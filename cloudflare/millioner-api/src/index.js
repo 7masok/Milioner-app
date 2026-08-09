@@ -1,5 +1,5 @@
 const DEFAULT_CORS_ORIGIN = 'https://7masok.github.io';
-const KASPI_SCHEDULE_MS = 10 * 60 * 1000;
+const KASPI_SCHEDULE_MS = 5 * 60 * 1000;
 const KASPI_MAX_BATCHES = 10;
 const KASPI_EXTERNAL_BUDGET = 45;
 const WB_MIN_SYNC_MS = 10 * 60 * 1000;
