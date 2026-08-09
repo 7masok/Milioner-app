@@ -67,6 +67,8 @@ table{width:100%;border-collapse:collapse;background:#fff;border-radius:14px;ove
     <input id="kaspiTokenInput" type="password" placeholder="Вставь токен Kaspi" value="">
   </div>
   <button class="btn full" onclick="saveKaspiToken()">Сохранить токен</button>
+  <button class="btn full" onclick="testKaspiApi()">Проверить Kaspi API</button>
+  <div id="kaspiApiStatus" class="muted" style="margin-top:8px">Статус: не проверено</div>
   <div class="muted" style="margin-top:7px">
     Токен хранится в браузере этого устройства. На публичном сайте это небезопасный режим.
   </div>
@@ -110,6 +112,7 @@ function render(){
  renderAttention();renderRecent();renderProducts();renderMovement();renderPurchases();renderReports();
  document.getElementById('lastSync').textContent=state.settings.lastSync?new Date(state.settings.lastSync).toLocaleTimeString('ru-RU',{hour:'2-digit',minute:'2-digit'}):'—';
  const kt=document.getElementById('kaspiTokenInput'); if(kt && !kt.value) kt.value=state.settings.kaspiToken||'';
+ const ks=document.getElementById('kaspiApiStatus'); if(ks && state.settings.lastKaspiTestStatus) ks.textContent=state.settings.lastKaspiTestStatus;
 }
 function renderAttention(){let a=state.products.filter(p=>p.stock<=p.min&&p.min>0||p.stock<0).sort((x,y)=>x.stock-y.stock).slice(0,5);document.getElementById('attention').innerHTML=a.length?a.map(p=>`<div class="item row"><div class="grow"><div class="name">${esc(p.name)}</div><div class="muted">Остаток ${p.stock} · минимум ${p.min}</div></div><span class="badge ${p.stock<0?'bad':'warn'}">${p.stock<0?'Нехватка':'На закупку'}</span></div>`).join(''):'<div class="empty">Всё в норме</div>'}
 function renderRecent(){let a=state.movements.slice(0,5);document.getElementById('recent').innerHTML=a.length?a.map(m=>`<div class="item"><div class="row"><div class="grow"><b>${esc(m.type)}</b><div class="muted">${esc(prod(m.productId)?.name||'Товар удалён')}</div></div><div class="right">${m.qty>0?'+':''}${m.qty}<div class="muted">${new Date(m.date).toLocaleString('ru-RU')}</div></div></div></div>`).join(''):'<div class="empty">Операций пока нет</div>'}
@@ -159,6 +162,94 @@ function saveKaspiToken(){
  state.settings.kaspiToken=el.value.trim();
  save();
  alert(state.settings.kaspiToken?'Kaspi token сохранён на этом устройстве':'Token очищен');
+}
+
+
+async function testKaspiApi(){
+ const status=document.getElementById('kaspiApiStatus');
+ const token=(state.settings.kaspiToken||'').trim();
+
+ if(!token){
+   if(status) status.textContent='Статус: токен не сохранён';
+   alert('Сначала вставь и сохрани Kaspi API token.');
+   return;
+ }
+
+ if(status) status.textContent='Статус: проверяем...';
+
+ try{
+   const now=Date.now();
+   const from=now-24*60*60*1000;
+
+   const params=new URLSearchParams();
+   params.set('filter[orders][creationDate][$ge]',String(from));
+   params.set('filter[orders][creationDate][$le]',String(now));
+   params.set('page[number]','0');
+   params.set('page[size]','1');
+
+   const controller=new AbortController();
+   const timeout=setTimeout(()=>controller.abort(),12000);
+
+   const r=await fetch(
+     'https://kaspi.kz/shop/api/v2/orders?'+params.toString(),
+     {
+       method:'GET',
+       headers:{
+         'Content-Type':'application/vnd.api+json',
+         'X-Auth-Token':token
+       },
+       signal:controller.signal
+     }
+   );
+
+   clearTimeout(timeout);
+
+   const text=await r.text();
+   let data;
+   try{data=JSON.parse(text)}catch{data={raw:text}}
+
+   if(!r.ok){
+     let detail=
+       data?.errors?.[0]?.detail ||
+       data?.errors?.[0]?.title ||
+       data?.message ||
+       ('HTTP '+r.status);
+
+     if(r.status===401||r.status===403){
+       if(status) status.textContent='Статус: токен отклонён ('+r.status+')';
+     }else{
+       if(status) status.textContent='Статус: Kaspi ответил ошибкой '+r.status;
+     }
+
+     alert('Kaspi ответил:\\n'+detail);
+     return;
+   }
+
+   const count=Array.isArray(data?.data)?data.data.length:0;
+   if(status) status.textContent='Статус: подключено. Kaspi отвечает.';
+   alert('Подключение работает.\\nKaspi API отвечает.\\nТестовых заказов получено: '+count);
+
+ }catch(e){
+   const msg=String(e?.message||e);
+
+   if(e?.name==='AbortError'){
+     if(status) status.textContent='Статус: таймаут запроса';
+     alert('Kaspi не ответил за 12 секунд.');
+     return;
+   }
+
+   if(/failed to fetch|network|cors|load failed/i.test(msg)){
+     if(status) status.textContent='Статус: браузер заблокировал прямой запрос (CORS)';
+     alert(
+       'Прямой запрос из браузера заблокирован.\\n'+
+       'Скорее всего это CORS Kaspi.\\n'+
+       'В таком случае нужен Worker/сервер.'
+     );
+   }else{
+     if(status) status.textContent='Статус: ошибка — '+msg;
+     alert('Ошибка проверки Kaspi:\\n'+msg);
+   }
+ }
 }
 
 async function syncNow(){
