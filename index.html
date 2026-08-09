@@ -62,6 +62,7 @@ table{width:100%;border-collapse:collapse;background:#fff;border-radius:14px;ove
   <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
     <span>Kaspi API</span><span class="badge ok">Через Cloudflare Worker</span>
   </div>
+  <div class="muted" style="margin-bottom:6px">API-токен хранится в Secret <b>KASPI_TOKEN</b> на Cloudflare и в сайт не вставляется.</div>
   <div id="kaspiApiStatus" class="muted">Статус: готов к проверке</div>
   <button class="btn full" onclick="testKaspiWorker()">Проверить Kaspi</button>
 </div>
@@ -360,10 +361,26 @@ async function syncNow(){
 }
 function backup(){let blob=new Blob([JSON.stringify(state,null,2)],{type:'application/json'}),a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download='sklad-backup-'+new Date().toISOString().slice(0,10)+'.json';a.click()}
 function restore(){let i=document.createElement('input');i.type='file';i.accept='.json';i.onchange=()=>{let r=new FileReader();r.onload=()=>{try{state=JSON.parse(r.result);save();render();alert('Восстановлено')}catch(e){alert('Неверная копия')}};r.readAsText(i.files[0])};i.click()}
-document.querySelectorAll('nav button').forEach(b=>b.onclick=()=>{document.querySelectorAll('nav button').forEach(x=>x.classList.remove('active'));b.classList.add('active');document.querySelectorAll('.view').forEach(x=>x.classList.remove('active'));document.getElementById(b.dataset.view).classList.add('active');render()});
+function openView(view, remember=true){
+ const target=document.getElementById(view);
+ const button=document.querySelector(`nav button[data-view="${view}"]`);
+ if(!target||!button){view='home';}
+ document.querySelectorAll('nav button').forEach(x=>x.classList.remove('active'));
+ document.querySelectorAll('.view').forEach(x=>x.classList.remove('active'));
+ const finalButton=document.querySelector(`nav button[data-view="${view}"]`);
+ const finalView=document.getElementById(view);
+ if(finalButton) finalButton.classList.add('active');
+ if(finalView) finalView.classList.add('active');
+ if(remember){
+   state.settings.activeView=view;
+   save();
+ }
+ render();
+}
+document.querySelectorAll('nav button').forEach(b=>b.onclick=()=>openView(b.dataset.view,true));
 document.querySelectorAll('.chip').forEach(b=>b.onclick=()=>{document.querySelectorAll('.chip').forEach(x=>x.classList.remove('active'));b.classList.add('active');selectedPeriod=+b.dataset.period;if(selectedPeriod===0){let d=prompt('Количество дней для своего периода','14');selectedPeriod=Math.max(1,+d||1)}render()});
 document.getElementById('autoBackup').onchange=e=>{state.settings.autoBackup=e.target.checked;save()};
-render();
+openView(state.settings.activeView||'home',false);
 </script>
 </body>
 </html>
