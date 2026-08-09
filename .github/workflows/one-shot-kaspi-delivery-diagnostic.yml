@@ -1,0 +1,20 @@
+name: One-shot Kaspi delivery diagnostic
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/one-shot-kaspi-delivery-diagnostic.yml'
+permissions:
+  contents: read
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Inspect exact Kaspi delivery orders
+        run: |
+          set -e
+          body=$(curl -fsSL --retry 3 --retry-delay 2 --max-time 30 'https://millioner-api.7masok.workers.dev/api/orders?market=Kaspi&limit=1000')
+          for id in 1027863523 1027066063 1027161866; do
+            echo "=== $id ==="
+            echo "$body" | jq --arg id "$id" '[.orders[] | select((.code|tostring)==$id or (.orderId|tostring)==$id) | {code,orderId,status,state,productName,sku,creationDate}]'
+          done
