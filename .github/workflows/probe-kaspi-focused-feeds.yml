@@ -1,0 +1,26 @@
+name: Probe Kaspi focused feeds
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/probe-kaspi-focused-feeds.yml'
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Probe live central and worker
+        run: |
+          set -euo pipefail
+          echo CENTRAL
+          curl -fsSL --max-time 25 'https://millioner-api.7masok.workers.dev/api/market-status' | jq .
+          for spec in \
+            'days=1&status=ACCEPTED_BY_MERCHANT&state=KASPI_DELIVERY&size=12&batch=0' \
+            'days=1&status=ACCEPTED_BY_MERCHANT&state=KASPI_DELIVERY_TRANSIT&size=12&batch=0'; do
+            echo "WORKER $spec"
+            code=$(curl -sS -o /tmp/w.json -w '%{http_code}' --max-time 60 "https://fragrant-shadow-72ed.7masok.workers.dev/kaspi/sync?$spec")
+            echo "HTTP=$code"
+            head -c 500 /tmp/w.json; echo
+            test "$code" = 200
+            jq -e '.ok==true' /tmp/w.json
+          done
