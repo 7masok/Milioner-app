@@ -10,41 +10,19 @@ jobs:
   inspect:
     runs-on: ubuntu-latest
     steps:
-      - name: Measure safe Kaspi batch size and delivery split
+      - name: Wait briefly for Worker deployment
+        run: sleep 30
+      - name: Inspect live Millioner Kaspi states
         run: |
           set -e
-          for size in 12 15 16; do
-            echo "=== SIZE_${size} FIRST BATCH ==="
-            body=$(curl -fsSL --retry 2 --retry-delay 2 --max-time 60 "https://fragrant-shadow-72ed.7masok.workers.dev/kaspi/sync?days=7&status=ACCEPTED_BY_MERCHANT&state=KASPI_DELIVERY&batch=0&size=${size}")
-            echo "$body" | jq '{ok,totalOrders,hasMore,nextBatch,orders:(.orders|length),withLines:([.orders[]|select((.lines|length)>0)]|length),lineErrors:([.orders[]|select(.lineError!=null)]|length)}'
-          done
-
-          tmp=$(mktemp)
-          : > "$tmp"
-          batch=0
-          for safety in 0 1 2 3 4 5 6 7 8 9; do
-            body=$(curl -fsSL --retry 2 --retry-delay 2 --max-time 60 "https://fragrant-shadow-72ed.7masok.workers.dev/kaspi/sync?days=7&status=ACCEPTED_BY_MERCHANT&state=KASPI_DELIVERY&batch=${batch}&size=12")
-            echo "$body" | jq -c '.orders[]' >> "$tmp"
-            echo "BATCH_${batch}=$(echo "$body" | jq '{orders:(.orders|length),withLines:([.orders[]|select((.lines|length)>0)]|length),lineErrors:([.orders[]|select(.lineError!=null)]|length),hasMore,nextBatch}')"
-            [ "$(echo "$body" | jq -r '.hasMore // false')" = "true" ] || break
-            batch=$(echo "$body" | jq -r '.nextBatch')
-          done
-          echo "TOTAL=$(jq -s 'length' "$tmp")"
-          echo "WITH_LINES=$(jq -s '[.[]|select((.lines|length)>0)]|length' "$tmp")"
-          echo "ERRORS=$(jq -s '[.[]|select(.lineError!=null)]|length' "$tmp")"
-          echo "DELIVERY_COST_POSITIVE=$(jq -s '[.[]|select((.deliveryCostForSeller//0)>0)]|length' "$tmp")"
-          echo "DELIVERY_COST_ZERO=$(jq -s '[.[]|select((.deliveryCostForSeller//0)==0)]|length' "$tmp")"
-          for id in 1028072690 1028169317 1028174494 1027863523 1027066063 1027161866; do
-            echo "ORDER_${id}=$(jq -s --arg id "$id" '[.[]|select((.code|tostring)==$id)|{code,status,state,deliveryCostForSeller,lines:(.lines|length),lineError}]' "$tmp")"
-          done
-
-      - name: Inspect live Millioner status
-        run: |
-          set -e
-          curl -fsSL --retry 3 --retry-delay 2 --max-time 30 'https://millioner-api.7masok.workers.dev/api/market-status' | jq .
-          body=$(curl -fsSL --retry 3 --retry-delay 2 --max-time 30 'https://millioner-api.7masok.workers.dev/api/orders?market=Kaspi&limit=1000')
+          status=$(curl -fsSL --retry 4 --retry-delay 3 --max-time 30 'https://millioner-api.7masok.workers.dev/api/market-status')
+          echo "$status" | jq .
+          body=$(curl -fsSL --retry 4 --retry-delay 3 --max-time 30 'https://millioner-api.7masok.workers.dev/api/orders?market=Kaspi&limit=1000')
           echo "D1_KASPI_LINES=$(echo "$body" | jq '.orders|length')"
           for id in 1028072690 1028169317 1028174494 1027863523 1027066063 1027161866; do
-            echo -n "$id="
-            echo "$body" | jq --arg id "$id" '[.orders[]|select((.code|tostring)==$id or (.orderId|tostring)==$id)]|length'
+            echo "=== $id ==="
+            echo "$body" | jq --arg id "$id" '[.orders[]|select((.code|tostring)==$id or (.orderId|tostring)==$id)|{code,status,state,productName,qty,totalPrice}]'
+          done
+          for id in 1028072690 1028169317 1028174494; do
+            test "$(echo "$body" | jq --arg id "$id" '[.orders[]|select((.code|tostring)==$id or (.orderId|tostring)==$id)]|length')" -gt 0
           done
