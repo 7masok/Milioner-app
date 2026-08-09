@@ -67,8 +67,19 @@ jobs:
               raise SystemExit('syncNow function missing')
           if 'KASPI_WORKER' in sync.group(0):
               raise SystemExit('Browser syncNow still calls Kaspi Worker directly')
-          if 'const KASPI_MAX_BATCHES = 4;' not in api:
-              raise SystemExit('Kaspi background pagination is not bounded')
+          page_cap = re.search(r'const KASPI_MAX_BATCHES = (\d+);', api)
+          if not page_cap or not (1 <= int(page_cap.group(1)) <= 10):
+              raise SystemExit('Kaspi background pagination is not safely bounded')
+          recovery_required = [
+              'const KASPI_EXTERNAL_BUDGET = 45;',
+              'fetchKaspiOrderLinesDirect(token, order, budget)',
+              '/orders/${encodeURIComponent(orderId)}/entries',
+              'masterproducts/${encodeURIComponent(masterProductId)}/merchantProduct',
+              "status === 'ACCEPTED_BY_MERCHANT'",
+          ]
+          recovery_missing = [marker for marker in recovery_required if marker not in api]
+          if recovery_missing:
+              raise SystemExit('Kaspi missing-line recovery is incomplete: ' + ', '.join(recovery_missing))
           if 'await upsertOrderLines(env.DB, market, lines);' not in api:
               raise SystemExit('D1 marketplace upserts are not batched')
           print('Warehouse and sync contract OK')
@@ -125,7 +136,7 @@ jobs:
           echo "$body"
           echo "$body" | jq -e '.ok == true'
 
-      - name: Protect WB rate limit
+      - name: Avoid unnecessary WB calls
         run: |
-          echo 'WB statistics endpoint is intentionally NOT called by smoke tests.'
-          echo 'Its seller-wide limit can be as low as one request per three hours.'
+          echo 'WB marketplace orders are synchronized server-side.'
+          echo 'Smoke tests inspect the server cache instead of generating extra marketplace traffic.'
