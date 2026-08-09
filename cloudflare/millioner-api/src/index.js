@@ -53,6 +53,7 @@ export default {
       }
 
       if (url.pathname === '/api/warehouse-state' && request.method === 'GET') {
+        if (!isTrustedBrowserOrigin(origin, env)) return json({ ok: false, error: 'Forbidden origin' }, 403, cors);
         const row = await env.DB.prepare('SELECT payload,revision,updated_at FROM warehouse_state WHERE id=1').first();
         if (!row) return json({ ok: true, exists: false, revision: 0, updatedAt: null, state: null }, 200, cors);
         let warehouse = null;
