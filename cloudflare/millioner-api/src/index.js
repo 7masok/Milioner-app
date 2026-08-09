@@ -218,9 +218,9 @@ async function fetchKaspi(env) {
 
   // Packing orders are the most time-sensitive. Asking the dedicated Kaspi
   // Worker for this smaller set first keeps its per-invocation subrequest
-  // budget available for line/product expansion. A broad pass then refreshes
-  // transit lifecycle states for cached orders. When both feeds contain an order, keep
-  // the version that has populated lines.
+  // budget available for line/product expansion. One page of up to 100 accepted
+  // delivery orders is enough for the current feed and avoids repeated expensive
+  // nested Worker calls. Handoff is derived from deliveryCostForSeller below.
   let activeFeed = { orders: [], requests: 0 };
   let broadFeed = { orders: [], requests: 0 };
   let activeError = null;
@@ -230,23 +230,15 @@ async function fetchKaspi(env) {
       days: '1',
       status: 'ACCEPTED_BY_MERCHANT',
       state: 'KASPI_DELIVERY',
-      size: '12'
+      size: '100'
     });
   } catch (e) {
     activeError = String(e?.message || e);
     console.warn('Kaspi active feed failed', activeError);
   }
-  try {
-    broadFeed = await fetchKaspiWorkerFeed(base, {
-      days: '1',
-      status: 'ACCEPTED_BY_MERCHANT',
-      state: 'KASPI_DELIVERY_TRANSIT',
-      size: '12'
-    });
-  } catch (e) {
-    broadError = String(e?.message || e);
-    console.warn('Kaspi broad feed failed', broadError);
-  }
+  // Kaspi's API rejects KASPI_DELIVERY_TRANSIT as an order-state filter.
+  // Handoff is derived from deliveryCostForSeller on the accepted delivery feed,
+  // so a second invalid/heavy broad request only makes the cron less reliable.
   if (!activeFeed.orders.length && !broadFeed.orders.length) {
     throw new Error(`Kaspi Worker unavailable: ${activeError || broadError || 'empty feeds'}`);
   }
