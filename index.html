@@ -35,205 +35,45 @@ table{width:100%;border-collapse:collapse;background:#fff;border-radius:14px;ove
   <div class="headrow"><div class="title">Склад</div><button class="btn" onclick="syncNow()">↻</button></div>
   <div class="sync"><span class="dot"></span>Kaspi &nbsp; <span class="dot"></span>WB &nbsp; <span class="dot"></span>Ozon · последняя синхронизация: <span id="lastSync">—</span></div>
 </header>
-
 <main>
 <section id="home" class="view active">
-  <div class="metrics">
-    <div class="card"><div class="label">Остаток склада</div><div class="num" id="mStock">0</div><div class="small">шт.</div></div>
-    <div class="card"><div class="label">Продажи</div><div class="num" id="mSales">0 ₸</div><div class="small" id="periodLabel">сегодня</div></div>
-    <div class="card"><div class="label">Чистая прибыль</div><div class="num" id="mProfit">0 ₸</div><div class="small">сегодня</div></div>
-  </div>
-  <div class="period">
-    <button class="chip active" data-period="1">Сегодня</button><button class="chip" data-period="7">7 дней</button><button class="chip" data-period="30">30 дней</button><button class="chip" data-period="0">Свой период</button>
-  </div>
-  <h2>Заказы</h2>
-  <div class="market-tabs">
-    <button class="market-tab active" data-market="Kaspi" onclick="selectOrderMarket('Kaspi')">Kaspi</button>
-    <button class="market-tab" data-market="WB" onclick="selectOrderMarket('WB')">WB</button>
-    <button class="market-tab" data-market="Ozon" onclick="selectOrderMarket('Ozon')">Ozon</button>
-  </div>
-  <div class="order-summary">
-    <div class="card"><div class="label">Получено</div><div class="num" id="koTotal">0</div></div>
-    <div class="card"><div class="label">Привязано</div><div class="num" id="koMatched">0</div></div>
-    <div class="card"><div class="label">Не привязано</div><div class="num" id="koUnmatched">0</div></div>
-  </div>
-  <div id="kaspiOrderList" class="order-list"></div>
-  <h2>Товары, требующие внимания</h2><div id="attention" class="list"></div>
-  <h2>Последние движения</h2><div id="recent" class="list"></div>
+  <div class="metrics"><div class="card"><div class="label">Остаток склада</div><div class="num" id="mStock">0</div><div class="small">шт.</div></div><div class="card"><div class="label">Продажи</div><div class="num" id="mSales">0 ₸</div><div class="small" id="periodLabel">сегодня</div></div><div class="card"><div class="label">Чистая прибыль</div><div class="num" id="mProfit">0 ₸</div><div class="small">сегодня</div></div></div>
+  <div class="period"><button class="chip active" data-period="1">Сегодня</button><button class="chip" data-period="7">7 дней</button><button class="chip" data-period="30">30 дней</button><button class="chip" data-period="0">Свой период</button></div>
+  <h2>Заказы</h2><div class="market-tabs"><button class="market-tab active" data-market="Kaspi" onclick="selectOrderMarket('Kaspi')">Kaspi</button><button class="market-tab" data-market="WB" onclick="selectOrderMarket('WB')">WB</button><button class="market-tab" data-market="Ozon" onclick="selectOrderMarket('Ozon')">Ozon</button></div>
+  <div class="order-summary"><div class="card"><div class="label">Получено</div><div class="num" id="koTotal">0</div></div><div class="card"><div class="label">Привязано</div><div class="num" id="koMatched">0</div></div><div class="card"><div class="label">Не привязано</div><div class="num" id="koUnmatched">0</div></div></div>
+  <div id="kaspiOrderList" class="order-list"></div><h2>Товары, требующие внимания</h2><div id="attention" class="list"></div><h2>Последние движения</h2><div id="recent" class="list"></div>
 </section>
-
-<section id="products" class="view">
-  <div class="toolbar"><input id="q" class="search" placeholder="Поиск по названию или артикулам" oninput="renderProducts()"><select id="filter" class="select" onchange="renderProducts()"><option value="all">Все</option><option value="low">Заканчиваются</option><option value="zero">Нет в наличии</option><option value="reserve">В резерве</option><option value="buy">На закупку</option></select></div>
-  <div class="toolbar"><select id="sort" class="select" onchange="renderProducts()" style="width:100%"><option value="name">По названию</option><option value="stock">По остатку</option><option value="sales">По продажам</option><option value="profit">По прибыли</option><option value="days">По запасу в днях</option></select></div>
-  <div id="productList" class="list"></div>
-</section>
-
+<section id="products" class="view"><div class="toolbar"><input id="q" class="search" placeholder="Поиск по названию или артикулам" oninput="renderProducts()"><select id="filter" class="select" onchange="renderProducts()"><option value="all">Все</option><option value="low">Заканчиваются</option><option value="zero">Нет в наличии</option><option value="reserve">В резерве</option><option value="buy">На закупку</option></select></div><div class="toolbar"><select id="sort" class="select" onchange="renderProducts()" style="width:100%"><option value="name">По названию</option><option value="stock">По остатку</option><option value="sales">По продажам</option><option value="profit">По прибыли</option><option value="days">По запасу в днях</option></select></div><div id="productList" class="list"></div></section>
 <section id="movement" class="view"><h2>Движение</h2><div class="toolbar"><select id="moveType" class="select" onchange="renderMovement()"><option value="all">Все операции</option><option value="приход">Приход</option><option value="продажа">Продажа</option><option value="списание">Списание</option><option value="инвентаризация">Инвентаризация</option><option value="резерв">Резерв</option><option value="отмена резерва">Отмена резерва</option></select><input id="moveQ" class="search" placeholder="Товар" oninput="renderMovement()"></div><div id="movementList"></div></section>
-
 <section id="purchases" class="view"><h2>Закупки</h2><button class="btn dark full" onclick="openModal('arrival')">+ Создать приход</button><div id="purchaseList" class="list" style="margin-top:10px"></div></section>
-
 <section id="reports" class="view"><h2>Отчёты</h2><div class="kpi"><div class="card"><div class="label">Выручка</div><div class="num" id="rRevenue">0 ₸</div></div><div class="card"><div class="label">Себестоимость</div><div class="num" id="rCost">0 ₸</div></div><div class="card"><div class="label">Расходы МП</div><div class="num" id="rFees">0 ₸</div></div><div class="card"><div class="label">Чистая прибыль</div><div class="num" id="rProfit">0 ₸</div></div></div><h2>По маркетплейсам</h2><div id="mpReport"></div></section>
-
-<section id="settings" class="view"><h2>Настройки</h2><div class="setting"><span>Название склада</span><b>Склад</b></div><div class="setting"><span>Валюта</span><b>₸</b></div><div class="setting"><span>Автобэкап</span><input id="autoBackup" type="checkbox" checked></div><div class="setting"><span>Google Drive</span><button class="btn" onclick="alert('Подключение Google Drive добавим на следующем этапе')">Подключить</button></div><div class="setting" style="display:block">
-  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
-    <span>Kaspi API</span><span class="badge ok">Через Cloudflare Worker</span>
-  </div>
-  <div class="muted" style="margin-bottom:6px">API-токен хранится в Secret <b>KASPI_TOKEN</b> на Cloudflare и в сайт не вставляется.</div>
-  <div id="kaspiApiStatus" class="muted">Статус: готов к проверке</div>
-  <button class="btn full" onclick="testKaspiWorker()">Проверить Kaspi</button>
-</div>
-<div class="setting" style="display:block">
-  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
-    <span>Wildberries API</span><span id="wbApiBadge" class="badge warn">Нужен Worker</span>
-  </div>
-  <div class="muted">WB-токен должен храниться в Cloudflare Secret <b>WB_TOKEN</b>. В сайт токен не вставляется.</div>
-  <input id="wbWorkerUrl" class="worker-url" type="url" inputmode="url" placeholder="https://имя-worker.workers.dev" autocomplete="off">
-  <div id="wbApiStatus" class="muted" style="margin-top:7px">Статус: укажите адрес WB Worker</div>
-  <div class="actions">
-    <button class="btn" onclick="saveWbWorkerUrl()">Сохранить адрес</button>
-    <button class="btn" onclick="testWbWorker()">Проверить WB</button>
-  </div>
-  <button class="btn dark full" onclick="syncWbNow()">Получить заказы WB</button>
-</div>
+<section id="settings" class="view"><h2>Настройки</h2><div class="setting"><span>Название склада</span><b>Склад</b></div><div class="setting"><span>Валюта</span><b>₸</b></div><div class="setting"><span>Автобэкап</span><input id="autoBackup" type="checkbox" checked></div><div class="setting"><span>Google Drive</span><button class="btn" onclick="alert('Подключение Google Drive добавим на следующем этапе')">Подключить</button></div><div class="setting" style="display:block"><div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px"><span>Kaspi API</span><span class="badge ok">Через Cloudflare Worker</span></div><div class="muted" style="margin-bottom:6px">API-токен хранится в Secret <b>KASPI_TOKEN</b> на Cloudflare и в сайт не вставляется.</div><div id="kaspiApiStatus" class="muted">Статус: готов к проверке</div><button class="btn full" onclick="testKaspiWorker()">Проверить Kaspi</button></div>
+<div class="setting" style="display:block"><div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px"><span>Wildberries API</span><span id="wbApiBadge" class="badge warn">Нужен Worker</span></div><div class="muted">WB-токен должен храниться в Cloudflare Secret <b>WB_TOKEN</b>. В сайт токен не вставляется.</div><input id="wbWorkerUrl" class="worker-url" type="url" inputmode="url" placeholder="https://имя-worker.workers.dev" autocomplete="off"><div id="wbApiStatus" class="muted" style="margin-top:7px">Статус: укажите адрес WB Worker</div><div class="actions"><button class="btn" onclick="saveWbWorkerUrl()">Сохранить адрес</button><button class="btn" onclick="testWbWorker()">Проверить WB</button></div><button class="btn dark full" onclick="syncWbNow()">Получить заказы WB</button></div>
 <div class="setting"><span>Ozon</span><span class="muted">ещё не подключён</span></div><button class="btn full" onclick="backup()">Создать резервную копию</button><button class="btn full" onclick="restore()">Восстановить из копии</button></section>
 </main>
-
-<button class="fab" onclick="openModal('menu')">+</button>
-<nav><button class="active" data-view="home"><span>⌂</span>Главная</button><button data-view="products"><span>▦</span>Товары</button><button data-view="movement"><span>↕</span>Движение</button><button data-view="purchases"><span>□</span>Закупки</button><button data-view="reports"><span>◒</span>Отчёты</button><button data-view="settings"><span>⚙</span>Настройки</button></nav>
-
-<div id="modal" class="modal" onclick="if(event.target===this)closeModal()"><div class="sheet" id="sheet"></div></div>
-</div>
-
+<button class="fab" onclick="openModal('menu')">+</button><nav><button class="active" data-view="home"><span>⌂</span>Главная</button><button data-view="products"><span>▦</span>Товары</button><button data-view="movement"><span>↕</span>Движение</button><button data-view="purchases"><span>□</span>Закупки</button><button data-view="reports"><span>◒</span>Отчёты</button><button data-view="settings"><span>⚙</span>Настройки</button></nav><div id="modal" class="modal" onclick="if(event.target===this)closeModal()"><div class="sheet" id="sheet"></div></div></div>
 <script>
 const KEY='sklad_mvp_v2';
 const KASPI_WORKER='https://fragrant-shadow-72ed.7masok.workers.dev';
+const WB_WORKER='https://wb-sync.7masok.workers.dev';
 let state=JSON.parse(localStorage.getItem(KEY)||'null')||{products:[],movements:[],sales:[],purchases:[],reservations:[],settings:{autoBackup:true,lastSync:null}};
-state.products ||= [];
-state.movements ||= [];
-state.sales ||= [];
-state.purchases ||= [];
-state.reservations ||= [];
-state.settings ||= {};
-state.kaspiOrders ||= {};
-state.kaspiOrderFeed ||= [];
-state.wbOrderFeed ||= [];
-state.ozonOrderFeed ||= [];
-state.kaspiBaselineAt ||= null;
-let selectedPeriod=1;
-let selectedOrderMarket='Kaspi';
-const save=()=>localStorage.setItem(KEY,JSON.stringify(state));
-const id=()=>Date.now().toString(36)+Math.random().toString(36).slice(2,7);
-const fmt=n=>new Intl.NumberFormat('ru-RU').format(Math.round(n||0))+' ₸';
-const esc=s=>String(s??'').replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[m]));
-const prod=id=>state.products.find(p=>p.id===id);
-function stockTotal(){return state.products.reduce((a,p)=>a+p.stock,0)}
-function reserved(p){return state.reservations.filter(r=>r.productId===p.id&&r.active).reduce((a,r)=>a+r.qty,0)}
-function salesDays(p,days=30){let since=Date.now()-days*86400000;return state.sales.filter(s=>s.productId===p.id&&s.date>=since).reduce((a,s)=>a+s.qty,0)/days}
-function costOf(p){return p.cost||0}
-function log(type,pid,qty,extra=''){state.movements.unshift({id:id(),date:Date.now(),type,productId:pid,qty,extra});state.movements=state.movements.slice(0,1000)}
-function render(){
- document.getElementById('mStock').textContent=stockTotal().toLocaleString('ru-RU');
- let since=Date.now()-selectedPeriod*86400000;
- let ss=state.sales.filter(s=>s.date>=since);let rev=ss.reduce((a,s)=>a+s.qty*s.price,0);let pr=ss.reduce((a,s)=>a+s.qty*(s.price-s.cost-s.fee),0);
- document.getElementById('mSales').textContent=fmt(rev);document.getElementById('mProfit').textContent=fmt(pr);document.getElementById('periodLabel').textContent=selectedPeriod===1?'сегодня':selectedPeriod+' дней';
- renderMarketplaceOrders();renderAttention();renderRecent();renderProducts();renderMovement();renderPurchases();renderReports();
- document.getElementById('lastSync').textContent=state.settings.lastSync?new Date(state.settings.lastSync).toLocaleTimeString('ru-RU',{hour:'2-digit',minute:'2-digit'}):'—';
- const ks=document.getElementById('kaspiApiStatus'); if(ks && state.settings.lastKaspiTestStatus) ks.textContent=state.settings.lastKaspiTestStatus;
- const wbInput=document.getElementById('wbWorkerUrl');if(wbInput&&document.activeElement!==wbInput)wbInput.value=state.settings.wbWorkerUrl||'';
- const ws=document.getElementById('wbApiStatus');if(ws)ws.textContent=state.settings.lastWbTestStatus||(state.settings.wbWorkerUrl?'Статус: адрес сохранён':'Статус: укажите адрес WB Worker');
- const badge=document.getElementById('wbApiBadge');if(badge){const ready=Boolean(state.settings.wbWorkerUrl);badge.textContent=ready?'Worker указан':'Нужен Worker';badge.className='badge '+(ready?'ok':'warn');}
-}
+state.products ||= [];state.movements ||= [];state.sales ||= [];state.purchases ||= [];state.reservations ||= [];state.settings ||= {};state.settings.wbWorkerUrl ||= WB_WORKER;state.kaspiOrders ||= {};state.kaspiOrderFeed ||= [];state.wbOrderFeed ||= [];state.ozonOrderFeed ||= [];state.kaspiBaselineAt ||= null;
+let selectedPeriod=1;let selectedOrderMarket='Kaspi';
+const save=()=>localStorage.setItem(KEY,JSON.stringify(state));const id=()=>Date.now().toString(36)+Math.random().toString(36).slice(2,7);const fmt=n=>new Intl.NumberFormat('ru-RU').format(Math.round(n||0))+' ₸';const esc=s=>String(s??'').replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[m]));const prod=id=>state.products.find(p=>p.id===id);
+function stockTotal(){return state.products.reduce((a,p)=>a+p.stock,0)}function reserved(p){return state.reservations.filter(r=>r.productId===p.id&&r.active).reduce((a,r)=>a+r.qty,0)}function salesDays(p,days=30){let since=Date.now()-days*86400000;return state.sales.filter(s=>s.productId===p.id&&s.date>=since).reduce((a,s)=>a+s.qty,0)/days}function costOf(p){return p.cost||0}function log(type,pid,qty,extra=''){state.movements.unshift({id:id(),date:Date.now(),type,productId:pid,qty,extra});state.movements=state.movements.slice(0,1000)}
+function render(){document.getElementById('mStock').textContent=stockTotal().toLocaleString('ru-RU');let since=Date.now()-selectedPeriod*86400000;let ss=state.sales.filter(s=>s.date>=since);let rev=ss.reduce((a,s)=>a+s.qty*s.price,0);let pr=ss.reduce((a,s)=>a+s.qty*(s.price-s.cost-s.fee),0);document.getElementById('mSales').textContent=fmt(rev);document.getElementById('mProfit').textContent=fmt(pr);document.getElementById('periodLabel').textContent=selectedPeriod===1?'сегодня':selectedPeriod+' дней';renderMarketplaceOrders();renderAttention();renderRecent();renderProducts();renderMovement();renderPurchases();renderReports();document.getElementById('lastSync').textContent=state.settings.lastSync?new Date(state.settings.lastSync).toLocaleTimeString('ru-RU',{hour:'2-digit',minute:'2-digit'}):'—';const ks=document.getElementById('kaspiApiStatus');if(ks&&state.settings.lastKaspiTestStatus)ks.textContent=state.settings.lastKaspiTestStatus;const wbInput=document.getElementById('wbWorkerUrl');if(wbInput&&document.activeElement!==wbInput)wbInput.value=state.settings.wbWorkerUrl||WB_WORKER;const ws=document.getElementById('wbApiStatus');if(ws)ws.textContent=state.settings.lastWbTestStatus||(state.settings.wbWorkerUrl?'Статус: адрес сохранён':'Статус: укажите адрес WB Worker');const badge=document.getElementById('wbApiBadge');if(badge){const ready=Boolean(state.settings.wbWorkerUrl||WB_WORKER);badge.textContent=ready?'Worker указан':'Нужен Worker';badge.className='badge '+(ready?'ok':'warn')}}
 function selectOrderMarket(market){selectedOrderMarket=market;document.querySelectorAll('.market-tab').forEach(b=>b.classList.toggle('active',b.dataset.market===market));renderMarketplaceOrders()}
-function marketplaceStatusLabel(market,status){
- const s=String(status||'');
- if(market==='WB')return ({NEW:'Новый',CONFIRM:'На сборке',COMPLETE:'Завершён',COMPLETED:'Завершён',CANCEL:'Отменён',CANCELLED:'Отменён',SORTED:'Отсортирован'})[s.toUpperCase()]||s||'—';
- return ({APPROVED:'Принят',ACCEPTED_BY_MERCHANT:'Принят',COMPLETED:'Завершён',CANCELLED:'Отменён',CANCELLING:'Отменяется',DELIVERY:'Доставка',PICKUP:'Самовывоз'})[s]||s||'—';
-}
+function marketplaceStatusLabel(market,status){const s=String(status||'');if(market==='WB')return ({NEW:'Новый',CONFIRM:'На сборке',COMPLETE:'Завершён',COMPLETED:'Завершён',CANCEL:'Отменён',CANCELLED:'Отменён',SORTED:'Отсортирован'})[s.toUpperCase()]||s||'—';return ({APPROVED:'Принят',ACCEPTED_BY_MERCHANT:'Принят',COMPLETED:'Завершён',CANCELLED:'Отменён',CANCELLING:'Отменяется',DELIVERY:'Доставка',PICKUP:'Самовывоз'})[s]||s||'—'}
 function kaspiStatusLabel(status){return marketplaceStatusLabel('Kaspi',status)}
-function renderMarketplaceOrders(){
- const list=document.getElementById('kaspiOrderList');if(!list)return;
- const market=selectedOrderMarket;
- const feed=market==='Kaspi'?state.kaspiOrderFeed:market==='WB'?state.wbOrderFeed:state.ozonOrderFeed;
- const a=[...(feed||[])].sort((x,y)=>(Number(y.creationDate)||0)-(Number(x.creationDate)||0));
- const total=a.length,matched=a.filter(x=>x.productId).length,unmatched=total-matched;
- const eTotal=document.getElementById('koTotal'),eMatched=document.getElementById('koMatched'),eUnmatched=document.getElementById('koUnmatched');
- if(eTotal)eTotal.textContent=total;if(eMatched)eMatched.textContent=matched;if(eUnmatched)eUnmatched.textContent=unmatched;
- if(!a.length){
-   if(market==='Kaspi')list.innerHTML='<div class="empty">Нажмите ↻ сверху, чтобы загрузить заказы Kaspi</div>';
-   else if(market==='WB')list.innerHTML='<div class="empty">Заказы WB ещё не загружены.<button class="btn dark full" onclick="syncWbNow()">Получить заказы WB</button></div>';
-   else list.innerHTML='<div class="empty">Ozon пока не подключён. После подключения здесь будут его заказы.</div>';
-   return;
- }
- list.innerHTML=a.slice(0,100).map(o=>{
-   const p=o.productId?prod(o.productId):null;
-   const statusUpper=String(o.status||'').toUpperCase();
-   const statusClass=['CANCELLED','CANCELLING','CANCEL'].includes(statusUpper)?'bad':['COMPLETED','COMPLETE'].includes(statusUpper)?'ok':'warn';
-   const totalPrice=Number(o.totalPrice||0);
-   const feedKey=encodeURIComponent(String(o.orderId)+':'+String(o.entryId));
-   const linkControl=p?`<button type="button" class="badge ok link-btn" onclick="openProduct('${p.id}')">Привязано</button>`:`<button type="button" class="badge bad link-btn" onclick="${market==='Kaspi'?`openKaspiLink('${feedKey}')`:market==='WB'?`openWbLink('${feedKey}')`:`openMarketplaceLink('${market}','${esc(o.sku||'')}','${esc(o.code||o.orderId||'')}','${feedKey}')`}">Нужно привязать</button>`;
-   return `<div class="item"><div class="order-head"><div class="grow"><div class="name">Заказ ${esc(o.code||o.orderId||'—')}</div><div class="muted">${o.creationDate?new Date(o.creationDate).toLocaleString('ru-RU'):'Дата неизвестна'}</div></div><span class="badge ${statusClass}">${esc(marketplaceStatusLabel(market,o.status))}</span></div><div class="order-line" style="margin-top:9px"><div class="grow"><b>${esc(p?.name||o.productName||'Товар не привязан')}</b><div class="order-sku">${market} артикул: ${esc(o.sku||'—')}</div></div><div class="right"><b>${o.qty||0} шт.</b>${totalPrice?`<div class="muted">${fmt(totalPrice)}</div>`:''}</div></div><div class="order-meta">${linkControl}<span class="badge">${esc(o.state||'—')}</span></div></div>`;
- }).join('');
-}
-function renderKaspiOrders(){renderMarketplaceOrders()}
-function normalizeName(s){return String(s||'').trim().toLowerCase().replace(/\s+/g,' ')}
-function marketplaceField(market){return market==='Kaspi'?'kaspi':market==='WB'?'wb':market==='Ozon'?'ozon':null}
-function openKaspiLink(encodedKey){
- const key=decodeURIComponent(encodedKey);
- const o=(state.kaspiOrderFeed||[]).find(x=>String(x.orderId)+':'+String(x.entryId)===key);
- if(!o)return alert('Строка заказа не найдена. Обновите синхронизацию.');
- openMarketplaceLink('Kaspi',o.sku,o.code||o.orderId||'',key,o.productName||'');
-}
-function openWbLink(encodedKey){
- const key=decodeURIComponent(encodedKey);
- const o=(state.wbOrderFeed||[]).find(x=>String(x.orderId)+':'+String(x.entryId)===key);
- if(!o)return alert('Заказ WB не найден. Обновите загрузку WB.');
- openMarketplaceLink('WB',o.sku,o.code||o.orderId||'',key,o.productName||'');
-}
-function openMarketplaceLink(market,sku,context='',feedKey='',productName=''){
- const safeMarket=esc(market),safeSku=esc(sku||'—'),safeContext=esc(context||''),safeProductName=esc(productName||'');
- showSheet(`<h3>Привязать товар</h3><div class="item"><b>${safeMarket}${safeContext?' · заказ '+safeContext:''}</b><div class="muted">Артикул: ${safeSku}</div></div><div class="link-note">Начните вводить название. Если такой товар уже есть, он появится в подсказках — нажмите на него, и артикул этого маркетплейса добавится к существующему товару. Если товара ещё нет, введите новое название и нажмите «Сохранить».</div><div class="field"><label>Название товара</label><input id="linkProductName" autocomplete="off" value="${safeProductName}" placeholder="Например: Чехол для ключа" oninput="renderLinkSuggestions()"></div><div id="linkSuggestions" class="suggestions"></div><button class="btn dark full" onclick="saveMarketplaceLink()">Сохранить</button>`);
- window.pendingMarketplaceLink={market:String(market),sku:String(sku||''),context:String(context||''),feedKey:String(feedKey||'')};
- setTimeout(()=>{const i=document.getElementById('linkProductName');if(i){i.focus();renderLinkSuggestions();}},0);
-}
-function renderLinkSuggestions(){
- const box=document.getElementById('linkSuggestions'),input=document.getElementById('linkProductName');if(!box||!input)return;
- const q=normalizeName(input.value);
- let a=[...state.products];
- if(q)a=a.filter(p=>normalizeName(p.name).includes(q));
- a=a.slice(0,8);
- if(!a.length){box.innerHTML=q?'<div class="muted">Совпадений нет — будет создан новый товар.</div>':'<div class="muted">Введите название, чтобы найти существующий товар.</div>';return;}
- box.innerHTML=a.map(p=>`<button type="button" class="suggestion" onclick="chooseMarketplaceProduct('${p.id}')"><b>${esc(p.name)}</b><div class="muted">Kaspi: ${esc(p.kaspi||'—')} · WB: ${esc(p.wb||'—')} · Ozon: ${esc(p.ozon||'—')}</div></button>`).join('');
-}
-function chooseMarketplaceProduct(pid){
- const link=window.pendingMarketplaceLink,p=prod(pid);if(!link||!p)return;
- attachMarketplaceSku(p,link.market,link.sku,link.feedKey);
- closeModal();render();
-}
-function attachMarketplaceSku(p,market,sku,feedKey=''){
- const field=marketplaceField(market);if(!field)return alert('Неизвестный маркетплейс');
- const old=String(p[field]||'').trim();
- if(old&&old!==String(sku||'').trim()){
-   const ok=confirm(`У товара «${p.name}» уже указан ${market} артикул ${old}. Заменить его на ${sku}?`);
-   if(!ok)return false;
- }
- p[field]=String(sku||'').trim();
- const feed=market==='Kaspi'?state.kaspiOrderFeed:market==='WB'?state.wbOrderFeed:state.ozonOrderFeed;
- (feed||[]).forEach(o=>{if(String(o.sku||'').trim()===p[field])o.productId=p.id;});
- save();return true;
-}
-function saveMarketplaceLink(){
- const link=window.pendingMarketplaceLink,input=document.getElementById('linkProductName');if(!link||!input)return;
- const name=input.value.trim();if(!name)return alert('Введите название товара');
- const exact=state.products.find(p=>normalizeName(p.name)===normalizeName(name));
- if(exact){
-   if(attachMarketplaceSku(exact,link.market,link.sku,link.feedKey)!==false){closeModal();render();}
-   return;
- }
- const p={id:id(),name,category:'',photo:'',kaspi:'',wb:'',ozon:'',min:0,stock:0,cost:0,totalProfit:0};
- state.products.push(p);
- attachMarketplaceSku(p,link.market,link.sku,link.feedKey);
- closeModal();render();
-}
+function renderMarketplaceOrders(){const list=document.getElementById('kaspiOrderList');if(!list)return;const market=selectedOrderMarket;const feed=market==='Kaspi'?state.kaspiOrderFeed:market==='WB'?state.wbOrderFeed:state.ozonOrderFeed;const a=[...(feed||[])].sort((x,y)=>(Number(y.creationDate)||0)-(Number(x.creationDate)||0));const total=a.length,matched=a.filter(x=>x.productId).length,unmatched=total-matched;const eTotal=document.getElementById('koTotal'),eMatched=document.getElementById('koMatched'),eUnmatched=document.getElementById('koUnmatched');if(eTotal)eTotal.textContent=total;if(eMatched)eMatched.textContent=matched;if(eUnmatched)eUnmatched.textContent=unmatched;if(!a.length){if(market==='Kaspi')list.innerHTML='<div class="empty">Нажмите ↻ сверху, чтобы загрузить заказы Kaspi</div>';else if(market==='WB')list.innerHTML='<div class="empty">Заказы WB ещё не загружены.<button class="btn dark full" onclick="syncWbNow()">Получить заказы WB</button></div>';else list.innerHTML='<div class="empty">Ozon пока не подключён. После подключения здесь будут его заказы.</div>';return}list.innerHTML=a.slice(0,100).map(o=>{const p=o.productId?prod(o.productId):null;const statusUpper=String(o.status||'').toUpperCase();const statusClass=['CANCELLED','CANCELLING','CANCEL'].includes(statusUpper)?'bad':['COMPLETED','COMPLETE'].includes(statusUpper)?'ok':'warn';const totalPrice=Number(o.totalPrice||0);const feedKey=encodeURIComponent(String(o.orderId)+':'+String(o.entryId));const linkControl=p?`<button type="button" class="badge ok link-btn" onclick="openProduct('${p.id}')">Привязано</button>`:`<button type="button" class="badge bad link-btn" onclick="${market==='Kaspi'?`openKaspiLink('${feedKey}')`:market==='WB'?`openWbLink('${feedKey}')`:`openMarketplaceLink('${market}','${esc(o.sku||'')}','${esc(o.code||o.orderId||'')}','${feedKey}')`}">Нужно привязать</button>`;return `<div class="item"><div class="order-head"><div class="grow"><div class="name">Заказ ${esc(o.code||o.orderId||'—')}</div><div class="muted">${o.creationDate?new Date(o.creationDate).toLocaleString('ru-RU'):'Дата неизвестна'}</div></div><span class="badge ${statusClass}">${esc(marketplaceStatusLabel(market,o.status))}</span></div><div class="order-line" style="margin-top:9px"><div class="grow"><b>${esc(p?.name||o.productName||'Товар не привязан')}</b><div class="order-sku">${market} артикул: ${esc(o.sku||'—')}</div></div><div class="right"><b>${o.qty||0} шт.</b>${totalPrice?`<div class="muted">${fmt(totalPrice)}</div>`:''}</div></div><div class="order-meta">${linkControl}<span class="badge">${esc(o.state||'—')}</span></div></div>`}).join('')}
+function renderKaspiOrders(){renderMarketplaceOrders()}function normalizeName(s){return String(s||'').trim().toLowerCase().replace(/\s+/g,' ')}function marketplaceField(market){return market==='Kaspi'?'kaspi':market==='WB'?'wb':market==='Ozon'?'ozon':null}
+function openKaspiLink(encodedKey){const key=decodeURIComponent(encodedKey);const o=(state.kaspiOrderFeed||[]).find(x=>String(x.orderId)+':'+String(x.entryId)===key);if(!o)return alert('Строка заказа не найдена. Обновите синхронизацию.');openMarketplaceLink('Kaspi',o.sku,o.code||o.orderId||'',key,o.productName||'')}
+function openWbLink(encodedKey){const key=decodeURIComponent(encodedKey);const o=(state.wbOrderFeed||[]).find(x=>String(x.orderId)+':'+String(x.entryId)===key);if(!o)return alert('Заказ WB не найден. Обновите загрузку WB.');openMarketplaceLink('WB',o.sku,o.code||o.orderId||'',key,o.productName||'')}
+function openMarketplaceLink(market,sku,context='',feedKey='',productName=''){const safeMarket=esc(market),safeSku=esc(sku||'—'),safeContext=esc(context||''),safeProductName=esc(productName||'');showSheet(`<h3>Привязать товар</h3><div class="item"><b>${safeMarket}${safeContext?' · заказ '+safeContext:''}</b><div class="muted">Артикул: ${safeSku}</div></div><div class="link-note">Начните вводить название. Если такой товар уже есть, он появится в подсказках — нажмите на него, и артикул этого маркетплейса добавится к существующему товару. Если товара ещё нет, введите новое название и нажмите «Сохранить».</div><div class="field"><label>Название товара</label><input id="linkProductName" autocomplete="off" value="${safeProductName}" placeholder="Например: Чехол для ключа" oninput="renderLinkSuggestions()"></div><div id="linkSuggestions" class="suggestions"></div><button class="btn dark full" onclick="saveMarketplaceLink()">Сохранить</button>`);window.pendingMarketplaceLink={market:String(market),sku:String(sku||''),context:String(context||''),feedKey:String(feedKey||'')};setTimeout(()=>{const i=document.getElementById('linkProductName');if(i){i.focus();renderLinkSuggestions()}},0)}
+function renderLinkSuggestions(){const box=document.getElementById('linkSuggestions'),input=document.getElementById('linkProductName');if(!box||!input)return;const q=normalizeName(input.value);let a=[...state.products];if(q)a=a.filter(p=>normalizeName(p.name).includes(q));a=a.slice(0,8);if(!a.length){box.innerHTML=q?'<div class="muted">Совпадений нет — будет создан новый товар.</div>':'<div class="muted">Введите название, чтобы найти существующий товар.</div>';return}box.innerHTML=a.map(p=>`<button type="button" class="suggestion" onclick="chooseMarketplaceProduct('${p.id}')"><b>${esc(p.name)}</b><div class="muted">Kaspi: ${esc(p.kaspi||'—')} · WB: ${esc(p.wb||'—')} · Ozon: ${esc(p.ozon||'—')}</div></button>`).join('')}
+function chooseMarketplaceProduct(pid){const link=window.pendingMarketplaceLink,p=prod(pid);if(!link||!p)return;attachMarketplaceSku(p,link.market,link.sku,link.feedKey);closeModal();render()}
+function attachMarketplaceSku(p,market,sku,feedKey=''){const field=marketplaceField(market);if(!field)return alert('Неизвестный маркетплейс');const old=String(p[field]||'').trim();if(old&&old!==String(sku||'').trim()){const ok=confirm(`У товара «${p.name}» уже указан ${market} артикул ${old}. Заменить его на ${sku}?`);if(!ok)return false}p[field]=String(sku||'').trim();const feed=market==='Kaspi'?state.kaspiOrderFeed:market==='WB'?state.wbOrderFeed:state.ozonOrderFeed;(feed||[]).forEach(o=>{if(String(o.sku||'').trim()===p[field])o.productId=p.id});save();return true}
+function saveMarketplaceLink(){const link=window.pendingMarketplaceLink,input=document.getElementById('linkProductName');if(!link||!input)return;const name=input.value.trim();if(!name)return alert('Введите название товара');const exact=state.products.find(p=>normalizeName(p.name)===normalizeName(name));if(exact){if(attachMarketplaceSku(exact,link.market,link.sku,link.feedKey)!==false){closeModal();render()}return}const p={id:id(),name,category:'',photo:'',kaspi:'',wb:'',ozon:'',min:0,stock:0,cost:0,totalProfit:0};state.products.push(p);attachMarketplaceSku(p,link.market,link.sku,link.feedKey);closeModal();render()}
 function renderAttention(){let a=state.products.filter(p=>p.stock<=p.min&&p.min>0||p.stock<0).sort((x,y)=>x.stock-y.stock).slice(0,5);document.getElementById('attention').innerHTML=a.length?a.map(p=>`<div class="item row"><div class="grow"><div class="name">${esc(p.name)}</div><div class="muted">Остаток ${p.stock} · минимум ${p.min}</div></div><span class="badge ${p.stock<0?'bad':'warn'}">${p.stock<0?'Нехватка':'На закупку'}</span></div>`).join(''):'<div class="empty">Всё в норме</div>'}
 function renderRecent(){let a=state.movements.slice(0,5);document.getElementById('recent').innerHTML=a.length?a.map(m=>`<div class="item"><div class="row"><div class="grow"><b>${esc(m.type)}</b><div class="muted">${esc(prod(m.productId)?.name||'Товар удалён')}</div></div><div class="right">${m.qty>0?'+':''}${m.qty}<div class="muted">${new Date(m.date).toLocaleString('ru-RU')}</div></div></div></div>`).join(''):'<div class="empty">Операций пока нет</div>'}
 function renderProducts(){let q=(document.getElementById('q')?.value||'').toLowerCase(),f=document.getElementById('filter')?.value||'all',s=document.getElementById('sort')?.value||'name';let a=state.products.filter(p=>[p.name,p.kaspi,p.wb,p.ozon].join(' ').toLowerCase().includes(q));a=a.filter(p=>f==='all'||f==='low'&&p.stock<=p.min&&p.stock>0||f==='zero'&&p.stock<=0||f==='reserve'&&reserved(p)>0||f==='buy'&&(p.stock<=p.min||p.stock<0));a.sort((x,y)=>s==='name'?x.name.localeCompare(y.name):s==='stock'?y.stock-x.stock:s==='sales'?salesDays(y)-salesDays(x):s==='profit'?(y.totalProfit||0)-(x.totalProfit||0):salesDays(x)?x.stock/salesDays(x)-y.stock/salesDays(y):0);document.getElementById('productList').innerHTML=a.length?a.map(productCard).join(''):'<div class="empty">Товаров не найдено</div>'}
@@ -259,70 +99,13 @@ function doInventory(){let p=prod(document.getElementById('ip').value),actual=+d
 function showSheet(x){document.getElementById('sheet').innerHTML=x;document.getElementById('modal').classList.add('open')}function closeModal(){document.getElementById('modal').classList.remove('open')}
 async function testKaspiWorker(){const status=document.getElementById('kaspiApiStatus');if(status)status.textContent='Статус: проверяем Worker...';try{const r=await fetch(KASPI_WORKER+'/health',{cache:'no-store'});const data=await r.json();if(!r.ok||!data.ok)throw new Error(data.error||('HTTP '+r.status));if(status)status.textContent='Статус: Worker подключён';alert('Kaspi Worker работает.')}catch(e){if(status)status.textContent='Статус: ошибка Worker';alert('Ошибка Worker:\n'+String(e.message||e))}}
 function cleanWorkerUrl(value){return String(value||'').trim().replace(/\/+$/,'')}
-function getWbWorkerUrl(){return cleanWorkerUrl(state.settings.wbWorkerUrl||'')}
-function saveWbWorkerUrl(silent=false){
- const input=document.getElementById('wbWorkerUrl');
- const value=cleanWorkerUrl(input?.value||state.settings.wbWorkerUrl||'');
- if(!value){if(!silent)alert('Вставьте адрес WB Worker вида https://....workers.dev');return ''}
- try{const u=new URL(value);if(!['http:','https:'].includes(u.protocol))throw new Error('protocol')}catch(e){if(!silent)alert('Неверный адрес WB Worker');return ''}
- state.settings.wbWorkerUrl=value;state.settings.lastWbTestStatus='Статус: адрес сохранён';save();render();if(!silent)alert('Адрес WB Worker сохранён');return value;
-}
-async function requestWbSync(days=14){
- const base=getWbWorkerUrl()||saveWbWorkerUrl(true);if(!base)throw new Error('Сначала укажите адрес WB Worker в Настройках');
- const r=await fetch(base+'/wb/sync?days='+encodeURIComponent(days),{cache:'no-store'});
- let data=null;try{data=await r.json()}catch(e){throw new Error('WB Worker вернул не JSON (HTTP '+r.status+')')}
- if(!r.ok||data?.ok===false)throw new Error(data?.error||data?.message||('HTTP '+r.status));
- return data;
-}
-function toTimestamp(value){
- if(value==null||value==='')return Date.now();
- const n=Number(value);if(Number.isFinite(n)&&n>0)return n<1000000000000?n*1000:n;
- const t=Date.parse(value);return Number.isFinite(t)?t:Date.now();
-}
-function normalizeWbFeed(data){
- const src=Array.isArray(data)?data:Array.isArray(data?.orders)?data.orders:[];
- const result=[];
- src.forEach((order,oi)=>{
-   const lines=Array.isArray(order?.lines)&&order.lines.length?order.lines:[order];
-   lines.forEach((line,li)=>{
-     const sku=String(line?.merchantCode??line?.sku??line?.article??line?.vendorCode??order?.article??order?.sku??order?.vendorCode??order?.nmId??'').trim();
-     const qty=Math.max(1,Number(line?.quantity??line?.qty??order?.quantity??order?.qty??1)||1);
-     const explicitUnit=Number(line?.unitPrice??order?.unitPrice??0)||0;
-     const explicitTotal=Number(line?.totalPrice??order?.totalPrice??0)||0;
-     const fallbackPrice=Number(line?.convertedFinalPrice??line?.convertedPrice??line?.finalPrice??line?.price??order?.convertedFinalPrice??order?.convertedPrice??order?.finalPrice??order?.price??0)||0;
-     const unitPrice=explicitUnit||(explicitTotal&&qty?explicitTotal/qty:0)||fallbackPrice;
-     const totalPrice=explicitTotal||unitPrice*qty;
-     const orderId=String(order?.orderId??order?.id??order?.orderUid??order?.rid??line?.orderId??('wb-'+oi));
-     const entryId=String(line?.entryId??line?.id??order?.id??(orderId+'-'+li));
-     const code=String(order?.code??order?.orderUid??order?.id??orderId);
-     const productName=String(line?.productName??line?.name??order?.productName??order?.name??'');
-     const status=String(order?.status??order?.supplierStatus??line?.status??'NEW');
-     const stateLabel=String(order?.state??order?.wbStatus??order?.deliveryType??'FBS');
-     const creationDate=toTimestamp(order?.creationDate??order?.createdAt??line?.creationDate??line?.createdAt);
-     const p=sku?state.products.find(x=>String(x.wb||'').trim()===sku):null;
-     result.push({orderId,code,entryId,status,state:stateLabel,creationDate,sku,productName,qty,unitPrice,totalPrice,productId:p?.id||null});
-   });
- });
- return result;
-}
-async function testWbWorker(){
- const status=document.getElementById('wbApiStatus');if(status)status.textContent='Статус: проверяем WB Worker...';
- try{const data=await requestWbSync(1);const count=normalizeWbFeed(data).length;state.settings.lastWbTestStatus='Статус: WB Worker работает · заказов '+count;save();render();alert('WB Worker работает. Получено строк заказов: '+count)}
- catch(e){state.settings.lastWbTestStatus='Статус: ошибка WB Worker';save();render();alert('Ошибка WB:\n'+String(e.message||e))}
-}
-async function syncWbNow(){
- const status=document.getElementById('wbApiStatus');if(status)status.textContent='Статус: загружаем заказы WB...';
- try{
-   const data=await requestWbSync(14);
-   const feed=normalizeWbFeed(data);
-   state.wbOrderFeed=feed.slice(0,500);
-   state.settings.lastWbTestStatus='Статус: WB подключён · получено '+feed.length;
-   state.settings.lastSync=Date.now();
-   save();selectedOrderMarket='WB';document.querySelectorAll('.market-tab').forEach(b=>b.classList.toggle('active',b.dataset.market==='WB'));render();
-   const matched=feed.filter(x=>x.productId).length;
-   alert('WB загружен\nСтрок заказов: '+feed.length+'\nПривязано: '+matched+'\nНужно привязать: '+(feed.length-matched));
- }catch(e){state.settings.lastWbTestStatus='Статус: ошибка WB Worker';save();render();alert('Ошибка загрузки WB:\n'+String(e.message||e))}
-}
+function getWbWorkerUrl(){return cleanWorkerUrl(state.settings.wbWorkerUrl||WB_WORKER)}
+function saveWbWorkerUrl(silent=false){const input=document.getElementById('wbWorkerUrl');const value=cleanWorkerUrl(input?.value||state.settings.wbWorkerUrl||WB_WORKER);if(!value){if(!silent)alert('Вставьте адрес WB Worker вида https://....workers.dev');return ''}try{const u=new URL(value);if(!['http:','https:'].includes(u.protocol))throw new Error('protocol')}catch(e){if(!silent)alert('Неверный адрес WB Worker');return ''}state.settings.wbWorkerUrl=value;state.settings.lastWbTestStatus='Статус: адрес сохранён';save();render();if(!silent)alert('Адрес WB Worker сохранён');return value}
+async function requestWbSync(days=14){const base=getWbWorkerUrl()||saveWbWorkerUrl(true);if(!base)throw new Error('Сначала укажите адрес WB Worker в Настройках');const r=await fetch(base+'/wb/sync?days='+encodeURIComponent(days),{cache:'no-store'});let data=null;try{data=await r.json()}catch(e){throw new Error('WB Worker вернул не JSON (HTTP '+r.status+')')}if(!r.ok||data?.ok===false)throw new Error(data?.error||data?.message||('HTTP '+r.status));return data}
+function toTimestamp(value){if(value==null||value==='')return Date.now();const n=Number(value);if(Number.isFinite(n)&&n>0)return n<1000000000000?n*1000:n;const t=Date.parse(value);return Number.isFinite(t)?t:Date.now()}
+function normalizeWbFeed(data){const src=Array.isArray(data)?data:Array.isArray(data?.orders)?data.orders:[];const result=[];src.forEach((order,oi)=>{const lines=Array.isArray(order?.lines)&&order.lines.length?order.lines:[order];lines.forEach((line,li)=>{const sku=String(line?.merchantCode??line?.sku??line?.article??line?.vendorCode??order?.article??order?.sku??order?.vendorCode??order?.nmId??'').trim();const qty=Math.max(1,Number(line?.quantity??line?.qty??order?.quantity??order?.qty??1)||1);const explicitUnit=Number(line?.unitPrice??order?.unitPrice??0)||0;const explicitTotal=Number(line?.totalPrice??order?.totalPrice??0)||0;const fallbackPrice=Number(line?.convertedFinalPrice??line?.convertedPrice??line?.finalPrice??line?.price??order?.convertedFinalPrice??order?.convertedPrice??order?.finalPrice??order?.price??0)||0;const unitPrice=explicitUnit||(explicitTotal&&qty?explicitTotal/qty:0)||fallbackPrice;const totalPrice=explicitTotal||unitPrice*qty;const orderId=String(order?.orderId??order?.id??order?.orderUid??order?.rid??line?.orderId??('wb-'+oi));const entryId=String(line?.entryId??line?.id??order?.id??(orderId+'-'+li));const code=String(order?.code??order?.orderUid??order?.id??orderId);const productName=String(line?.productName??line?.name??order?.productName??order?.name??'');const status=String(order?.status??order?.supplierStatus??line?.status??'NEW');const stateLabel=String(order?.state??order?.wbStatus??order?.deliveryType??'FBS');const creationDate=toTimestamp(order?.creationDate??order?.createdAt??line?.creationDate??line?.createdAt);const p=sku?state.products.find(x=>String(x.wb||'').trim()===sku):null;result.push({orderId,code,entryId,status,state:stateLabel,creationDate,sku,productName,qty,unitPrice,totalPrice,productId:p?.id||null})})});return result}
+async function testWbWorker(){const status=document.getElementById('wbApiStatus');if(status)status.textContent='Статус: проверяем WB Worker...';try{const data=await requestWbSync(1);const count=normalizeWbFeed(data).length;state.settings.lastWbTestStatus='Статус: WB Worker работает · заказов '+count;save();render();alert('WB Worker работает. Получено строк заказов: '+count)}catch(e){state.settings.lastWbTestStatus='Статус: ошибка WB Worker';save();render();alert('Ошибка WB:\n'+String(e.message||e))}}
+async function syncWbNow(){const status=document.getElementById('wbApiStatus');if(status)status.textContent='Статус: загружаем заказы WB...';try{const data=await requestWbSync(14);const feed=normalizeWbFeed(data);state.wbOrderFeed=feed.slice(0,500);state.settings.lastWbTestStatus='Статус: WB подключён · получено '+feed.length;state.settings.lastSync=Date.now();save();selectedOrderMarket='WB';document.querySelectorAll('.market-tab').forEach(b=>b.classList.toggle('active',b.dataset.market==='WB'));render();const matched=feed.filter(x=>x.productId).length;alert('WB загружен\nСтрок заказов: '+feed.length+'\nПривязано: '+matched+'\nНужно привязать: '+(feed.length-matched))}catch(e){state.settings.lastWbTestStatus='Статус: ошибка WB Worker';save();render();alert('Ошибка загрузки WB:\n'+String(e.message||e))}}
 async function syncNow(){const btn=document.querySelector('header .btn');const old=btn?.textContent;if(btn){btn.disabled=true;btn.textContent='…';}try{let batch=0,totalOrders=0,matched=0,unmatched=0,reservedCount=0,soldCount=0,cancelledCount=0,safety=0;const latestOrderFeed=[];state.kaspiOrders||={};state.kaspiOrderFeed||=[];state.kaspiBaselineAt||=Date.now();while(safety<30){safety++;const r=await fetch(KASPI_WORKER+'/kaspi/sync?days=14&batch='+batch,{cache:'no-store'});const data=await r.json();if(!r.ok||!data.ok)throw new Error(data.error||('HTTP '+r.status));if(batch===0)totalOrders=Number(data.totalOrders||0);for(const o of(data.orders||[])){for(const line of(o.lines||[])){const sku=String(line.merchantCode||'').trim();const qty=Math.max(0,Number(line.quantity||1));const p=sku?state.products.find(x=>String(x.kaspi||'').trim()===sku):null;const unitPrice=qty?Number(line.totalPrice||line.basePrice*qty||0)/qty:0;latestOrderFeed.push({orderId:o.id,code:o.code||'',entryId:line.entryId,status:o.status||'',state:o.state||'',creationDate:o.creationDate||Date.now(),sku,productName:line.productName||'',qty,unitPrice,totalPrice:Number(line.totalPrice||unitPrice*qty||0),productId:p?.id||null});if(!sku){unmatched++;continue}if(!p){unmatched++;continue}matched++;const key=o.id+':'+line.entryId;const prev=state.kaspiOrders[key]||null;const cancelled=['CANCELLED','CANCELLING'].includes(o.status);const completed=o.status==='COMPLETED';const active=!completed&&!cancelled&&o.state!=='ARCHIVE';if(!prev){if(active){state.reservations.push({id:id(),productId:p.id,qty,active:true,source:'Kaspi',externalKey:key,date:Date.now()});log('резерв',p.id,-qty,'Kaspi '+(o.code||''));reservedCount+=qty}}else{if(prev.active&&completed){const res=state.reservations.find(x=>x.externalKey===key&&x.active);if(res)res.active=false;if(!state.sales.some(s=>s.externalKey===key)){p.stock-=qty;state.sales.push({id:id(),productId:p.id,qty,price:unitPrice,cost:p.cost,fee:0,channel:'Kaspi',date:o.creationDate||Date.now(),externalKey:key});log('продажа',p.id,-qty,'Kaspi '+(o.code||''));soldCount+=qty}}if(prev.active&&cancelled){const res=state.reservations.find(x=>x.externalKey===key&&x.active);if(res){res.active=false;log('отмена резерва',p.id,res.qty,'Kaspi '+(o.code||''));cancelledCount+=res.qty}}}state.kaspiOrders[key]={status:o.status,state:o.state,active,qty,sku,updatedAt:Date.now()}}}if(!data.hasMore)break;batch=Number(data.nextBatch);if(!Number.isFinite(batch))break}state.kaspiOrderFeed=latestOrderFeed.slice(0,500);state.settings.lastSync=Date.now();save();render();alert('Kaspi синхронизирован\n'+'Заказов: '+totalOrders+'\n'+'Строк заказов: '+latestOrderFeed.length+'\n'+'Совпало по артикулам: '+matched+'\n'+'Не привязано: '+unmatched+'\n'+'В резерв: '+reservedCount+' шт.\n'+'Продано: '+soldCount+' шт.\n'+'Снято с резерва: '+cancelledCount+' шт.')}catch(e){alert('Ошибка синхронизации Kaspi:\n'+String(e.message||e))}finally{if(btn){btn.disabled=false;btn.textContent=old||'↻'}}}
 function backup(){let blob=new Blob([JSON.stringify(state,null,2)],{type:'application/json'}),a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download='sklad-backup-'+new Date().toISOString().slice(0,10)+'.json';a.click()}
 function restore(){let i=document.createElement('input');i.type='file';i.accept='.json';i.onchange=()=>{let r=new FileReader();r.onload=()=>{try{state=JSON.parse(r.result);state.products||=[];state.movements||=[];state.sales||=[];state.purchases||=[];state.reservations||=[];state.settings||={};state.kaspiOrders||={};state.kaspiOrderFeed||=[];state.wbOrderFeed||=[];state.ozonOrderFeed||=[];save();render();alert('Восстановлено')}catch(e){alert('Неверная копия')}};r.readAsText(i.files[0])};i.click()}
