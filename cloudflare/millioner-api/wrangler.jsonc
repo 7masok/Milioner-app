@@ -15,7 +15,7 @@
     {
       "binding": "DB",
       "database_name": "millioner-db",
-      "database_id": "REPLACE_WITH_D1_DATABASE_ID"
+      "database_id": "174ad13f-7d45-4e11-92ae-fe04ce5fd6c1"
     }
   ],
   "observability": {
