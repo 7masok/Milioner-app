@@ -1,4 +1,8 @@
 const DEFAULT_CORS_ORIGIN = 'https://7masok.github.io';
+const KASPI_SCHEDULE_MS = 10 * 60 * 1000;
+// WB Statistics API can be limited seller-wide to one request per three hours.
+// Keep a small safety margin so background checks do not keep the seller in 429.
+const WB_MIN_SYNC_MS = (3 * 60 + 5) * 60 * 1000;
 
 export default {
   async fetch(request, env, ctx) {
@@ -55,6 +59,11 @@ export default {
         return json({ ok: true, markets: rows.results || [] }, 200, cors);
       }
 
+      if (url.pathname === '/api/market-status' && request.method === 'GET') {
+        const markets = await getMarketStatuses(env.DB);
+        return json({ ok: true, serverTime: Date.now(), markets }, 200, cors);
+      }
+
       if (url.pathname === '/admin/import-products' && request.method === 'POST') {
         requireAdmin(request, env);
         const body = await request.json();
@@ -66,7 +75,7 @@ export default {
       if (url.pathname === '/admin/sync' && request.method === 'POST') {
         requireAdmin(request, env);
         const market = normalizeMarket(url.searchParams.get('market'));
-        const result = market ? await syncMarket(env, market) : await syncAll(env);
+        const result = market ? await syncMarket(env, market) : await syncAll(env, { scheduled: false });
         return json({ ok: true, result }, 200, cors);
       }
 
@@ -77,7 +86,10 @@ export default {
   },
 
   async scheduled(controller, env, ctx) {
-    ctx.waitUntil(syncAll(env));
+    ctx.waitUntil((async () => {
+      await ensureSchema(env.DB);
+      return syncAll(env, { scheduled: true });
+    })());
   }
 };
 
@@ -96,13 +108,57 @@ async function ensureSchema(db) {
   for (const sql of statements) await db.prepare(sql).run();
 }
 
-async function syncAll(env) {
+async function syncAll(env, { scheduled = false } = {}) {
   const results = {};
   for (const market of ['Kaspi', 'WB']) {
-    try { results[market] = await syncMarket(env, market); }
-    catch (e) { results[market] = { ok: false, error: String(e?.message || e) }; }
+    try {
+      if (scheduled && market === 'WB') {
+        const gate = await getWbSyncGate(env.DB);
+        if (!gate.allowed) {
+          results[market] = {
+            ok: true,
+            skipped: true,
+            reason: 'WB seller-wide rate-limit window',
+            nextSyncAt: gate.nextSyncAt
+          };
+          continue;
+        }
+      }
+      results[market] = await syncMarket(env, market);
+    } catch (e) {
+      results[market] = { ok: false, error: String(e?.message || e) };
+    }
   }
   return results;
+}
+
+async function getWbSyncGate(db) {
+  const row = await db.prepare(`SELECT MAX(started_at) AS lastAttempt FROM sync_runs WHERE market='WB'`).first();
+  const lastAttempt = Number(row?.lastAttempt || 0);
+  const nextSyncAt = lastAttempt ? lastAttempt + WB_MIN_SYNC_MS : Date.now();
+  return { allowed: !lastAttempt || Date.now() >= nextSyncAt, lastAttempt, nextSyncAt };
+}
+
+async function getMarketStatuses(db) {
+  const result = [];
+  for (const market of ['Kaspi', 'WB', 'Ozon']) {
+    const latest = await db.prepare('SELECT * FROM sync_runs WHERE market=? ORDER BY id DESC LIMIT 1').bind(market).first();
+    const success = await db.prepare('SELECT MAX(finished_at) AS lastSuccessAt FROM sync_runs WHERE market=? AND ok=1').bind(market).first();
+    const count = await db.prepare('SELECT COUNT(*) AS n FROM marketplace_order_lines WHERE market=?').bind(market).first();
+    const lastAttempt = Number(latest?.started_at || 0);
+    let nextSyncAt = null;
+    if (market === 'Kaspi') nextSyncAt = lastAttempt ? lastAttempt + KASPI_SCHEDULE_MS : Date.now();
+    if (market === 'WB') nextSyncAt = lastAttempt ? lastAttempt + WB_MIN_SYNC_MS : Date.now();
+    result.push({
+      market,
+      configured: market !== 'Ozon',
+      latest: latest || null,
+      lastSuccessAt: Number(success?.lastSuccessAt || 0) || null,
+      orderLines: Number(count?.n || 0),
+      nextSyncAt
+    });
+  }
+  return result;
 }
 
 async function syncMarket(env, market) {
@@ -157,7 +213,13 @@ async function fetchWb(env) {
   if (!base) throw new Error('WB_WORKER_URL is not configured');
   const r = await fetch(`${base}/wb/sync?days=14`, { headers: { 'Accept': 'application/json' } });
   const data = await safeJson(r, 'WB Worker');
-  if (!r.ok || data?.ok === false) throw new Error(data?.error || data?.message || `WB Worker HTTP ${r.status}`);
+  if (!r.ok || data?.ok === false) {
+    const detail = String(data?.error || data?.message || `WB Worker HTTP ${r.status}`);
+    if (r.status === 429 || /\b429\b|too many requests|global limiter/i.test(detail)) {
+      throw new Error(`WB rate limited by Statistics API. Automatic sync waits at least 3h05m between attempts. ${detail}`);
+    }
+    throw new Error(detail);
+  }
   return normalizeWb(data);
 }
 
