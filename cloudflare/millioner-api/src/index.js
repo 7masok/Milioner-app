@@ -1,5 +1,6 @@
 const DEFAULT_CORS_ORIGIN = 'https://7masok.github.io';
 const KASPI_SCHEDULE_MS = 10 * 60 * 1000;
+const KASPI_MAX_BATCHES = 4;
 // WB Statistics API can be limited seller-wide to one request per three hours.
 // Keep a small safety margin so background checks do not keep the seller in 429.
 const WB_MIN_SYNC_MS = (3 * 60 + 5) * 60 * 1000;
@@ -170,7 +171,7 @@ async function syncMarket(env, market) {
     else if (market === 'WB') lines = await fetchWb(env);
     else throw new Error('Unsupported market');
 
-    for (const line of lines) await upsertOrderLine(env.DB, market, line);
+    await upsertOrderLines(env.DB, market, lines);
     await env.DB.prepare('UPDATE sync_runs SET finished_at=?,ok=1,items=? WHERE id=?').bind(Date.now(), lines.length, run.id).run();
     return { ok: true, items: lines.length };
   } catch (e) {
@@ -184,7 +185,7 @@ async function fetchKaspi(env) {
   if (!base) throw new Error('KASPI_WORKER_URL is not configured');
   const result = [];
   let batch = 0;
-  for (let safety = 0; safety < 40; safety++) {
+  for (let safety = 0; safety < KASPI_MAX_BATCHES; safety++) {
     const r = await fetch(`${base}/kaspi/sync?days=14&batch=${batch}`, { headers: { 'Accept': 'application/json' } });
     const data = await safeJson(r, 'Kaspi Worker');
     if (!r.ok || data?.ok === false) throw new Error(data?.error || `Kaspi Worker HTTP ${r.status}`);
@@ -249,6 +250,28 @@ function normalizeWb(data) {
     });
   });
   return result;
+}
+
+async function upsertOrderLines(db, market, lines) {
+  if (!lines.length) return;
+  const sql = `
+    INSERT INTO marketplace_order_lines
+      (market,order_id,code,entry_id,status,state,creation_date,sku,product_name,qty,unit_price,total_price,raw_json,first_seen_at,updated_at)
+    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+    ON CONFLICT(market,order_id,entry_id) DO UPDATE SET
+      code=excluded.code,status=excluded.status,state=excluded.state,creation_date=excluded.creation_date,
+      sku=excluded.sku,product_name=excluded.product_name,qty=excluded.qty,unit_price=excluded.unit_price,
+      total_price=excluded.total_price,raw_json=excluded.raw_json,updated_at=excluded.updated_at
+  `;
+  for (let i = 0; i < lines.length; i += 50) {
+    const now = Date.now();
+    const batch = lines.slice(i, i + 50).map(o => envlessOrderStatement(db, sql, market, o, now));
+    await db.batch(batch);
+  }
+}
+
+function envlessOrderStatement(db, sql, market, o, now) {
+  return db.prepare(sql).bind(market,o.orderId,o.code,o.entryId,o.status,o.state,o.creationDate,o.sku,o.productName,o.qty,o.unitPrice,o.totalPrice,JSON.stringify(o.raw || {}),now,now);
 }
 
 async function upsertOrderLine(db, market, o) {

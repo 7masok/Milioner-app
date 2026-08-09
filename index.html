@@ -109,7 +109,9 @@ function setIntegrationBadge(id,text,kind){const el=document.getElementById(id);
 function renderIntegrationStatus(){
   const k=marketServerStatus('Kaspi'),w=marketServerStatus('WB');
   const ks=document.getElementById('kaspiApiStatus'),ws=document.getElementById('wbApiStatus');
-  if(k?.latest?.ok){setIntegrationBadge('kaspiApiBadge','Работает','ok');setDot('dotKaspi','');if(ks)ks.textContent=`Статус: фоновая синхронизация работает · ${k.orderLines||0} строк · успешно ${shortClock(k.lastSuccessAt)}`}
+  const kRunning=!!(k?.latest&&!k.latest.finished_at&&!k.latest.error);
+  if(kRunning){setIntegrationBadge('kaspiApiBadge','Синхронизация','warn');setDot('dotKaspi','warn');if(ks)ks.textContent=`Статус: идёт фоновая синхронизация · старт ${shortClock(k.latest.started_at)}`}
+  else if(k?.latest?.ok){setIntegrationBadge('kaspiApiBadge','Работает','ok');setDot('dotKaspi','');if(ks)ks.textContent=`Статус: фоновая синхронизация работает · ${k.orderLines||0} строк · успешно ${shortClock(k.lastSuccessAt)}`}
   else if(k?.latest){setIntegrationBadge('kaspiApiBadge','Ошибка','bad');setDot('dotKaspi','bad');if(ks)ks.textContent='Статус: '+String(k.latest.error||'ошибка фоновой синхронизации').slice(0,180)}
   else{setIntegrationBadge('kaspiApiBadge','Проверяем','warn');setDot('dotKaspi','warn');if(ks)ks.textContent='Статус: ждём первый фоновый запуск'}
   if(w?.latest?.ok){setIntegrationBadge('wbApiBadge','Работает','ok');setDot('dotWb','');if(ws)ws.textContent=`Статус: данные WB в общей базе · ${w.orderLines||0} строк · успешно ${shortClock(w.lastSuccessAt)}`}
