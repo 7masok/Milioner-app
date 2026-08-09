@@ -26,6 +26,7 @@ table{width:100%;border-collapse:collapse;background:#fff;border-radius:14px;ove
 .order-meta{display:flex;gap:6px;flex-wrap:wrap;margin-top:7px}.order-line{display:flex;justify-content:space-between;gap:10px;align-items:flex-start}.order-line+.order-line{margin-top:5px}.order-sku{font-size:11px;color:var(--muted);word-break:break-all}.order-head{display:flex;justify-content:space-between;gap:10px;align-items:flex-start}.order-price{font-weight:800;white-space:nowrap}.order-summary{display:grid;grid-template-columns:repeat(3,1fr);gap:7px;margin:10px 0}.order-summary .card{padding:10px}.order-summary .num{font-size:17px}.order-list{display:flex;flex-direction:column;gap:8px}
 .link-btn{border:0;cursor:pointer}.link-btn.bad{text-decoration:underline}.suggestions{display:flex;flex-direction:column;gap:6px;margin-top:8px}.suggestion{width:100%;border:1px solid var(--line);background:#fff;border-radius:12px;padding:10px;text-align:left}.suggestion b{display:block}.suggestion .muted{margin-top:3px}.link-note{background:#f6f7f8;border-radius:12px;padding:10px;margin:8px 0;font-size:12px;color:var(--muted)}
 .market-tabs{display:flex;gap:8px;overflow:auto;margin:8px 0 10px;padding-bottom:2px}.market-tab{flex:1;min-width:90px;border:1px solid var(--line);background:#fff;border-radius:12px;padding:10px 14px;font-weight:700}.market-tab.active{background:#111;color:#fff;border-color:#111}
+.worker-url{width:100%;padding:11px;border:1px solid var(--line);border-radius:11px;background:#fff;margin-top:6px}
 </style>
 </head>
 <body>
@@ -81,7 +82,20 @@ table{width:100%;border-collapse:collapse;background:#fff;border-radius:14px;ove
   <div id="kaspiApiStatus" class="muted">Статус: готов к проверке</div>
   <button class="btn full" onclick="testKaspiWorker()">Проверить Kaspi</button>
 </div>
-<div class="setting"><span>WB / Ozon</span><span class="muted">ещё не подключены</span></div><button class="btn full" onclick="backup()">Создать резервную копию</button><button class="btn full" onclick="restore()">Восстановить из копии</button></section>
+<div class="setting" style="display:block">
+  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+    <span>Wildberries API</span><span id="wbApiBadge" class="badge warn">Нужен Worker</span>
+  </div>
+  <div class="muted">WB-токен должен храниться в Cloudflare Secret <b>WB_TOKEN</b>. В сайт токен не вставляется.</div>
+  <input id="wbWorkerUrl" class="worker-url" type="url" inputmode="url" placeholder="https://имя-worker.workers.dev" autocomplete="off">
+  <div id="wbApiStatus" class="muted" style="margin-top:7px">Статус: укажите адрес WB Worker</div>
+  <div class="actions">
+    <button class="btn" onclick="saveWbWorkerUrl()">Сохранить адрес</button>
+    <button class="btn" onclick="testWbWorker()">Проверить WB</button>
+  </div>
+  <button class="btn dark full" onclick="syncWbNow()">Получить заказы WB</button>
+</div>
+<div class="setting"><span>Ozon</span><span class="muted">ещё не подключён</span></div><button class="btn full" onclick="backup()">Создать резервную копию</button><button class="btn full" onclick="restore()">Восстановить из копии</button></section>
 </main>
 
 <button class="fab" onclick="openModal('menu')">+</button>
@@ -125,9 +139,17 @@ function render(){
  renderMarketplaceOrders();renderAttention();renderRecent();renderProducts();renderMovement();renderPurchases();renderReports();
  document.getElementById('lastSync').textContent=state.settings.lastSync?new Date(state.settings.lastSync).toLocaleTimeString('ru-RU',{hour:'2-digit',minute:'2-digit'}):'—';
  const ks=document.getElementById('kaspiApiStatus'); if(ks && state.settings.lastKaspiTestStatus) ks.textContent=state.settings.lastKaspiTestStatus;
+ const wbInput=document.getElementById('wbWorkerUrl');if(wbInput&&document.activeElement!==wbInput)wbInput.value=state.settings.wbWorkerUrl||'';
+ const ws=document.getElementById('wbApiStatus');if(ws)ws.textContent=state.settings.lastWbTestStatus||(state.settings.wbWorkerUrl?'Статус: адрес сохранён':'Статус: укажите адрес WB Worker');
+ const badge=document.getElementById('wbApiBadge');if(badge){const ready=Boolean(state.settings.wbWorkerUrl);badge.textContent=ready?'Worker указан':'Нужен Worker';badge.className='badge '+(ready?'ok':'warn');}
 }
 function selectOrderMarket(market){selectedOrderMarket=market;document.querySelectorAll('.market-tab').forEach(b=>b.classList.toggle('active',b.dataset.market===market));renderMarketplaceOrders()}
-function kaspiStatusLabel(status){return ({APPROVED:'Принят',ACCEPTED_BY_MERCHANT:'Принят',COMPLETED:'Завершён',CANCELLED:'Отменён',CANCELLING:'Отменяется',DELIVERY:'Доставка',PICKUP:'Самовывоз'})[status]||status||'—'}
+function marketplaceStatusLabel(market,status){
+ const s=String(status||'');
+ if(market==='WB')return ({NEW:'Новый',CONFIRM:'На сборке',COMPLETE:'Завершён',COMPLETED:'Завершён',CANCEL:'Отменён',CANCELLED:'Отменён',SORTED:'Отсортирован'})[s.toUpperCase()]||s||'—';
+ return ({APPROVED:'Принят',ACCEPTED_BY_MERCHANT:'Принят',COMPLETED:'Завершён',CANCELLED:'Отменён',CANCELLING:'Отменяется',DELIVERY:'Доставка',PICKUP:'Самовывоз'})[s]||s||'—';
+}
+function kaspiStatusLabel(status){return marketplaceStatusLabel('Kaspi',status)}
 function renderMarketplaceOrders(){
  const list=document.getElementById('kaspiOrderList');if(!list)return;
  const market=selectedOrderMarket;
@@ -137,16 +159,19 @@ function renderMarketplaceOrders(){
  const eTotal=document.getElementById('koTotal'),eMatched=document.getElementById('koMatched'),eUnmatched=document.getElementById('koUnmatched');
  if(eTotal)eTotal.textContent=total;if(eMatched)eMatched.textContent=matched;if(eUnmatched)eUnmatched.textContent=unmatched;
  if(!a.length){
-   list.innerHTML=market==='Kaspi'?'<div class="empty">Нажмите ↻ сверху, чтобы загрузить заказы Kaspi</div>':`<div class="empty">${market} пока не подключён. После подключения здесь будут его заказы.</div>`;
+   if(market==='Kaspi')list.innerHTML='<div class="empty">Нажмите ↻ сверху, чтобы загрузить заказы Kaspi</div>';
+   else if(market==='WB')list.innerHTML='<div class="empty">Заказы WB ещё не загружены.<button class="btn dark full" onclick="syncWbNow()">Получить заказы WB</button></div>';
+   else list.innerHTML='<div class="empty">Ozon пока не подключён. После подключения здесь будут его заказы.</div>';
    return;
  }
  list.innerHTML=a.slice(0,100).map(o=>{
    const p=o.productId?prod(o.productId):null;
-   const statusClass=['CANCELLED','CANCELLING'].includes(o.status)?'bad':o.status==='COMPLETED'?'ok':'warn';
+   const statusUpper=String(o.status||'').toUpperCase();
+   const statusClass=['CANCELLED','CANCELLING','CANCEL'].includes(statusUpper)?'bad':['COMPLETED','COMPLETE'].includes(statusUpper)?'ok':'warn';
    const totalPrice=Number(o.totalPrice||0);
    const feedKey=encodeURIComponent(String(o.orderId)+':'+String(o.entryId));
-   const linkControl=p?`<button type="button" class="badge ok link-btn" onclick="openProduct('${p.id}')">Привязано</button>`:`<button type="button" class="badge bad link-btn" onclick="${market==='Kaspi'?`openKaspiLink('${feedKey}')`:`openMarketplaceLink('${market}','${esc(o.sku||'')}','${esc(o.code||o.orderId||'')}','${feedKey}')`}">Нужно привязать</button>`;
-   return `<div class="item"><div class="order-head"><div class="grow"><div class="name">Заказ ${esc(o.code||o.orderId||'—')}</div><div class="muted">${o.creationDate?new Date(o.creationDate).toLocaleString('ru-RU'):'Дата неизвестна'}</div></div><span class="badge ${statusClass}">${esc(kaspiStatusLabel(o.status))}</span></div><div class="order-line" style="margin-top:9px"><div class="grow"><b>${esc(p?.name||'Товар не привязан')}</b><div class="order-sku">${market} артикул: ${esc(o.sku||'—')}</div></div><div class="right"><b>${o.qty||0} шт.</b>${totalPrice?`<div class="muted">${fmt(totalPrice)}</div>`:''}</div></div><div class="order-meta">${linkControl}<span class="badge">${esc(o.state||'—')}</span></div></div>`;
+   const linkControl=p?`<button type="button" class="badge ok link-btn" onclick="openProduct('${p.id}')">Привязано</button>`:`<button type="button" class="badge bad link-btn" onclick="${market==='Kaspi'?`openKaspiLink('${feedKey}')`:market==='WB'?`openWbLink('${feedKey}')`:`openMarketplaceLink('${market}','${esc(o.sku||'')}','${esc(o.code||o.orderId||'')}','${feedKey}')`}">Нужно привязать</button>`;
+   return `<div class="item"><div class="order-head"><div class="grow"><div class="name">Заказ ${esc(o.code||o.orderId||'—')}</div><div class="muted">${o.creationDate?new Date(o.creationDate).toLocaleString('ru-RU'):'Дата неизвестна'}</div></div><span class="badge ${statusClass}">${esc(marketplaceStatusLabel(market,o.status))}</span></div><div class="order-line" style="margin-top:9px"><div class="grow"><b>${esc(p?.name||o.productName||'Товар не привязан')}</b><div class="order-sku">${market} артикул: ${esc(o.sku||'—')}</div></div><div class="right"><b>${o.qty||0} шт.</b>${totalPrice?`<div class="muted">${fmt(totalPrice)}</div>`:''}</div></div><div class="order-meta">${linkControl}<span class="badge">${esc(o.state||'—')}</span></div></div>`;
  }).join('');
 }
 function renderKaspiOrders(){renderMarketplaceOrders()}
@@ -157,6 +182,12 @@ function openKaspiLink(encodedKey){
  const o=(state.kaspiOrderFeed||[]).find(x=>String(x.orderId)+':'+String(x.entryId)===key);
  if(!o)return alert('Строка заказа не найдена. Обновите синхронизацию.');
  openMarketplaceLink('Kaspi',o.sku,o.code||o.orderId||'',key,o.productName||'');
+}
+function openWbLink(encodedKey){
+ const key=decodeURIComponent(encodedKey);
+ const o=(state.wbOrderFeed||[]).find(x=>String(x.orderId)+':'+String(x.entryId)===key);
+ if(!o)return alert('Заказ WB не найден. Обновите загрузку WB.');
+ openMarketplaceLink('WB',o.sku,o.code||o.orderId||'',key,o.productName||'');
 }
 function openMarketplaceLink(market,sku,context='',feedKey='',productName=''){
  const safeMarket=esc(market),safeSku=esc(sku||'—'),safeContext=esc(context||''),safeProductName=esc(productName||'');
@@ -227,6 +258,71 @@ function inventoryForm(pid){let opts=state.products.map(p=>`<option value="${p.i
 function doInventory(){let p=prod(document.getElementById('ip').value),actual=+document.getElementById('iq').value||0,delta=actual-p.stock;if(!p)return;let old=p.stock;p.stock=actual;if(delta<0)recalcCostAfterLoss(p,-delta);log('инвентаризация',p.id,delta,`было ${old}, стало ${actual}`);save();closeModal();render()}
 function showSheet(x){document.getElementById('sheet').innerHTML=x;document.getElementById('modal').classList.add('open')}function closeModal(){document.getElementById('modal').classList.remove('open')}
 async function testKaspiWorker(){const status=document.getElementById('kaspiApiStatus');if(status)status.textContent='Статус: проверяем Worker...';try{const r=await fetch(KASPI_WORKER+'/health',{cache:'no-store'});const data=await r.json();if(!r.ok||!data.ok)throw new Error(data.error||('HTTP '+r.status));if(status)status.textContent='Статус: Worker подключён';alert('Kaspi Worker работает.')}catch(e){if(status)status.textContent='Статус: ошибка Worker';alert('Ошибка Worker:\n'+String(e.message||e))}}
+function cleanWorkerUrl(value){return String(value||'').trim().replace(/\/+$/,'')}
+function getWbWorkerUrl(){return cleanWorkerUrl(state.settings.wbWorkerUrl||'')}
+function saveWbWorkerUrl(silent=false){
+ const input=document.getElementById('wbWorkerUrl');
+ const value=cleanWorkerUrl(input?.value||state.settings.wbWorkerUrl||'');
+ if(!value){if(!silent)alert('Вставьте адрес WB Worker вида https://....workers.dev');return ''}
+ try{const u=new URL(value);if(!['http:','https:'].includes(u.protocol))throw new Error('protocol')}catch(e){if(!silent)alert('Неверный адрес WB Worker');return ''}
+ state.settings.wbWorkerUrl=value;state.settings.lastWbTestStatus='Статус: адрес сохранён';save();render();if(!silent)alert('Адрес WB Worker сохранён');return value;
+}
+async function requestWbSync(days=14){
+ const base=getWbWorkerUrl()||saveWbWorkerUrl(true);if(!base)throw new Error('Сначала укажите адрес WB Worker в Настройках');
+ const r=await fetch(base+'/wb/sync?days='+encodeURIComponent(days),{cache:'no-store'});
+ let data=null;try{data=await r.json()}catch(e){throw new Error('WB Worker вернул не JSON (HTTP '+r.status+')')}
+ if(!r.ok||data?.ok===false)throw new Error(data?.error||data?.message||('HTTP '+r.status));
+ return data;
+}
+function toTimestamp(value){
+ if(value==null||value==='')return Date.now();
+ const n=Number(value);if(Number.isFinite(n)&&n>0)return n<1000000000000?n*1000:n;
+ const t=Date.parse(value);return Number.isFinite(t)?t:Date.now();
+}
+function normalizeWbFeed(data){
+ const src=Array.isArray(data)?data:Array.isArray(data?.orders)?data.orders:[];
+ const result=[];
+ src.forEach((order,oi)=>{
+   const lines=Array.isArray(order?.lines)&&order.lines.length?order.lines:[order];
+   lines.forEach((line,li)=>{
+     const sku=String(line?.merchantCode??line?.sku??line?.article??line?.vendorCode??order?.article??order?.sku??order?.vendorCode??order?.nmId??'').trim();
+     const qty=Math.max(1,Number(line?.quantity??line?.qty??order?.quantity??order?.qty??1)||1);
+     const explicitUnit=Number(line?.unitPrice??order?.unitPrice??0)||0;
+     const explicitTotal=Number(line?.totalPrice??order?.totalPrice??0)||0;
+     const fallbackPrice=Number(line?.convertedFinalPrice??line?.convertedPrice??line?.finalPrice??line?.price??order?.convertedFinalPrice??order?.convertedPrice??order?.finalPrice??order?.price??0)||0;
+     const unitPrice=explicitUnit||(explicitTotal&&qty?explicitTotal/qty:0)||fallbackPrice;
+     const totalPrice=explicitTotal||unitPrice*qty;
+     const orderId=String(order?.orderId??order?.id??order?.orderUid??order?.rid??line?.orderId??('wb-'+oi));
+     const entryId=String(line?.entryId??line?.id??order?.id??(orderId+'-'+li));
+     const code=String(order?.code??order?.orderUid??order?.id??orderId);
+     const productName=String(line?.productName??line?.name??order?.productName??order?.name??'');
+     const status=String(order?.status??order?.supplierStatus??line?.status??'NEW');
+     const stateLabel=String(order?.state??order?.wbStatus??order?.deliveryType??'FBS');
+     const creationDate=toTimestamp(order?.creationDate??order?.createdAt??line?.creationDate??line?.createdAt);
+     const p=sku?state.products.find(x=>String(x.wb||'').trim()===sku):null;
+     result.push({orderId,code,entryId,status,state:stateLabel,creationDate,sku,productName,qty,unitPrice,totalPrice,productId:p?.id||null});
+   });
+ });
+ return result;
+}
+async function testWbWorker(){
+ const status=document.getElementById('wbApiStatus');if(status)status.textContent='Статус: проверяем WB Worker...';
+ try{const data=await requestWbSync(1);const count=normalizeWbFeed(data).length;state.settings.lastWbTestStatus='Статус: WB Worker работает · заказов '+count;save();render();alert('WB Worker работает. Получено строк заказов: '+count)}
+ catch(e){state.settings.lastWbTestStatus='Статус: ошибка WB Worker';save();render();alert('Ошибка WB:\n'+String(e.message||e))}
+}
+async function syncWbNow(){
+ const status=document.getElementById('wbApiStatus');if(status)status.textContent='Статус: загружаем заказы WB...';
+ try{
+   const data=await requestWbSync(14);
+   const feed=normalizeWbFeed(data);
+   state.wbOrderFeed=feed.slice(0,500);
+   state.settings.lastWbTestStatus='Статус: WB подключён · получено '+feed.length;
+   state.settings.lastSync=Date.now();
+   save();selectedOrderMarket='WB';document.querySelectorAll('.market-tab').forEach(b=>b.classList.toggle('active',b.dataset.market==='WB'));render();
+   const matched=feed.filter(x=>x.productId).length;
+   alert('WB загружен\nСтрок заказов: '+feed.length+'\nПривязано: '+matched+'\nНужно привязать: '+(feed.length-matched));
+ }catch(e){state.settings.lastWbTestStatus='Статус: ошибка WB Worker';save();render();alert('Ошибка загрузки WB:\n'+String(e.message||e))}
+}
 async function syncNow(){const btn=document.querySelector('header .btn');const old=btn?.textContent;if(btn){btn.disabled=true;btn.textContent='…';}try{let batch=0,totalOrders=0,matched=0,unmatched=0,reservedCount=0,soldCount=0,cancelledCount=0,safety=0;const latestOrderFeed=[];state.kaspiOrders||={};state.kaspiOrderFeed||=[];state.kaspiBaselineAt||=Date.now();while(safety<30){safety++;const r=await fetch(KASPI_WORKER+'/kaspi/sync?days=14&batch='+batch,{cache:'no-store'});const data=await r.json();if(!r.ok||!data.ok)throw new Error(data.error||('HTTP '+r.status));if(batch===0)totalOrders=Number(data.totalOrders||0);for(const o of(data.orders||[])){for(const line of(o.lines||[])){const sku=String(line.merchantCode||'').trim();const qty=Math.max(0,Number(line.quantity||1));const p=sku?state.products.find(x=>String(x.kaspi||'').trim()===sku):null;const unitPrice=qty?Number(line.totalPrice||line.basePrice*qty||0)/qty:0;latestOrderFeed.push({orderId:o.id,code:o.code||'',entryId:line.entryId,status:o.status||'',state:o.state||'',creationDate:o.creationDate||Date.now(),sku,productName:line.productName||'',qty,unitPrice,totalPrice:Number(line.totalPrice||unitPrice*qty||0),productId:p?.id||null});if(!sku){unmatched++;continue}if(!p){unmatched++;continue}matched++;const key=o.id+':'+line.entryId;const prev=state.kaspiOrders[key]||null;const cancelled=['CANCELLED','CANCELLING'].includes(o.status);const completed=o.status==='COMPLETED';const active=!completed&&!cancelled&&o.state!=='ARCHIVE';if(!prev){if(active){state.reservations.push({id:id(),productId:p.id,qty,active:true,source:'Kaspi',externalKey:key,date:Date.now()});log('резерв',p.id,-qty,'Kaspi '+(o.code||''));reservedCount+=qty}}else{if(prev.active&&completed){const res=state.reservations.find(x=>x.externalKey===key&&x.active);if(res)res.active=false;if(!state.sales.some(s=>s.externalKey===key)){p.stock-=qty;state.sales.push({id:id(),productId:p.id,qty,price:unitPrice,cost:p.cost,fee:0,channel:'Kaspi',date:o.creationDate||Date.now(),externalKey:key});log('продажа',p.id,-qty,'Kaspi '+(o.code||''));soldCount+=qty}}if(prev.active&&cancelled){const res=state.reservations.find(x=>x.externalKey===key&&x.active);if(res){res.active=false;log('отмена резерва',p.id,res.qty,'Kaspi '+(o.code||''));cancelledCount+=res.qty}}}state.kaspiOrders[key]={status:o.status,state:o.state,active,qty,sku,updatedAt:Date.now()}}}if(!data.hasMore)break;batch=Number(data.nextBatch);if(!Number.isFinite(batch))break}state.kaspiOrderFeed=latestOrderFeed.slice(0,500);state.settings.lastSync=Date.now();save();render();alert('Kaspi синхронизирован\n'+'Заказов: '+totalOrders+'\n'+'Строк заказов: '+latestOrderFeed.length+'\n'+'Совпало по артикулам: '+matched+'\n'+'Не привязано: '+unmatched+'\n'+'В резерв: '+reservedCount+' шт.\n'+'Продано: '+soldCount+' шт.\n'+'Снято с резерва: '+cancelledCount+' шт.')}catch(e){alert('Ошибка синхронизации Kaspi:\n'+String(e.message||e))}finally{if(btn){btn.disabled=false;btn.textContent=old||'↻'}}}
 function backup(){let blob=new Blob([JSON.stringify(state,null,2)],{type:'application/json'}),a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download='sklad-backup-'+new Date().toISOString().slice(0,10)+'.json';a.click()}
 function restore(){let i=document.createElement('input');i.type='file';i.accept='.json';i.onchange=()=>{let r=new FileReader();r.onload=()=>{try{state=JSON.parse(r.result);state.products||=[];state.movements||=[];state.sales||=[];state.purchases||=[];state.reservations||=[];state.settings||={};state.kaspiOrders||={};state.kaspiOrderFeed||=[];state.wbOrderFeed||=[];state.ozonOrderFeed||=[];save();render();alert('Восстановлено')}catch(e){alert('Неверная копия')}};r.readAsText(i.files[0])};i.click()}
