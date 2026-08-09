@@ -3,7 +3,7 @@ name: Millioner smoke test
 on:
   workflow_dispatch:
   schedule:
-    - cron: '*/10 * * * *'
+    - cron: '*/5 * * * *'
   push:
     branches: [main]
     paths:
@@ -40,6 +40,7 @@ jobs:
           import re
           html = Path('index.html').read_text(encoding='utf-8')
           api = Path('cloudflare/millioner-api/src/index.js').read_text(encoding='utf-8')
+          wrangler = Path('cloudflare/millioner-api/wrangler.jsonc').read_text(encoding='utf-8')
           required = {
               'product cost input': 'id="pcost"',
               'product cost edit': 'id="ecost"',
@@ -60,10 +61,16 @@ jobs:
               'Kaspi courier handoff marker': 'courierTransmissionDate',
               'Kaspi direct delivery feed': 'fetchKaspiOrdersDirect',
               'Kaspi pending order retention': "entryId: '__pending__'",
+              'grouped marketplace order cards': 'function groupMarketplaceOrders(feed)',
+              'pending line compaction': 'realOrders=new Set',
+              'five-minute browser cache refresh': 'setInterval(()=>loadSharedOrderCache({silent:true}),300000)',
+              'five-minute Kaspi status cadence': 'const KASPI_SCHEDULE_MS = 5 * 60 * 1000;',
           }
           missing = [name for name, marker in required.items() if marker not in html and marker not in api]
           if missing:
               raise SystemExit('Missing warehouse features: ' + ', '.join(missing))
+          if '"crons": ["*/5 * * * *"]' not in wrangler:
+              raise SystemExit('millioner-api cron is not five minutes')
           if 'recalcCostAfterLoss' in html:
               raise SystemExit('Legacy incorrect writeoff cost recalculation is still present')
           sync = re.search(r'async function syncNow\(\)\{.*?\}\nfunction backup', html, flags=re.S)
@@ -82,9 +89,11 @@ jobs:
       - name: Check published site
         run: |
           set -e
-          curl -fsSL --retry 4 --retry-delay 3 --max-time 25 'https://7masok.github.io/Milioner-app/' -o /tmp/site.html
+          curl -fsSL --retry 6 --retry-delay 5 --max-time 25 'https://7masok.github.io/Milioner-app/' -o /tmp/site.html
           grep -q 'Склад' /tmp/site.html
           grep -q 'function applyMarketplaceTransitions' /tmp/site.html
+          grep -q 'function groupMarketplaceOrders(feed)' /tmp/site.html
+          grep -q '300000' /tmp/site.html
 
       - name: Check Millioner API health
         run: |
@@ -95,7 +104,9 @@ jobs:
       - name: Check marketplace status endpoint
         run: |
           set -e
-          curl -fsSL --retry 4 --retry-delay 3 --max-time 25 'https://millioner-api.7masok.workers.dev/api/market-status' | jq .
+          body=$(curl -fsSL --retry 4 --retry-delay 3 --max-time 25 'https://millioner-api.7masok.workers.dev/api/market-status')
+          echo "$body" | jq .
+          echo "$body" | jq -e '[.markets[] | select(.market=="Kaspi")][0] as $k | ($k.nextSyncAt - $k.latest.started_at) <= 310000'
 
       - name: Inspect background sync status
         run: |
@@ -109,7 +120,9 @@ jobs:
           echo "Kaspi D1 lines: $(echo "$body" | jq '.orders | length')"
           for id in 1028072690 1028169317 1028174494 1027863523 1027066063 1027161866; do
             matches=$(echo "$body" | jq --arg id "$id" '[.orders[] | select((.code|tostring)==$id or (.orderId|tostring)==$id)]')
-            echo "KASPI_EXACT_${id}=$(echo "$matches" | jq 'length')"
+            count=$(echo "$matches" | jq 'length')
+            echo "KASPI_EXACT_${id}=$count"
+            test "$count" -gt 0
             echo "$matches" | jq '[.[] | {code,status,state,productName,qty,totalPrice}]'
           done
 
