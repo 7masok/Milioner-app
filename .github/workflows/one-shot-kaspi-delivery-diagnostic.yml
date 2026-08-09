@@ -10,31 +10,18 @@ jobs:
   inspect:
     runs-on: ubuntu-latest
     steps:
-      - name: Inspect exact Kaspi delivery orders in D1
+      - name: Compare exact Kaspi order payloads
         run: |
           set -e
-          body=$(curl -fsSL --retry 3 --retry-delay 2 --max-time 30 'https://millioner-api.7masok.workers.dev/api/orders?market=Kaspi&limit=1000')
-          for id in 1027863523 1027066063 1027161866; do
-            echo "=== D1 $id ==="
-            echo "$body" | jq --arg id "$id" '[.orders[] | select((.code|tostring)==$id or (.orderId|tostring)==$id) | {code,orderId,status,state,productName,sku,creationDate}]'
-          done
-
-      - name: Inspect ASSEMBLE Kaspi delivery feed
-        run: |
-          set -e
-          found=0
           for batch in 0 1 2 3 4 5 6 7 8 9; do
-            body=$(curl -fsSL --retry 2 --retry-delay 2 --max-time 60 "https://fragrant-shadow-72ed.7masok.workers.dev/kaspi/sync?days=7&status=ASSEMBLE&state=KASPI_DELIVERY&batch=${batch}")
+            body=$(curl -fsSL --retry 2 --retry-delay 2 --max-time 60 "https://fragrant-shadow-72ed.7masok.workers.dev/kaspi/sync?days=7&state=KASPI_DELIVERY&batch=${batch}")
             echo "BATCH_${batch}=$(echo "$body" | jq '{ok,totalOrders,hasMore,nextBatch,orders:(.orders|length)}')"
-            for id in 1027863523 1027066063 1027161866; do
-              row=$(echo "$body" | jq --arg id "$id" '[.orders[] | select((.code|tostring)==$id) | {id,code,status,state,creationDate,lines:(.lines|length),lineError}]')
-              n=$(echo "$row" | jq 'length')
-              if [ "$n" -gt 0 ]; then
-                echo "FOUND_${id}=true"
+            for id in 1028072690 1027863523; do
+              row=$(echo "$body" | jq --arg id "$id" '[.orders[] | select((.code|tostring)==$id)]')
+              if [ "$(echo "$row" | jq 'length')" -gt 0 ]; then
+                echo "=== FULL_${id} ==="
                 echo "$row" | jq .
-                found=$((found+n))
               fi
             done
             [ "$(echo "$body" | jq -r '.hasMore // false')" = "true" ] || break
           done
-          echo "TOTAL_FOUND=$found"
