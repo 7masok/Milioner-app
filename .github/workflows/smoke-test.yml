@@ -65,6 +65,10 @@ jobs:
               'pending line compaction': 'realOrders=new Set',
               'five-minute browser cache refresh': 'setInterval(()=>loadSharedOrderCache({silent:true}),300000)',
               'five-minute Kaspi status cadence': 'const KASPI_SCHEDULE_MS = 5 * 60 * 1000;',
+              'unmatched filter card': 'id="koUnmatchedCard"',
+              'unmatched filter toggle': 'function toggleUnmatchedOrderFilter()',
+              'unmatched filter predicate': 'function orderHasUnmatchedLine(g)',
+              'unmatched filtered orders': 'const visibleOrders=unmatchedOrderFilter?unmatchedOrders:orders',
           }
           missing = [name for name, marker in required.items() if marker not in html and marker not in api]
           if missing:
@@ -93,6 +97,8 @@ jobs:
           grep -q 'Склад' /tmp/site.html
           grep -q 'function applyMarketplaceTransitions' /tmp/site.html
           grep -q 'function groupMarketplaceOrders(feed)' /tmp/site.html
+          grep -q 'id="koUnmatchedCard"' /tmp/site.html
+          grep -q 'function toggleUnmatchedOrderFilter()' /tmp/site.html
           grep -q '300000' /tmp/site.html
 
       - name: Check Millioner API health
