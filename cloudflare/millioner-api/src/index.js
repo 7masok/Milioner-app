@@ -84,7 +84,6 @@ export default {
 async function ensureSchema(db) {
   if (!db) throw new Error('D1 binding DB is not configured');
   await db.exec(`
-    PRAGMA foreign_keys = ON;
     CREATE TABLE IF NOT EXISTS products (
       id TEXT PRIMARY KEY,name TEXT NOT NULL,category TEXT NOT NULL DEFAULT '',photo TEXT NOT NULL DEFAULT '',
       min_stock INTEGER NOT NULL DEFAULT 0,stock INTEGER NOT NULL DEFAULT 0,cost REAL NOT NULL DEFAULT 0,
