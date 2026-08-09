@@ -72,28 +72,7 @@ jobs:
           echo "$body"
           echo "$body" | jq -e '.ok == true'
 
-      - name: Diagnose WB Worker
+      - name: Protect WB rate limit
         run: |
-          set +e
-          code=$(curl -sS --retry 2 --retry-delay 8 --max-time 45 \
-            -o /tmp/wb.json -w '%{http_code}' \
-            'https://wb-sync.7masok.workers.dev/wb/sync?days=1')
-          rc=$?
-          echo "WB curl rc=${rc}, HTTP=${code}"
-          cat /tmp/wb.json 2>/dev/null || true
-          echo
-          if [ "$rc" -ne 0 ]; then
-            echo 'WB Worker request itself failed' >&2
-            exit 1
-          fi
-          if [ "$code" = '429' ]; then
-            echo 'WB Worker is reachable but upstream WB is rate-limiting requests (HTTP 429).'
-            exit 0
-          fi
-          if [ "$code" -lt 200 ] || [ "$code" -ge 300 ]; then
-            echo "WB Worker returned HTTP ${code}" >&2
-            exit 1
-          fi
-          jq . /tmp/wb.json >/dev/null
-
-# diagnostics trigger 2026-08-10
+          echo 'WB statistics endpoint is intentionally NOT called by smoke tests.'
+          echo 'Its seller-wide limit can be as low as one request per three hours.'
