@@ -1,0 +1,29 @@
+name: One-shot real Kaspi smoke assertion
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/one-shot-smoke-real-kaspi.yml'
+permissions:
+  contents: write
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 6
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - run: git pull --rebase origin main
+      - run: python .github/scripts/patch_smoke_real_kaspi.py
+      - name: Validate workflow markers
+        run: |
+          grep -q 'KASPI_LAST_SUCCESS_AGE_MS' .github/workflows/smoke-test.yml
+          grep -q 'test "$age_ms" -lt 900000' .github/workflows/smoke-test.yml
+      - name: Commit patch
+        run: |
+          git config user.name 'millioner-maintenance'
+          git config user.email 'actions@users.noreply.github.com'
+          git add .github/workflows/smoke-test.yml
+          git diff --cached --quiet || git commit -m 'Make smoke test require recent Kaspi sync success'
+          git push origin main
