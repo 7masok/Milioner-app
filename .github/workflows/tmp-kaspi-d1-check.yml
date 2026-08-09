@@ -1,0 +1,20 @@
+name: Check screenshot Kaspi orders in D1
+
+on:
+  push:
+    branches: [tmp-kaspi-order-diagnostic]
+    paths:
+      - '.github/workflows/tmp-kaspi-d1-check.yml'
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Find screenshot orders in D1
+        run: |
+          curl -fsSL 'https://millioner-api.7masok.workers.dev/api/orders?market=Kaspi&limit=1000' -o /tmp/d1.json
+          echo "TOTAL=$(jq '.orders|length' /tmp/d1.json)"
+          for id in 1028072690 1028169317 1028174494; do
+            echo "=== $id ==="
+            jq --arg id "$id" '[.orders[] | select((.code|tostring)==$id or (.orderId|tostring)==$id)]' /tmp/d1.json
+          done
