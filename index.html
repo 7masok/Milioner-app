@@ -24,6 +24,7 @@ nav{position:fixed;bottom:0;left:50%;transform:translateX(-50%);width:min(560px,
 table{width:100%;border-collapse:collapse;background:#fff;border-radius:14px;overflow:hidden;font-size:11px}td,th{padding:9px;border-bottom:1px solid var(--line);text-align:left}th{color:var(--muted);font-weight:600}
 .kpi{display:grid;grid-template-columns:1fr 1fr;gap:8px}.setting{display:flex;justify-content:space-between;align-items:center;background:#fff;padding:13px;border:1px solid var(--line);border-radius:14px;margin-bottom:8px}
 .order-meta{display:flex;gap:6px;flex-wrap:wrap;margin-top:7px}.order-line{display:flex;justify-content:space-between;gap:10px;align-items:flex-start}.order-line+.order-line{margin-top:5px}.order-sku{font-size:11px;color:var(--muted);word-break:break-all}.order-head{display:flex;justify-content:space-between;gap:10px;align-items:flex-start}.order-price{font-weight:800;white-space:nowrap}.order-summary{display:grid;grid-template-columns:repeat(3,1fr);gap:7px;margin:10px 0}.order-summary .card{padding:10px}.order-summary .num{font-size:17px}.order-list{display:flex;flex-direction:column;gap:8px}
+.link-btn{border:0;cursor:pointer}.link-btn.bad{text-decoration:underline}.suggestions{display:flex;flex-direction:column;gap:6px;margin-top:8px}.suggestion{width:100%;border:1px solid var(--line);background:#fff;border-radius:12px;padding:10px;text-align:left}.suggestion b{display:block}.suggestion .muted{margin-top:3px}.link-note{background:#f6f7f8;border-radius:12px;padding:10px;margin:8px 0;font-size:12px;color:var(--muted)}
 </style>
 </head>
 <body>
@@ -128,8 +129,64 @@ function renderKaspiOrders(){
    const p=o.productId?prod(o.productId):null;
    const statusClass=['CANCELLED','CANCELLING'].includes(o.status)?'bad':o.status==='COMPLETED'?'ok':'warn';
    const totalPrice=Number(o.totalPrice||0);
-   return `<div class="item"><div class="order-head"><div class="grow"><div class="name">Заказ ${esc(o.code||o.orderId||'—')}</div><div class="muted">${o.creationDate?new Date(o.creationDate).toLocaleString('ru-RU'):'Дата неизвестна'}</div></div><span class="badge ${statusClass}">${esc(kaspiStatusLabel(o.status))}</span></div><div class="order-line" style="margin-top:9px"><div class="grow"><b>${esc(p?.name||'Товар не привязан')}</b><div class="order-sku">Kaspi артикул: ${esc(o.sku||'—')}</div></div><div class="right"><b>${o.qty||0} шт.</b>${totalPrice?`<div class="muted">${fmt(totalPrice)}</div>`:''}</div></div><div class="order-meta"><span class="badge ${p?'ok':'bad'}">${p?'Артикул найден':'Нужно привязать'}</span><span class="badge">${esc(o.state||'—')}</span></div></div>`;
+   const feedKey=encodeURIComponent(String(o.orderId)+':'+String(o.entryId));
+   const linkControl=p?`<button type="button" class="badge ok link-btn" onclick="openProduct('${p.id}')">Привязано</button>`:`<button type="button" class="badge bad link-btn" onclick="openKaspiLink('${feedKey}')">Нужно привязать</button>`;
+   return `<div class="item"><div class="order-head"><div class="grow"><div class="name">Заказ ${esc(o.code||o.orderId||'—')}</div><div class="muted">${o.creationDate?new Date(o.creationDate).toLocaleString('ru-RU'):'Дата неизвестна'}</div></div><span class="badge ${statusClass}">${esc(kaspiStatusLabel(o.status))}</span></div><div class="order-line" style="margin-top:9px"><div class="grow"><b>${esc(p?.name||'Товар не привязан')}</b><div class="order-sku">Kaspi артикул: ${esc(o.sku||'—')}</div></div><div class="right"><b>${o.qty||0} шт.</b>${totalPrice?`<div class="muted">${fmt(totalPrice)}</div>`:''}</div></div><div class="order-meta">${linkControl}<span class="badge">${esc(o.state||'—')}</span></div></div>`;
  }).join('');
+}
+function normalizeName(s){return String(s||'').trim().toLowerCase().replace(/\s+/g,' ')}
+function marketplaceField(market){return market==='Kaspi'?'kaspi':market==='WB'?'wb':market==='Ozon'?'ozon':null}
+function openKaspiLink(encodedKey){
+ const key=decodeURIComponent(encodedKey);
+ const o=(state.kaspiOrderFeed||[]).find(x=>String(x.orderId)+':'+String(x.entryId)===key);
+ if(!o)return alert('Строка заказа не найдена. Обновите синхронизацию.');
+ openMarketplaceLink('Kaspi',o.sku,o.code||o.orderId||'',key);
+}
+function openMarketplaceLink(market,sku,context='',feedKey=''){
+ const safeMarket=esc(market),safeSku=esc(sku||'—'),safeContext=esc(context||'');
+ showSheet(`<h3>Привязать товар</h3><div class="item"><b>${safeMarket}${safeContext?' · заказ '+safeContext:''}</b><div class="muted">Артикул: ${safeSku}</div></div><div class="link-note">Начните вводить название. Если такой товар уже есть, он появится в подсказках — нажмите на него, и артикул этого маркетплейса добавится к существующему товару. Если товара ещё нет, введите новое название и нажмите «Сохранить».</div><div class="field"><label>Название товара</label><input id="linkProductName" autocomplete="off" placeholder="Например: Чехол для ключа" oninput="renderLinkSuggestions()"></div><div id="linkSuggestions" class="suggestions"></div><button class="btn dark full" onclick="saveMarketplaceLink()">Сохранить</button>`);
+ window.pendingMarketplaceLink={market:String(market),sku:String(sku||''),context:String(context||''),feedKey:String(feedKey||'')};
+ setTimeout(()=>{const i=document.getElementById('linkProductName');if(i){i.focus();renderLinkSuggestions();}},0);
+}
+function renderLinkSuggestions(){
+ const box=document.getElementById('linkSuggestions'),input=document.getElementById('linkProductName');if(!box||!input)return;
+ const q=normalizeName(input.value);
+ let a=[...state.products];
+ if(q)a=a.filter(p=>normalizeName(p.name).includes(q));
+ a=a.slice(0,8);
+ if(!a.length){box.innerHTML=q?'<div class="muted">Совпадений нет — будет создан новый товар.</div>':'<div class="muted">Введите название, чтобы найти существующий товар.</div>';return;}
+ box.innerHTML=a.map(p=>`<button type="button" class="suggestion" onclick="chooseMarketplaceProduct('${p.id}')"><b>${esc(p.name)}</b><div class="muted">Kaspi: ${esc(p.kaspi||'—')} · WB: ${esc(p.wb||'—')} · Ozon: ${esc(p.ozon||'—')}</div></button>`).join('');
+}
+function chooseMarketplaceProduct(pid){
+ const link=window.pendingMarketplaceLink,p=prod(pid);if(!link||!p)return;
+ attachMarketplaceSku(p,link.market,link.sku,link.feedKey);
+ closeModal();render();
+}
+function attachMarketplaceSku(p,market,sku,feedKey=''){
+ const field=marketplaceField(market);if(!field)return alert('Неизвестный маркетплейс');
+ const old=String(p[field]||'').trim();
+ if(old&&old!==String(sku||'').trim()){
+   const ok=confirm(`У товара «${p.name}» уже указан ${market} артикул ${old}. Заменить его на ${sku}?`);
+   if(!ok)return false;
+ }
+ p[field]=String(sku||'').trim();
+ if(market==='Kaspi'){
+   (state.kaspiOrderFeed||[]).forEach(o=>{if(String(o.sku||'').trim()===p[field])o.productId=p.id;});
+ }
+ save();return true;
+}
+function saveMarketplaceLink(){
+ const link=window.pendingMarketplaceLink,input=document.getElementById('linkProductName');if(!link||!input)return;
+ const name=input.value.trim();if(!name)return alert('Введите название товара');
+ const exact=state.products.find(p=>normalizeName(p.name)===normalizeName(name));
+ if(exact){
+   if(attachMarketplaceSku(exact,link.market,link.sku,link.feedKey)!==false){closeModal();render();}
+   return;
+ }
+ const p={id:id(),name,category:'',photo:'',kaspi:'',wb:'',ozon:'',min:0,stock:0,cost:0,totalProfit:0};
+ state.products.push(p);
+ attachMarketplaceSku(p,link.market,link.sku,link.feedKey);
+ closeModal();render();
 }
 function renderAttention(){let a=state.products.filter(p=>p.stock<=p.min&&p.min>0||p.stock<0).sort((x,y)=>x.stock-y.stock).slice(0,5);document.getElementById('attention').innerHTML=a.length?a.map(p=>`<div class="item row"><div class="grow"><div class="name">${esc(p.name)}</div><div class="muted">Остаток ${p.stock} · минимум ${p.min}</div></div><span class="badge ${p.stock<0?'bad':'warn'}">${p.stock<0?'Нехватка':'На закупку'}</span></div>`).join(''):'<div class="empty">Всё в норме</div>'}
 function renderRecent(){let a=state.movements.slice(0,5);document.getElementById('recent').innerHTML=a.length?a.map(m=>`<div class="item"><div class="row"><div class="grow"><b>${esc(m.type)}</b><div class="muted">${esc(prod(m.productId)?.name||'Товар удалён')}</div></div><div class="right">${m.qty>0?'+':''}${m.qty}<div class="muted">${new Date(m.date).toLocaleString('ru-RU')}</div></div></div></div>`).join(''):'<div class="empty">Операций пока нет</div>'}
