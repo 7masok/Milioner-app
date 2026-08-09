@@ -56,8 +56,12 @@ jobs:
               'manual sale stock guard': 'Недостаточно свободного остатка',
               'writeoff stock guard': 'Нельзя списать больше остатка',
               'inventory stock guard': 'Фактический остаток не может быть отрицательным',
+              'Kaspi in-delivery label': "KASPI_DELIVERY_TRANSIT')return 'В доставке'",
+              'Kaspi courier handoff marker': 'courierTransmissionDate',
+              'Kaspi direct delivery feed': 'fetchKaspiOrdersDirect',
+              'Kaspi pending order retention': "entryId: '__pending__'",
           }
-          missing = [name for name, marker in required.items() if marker not in html]
+          missing = [name for name, marker in required.items() if marker not in html and marker not in api]
           if missing:
               raise SystemExit('Missing warehouse features: ' + ', '.join(missing))
           if 'recalcCostAfterLoss' in html:
@@ -103,9 +107,10 @@ jobs:
           set -e
           body=$(curl -fsSL --retry 4 --retry-delay 3 --max-time 25 'https://millioner-api.7masok.workers.dev/api/orders?market=Kaspi&limit=1000')
           echo "Kaspi D1 lines: $(echo "$body" | jq '.orders | length')"
-          for id in 1028072690 1028169317 1028174494; do
+          for id in 1028072690 1028169317 1028174494 1027863523 1027066063 1027161866; do
             matches=$(echo "$body" | jq --arg id "$id" '[.orders[] | select((.code|tostring)==$id or (.orderId|tostring)==$id)]')
             echo "KASPI_EXACT_${id}=$(echo "$matches" | jq 'length')"
+            echo "$matches" | jq '[.[] | {code,status,state,productName,qty,totalPrice}]'
           done
 
       - name: Probe active Kaspi Worker filter
