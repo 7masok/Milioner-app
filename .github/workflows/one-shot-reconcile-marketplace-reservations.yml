@@ -32,16 +32,6 @@ jobs:
           new = r'''function applyMarketplaceTransitions(market,feed){state.marketOrderState||={};state.marketplaceLiveSince||={};const bucket=state.marketOrderState[market]||(market==='Kaspi'?{...(state.kaspiOrders||{})}:{});state.marketOrderState[market]=bucket;if(!state.marketplaceLiveSince[market])state.marketplaceLiveSince[market]=Date.now();const liveSince=Number(state.marketplaceLiveSince[market])||Date.now();let reservedCount=0,soldCount=0,cancelledCount=0;for(const o of(feed||[])){if(!o?.productId)continue;const p=prod(o.productId);if(!p)continue;const qty=Math.max(0,Number(o.qty)||0);if(!qty)continue;const legacy=String(o.orderId)+':'+String(o.entryId),scoped=market+':'+legacy,prev=bucket[legacy]||bucket[scoped]||null,status=String(o.status||'').toUpperCase(),cancelled=['CANCELLED','CANCELLING','CANCEL'].includes(status),completed=isCompletedOrder(market,status),active=!completed&&!cancelled&&String(o.state||'').toUpperCase()!=='ARCHIVE';const existingSale=state.sales.some(x=>x.externalKey===scoped||(market==='Kaspi'&&x.externalKey===legacy));const existingReservation=state.reservations.find(x=>x.active&&x.source===market&&(x.externalKey===scoped||(market==='Kaspi'&&x.externalKey===legacy)));if(active&&!existingSale&&!existingReservation){state.reservations.push({id:id(),productId:p.id,qty,active:true,source:market,externalKey:scoped,date:Date.now()});log('резерв',p.id,-qty,market+' '+(o.code||''));reservedCount+=qty}else if(completed){if(existingReservation)existingReservation.active=false;if(!existingSale&&(prev?.active||toTimestamp(o.creationDate)>=liveSince)){p.stock=(Number(p.stock)||0)-qty;state.sales.push({id:id(),productId:p.id,qty,price:Number(o.unitPrice)||0,cost:Number(p.cost)||0,fee:0,channel:market,date:toTimestamp(o.creationDate),externalKey:scoped});log('продажа',p.id,-qty,market+' '+(o.code||''));soldCount+=qty}}else if(!active&&existingReservation){existingReservation.active=false;log('отмена резерва',p.id,existingReservation.qty,market+' '+(o.code||''));cancelledCount+=Number(existingReservation.qty)||0}bucket[legacy]={status:o.status,state:o.state,active,qty,sku:o.sku,updatedAt:Date.now()}}if(market==='Kaspi')state.kaspiOrders=bucket;return {reserved:reservedCount,sold:soldCount,cancelled:cancelledCount}}'''
           s = s[:start] + new + s[end:]
           p.write_text(s, encoding='utf-8')
-
-          smoke = Path('.github/workflows/smoke-test.yml')
-          t = smoke.read_text(encoding='utf-8')
-          marker = "              'late marketplace link reconciliation': 'if(active&&!existingSale&&!existingReservation)',\n"
-          anchor = "              'marketplace stock transitions': 'function applyMarketplaceTransitions(market,feed)',\n"
-          if marker not in t:
-              if anchor not in t:
-                  raise SystemExit('smoke anchor not found')
-              t = t.replace(anchor, anchor + marker, 1)
-          smoke.write_text(t, encoding='utf-8')
           PY
       - name: Validate
         run: |
@@ -60,7 +50,7 @@ jobs:
         run: |
           git config user.name 'millioner-maintenance'
           git config user.email 'actions@users.noreply.github.com'
-          git add index.html .github/workflows/smoke-test.yml
+          git add index.html
           git commit -m 'Reconcile reservations after marketplace linking'
           for attempt in 1 2 3; do
             if git push origin HEAD:main; then exit 0; fi
