@@ -52,6 +52,7 @@ jobs:
               'arrival weighted cost': 'newPositiveQty=oldQty+q',
               'sync in-progress UI': "'Синхронизация','warn'",
               'marketplace stock transitions': 'function applyMarketplaceTransitions(market,feed)',
+              'late marketplace link reconciliation': 'if(active&&!existingSale&&!existingReservation)',
               'Kaspi cache transition': "applyMarketplaceTransitions('Kaspi',state.kaspiOrderFeed)",
               'WB cache transition': "applyMarketplaceTransitions('WB',state.wbOrderFeed)",
               'manual sale stock guard': 'Недостаточно свободного остатка',
@@ -96,6 +97,7 @@ jobs:
           curl -fsSL --retry 6 --retry-delay 5 --max-time 25 'https://7masok.github.io/Milioner-app/' -o /tmp/site.html
           grep -q 'Склад' /tmp/site.html
           grep -q 'function applyMarketplaceTransitions' /tmp/site.html
+          grep -q 'if(active&&!existingSale&&!existingReservation)' /tmp/site.html
           grep -q 'function groupMarketplaceOrders(feed)' /tmp/site.html
           grep -q 'id="koUnmatchedCard"' /tmp/site.html
           grep -q 'function toggleUnmatchedOrderFilter()' /tmp/site.html
