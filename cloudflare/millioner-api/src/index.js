@@ -198,7 +198,11 @@ async function fetchKaspi(env) {
     state: 'KASPI_DELIVERY'
   });
   const broadFeed = await fetchKaspiWorkerFeed(base, { days: '1' });
-  const workerRequests = activeFeed.requests + broadFeed.requests;
+  const token = String(env.KASPI_TOKEN || '').trim();
+  const deliveryFeed = token
+    ? await fetchKaspiOrdersDirect(token, { days: 7, state: 'KASPI_DELIVERY' })
+    : { orders: [], requests: 0 };
+  const workerRequests = activeFeed.requests + broadFeed.requests + deliveryFeed.requests;
 
   const byId = new Map();
   for (const order of broadFeed.orders) {
@@ -212,6 +216,13 @@ async function fetchKaspi(env) {
     const activeHasLines = Array.isArray(order?.lines) && order.lines.length > 0;
     const previousHasLines = Array.isArray(previous?.lines) && previous.lines.length > 0;
     if (!previous || activeHasLines || !previousHasLines) byId.set(key, order);
+  }
+  for (const order of deliveryFeed.orders) {
+    const key = String(order?.id || order?.code || '');
+    if (!key) continue;
+    const previous = byId.get(key) || {};
+    const previousLines = Array.isArray(previous?.lines) ? previous.lines : [];
+    byId.set(key, { ...previous, ...order, lines: previousLines.length ? previousLines : (order.lines || []) });
   }
   const orders = [...byId.values()];
 
@@ -243,8 +254,13 @@ async function fetchKaspi(env) {
     `).bind(String(order?.status || ''),String(order?.state || ''),toTimestamp(order?.creationDate),now,orderId).run();
   }
 
-  const token = String(env.KASPI_TOKEN || '').trim();
-  if (!token) return result;
+  if (!token) {
+    for (const order of missing) {
+      const orderId = String(order?.id || '');
+      if (orderId && !existing.has(orderId)) appendKaspiPlaceholder(result, order);
+    }
+    return result;
+  }
 
   const queue = missing
     .filter(order => {
@@ -267,6 +283,12 @@ async function fetchKaspi(env) {
     } catch (e) {
       console.warn('Kaspi direct line recovery failed', String(order?.code || order?.id || ''), String(e?.message || e));
     }
+  }
+
+  const represented = new Set(result.map(line => String(line?.orderId || '')));
+  for (const order of missing) {
+    const orderId = String(order?.id || '');
+    if (orderId && !existing.has(orderId) && !represented.has(orderId)) appendKaspiPlaceholder(result, order);
   }
 
   return result;
@@ -307,6 +329,70 @@ function appendKaspiLines(result, order, lines) {
       unitPrice: qty ? total / qty : Number(line?.basePrice || 0), totalPrice: total, raw: { order, line }
     });
   }
+}
+
+async function fetchKaspiOrdersDirect(token, { days = 7, state = 'KASPI_DELIVERY' } = {}) {
+  const headers = {
+    'Accept': 'application/vnd.api+json',
+    'Content-Type': 'application/vnd.api+json',
+    'X-Auth-Token': token
+  };
+  const orders = [];
+  const end = Date.now();
+  const start = end - Math.max(1, Number(days) || 7) * 86400000;
+  let requests = 0;
+  for (let page = 0; page < 10; page++) {
+    const q = new URLSearchParams();
+    q.set('page[number]', String(page));
+    q.set('page[size]', '100');
+    q.set('filter[orders][state]', state);
+    q.set('filter[orders][creationDate][$ge]', String(start));
+    q.set('filter[orders][creationDate][$le]', String(end));
+    const response = await fetch(`https://kaspi.kz/shop/api/v2/orders?${q.toString()}`, { headers });
+    requests++;
+    const data = await safeJson(response, 'Kaspi orders');
+    if (!response.ok) throw new Error(data?.message || data?.error || `Kaspi orders HTTP ${response.status}`);
+    const batch = Array.isArray(data?.data) ? data.data : [];
+    for (const item of batch) {
+      const attrs = item?.attributes || {};
+      const transmissionDate = Number(attrs?.courierTransmissionDate || 0) || 0;
+      orders.push({
+        id: String(item?.id || ''),
+        code: String(attrs?.code || ''),
+        status: String(attrs?.status || ''),
+        state: transmissionDate ? 'KASPI_DELIVERY_TRANSIT' : String(attrs?.state || state),
+        creationDate: toTimestamp(attrs?.creationDate),
+        totalPrice: Number(attrs?.totalPrice || 0),
+        deliveryCostForSeller: Number(attrs?.deliveryCostForSeller || 0),
+        courierTransmissionDate: transmissionDate || null,
+        courierTransmissionPlanningDate: Number(attrs?.courierTransmissionPlanningDate || 0) || null,
+        plannedDeliveryDate: Number(attrs?.plannedDeliveryDate || 0) || null,
+        waybillNumber: String(attrs?.waybillNumber || ''),
+        lines: [],
+        rawOrder: item
+      });
+    }
+    const pageCount = Number(data?.meta?.pageCount || 0);
+    if (!batch.length || batch.length < 100 || (pageCount && page + 1 >= pageCount)) break;
+  }
+  return { orders, requests };
+}
+
+function appendKaspiPlaceholder(result, order) {
+  result.push({
+    orderId: String(order?.id || ''),
+    code: String(order?.code || ''),
+    entryId: '__pending__',
+    status: String(order?.status || ''),
+    state: String(order?.state || ''),
+    creationDate: toTimestamp(order?.creationDate),
+    sku: '',
+    productName: 'Состав загружается',
+    qty: 0,
+    unitPrice: 0,
+    totalPrice: Number(order?.totalPrice || 0),
+    raw: { order, pending: true }
+  });
 }
 
 async function fetchKaspiOrderLinesDirect(token, order, budget) {
@@ -457,6 +543,16 @@ async function upsertOrderLines(db, market, lines) {
     const now = Date.now();
     const batch = lines.slice(i, i + 50).map(o => envlessOrderStatement(db, sql, market, o, now));
     await db.batch(batch);
+  }
+  if (market === 'Kaspi') {
+    await db.prepare(`
+      DELETE FROM marketplace_order_lines
+      WHERE market='Kaspi' AND entry_id='__pending__'
+        AND order_id IN (
+          SELECT order_id FROM marketplace_order_lines
+          WHERE market='Kaspi' AND entry_id<>'__pending__'
+        )
+    `).run();
   }
 }
 
