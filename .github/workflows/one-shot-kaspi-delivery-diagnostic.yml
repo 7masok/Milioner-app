@@ -10,9 +10,7 @@ jobs:
   inspect:
     runs-on: ubuntu-latest
     steps:
-      - name: Wait briefly for Worker deployment
-        run: sleep 30
-      - name: Inspect live Millioner Kaspi states
+      - name: Inspect live Millioner Kaspi states after cron
         run: |
           set -e
           status=$(curl -fsSL --retry 4 --retry-delay 3 --max-time 30 'https://millioner-api.7masok.workers.dev/api/market-status')
