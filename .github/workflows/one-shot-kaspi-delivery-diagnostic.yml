@@ -9,12 +9,22 @@ permissions:
 jobs:
   inspect:
     runs-on: ubuntu-latest
+    timeout-minutes: 7
     steps:
-      - name: Confirm completed Kaspi sync states
+      - name: Wait for Kaspi sync completion and verify states
         run: |
           set -e
+          for attempt in $(seq 1 20); do
+            status=$(curl -fsSL --retry 3 --retry-delay 2 --max-time 30 'https://millioner-api.7masok.workers.dev/api/market-status')
+            running=$(echo "$status" | jq -r '[.markets[]|select(.market=="Kaspi")|(.latest.finished_at == null)]|first // false')
+            echo "attempt=$attempt running=$running"
+            if [ "$running" != "true" ]; then break; fi
+            sleep 15
+          done
           status=$(curl -fsSL --retry 4 --retry-delay 3 --max-time 30 'https://millioner-api.7masok.workers.dev/api/market-status')
           echo "$status" | jq .
+          running=$(echo "$status" | jq -r '[.markets[]|select(.market=="Kaspi")|(.latest.finished_at == null)]|first // false')
+          [ "$running" != "true" ] || { echo 'Kaspi sync did not finish in time'; exit 1; }
           body=$(curl -fsSL --retry 4 --retry-delay 3 --max-time 30 'https://millioner-api.7masok.workers.dev/api/orders?market=Kaspi&limit=1000')
           echo "D1_KASPI_LINES=$(echo "$body" | jq '.orders|length')"
           for id in 1028072690 1028169317 1028174494 1027863523 1027066063 1027161866; do
