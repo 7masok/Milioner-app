@@ -191,7 +191,7 @@ async function fetchKaspi(env) {
   let batch = 0;
   let workerRequests = 0;
   for (let safety = 0; safety < KASPI_MAX_BATCHES; safety++) {
-    const r = await fetch(`${base}/kaspi/sync?days=14&batch=${batch}`, { headers: { 'Accept': 'application/json' } });
+    const r = await fetch(`${base}/kaspi/sync?days=1&batch=${batch}`, { headers: { 'Accept': 'application/json' } });
     workerRequests++;
     const data = await safeJson(r, 'Kaspi Worker');
     if (!r.ok || data?.ok === false) throw new Error(data?.error || `Kaspi Worker HTTP ${r.status}`);
