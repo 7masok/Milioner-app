@@ -17,7 +17,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Check browser JavaScript syntax
+      - name: Check JavaScript syntax
         run: |
           python - <<'PY'
           from pathlib import Path
@@ -29,6 +29,7 @@ jobs:
           Path('/tmp/app.js').write_text('\n'.join(scripts), encoding='utf-8')
           PY
           node --check /tmp/app.js
+          node --check cloudflare/millioner-api/src/index.js
 
       - name: Check published site
         run: |
@@ -45,6 +46,14 @@ jobs:
             'https://millioner-api.7masok.workers.dev/health')
           echo "$body"
           echo "$body" | jq -e '.ok == true and .d1 == true'
+
+      - name: Check marketplace status endpoint
+        run: |
+          set -e
+          body=$(curl -fsSL --retry 4 --retry-delay 3 --max-time 25 \
+            'https://millioner-api.7masok.workers.dev/api/market-status')
+          echo "$body" | jq .
+          echo "$body" | jq -e '.ok == true and (.markets | type == "array")'
 
       - name: Inspect background sync status
         run: |
