@@ -95,3 +95,5 @@ jobs:
             exit 1
           fi
           jq . /tmp/wb.json >/dev/null
+
+# diagnostics trigger 2026-08-10
