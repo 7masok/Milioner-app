@@ -154,7 +154,8 @@ async function getMarketStatuses(env) {
     result.push({
       market,
       configured: market === 'Kaspi' ? Boolean(env.KASPI_WORKER_URL) : market === 'WB' ? Boolean(env.WB_TOKEN) : false,
-      mode: market === 'WB' ? (env.WB_TOKEN ? 'marketplace-api' : 'missing-token') : market === 'Kaspi' ? 'worker' : 'off',
+      mode: market === 'WB' ? (env.WB_TOKEN ? 'marketplace-api' : 'missing-token') : market === 'Kaspi' ? (env.KASPI_TOKEN ? 'worker+direct-recovery' : 'worker-only') : 'off',
+      directRecoveryConfigured: market === 'Kaspi' ? Boolean(env.KASPI_TOKEN) : null,
       latest: latest || null,
       lastSuccessAt: Number(success?.lastSuccessAt || 0) || null,
       orderLines: Number(count?.n || 0),
