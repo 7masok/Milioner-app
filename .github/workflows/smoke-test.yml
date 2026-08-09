@@ -1,4 +1,4 @@
-# FIFO lot accounting and Kaspi sale-on-delivery checks.
+# Warehouse, FIFO, Kaspi sale-on-delivery and backup checks.
 name: Millioner smoke test
 
 on:
@@ -79,6 +79,13 @@ jobs:
               'unmatched filter toggle': 'function toggleUnmatchedOrderFilter()',
               'unmatched filter predicate': 'function orderHasUnmatchedLine(g)',
               'unmatched filtered orders': 'const visibleOrders=unmatchedOrderFilter?unmatchedOrders:orders',
+              'Google Drive settings': 'Google Drive · резервные копии',
+              'Google Drive limited scope': 'https://www.googleapis.com/auth/drive.file',
+              'Google Drive backup': 'function backupToGoogleDrive(interactive=true)',
+              'Google Drive restore': 'function restoreGoogleDriveBackup(fileId)',
+              'Google Drive autobackup': 'function maybeAutoGoogleBackup()',
+              'Google backup payload': "format:'millioner-warehouse-backup'",
+              'Google backup timestamp': 'lastGoogleBackupAt',
           }
           missing = [name for name, marker in required.items() if marker not in html and marker not in api]
           if missing:
@@ -87,7 +94,9 @@ jobs:
               raise SystemExit('millioner-api cron is not five minutes')
           if 'recalcCostAfterLoss' in html:
               raise SystemExit('Legacy incorrect writeoff cost recalculation is still present')
-          sync = re.search(r'async function syncNow\(\)\{.*?\}\nfunction backup', html, flags=re.S)
+          if 'client_secret' in html.lower():
+              raise SystemExit('Secret-like Google client secret found in browser code')
+          sync = re.search(r'async function syncNow\(\)\{.*?\}\n', html, flags=re.S)
           if not sync:
               raise SystemExit('syncNow function missing')
           if 'KASPI_WORKER' in sync.group(0):
@@ -97,13 +106,13 @@ jobs:
               raise SystemExit('Kaspi background pagination is not safely bounded')
           if 'await upsertOrderLines(env.DB, market, lines);' not in api:
               raise SystemExit('D1 marketplace upserts are not batched')
-          print('Warehouse and sync contract OK')
+          print('Warehouse, sync and backup contract OK')
           PY
 
       - name: Check published site
         run: |
           set -e
-          curl -fsSL --retry 6 --retry-delay 5 --max-time 25 'https://7masok.github.io/Milioner-app/' -o /tmp/site.html
+          curl -fsSL --retry 8 --retry-delay 5 --max-time 25 'https://7masok.github.io/Milioner-app/' -o /tmp/site.html
           grep -q 'Склад' /tmp/site.html
           grep -q 'function applyMarketplaceTransitions' /tmp/site.html
           grep -q "function isMarketplaceSaleOrder(market,status,state='')" /tmp/site.html
@@ -117,6 +126,12 @@ jobs:
           grep -q 'function fifoConsume(productId,qty)' /tmp/site.html
           grep -q 'remainingQty:q' /tmp/site.html
           grep -q '300000' /tmp/site.html
+          grep -q 'Google Drive · резервные копии' /tmp/site.html
+          grep -q 'https://www.googleapis.com/auth/drive.file' /tmp/site.html
+          grep -q 'function backupToGoogleDrive(interactive=true)' /tmp/site.html
+          grep -q 'function restoreGoogleDriveBackup(fileId)' /tmp/site.html
+          grep -q 'function maybeAutoGoogleBackup()' /tmp/site.html
+          ! grep -qi 'client_secret' /tmp/site.html
 
       - name: Check Millioner API health
         run: |
