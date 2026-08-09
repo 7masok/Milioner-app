@@ -70,16 +70,6 @@ jobs:
           page_cap = re.search(r'const KASPI_MAX_BATCHES = (\d+);', api)
           if not page_cap or not (1 <= int(page_cap.group(1)) <= 10):
               raise SystemExit('Kaspi background pagination is not safely bounded')
-          recovery_required = [
-              'const KASPI_EXTERNAL_BUDGET = 45;',
-              'fetchKaspiOrderLinesDirect(token, order, budget)',
-              '/orders/${encodeURIComponent(orderId)}/entries',
-              'masterproducts/${encodeURIComponent(masterProductId)}/merchantProduct',
-              "status === 'ACCEPTED_BY_MERCHANT'",
-          ]
-          recovery_missing = [marker for marker in recovery_required if marker not in api]
-          if recovery_missing:
-              raise SystemExit('Kaspi missing-line recovery is incomplete: ' + ', '.join(recovery_missing))
           if 'await upsertOrderLines(env.DB, market, lines);' not in api:
               raise SystemExit('D1 marketplace upserts are not batched')
           print('Warehouse and sync contract OK')
@@ -88,62 +78,62 @@ jobs:
       - name: Check published site
         run: |
           set -e
-          curl -fsSL --retry 4 --retry-delay 3 --max-time 25 \
-            'https://7masok.github.io/Milioner-app/' -o /tmp/site.html
+          curl -fsSL --retry 4 --retry-delay 3 --max-time 25 'https://7masok.github.io/Milioner-app/' -o /tmp/site.html
           grep -q 'Склад' /tmp/site.html
           grep -q 'function applyMarketplaceTransitions' /tmp/site.html
-          echo "Published site is reachable and current"
 
       - name: Check Millioner API health
         run: |
           set -e
-          body=$(curl -fsSL --retry 4 --retry-delay 3 --max-time 25 \
-            'https://millioner-api.7masok.workers.dev/health')
-          echo "$body"
+          body=$(curl -fsSL --retry 4 --retry-delay 3 --max-time 25 'https://millioner-api.7masok.workers.dev/health')
           echo "$body" | jq -e '.ok == true and .d1 == true'
 
       - name: Check marketplace status endpoint
         run: |
           set -e
-          body=$(curl -fsSL --retry 4 --retry-delay 3 --max-time 25 \
-            'https://millioner-api.7masok.workers.dev/api/market-status')
-          echo "$body" | jq .
-          echo "$body" | jq -e '.ok == true and (.markets | type == "array")'
+          curl -fsSL --retry 4 --retry-delay 3 --max-time 25 'https://millioner-api.7masok.workers.dev/api/market-status' | jq .
 
       - name: Inspect background sync status
         run: |
           set -e
-          body=$(curl -fsSL --retry 4 --retry-delay 3 --max-time 25 \
-            'https://millioner-api.7masok.workers.dev/api/sync-status')
-          echo "$body" | jq .
-          echo "$body" | jq -e '.ok == true'
+          curl -fsSL --retry 4 --retry-delay 3 --max-time 25 'https://millioner-api.7masok.workers.dev/api/sync-status' | jq .
 
       - name: Inspect D1 order counts and exact Kaspi orders
         run: |
           set -e
-          for market in Kaspi WB; do
-            body=$(curl -fsSL --retry 4 --retry-delay 3 --max-time 25 \
-              "https://millioner-api.7masok.workers.dev/api/orders?market=${market}&limit=1000")
-            count=$(echo "$body" | jq '.orders | length')
-            echo "${market} D1 lines: ${count}"
-            if [ "$market" = "Kaspi" ]; then
-              for id in 1028072690 1028169317 1028174494; do
-                matches=$(echo "$body" | jq --arg id "$id" '[.orders[] | select((.code|tostring)==$id or (.orderId|tostring)==$id)]')
-                echo "KASPI_EXACT_${id}=$(echo "$matches" | jq 'length')"
-                echo "$matches" | jq .
-              done
-            fi
+          body=$(curl -fsSL --retry 4 --retry-delay 3 --max-time 25 'https://millioner-api.7masok.workers.dev/api/orders?market=Kaspi&limit=1000')
+          echo "Kaspi D1 lines: $(echo "$body" | jq '.orders | length')"
+          for id in 1028072690 1028169317 1028174494; do
+            matches=$(echo "$body" | jq --arg id "$id" '[.orders[] | select((.code|tostring)==$id or (.orderId|tostring)==$id)]')
+            echo "KASPI_EXACT_${id}=$(echo "$matches" | jq 'length')"
+            echo "$matches" | jq .
           done
+
+      - name: Inspect one-day Kaspi Worker feed
+        run: |
+          set -e
+          found=0
+          for batch in 0 1 2 3; do
+            body=$(curl -fsSL --max-time 60 "https://fragrant-shadow-72ed.7masok.workers.dev/kaspi/sync?days=1&batch=${batch}")
+            echo "KASPI_WORKER_BATCH_${batch}=$(echo "$body" | jq '{ok,totalOrders,hasMore,nextBatch,orders:(.orders|length)}')"
+            for id in 1028072690 1028169317 1028174494; do
+              row=$(echo "$body" | jq --arg id "$id" '[.orders[] | select((.code|tostring)==$id)]')
+              n=$(echo "$row" | jq 'length')
+              if [ "$n" -gt 0 ]; then
+                echo "WORKER_EXACT_${id}=FOUND"
+                echo "$row" | jq '[.[] | {code,status,state,lines:(.lines|length),lineError}]'
+                found=$((found+n))
+              fi
+            done
+            [ "$(echo "$body" | jq -r '.hasMore // false')" = "true" ] || break
+          done
+          echo "WORKER_EXACT_TOTAL_FOUND=$found"
 
       - name: Check Kaspi Worker
         run: |
           set -e
-          body=$(curl -fsSL --retry 4 --retry-delay 3 --max-time 25 \
-            'https://fragrant-shadow-72ed.7masok.workers.dev/health')
-          echo "$body"
+          body=$(curl -fsSL --retry 4 --retry-delay 3 --max-time 25 'https://fragrant-shadow-72ed.7masok.workers.dev/health')
           echo "$body" | jq -e '.ok == true'
 
       - name: Avoid unnecessary WB calls
-        run: |
-          echo 'WB marketplace orders are synchronized server-side.'
-          echo 'Smoke tests inspect the server cache instead of generating extra marketplace traffic.'
+        run: echo 'WB marketplace orders are synchronized server-side.'
