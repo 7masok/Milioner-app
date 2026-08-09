@@ -52,6 +52,33 @@ export default {
         return json({ ok: true, products: rows.results || [] }, 200, cors);
       }
 
+      if (url.pathname === '/api/warehouse-state' && request.method === 'GET') {
+        const row = await env.DB.prepare('SELECT payload,revision,updated_at FROM warehouse_state WHERE id=1').first();
+        if (!row) return json({ ok: true, exists: false, revision: 0, updatedAt: null, state: null }, 200, cors);
+        let warehouse = null;
+        try { warehouse = JSON.parse(row.payload || '{}'); } catch { warehouse = {}; }
+        return json({ ok: true, exists: true, revision: Number(row.revision || 0), updatedAt: Number(row.updated_at || 0), state: warehouse }, 200, cors);
+      }
+
+      if (url.pathname === '/api/warehouse-state' && request.method === 'PUT') {
+        if (!isTrustedBrowserOrigin(origin, env)) return json({ ok: false, error: 'Forbidden origin' }, 403, cors);
+        const body = await request.json();
+        const warehouse = sanitizeWarehouseState(body?.state);
+        const raw = JSON.stringify(warehouse);
+        if (raw.length > 1500000) return json({ ok: false, error: 'Warehouse snapshot is too large' }, 413, cors);
+        const current = await env.DB.prepare('SELECT revision FROM warehouse_state WHERE id=1').first();
+        const currentRevision = Number(current?.revision || 0);
+        const baseRevision = Number(body?.baseRevision || 0);
+        if (current && baseRevision !== currentRevision) return json({ ok: false, error: 'revision-conflict', revision: currentRevision }, 409, cors);
+        const nextRevision = currentRevision + 1;
+        const now = Date.now();
+        await env.DB.prepare(`INSERT INTO warehouse_state(id,payload,revision,updated_at) VALUES(1,?,?,?)
+          ON CONFLICT(id) DO UPDATE SET payload=excluded.payload,revision=excluded.revision,updated_at=excluded.updated_at`)
+          .bind(raw,nextRevision,now).run();
+        await importProducts(env.DB, warehouse.products || []);
+        return json({ ok: true, revision: nextRevision, updatedAt: now, products: (warehouse.products || []).length }, 200, cors);
+      }
+
       if (url.pathname === '/api/sync-status' && request.method === 'GET') {
         const rows = await env.DB.prepare(`
           SELECT s.* FROM sync_runs s
@@ -101,6 +128,7 @@ async function ensureSchema(db) {
     `CREATE TABLE IF NOT EXISTS product_links (id INTEGER PRIMARY KEY AUTOINCREMENT,product_id TEXT NOT NULL,market TEXT NOT NULL,sku TEXT NOT NULL,created_at INTEGER NOT NULL,updated_at INTEGER NOT NULL,FOREIGN KEY(product_id) REFERENCES products(id) ON DELETE CASCADE,UNIQUE(market,sku))`,
     `CREATE TABLE IF NOT EXISTS marketplace_order_lines (id INTEGER PRIMARY KEY AUTOINCREMENT,market TEXT NOT NULL,order_id TEXT NOT NULL,code TEXT NOT NULL DEFAULT '',entry_id TEXT NOT NULL,status TEXT NOT NULL DEFAULT '',state TEXT NOT NULL DEFAULT '',creation_date INTEGER NOT NULL DEFAULT 0,sku TEXT NOT NULL DEFAULT '',product_name TEXT NOT NULL DEFAULT '',qty REAL NOT NULL DEFAULT 0,unit_price REAL NOT NULL DEFAULT 0,total_price REAL NOT NULL DEFAULT 0,raw_json TEXT NOT NULL DEFAULT '',first_seen_at INTEGER NOT NULL,updated_at INTEGER NOT NULL,UNIQUE(market,order_id,entry_id))`,
     `CREATE TABLE IF NOT EXISTS sync_runs (id INTEGER PRIMARY KEY AUTOINCREMENT,market TEXT NOT NULL,started_at INTEGER NOT NULL,finished_at INTEGER,ok INTEGER NOT NULL DEFAULT 0,items INTEGER NOT NULL DEFAULT 0,error TEXT NOT NULL DEFAULT '')`,
+    `CREATE TABLE IF NOT EXISTS warehouse_state (id INTEGER PRIMARY KEY CHECK(id=1),payload TEXT NOT NULL DEFAULT '{}',revision INTEGER NOT NULL DEFAULT 0,updated_at INTEGER NOT NULL DEFAULT 0)`,
     `CREATE INDEX IF NOT EXISTS idx_product_links_product ON product_links(product_id)`,
     `CREATE INDEX IF NOT EXISTS idx_order_lines_market_date ON marketplace_order_lines(market,creation_date DESC)`,
     `CREATE INDEX IF NOT EXISTS idx_order_lines_market_sku ON marketplace_order_lines(market,sku)`,
@@ -582,6 +610,19 @@ async function upsertOrderLine(db, market, o) {
   `).bind(market,o.orderId,o.code,o.entryId,o.status,o.state,o.creationDate,o.sku,o.productName,o.qty,o.unitPrice,o.totalPrice,JSON.stringify(o.raw || {}),now,now).run();
 }
 
+function sanitizeWarehouseState(input) {
+  const x = input && typeof input === 'object' ? input : {};
+  const arr = key => Array.isArray(x[key]) ? x[key] : [];
+  const obj = key => x[key] && typeof x[key] === 'object' && !Array.isArray(x[key]) ? x[key] : {};
+  const settings = { ...obj('settings') };
+  delete settings.serverMarketStatus; delete settings.wbToken; delete settings.kaspiToken;
+  return { products:arr('products').slice(0,20000), movements:arr('movements').slice(0,5000), sales:arr('sales').slice(0,20000), purchases:arr('purchases').slice(0,20000), reservations:arr('reservations').slice(0,20000), settings, marketOrderState:obj('marketOrderState'), marketplaceLiveSince:obj('marketplaceLiveSince'), kaspiBaselineAt:x.kaspiBaselineAt||null };
+}
+function isTrustedBrowserOrigin(origin, env) {
+  const allowed = String(env.CORS_ORIGIN || DEFAULT_CORS_ORIGIN).replace(/\/$/, '');
+  return String(origin || '').replace(/\/$/, '') === allowed;
+}
+
 async function importProducts(db, products) {
   let count = 0;
   const now = Date.now();
@@ -627,7 +668,7 @@ function corsHeaders(origin, env) {
   const normalized = String(origin || '').replace(/\/$/, '');
   return {
     'Access-Control-Allow-Origin': normalized === allowed ? origin : allowed,
-    'Access-Control-Allow-Methods': 'GET,POST,OPTIONS',
+    'Access-Control-Allow-Methods': 'GET,POST,PUT,OPTIONS',
     'Access-Control-Allow-Headers': 'Content-Type,Authorization',
     'Access-Control-Max-Age': '86400',
     'Vary': 'Origin'
