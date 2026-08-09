@@ -1,0 +1,22 @@
+name: Inspect first Kaspi Worker batch
+
+on:
+  push:
+    branches: [tmp-kaspi-order-diagnostic]
+    paths:
+      - '.github/workflows/tmp-kaspi-batch0-check.yml'
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - name: Inspect batch zero
+        run: |
+          set -e
+          curl -fsSL --max-time 120 'https://fragrant-shadow-72ed.7masok.workers.dev/kaspi/sync?days=14&batch=0' -o /tmp/k.json
+          jq '{ok,totalOrders,hasMore,nextBatch,count:(.orders|length),sample:[.orders[0:10][]|{id,code,status,state,creationDate,lines:(.lines|length)}]}' /tmp/k.json
+          for id in 1028072690 1028169317 1028174494; do
+            echo "=== $id ==="
+            jq --arg id "$id" '[.orders[] | select((.code|tostring)==$id or (.id|tostring)==$id)]' /tmp/k.json
+          done
