@@ -1,0 +1,272 @@
+name: One-shot Kaspi delivery fix
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/one-shot-kaspi-delivery-fix.yml'
+permissions:
+  contents: write
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Patch Kaspi delivery ingestion
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          def once(s, old, new, label):
+              n=s.count(old)
+              if n!=1:
+                  raise SystemExit(f'{label}: expected 1 match, got {n}')
+              return s.replace(old,new,1)
+
+          p=Path('cloudflare/millioner-api/src/index.js')
+          s=p.read_text(encoding='utf-8')
+
+          old="""  const activeFeed = await fetchKaspiWorkerFeed(base, {
+    days: '1',
+    status: 'ACCEPTED_BY_MERCHANT',
+    state: 'KASPI_DELIVERY'
+  });
+  const broadFeed = await fetchKaspiWorkerFeed(base, { days: '1' });
+  const workerRequests = activeFeed.requests + broadFeed.requests;
+
+  const byId = new Map();
+"""
+          new="""  const activeFeed = await fetchKaspiWorkerFeed(base, {
+    days: '1',
+    status: 'ACCEPTED_BY_MERCHANT',
+    state: 'KASPI_DELIVERY'
+  });
+  const broadFeed = await fetchKaspiWorkerFeed(base, { days: '1' });
+  const token = String(env.KASPI_TOKEN || '').trim();
+  const deliveryFeed = token
+    ? await fetchKaspiOrdersDirect(token, { days: 7, state: 'KASPI_DELIVERY' })
+    : { orders: [], requests: 0 };
+  const workerRequests = activeFeed.requests + broadFeed.requests + deliveryFeed.requests;
+
+  const byId = new Map();
+"""
+          s=once(s,old,new,'direct delivery feed')
+
+          marker="""  for (const order of activeFeed.orders) {
+    const key = String(order?.id || order?.code || '');
+    if (!key) continue;
+    const previous = byId.get(key);
+    const activeHasLines = Array.isArray(order?.lines) && order.lines.length > 0;
+    const previousHasLines = Array.isArray(previous?.lines) && previous.lines.length > 0;
+    if (!previous || activeHasLines || !previousHasLines) byId.set(key, order);
+  }
+  const orders = [...byId.values()];
+"""
+          replacement="""  for (const order of activeFeed.orders) {
+    const key = String(order?.id || order?.code || '');
+    if (!key) continue;
+    const previous = byId.get(key);
+    const activeHasLines = Array.isArray(order?.lines) && order.lines.length > 0;
+    const previousHasLines = Array.isArray(previous?.lines) && previous.lines.length > 0;
+    if (!previous || activeHasLines || !previousHasLines) byId.set(key, order);
+  }
+  for (const order of deliveryFeed.orders) {
+    const key = String(order?.id || order?.code || '');
+    if (!key) continue;
+    const previous = byId.get(key) || {};
+    const previousLines = Array.isArray(previous?.lines) ? previous.lines : [];
+    byId.set(key, { ...previous, ...order, lines: previousLines.length ? previousLines : (order.lines || []) });
+  }
+  const orders = [...byId.values()];
+"""
+          s=once(s,marker,replacement,'merge delivery metadata')
+
+          s=once(s,"""  const token = String(env.KASPI_TOKEN || '').trim();
+  if (!token) return result;
+
+  const queue = missing
+""","""  if (!token) {
+    for (const order of missing) {
+      const orderId = String(order?.id || '');
+      if (orderId && !existing.has(orderId)) appendKaspiPlaceholder(result, order);
+    }
+    return result;
+  }
+
+  const queue = missing
+""",'token reuse')
+
+          old_tail="""  for (const order of queue) {
+    if (budget < 1) break;
+    try {
+      const recovered = await fetchKaspiOrderLinesDirect(token, order, budget);
+      budget = recovered.budget;
+      if (recovered.lines.length) appendKaspiLines(result, order, recovered.lines);
+    } catch (e) {
+      console.warn('Kaspi direct line recovery failed', String(order?.code || order?.id || ''), String(e?.message || e));
+    }
+  }
+
+  return result;
+}
+"""
+          new_tail="""  for (const order of queue) {
+    if (budget < 1) break;
+    try {
+      const recovered = await fetchKaspiOrderLinesDirect(token, order, budget);
+      budget = recovered.budget;
+      if (recovered.lines.length) appendKaspiLines(result, order, recovered.lines);
+    } catch (e) {
+      console.warn('Kaspi direct line recovery failed', String(order?.code || order?.id || ''), String(e?.message || e));
+    }
+  }
+
+  const represented = new Set(result.map(line => String(line?.orderId || '')));
+  for (const order of missing) {
+    const orderId = String(order?.id || '');
+    if (orderId && !existing.has(orderId) && !represented.has(orderId)) appendKaspiPlaceholder(result, order);
+  }
+
+  return result;
+}
+"""
+          s=once(s,old_tail,new_tail,'pending order placeholders')
+
+          insert_before="async function fetchKaspiOrderLinesDirect(token, order, budget) {\n"
+          direct_fn="""async function fetchKaspiOrdersDirect(token, { days = 7, state = 'KASPI_DELIVERY' } = {}) {
+  const headers = {
+    'Accept': 'application/vnd.api+json',
+    'Content-Type': 'application/vnd.api+json',
+    'X-Auth-Token': token
+  };
+  const orders = [];
+  const end = Date.now();
+  const start = end - Math.max(1, Number(days) || 7) * 86400000;
+  let requests = 0;
+  for (let page = 0; page < 10; page++) {
+    const q = new URLSearchParams();
+    q.set('page[number]', String(page));
+    q.set('page[size]', '100');
+    q.set('filter[orders][state]', state);
+    q.set('filter[orders][creationDate][$ge]', String(start));
+    q.set('filter[orders][creationDate][$le]', String(end));
+    const response = await fetch(`https://kaspi.kz/shop/api/v2/orders?${q.toString()}`, { headers });
+    requests++;
+    const data = await safeJson(response, 'Kaspi orders');
+    if (!response.ok) throw new Error(data?.message || data?.error || `Kaspi orders HTTP ${response.status}`);
+    const batch = Array.isArray(data?.data) ? data.data : [];
+    for (const item of batch) {
+      const attrs = item?.attributes || {};
+      const transmissionDate = Number(attrs?.courierTransmissionDate || 0) || 0;
+      orders.push({
+        id: String(item?.id || ''),
+        code: String(attrs?.code || ''),
+        status: String(attrs?.status || ''),
+        state: transmissionDate ? 'KASPI_DELIVERY_TRANSIT' : String(attrs?.state || state),
+        creationDate: toTimestamp(attrs?.creationDate),
+        totalPrice: Number(attrs?.totalPrice || 0),
+        deliveryCostForSeller: Number(attrs?.deliveryCostForSeller || 0),
+        courierTransmissionDate: transmissionDate || null,
+        courierTransmissionPlanningDate: Number(attrs?.courierTransmissionPlanningDate || 0) || null,
+        plannedDeliveryDate: Number(attrs?.plannedDeliveryDate || 0) || null,
+        waybillNumber: String(attrs?.waybillNumber || ''),
+        lines: [],
+        rawOrder: item
+      });
+    }
+    const pageCount = Number(data?.meta?.pageCount || 0);
+    if (!batch.length || batch.length < 100 || (pageCount && page + 1 >= pageCount)) break;
+  }
+  return { orders, requests };
+}
+
+function appendKaspiPlaceholder(result, order) {
+  result.push({
+    orderId: String(order?.id || ''),
+    code: String(order?.code || ''),
+    entryId: '__pending__',
+    status: String(order?.status || ''),
+    state: String(order?.state || ''),
+    creationDate: toTimestamp(order?.creationDate),
+    sku: '',
+    productName: 'Состав загружается',
+    qty: 0,
+    unitPrice: 0,
+    totalPrice: Number(order?.totalPrice || 0),
+    raw: { order, pending: true }
+  });
+}
+
+"""
+          if insert_before not in s:
+              raise SystemExit('direct recovery insertion marker missing')
+          s=s.replace(insert_before,direct_fn+insert_before,1)
+
+          old_upsert="""  for (let i = 0; i < lines.length; i += 50) {
+    const now = Date.now();
+    const batch = lines.slice(i, i + 50).map(o => envlessOrderStatement(db, sql, market, o, now));
+    await db.batch(batch);
+  }
+}
+"""
+          new_upsert="""  for (let i = 0; i < lines.length; i += 50) {
+    const now = Date.now();
+    const batch = lines.slice(i, i + 50).map(o => envlessOrderStatement(db, sql, market, o, now));
+    await db.batch(batch);
+  }
+  if (market === 'Kaspi') {
+    await db.prepare(`
+      DELETE FROM marketplace_order_lines
+      WHERE market='Kaspi' AND entry_id='__pending__'
+        AND order_id IN (
+          SELECT order_id FROM marketplace_order_lines
+          WHERE market='Kaspi' AND entry_id<>'__pending__'
+        )
+    `).run();
+  }
+}
+"""
+          s=once(s,old_upsert,new_upsert,'pending cleanup')
+          p.write_text(s,encoding='utf-8')
+
+          p=Path('index.html')
+          h=p.read_text(encoding='utf-8')
+          old="if(u==='ACCEPTED_BY_MERCHANT'){if(st==='KASPI_DELIVERY')return 'Упаковка';if(st==='DELIVERY')return 'Моя доставка';"
+          new="if(u==='ACCEPTED_BY_MERCHANT'){if(st==='KASPI_DELIVERY_TRANSIT')return 'В доставке';if(st==='KASPI_DELIVERY')return 'Упаковка';if(st==='DELIVERY')return 'Моя доставка';"
+          h=once(h,old,new,'Kaspi transit status label')
+          old2="return ({KASPI_DELIVERY:'Kaspi Доставка',DELIVERY:'Моя доставка'"
+          new2="return ({KASPI_DELIVERY_TRANSIT:'Kaspi Доставка',KASPI_DELIVERY:'Kaspi Доставка',DELIVERY:'Моя доставка'"
+          h=once(h,old2,new2,'Kaspi transit state label')
+          p.write_text(h,encoding='utf-8')
+          PY
+
+      - name: Validate patched code
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import re
+          html=Path('index.html').read_text(encoding='utf-8')
+          api=Path('cloudflare/millioner-api/src/index.js').read_text(encoding='utf-8')
+          scripts=re.findall(r'<script>(.*?)</script>',html,flags=re.S|re.I)
+          Path('/tmp/app.js').write_text('\n'.join(scripts),encoding='utf-8')
+          assert "KASPI_DELIVERY_TRANSIT')return 'В доставке'" in html
+          assert 'courierTransmissionDate' in api
+          assert 'fetchKaspiOrdersDirect' in api
+          assert "entryId: '__pending__'" in api
+          assert "entry_id='__pending__'" in api
+          PY
+          node --check /tmp/app.js
+          node --check cloudflare/millioner-api/src/index.js
+
+      - name: Commit safely
+        run: |
+          git config user.name 'millioner-maintenance'
+          git config user.email 'actions@users.noreply.github.com'
+          git add index.html cloudflare/millioner-api/src/index.js
+          git commit -m 'Show and retain Kaspi orders already in delivery'
+          for attempt in 1 2 3; do
+            if git push origin HEAD:main; then exit 0; fi
+            git pull --rebase origin main
+          done
+          exit 1
