@@ -1,0 +1,29 @@
+name: Verify Kaspi recovered orders after cron
+
+on:
+  push:
+    branches: [tmp-kaspi-order-diagnostic]
+    paths:
+      - '.github/workflows/tmp-kaspi-post-recovery-check.yml'
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 4
+    steps:
+      - name: Wait for active cron and verify exact orders
+        run: |
+          sleep 70
+          echo '=== SYNC STATUS ==='
+          curl -fsSL 'https://millioner-api.7masok.workers.dev/api/sync-status' | jq .
+          echo '=== EXACT ORDERS ==='
+          curl -fsSL 'https://millioner-api.7masok.workers.dev/api/orders?market=Kaspi&limit=1000' -o /tmp/d1.json
+          echo "TOTAL=$(jq '.orders|length' /tmp/d1.json)"
+          missing=0
+          for id in 1028072690 1028169317 1028174494; do
+            count=$(jq --arg id "$id" '[.orders[] | select((.code|tostring)==$id or (.orderId|tostring)==$id)] | length' /tmp/d1.json)
+            echo "$id=$count"
+            jq --arg id "$id" '[.orders[] | select((.code|tostring)==$id or (.orderId|tostring)==$id)]' /tmp/d1.json
+            if [ "$count" -eq 0 ]; then missing=$((missing+1)); fi
+          done
+          echo "MISSING=$missing"
