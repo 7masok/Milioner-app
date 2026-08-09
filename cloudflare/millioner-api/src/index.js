@@ -1,6 +1,7 @@
 const DEFAULT_CORS_ORIGIN = 'https://7masok.github.io';
 const KASPI_SCHEDULE_MS = 10 * 60 * 1000;
-const KASPI_MAX_BATCHES = 4;
+const KASPI_MAX_BATCHES = 10;
+const KASPI_EXTERNAL_BUDGET = 45;
 const WB_MIN_SYNC_MS = 10 * 60 * 1000;
 const WB_MARKETPLACE_BASE = 'https://marketplace-api.wildberries.ru';
 
@@ -184,30 +185,146 @@ async function syncMarket(env, market) {
 async function fetchKaspi(env) {
   const base = cleanUrl(env.KASPI_WORKER_URL);
   if (!base) throw new Error('KASPI_WORKER_URL is not configured');
-  const result = [];
+
+  const orders = [];
   let batch = 0;
+  let workerRequests = 0;
   for (let safety = 0; safety < KASPI_MAX_BATCHES; safety++) {
     const r = await fetch(`${base}/kaspi/sync?days=14&batch=${batch}`, { headers: { 'Accept': 'application/json' } });
+    workerRequests++;
     const data = await safeJson(r, 'Kaspi Worker');
     if (!r.ok || data?.ok === false) throw new Error(data?.error || `Kaspi Worker HTTP ${r.status}`);
-    for (const order of data.orders || []) {
-      for (const line of order.lines || []) {
-        const qty = Math.max(0, Number(line.quantity || 1));
-        const total = Number(line.totalPrice || (Number(line.basePrice || 0) * qty) || 0);
-        result.push({
-          orderId: String(order.id || ''), code: String(order.code || ''), entryId: String(line.entryId || ''),
-          status: String(order.status || ''), state: String(order.state || ''), creationDate: toTimestamp(order.creationDate),
-          sku: String(line.merchantCode || '').trim(), productName: String(line.productName || ''), qty,
-          unitPrice: qty ? total / qty : Number(line.basePrice || 0), totalPrice: total, raw: { order, line }
-        });
-      }
-    }
+    orders.push(...(Array.isArray(data?.orders) ? data.orders : []));
     if (!data.hasMore) break;
     const next = Number(data.nextBatch);
     if (!Number.isFinite(next)) break;
     batch = next;
   }
+
+  const result = [];
+  const missing = [];
+  for (const order of orders) {
+    const lines = Array.isArray(order?.lines) ? order.lines : [];
+    if (lines.length) appendKaspiLines(result, order, lines);
+    else missing.push(order);
+  }
+
+  if (!missing.length) return result;
+
+  const existingRows = await env.DB.prepare(`
+    SELECT DISTINCT order_id AS orderId
+    FROM marketplace_order_lines
+    WHERE market='Kaspi'
+  `).all();
+  const existing = new Set((existingRows.results || []).map(r => String(r.orderId || '')));
+
+  const now = Date.now();
+  for (const order of missing) {
+    const orderId = String(order?.id || '');
+    if (!orderId || !existing.has(orderId)) continue;
+    await env.DB.prepare(`
+      UPDATE marketplace_order_lines
+      SET status=?,state=?,creation_date=?,updated_at=?
+      WHERE market='Kaspi' AND order_id=?
+    `).bind(String(order?.status || ''),String(order?.state || ''),toTimestamp(order?.creationDate),now,orderId).run();
+  }
+
+  const token = String(env.KASPI_TOKEN || '').trim();
+  if (!token) return result;
+
+  const queue = missing
+    .filter(order => {
+      const orderId = String(order?.id || '');
+      return orderId && !existing.has(orderId);
+    })
+    .sort((a,b) => {
+      const ap = isKaspiActive(a) ? 1 : 0;
+      const bp = isKaspiActive(b) ? 1 : 0;
+      return (bp - ap) || (toTimestamp(b?.creationDate) - toTimestamp(a?.creationDate));
+    });
+
+  let budget = Math.max(0, KASPI_EXTERNAL_BUDGET - workerRequests);
+  for (const order of queue) {
+    if (budget < 1) break;
+    try {
+      const recovered = await fetchKaspiOrderLinesDirect(token, order, budget);
+      budget = recovered.budget;
+      if (recovered.lines.length) appendKaspiLines(result, order, recovered.lines);
+    } catch (e) {
+      console.warn('Kaspi direct line recovery failed', String(order?.code || order?.id || ''), String(e?.message || e));
+    }
+  }
+
   return result;
+}
+
+function isKaspiActive(order) {
+  const status = String(order?.status || '').toUpperCase();
+  return status === 'APPROVED_BY_BANK' || status === 'ACCEPTED_BY_MERCHANT' || status === 'ASSEMBLE';
+}
+
+function appendKaspiLines(result, order, lines) {
+  for (const line of lines || []) {
+    const qty = Math.max(0, Number(line?.quantity || 1));
+    const total = Number(line?.totalPrice || (Number(line?.basePrice || 0) * qty) || 0);
+    result.push({
+      orderId: String(order?.id || ''), code: String(order?.code || ''), entryId: String(line?.entryId || line?.id || ''),
+      status: String(order?.status || ''), state: String(order?.state || ''), creationDate: toTimestamp(order?.creationDate),
+      sku: String(line?.merchantCode || line?.sku || '').trim(), productName: String(line?.productName || line?.name || ''), qty,
+      unitPrice: qty ? total / qty : Number(line?.basePrice || 0), totalPrice: total, raw: { order, line }
+    });
+  }
+}
+
+async function fetchKaspiOrderLinesDirect(token, order, budget) {
+  const orderId = String(order?.id || '').trim();
+  if (!orderId || budget < 1) return { lines: [], budget };
+  const headers = {
+    'Accept': 'application/vnd.api+json',
+    'Content-Type': 'application/vnd.api+json',
+    'X-Auth-Token': token
+  };
+
+  const entriesResponse = await fetch(`https://kaspi.kz/shop/api/v2/orders/${encodeURIComponent(orderId)}/entries`, { headers });
+  budget--;
+  const entriesData = await safeJson(entriesResponse, 'Kaspi order entries');
+  if (!entriesResponse.ok) {
+    throw new Error(entriesData?.message || entriesData?.error || `Kaspi entries HTTP ${entriesResponse.status}`);
+  }
+
+  const lines = [];
+  for (const entry of Array.isArray(entriesData?.data) ? entriesData.data : []) {
+    const attrs = entry?.attributes || {};
+    const masterProductId = String(entry?.relationships?.product?.data?.id || '').trim();
+    let merchantCode = '';
+    let productName = '';
+
+    if (masterProductId && budget > 0) {
+      try {
+        const productResponse = await fetch(`https://kaspi.kz/shop/api/v2/masterproducts/${encodeURIComponent(masterProductId)}/merchantProduct`, { headers });
+        budget--;
+        const productData = await safeJson(productResponse, 'Kaspi merchant product');
+        if (productResponse.ok) {
+          merchantCode = String(productData?.data?.attributes?.code || '').trim();
+          productName = String(productData?.data?.attributes?.name || '').trim();
+        }
+      } catch (e) {
+        console.warn('Kaspi merchant product recovery failed', masterProductId, String(e?.message || e));
+      }
+    }
+
+    const qty = Math.max(0, Number(attrs?.quantity || 1));
+    const totalPrice = Number(attrs?.totalPrice || (Number(attrs?.basePrice || 0) * qty) || 0);
+    lines.push({
+      entryId: String(entry?.id || ''),
+      quantity: qty,
+      basePrice: Number(attrs?.basePrice || (qty ? totalPrice / qty : 0) || 0),
+      totalPrice,
+      merchantCode: merchantCode || masterProductId,
+      productName: productName || String(attrs?.category?.title || '')
+    });
+  }
+  return { lines, budget };
 }
 
 async function fetchWb(env) {
