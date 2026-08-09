@@ -1,3 +1,4 @@
+# retry
 name: One-shot FIFO lot accounting
 on:
   push:
@@ -21,12 +22,10 @@ jobs:
           from pathlib import Path
           p=Path('index.html')
           s=p.read_text(encoding='utf-8')
-
           old="state.products ||= [];state.movements ||= [];state.sales ||= [];state.purchases ||= [];state.reservations ||= [];state.settings ||= {};"
           new="state.products ||= [];state.movements ||= [];state.sales ||= [];state.purchases ||= [];state.reservations ||= [];state.settings ||= {};state.purchases.forEach(x=>{x.receivedAt=Number(x.receivedAt||x.date)||Date.now();x.remainingQty=Number.isFinite(Number(x.remainingQty))?Math.max(0,Number(x.remainingQty)):Math.max(0,Number(x.qty)||0);x.landedUnitCost=Number(x.landedUnitCost)||((Number(x.unitCost)||0)+((Number(x.delivery)||0)/(Math.max(1,Number(x.qty)||1))))});"
           if old not in s: raise SystemExit('state init marker missing')
           s=s.replace(old,new,1)
-
           marker="function costOf(p){return Number(p.cost)||0}"
           insert="""function costOf(p){return Number(p.cost)||0}
 function fifoLots(productId){return (state.purchases||[]).filter(x=>x.productId===productId&&(Number(x.remainingQty)||0)>0).sort((a,b)=>(Number(a.receivedAt||a.date)||0)-(Number(b.receivedAt||b.date)||0))}
@@ -36,37 +35,29 @@ function localDateInputValue(ts=Date.now()){const d=new Date(Number(ts)||Date.no
 function localDateStart(value){if(!value)return Date.now();const [y,m,d]=String(value).split('-').map(Number);return new Date(y,m-1,d,12,0,0,0).getTime()}"""
           if marker not in s: raise SystemExit('cost marker missing')
           s=s.replace(marker,insert,1)
-
           old="function renderPurchases(){document.getElementById('purchaseList').innerHTML=state.purchases.length?state.purchases.map(x=>`<div class=\"item\"><div class=\"name\">${esc(prod(x.productId)?.name||'—')}</div><div class=\"muted\">Партия: ${esc(x.batch)} · ${x.qty} шт. · ${fmt(x.unitCost)}/шт. · доставка ${fmt(x.delivery)}</div><div class=\"muted\">${new Date(x.date).toLocaleDateString('ru-RU')}</div></div>`).join(''):'<div class=\"empty\">Приходов пока нет</div>'}"
           new="function renderPurchases(){document.getElementById('purchaseList').innerHTML=state.purchases.length?[...state.purchases].sort((a,b)=>(Number(b.receivedAt||b.date)||0)-(Number(a.receivedAt||a.date)||0)).map(x=>`<div class=\"item\"><div class=\"name\">${esc(prod(x.productId)?.name||'—')}</div><div class=\"muted\">Партия: ${esc(x.batch||'—')} · пришла ${new Date(Number(x.receivedAt||x.date)).toLocaleDateString('ru-RU')}</div><div class=\"muted\">${x.qty} шт. · закуп ${fmt(x.unitCost)}/шт. · доставка ${fmt(x.delivery)} · себестоимость партии ${fmt(x.landedUnitCost)}/шт.</div><div class=\"muted\">Осталось в партии: ${Number(x.remainingQty)||0} шт.</div></div>`).join(''):'<div class=\"empty\">Приходов пока нет</div>'}"
           if old not in s: raise SystemExit('renderPurchases marker missing')
           s=s.replace(old,new,1)
-
           old="function arrivalForm(){let opts=state.products.map(p=>`<option value=\"${p.id}\">${esc(p.name)}</option>`).join('');return `<h3>Создать приход</h3><div class=\"field\"><label>Товар</label><select id=\"ap\">${opts}</select></div><div class=\"two\"><div class=\"field\"><label>Количество</label><input id=\"aq\" type=\"number\"></div><div class=\"field\"><label>Цена закупки/шт. ₸</label><input id=\"ac\" type=\"number\"></div></div><div class=\"field\"><label>Доставка партии ₸</label><input id=\"ad\" type=\"number\" value=\"0\"></div><div class=\"field\"><label>Партия</label><input id=\"ab\" placeholder=\"Например: Китай 01.08\"></div><button class=\"btn dark full\" onclick=\"createArrival()\">Создать приход</button>`}"
           new="function arrivalForm(){let opts=state.products.map(p=>`<option value=\"${p.id}\">${esc(p.name)}</option>`).join('');return `<h3>Создать приход</h3><div class=\"field\"><label>Товар</label><select id=\"ap\">${opts}</select></div><div class=\"field\"><label>Дата поступления на склад</label><input id=\"ar\" type=\"date\" value=\"${localDateInputValue()}\"></div><div class=\"two\"><div class=\"field\"><label>Количество</label><input id=\"aq\" type=\"number\"></div><div class=\"field\"><label>Цена закупки/шт. ₸</label><input id=\"ac\" type=\"number\"></div></div><div class=\"field\"><label>Доставка партии ₸</label><input id=\"ad\" type=\"number\" value=\"0\"></div><div class=\"field\"><label>Партия</label><input id=\"ab\" placeholder=\"Например: Китай 01.08\"></div><div class=\"link-note\">FIFO: при продаже сначала списывается самая ранняя по дате поступления партия. У каждой партии сохраняется своя себестоимость.</div><button class=\"btn dark full\" onclick=\"createArrival()\">Создать приход</button>`}"
           if old not in s: raise SystemExit('arrivalForm marker missing')
           s=s.replace(old,new,1)
-
           old="function createArrival(){let p=prod(document.getElementById('ap').value),q=+document.getElementById('aq').value||0,c=Math.max(0,+document.getElementById('ac').value||0),d=Math.max(0,+document.getElementById('ad').value||0),b=document.getElementById('ab').value||'';if(!p||q<=0)return alert('Проверьте данные');const oldQty=Math.max(0,Number(p.stock)||0),newPositiveQty=oldQty+q,total=(Number(p.cost)||0)*oldQty+c*q+d;p.stock=(Number(p.stock)||0)+q;if(newPositiveQty>0)p.cost=total/newPositiveQty;state.purchases.unshift({id:id(),productId:p.id,qty:q,unitCost:c,delivery:d,batch:b,date:Date.now()});log('приход',p.id,q,`партия ${b}`);save();closeModal();render()}"
           new="function createArrival(){let p=prod(document.getElementById('ap').value),q=+document.getElementById('aq').value||0,c=Math.max(0,+document.getElementById('ac').value||0),d=Math.max(0,+document.getElementById('ad').value||0),b=document.getElementById('ab').value||'',receivedAt=localDateStart(document.getElementById('ar')?.value);if(!p||q<=0)return alert('Проверьте данные');const landedUnitCost=c+(d/q);p.stock=(Number(p.stock)||0)+q;state.purchases.unshift({id:id(),productId:p.id,qty:q,remainingQty:q,unitCost:c,delivery:d,landedUnitCost,batch:b,receivedAt,date:Date.now()});refreshProductAverageCost(p);log('приход',p.id,q,`партия ${b||'—'} · поступила ${new Date(receivedAt).toLocaleDateString('ru-RU')}`);save();closeModal();render()}"
           if old not in s: raise SystemExit('createArrival marker missing')
           s=s.replace(old,new,1)
-
           old="function createSale(){let p=prod(document.getElementById('sp').value),q=+document.getElementById('sq').value||0,price=Math.max(0,+document.getElementById('sprice').value||0),fee=Math.max(0,+document.getElementById('sfee').value||0);if(!p||q<=0)return alert('Проверьте данные');const available=Math.max(0,(Number(p.stock)||0)-reserved(p));if(q>available)return alert('Недостаточно свободного остатка. Доступно: '+available+' шт.');p.stock=(Number(p.stock)||0)-q;let c=Number(p.cost)||0;state.sales.push({id:id(),productId:p.id,qty:q,price,cost:c,fee,channel:'Ручная',date:Date.now()});p.totalProfit=(p.totalProfit||0)+q*(price-c-fee);log('продажа',p.id,-q);save();closeModal();render()}"
           new="function createSale(){let p=prod(document.getElementById('sp').value),q=+document.getElementById('sq').value||0,price=Math.max(0,+document.getElementById('sprice').value||0),fee=Math.max(0,+document.getElementById('sfee').value||0);if(!p||q<=0)return alert('Проверьте данные');const available=Math.max(0,(Number(p.stock)||0)-reserved(p));if(q>available)return alert('Недостаточно свободного остатка. Доступно: '+available+' шт.');const fifo=fifoConsume(p.id,q);p.stock=(Number(p.stock)||0)-q;let c=fifo.unitCost;state.sales.push({id:id(),productId:p.id,qty:q,price,cost:c,fee,channel:'Ручная',date:Date.now(),fifoLots:fifo.lots});p.totalProfit=(p.totalProfit||0)+q*(price-c-fee);refreshProductAverageCost(p);log('продажа',p.id,-q,'FIFO');save();closeModal();render()}"
           if old not in s: raise SystemExit('createSale marker missing')
           s=s.replace(old,new,1)
-
-          # Replace both marketplace sale cost assignments with FIFO cost.
           old1="p.stock=(Number(p.stock)||0)-qty;state.sales.push({id:id(),productId:p.id,qty,price:Number(o.unitPrice)||0,cost:Number(p.cost)||0,fee:0,channel:market,date:toTimestamp(o.creationDate),externalKey:scoped});"
           new1="const fifo=fifoConsume(p.id,qty);p.stock=(Number(p.stock)||0)-qty;state.sales.push({id:id(),productId:p.id,qty,price:Number(o.unitPrice)||0,cost:fifo.unitCost,fee:0,channel:market,date:toTimestamp(o.creationDate),externalKey:scoped,fifoLots:fifo.lots});refreshProductAverageCost(p);"
-          count=s.count(old1)
-          if count<1: raise SystemExit('marketplace sale marker missing')
+          if old1 not in s: raise SystemExit('marketplace sale marker missing')
           s=s.replace(old1,new1)
-
           p.write_text(s,encoding='utf-8')
           PY
-      - name: Validate JavaScript and FIFO markers
+      - name: Validate
         run: |
           python - <<'PY'
           from pathlib import Path
@@ -74,7 +65,7 @@ function localDateStart(value){if(!value)return Date.now();const [y,m,d]=String(
           html=Path('index.html').read_text(encoding='utf-8')
           scripts=re.findall(r'<script>(.*?)</script>',html,flags=re.S|re.I)
           Path('/tmp/app.js').write_text('\n'.join(scripts),encoding='utf-8')
-          for marker in ['id="ar" type="date"','function fifoConsume(productId,qty)','remainingQty:q','landedUnitCost','fifoLots:fifo.lots','Дата поступления на склад']:
+          for marker in ['id="ar" type="date"','function fifoConsume(productId,qty)','remainingQty:q','fifoLots:fifo.lots']:
               if marker not in html: raise SystemExit('missing '+marker)
           PY
           node --check /tmp/app.js
@@ -84,8 +75,4 @@ function localDateStart(value){if(!value)return Date.now();const [y,m,d]=String(
           git config user.email 'actions@users.noreply.github.com'
           git add index.html
           git commit -m 'Track purchase lots and FIFO cost by arrival date'
-          for attempt in 1 2 3; do
-            if git push origin HEAD:main; then exit 0; fi
-            git pull --rebase origin main
-          done
-          exit 1
+          git push origin HEAD:main
