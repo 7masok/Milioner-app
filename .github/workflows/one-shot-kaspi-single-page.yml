@@ -1,0 +1,30 @@
+name: One-shot Kaspi single-page feed
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/one-shot-kaspi-single-page.yml'
+permissions:
+  contents: write
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - run: git pull --rebase origin main
+      - run: python .github/scripts/patch_kaspi_single_page.py
+      - name: Validate
+        run: |
+          node --check cloudflare/millioner-api/src/index.js
+          grep -A6 "activeFeed = await fetchKaspiWorkerFeed" cloudflare/millioner-api/src/index.js | grep -q "size: '100'"
+          ! grep -q "state: 'KASPI_DELIVERY_TRANSIT'" cloudflare/millioner-api/src/index.js
+      - name: Commit patch
+        run: |
+          git config user.name 'millioner-maintenance'
+          git config user.email 'actions@users.noreply.github.com'
+          git add cloudflare/millioner-api/src/index.js
+          git diff --cached --quiet || git commit -m 'Use one focused Kaspi packing feed per sync'
+          git push origin main
