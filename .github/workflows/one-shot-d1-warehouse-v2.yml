@@ -1,0 +1,33 @@
+name: One-shot D1 warehouse migration v2
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/one-shot-d1-warehouse-v2.yml'
+permissions:
+  contents: write
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - run: git pull --rebase origin main
+      - run: python .github/scripts/patch_d1_warehouse.py
+      - run: |
+          node --check cloudflare/millioner-api/src/index.js
+          python - <<'PY'
+          from pathlib import Path
+          import re
+          h=Path('index.html').read_text(encoding='utf-8')
+          scripts=re.findall(r'<script>(.*?)</script>',h,flags=re.S|re.I)
+          Path('/tmp/app.js').write_text('\n'.join(scripts),encoding='utf-8')
+          PY
+          node --check /tmp/app.js
+      - run: |
+          git config user.name 'millioner-maintenance'
+          git config user.email 'actions@users.noreply.github.com'
+          git add index.html cloudflare/millioner-api/src/index.js .github/workflows/smoke-test.yml
+          git commit -m 'Move warehouse state to D1 with safe local migration'
+          git push origin HEAD:main
