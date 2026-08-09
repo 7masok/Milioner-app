@@ -23,6 +23,7 @@ nav{position:fixed;bottom:0;left:50%;transform:translateX(-50%);width:min(560px,
 .modal{position:fixed;inset:0;background:#0006;display:none;align-items:flex-end;z-index:20}.modal.open{display:flex}.sheet{width:min(560px,100%);margin:auto 0 0;background:#fff;border-radius:22px 22px 0 0;padding:18px;max-height:90vh;overflow:auto}.sheet h3{margin:0 0 14px;font-size:20px}.field{margin:9px 0}.field label{display:block;font-size:11px;color:var(--muted);margin-bottom:5px}.field input,.field select{width:100%;padding:11px;border:1px solid var(--line);border-radius:11px;background:#fff}.two{display:grid;grid-template-columns:1fr 1fr;gap:8px}.actions{display:flex;gap:8px;margin-top:14px}.actions>*{flex:1}
 table{width:100%;border-collapse:collapse;background:#fff;border-radius:14px;overflow:hidden;font-size:11px}td,th{padding:9px;border-bottom:1px solid var(--line);text-align:left}th{color:var(--muted);font-weight:600}
 .kpi{display:grid;grid-template-columns:1fr 1fr;gap:8px}.setting{display:flex;justify-content:space-between;align-items:center;background:#fff;padding:13px;border:1px solid var(--line);border-radius:14px;margin-bottom:8px}
+.order-meta{display:flex;gap:6px;flex-wrap:wrap;margin-top:7px}.order-line{display:flex;justify-content:space-between;gap:10px;align-items:flex-start}.order-line+.order-line{margin-top:5px}.order-sku{font-size:11px;color:var(--muted);word-break:break-all}.order-head{display:flex;justify-content:space-between;gap:10px;align-items:flex-start}.order-price{font-weight:800;white-space:nowrap}.order-summary{display:grid;grid-template-columns:repeat(3,1fr);gap:7px;margin:10px 0}.order-summary .card{padding:10px}.order-summary .num{font-size:17px}.order-list{display:flex;flex-direction:column;gap:8px}
 </style>
 </head>
 <body>
@@ -42,6 +43,13 @@ table{width:100%;border-collapse:collapse;background:#fff;border-radius:14px;ove
   <div class="period">
     <button class="chip active" data-period="1">Сегодня</button><button class="chip" data-period="7">7 дней</button><button class="chip" data-period="30">30 дней</button><button class="chip" data-period="0">Свой период</button>
   </div>
+  <h2>Заказы Kaspi</h2>
+  <div class="order-summary">
+    <div class="card"><div class="label">Получено</div><div class="num" id="koTotal">0</div></div>
+    <div class="card"><div class="label">Привязано</div><div class="num" id="koMatched">0</div></div>
+    <div class="card"><div class="label">Не привязано</div><div class="num" id="koUnmatched">0</div></div>
+  </div>
+  <div id="kaspiOrderList" class="order-list"></div>
   <h2>Товары, требующие внимания</h2><div id="attention" class="list"></div>
   <h2>Последние движения</h2><div id="recent" class="list"></div>
 </section>
@@ -86,6 +94,7 @@ state.purchases ||= [];
 state.reservations ||= [];
 state.settings ||= {};
 state.kaspiOrders ||= {};
+state.kaspiOrderFeed ||= [];
 state.kaspiBaselineAt ||= null;
 let selectedPeriod=1;
 const save=()=>localStorage.setItem(KEY,JSON.stringify(state));
@@ -103,9 +112,24 @@ function render(){
  let since=Date.now()-selectedPeriod*86400000;
  let ss=state.sales.filter(s=>s.date>=since);let rev=ss.reduce((a,s)=>a+s.qty*s.price,0);let pr=ss.reduce((a,s)=>a+s.qty*(s.price-s.cost-s.fee),0);
  document.getElementById('mSales').textContent=fmt(rev);document.getElementById('mProfit').textContent=fmt(pr);document.getElementById('periodLabel').textContent=selectedPeriod===1?'сегодня':selectedPeriod+' дней';
- renderAttention();renderRecent();renderProducts();renderMovement();renderPurchases();renderReports();
- document.getElementById('lastSync').textContent=state.settings.lastSync?new Date(state.settings.lastSync).toLocaleTimeString('ru-RU',{hour:'2-digit',minute:'2-digit'}):'—'; if(kt && !kt.value) kt.value=state.settings.kaspiToken||'';
+ renderKaspiOrders();renderAttention();renderRecent();renderProducts();renderMovement();renderPurchases();renderReports();
+ document.getElementById('lastSync').textContent=state.settings.lastSync?new Date(state.settings.lastSync).toLocaleTimeString('ru-RU',{hour:'2-digit',minute:'2-digit'}):'—';
  const ks=document.getElementById('kaspiApiStatus'); if(ks && state.settings.lastKaspiTestStatus) ks.textContent=state.settings.lastKaspiTestStatus;
+}
+function kaspiStatusLabel(status){return ({APPROVED:'Принят',ACCEPTED_BY_MERCHANT:'Принят',COMPLETED:'Завершён',CANCELLED:'Отменён',CANCELLING:'Отменяется',DELIVERY:'Доставка',PICKUP:'Самовывоз'})[status]||status||'—'}
+function renderKaspiOrders(){
+ const list=document.getElementById('kaspiOrderList'); if(!list)return;
+ const a=[...(state.kaspiOrderFeed||[])].sort((x,y)=>(Number(y.creationDate)||0)-(Number(x.creationDate)||0));
+ const total=a.length,matched=a.filter(x=>x.productId).length,unmatched=total-matched;
+ const eTotal=document.getElementById('koTotal'),eMatched=document.getElementById('koMatched'),eUnmatched=document.getElementById('koUnmatched');
+ if(eTotal)eTotal.textContent=total;if(eMatched)eMatched.textContent=matched;if(eUnmatched)eUnmatched.textContent=unmatched;
+ if(!a.length){list.innerHTML='<div class="empty">Нажмите ↻ сверху, чтобы загрузить заказы Kaspi</div>';return;}
+ list.innerHTML=a.slice(0,100).map(o=>{
+   const p=o.productId?prod(o.productId):null;
+   const statusClass=['CANCELLED','CANCELLING'].includes(o.status)?'bad':o.status==='COMPLETED'?'ok':'warn';
+   const totalPrice=Number(o.totalPrice||0);
+   return `<div class="item"><div class="order-head"><div class="grow"><div class="name">Заказ ${esc(o.code||o.orderId||'—')}</div><div class="muted">${o.creationDate?new Date(o.creationDate).toLocaleString('ru-RU'):'Дата неизвестна'}</div></div><span class="badge ${statusClass}">${esc(kaspiStatusLabel(o.status))}</span></div><div class="order-line" style="margin-top:9px"><div class="grow"><b>${esc(p?.name||'Товар не привязан')}</b><div class="order-sku">Kaspi артикул: ${esc(o.sku||'—')}</div></div><div class="right"><b>${o.qty||0} шт.</b>${totalPrice?`<div class="muted">${fmt(totalPrice)}</div>`:''}</div></div><div class="order-meta"><span class="badge ${p?'ok':'bad'}">${p?'Артикул найден':'Нужно привязать'}</span><span class="badge">${esc(o.state||'—')}</span></div></div>`;
+ }).join('');
 }
 function renderAttention(){let a=state.products.filter(p=>p.stock<=p.min&&p.min>0||p.stock<0).sort((x,y)=>x.stock-y.stock).slice(0,5);document.getElementById('attention').innerHTML=a.length?a.map(p=>`<div class="item row"><div class="grow"><div class="name">${esc(p.name)}</div><div class="muted">Остаток ${p.stock} · минимум ${p.min}</div></div><span class="badge ${p.stock<0?'bad':'warn'}">${p.stock<0?'Нехватка':'На закупку'}</span></div>`).join(''):'<div class="empty">Всё в норме</div>'}
 function renderRecent(){let a=state.movements.slice(0,5);document.getElementById('recent').innerHTML=a.length?a.map(m=>`<div class="item"><div class="row"><div class="grow"><b>${esc(m.type)}</b><div class="muted">${esc(prod(m.productId)?.name||'Товар удалён')}</div></div><div class="right">${m.qty>0?'+':''}${m.qty}<div class="muted">${new Date(m.date).toLocaleString('ru-RU')}</div></div></div></div>`).join(''):'<div class="empty">Операций пока нет</div>'}
@@ -149,10 +173,6 @@ function inventoryForm(pid){let opts=state.products.map(p=>`<option value="${p.i
 function doInventory(){let p=prod(document.getElementById('ip').value),actual=+document.getElementById('iq').value||0,delta=actual-p.stock;if(!p)return;let old=p.stock;p.stock=actual;if(delta<0)recalcCostAfterLoss(p,-delta);log('инвентаризация',p.id,delta,`было ${old}, стало ${actual}`);save();closeModal();render()}
 function showSheet(x){document.getElementById('sheet').innerHTML=x;document.getElementById('modal').classList.add('open')}function closeModal(){document.getElementById('modal').classList.remove('open')}
 
-
-
-
-
 async function testKaspiWorker(){
  const status=document.getElementById('kaspiApiStatus');
  if(status) status.textContent='Статус: проверяем Worker...';
@@ -164,7 +184,7 @@ async function testKaspiWorker(){
    alert('Kaspi Worker работает.');
  }catch(e){
    if(status) status.textContent='Статус: ошибка Worker';
-   alert('Ошибка Worker:\\n'+String(e.message||e));
+   alert('Ошибка Worker:\n'+String(e.message||e));
  }
 }
 
@@ -182,8 +202,10 @@ async function syncNow(){
    let soldCount=0;
    let cancelledCount=0;
    let safety=0;
+   const latestOrderFeed=[];
 
    state.kaspiOrders ||= {};
+   state.kaspiOrderFeed ||= [];
    state.kaspiBaselineAt ||= Date.now();
 
    while(safety<30){
@@ -207,15 +229,28 @@ async function syncNow(){
      for(const o of (data.orders||[])){
        for(const line of (o.lines||[])){
          const sku=String(line.merchantCode||'').trim();
+         const qty=Math.max(0,Number(line.quantity||1));
+         const p=sku?state.products.find(x=>String(x.kaspi||'').trim()===sku):null;
+         const unitPrice=qty?Number(line.totalPrice||line.basePrice*qty||0)/qty:0;
+
+         latestOrderFeed.push({
+           orderId:o.id,
+           code:o.code||'',
+           entryId:line.entryId,
+           status:o.status||'',
+           state:o.state||'',
+           creationDate:o.creationDate||Date.now(),
+           sku,
+           qty,
+           unitPrice,
+           totalPrice:Number(line.totalPrice||unitPrice*qty||0),
+           productId:p?.id||null
+         });
 
          if(!sku){
            unmatched++;
            continue;
          }
-
-         const p=state.products.find(
-           x=>String(x.kaspi||'').trim()===sku
-         );
 
          if(!p){
            unmatched++;
@@ -225,7 +260,6 @@ async function syncNow(){
          matched++;
 
          const key=o.id+':'+line.entryId;
-         const qty=Math.max(0,Number(line.quantity||1));
          const prev=state.kaspiOrders[key]||null;
 
          const cancelled=['CANCELLED','CANCELLING'].includes(o.status);
@@ -266,15 +300,6 @@ async function syncNow(){
 
              if(!state.sales.some(s=>s.externalKey===key)){
                p.stock-=qty;
-
-               const unitPrice=
-                 qty
-                   ? Number(
-                       line.totalPrice||
-                       line.basePrice*qty||
-                       0
-                     )/qty
-                   : 0;
 
                state.sales.push({
                  id:id(),
@@ -336,22 +361,24 @@ async function syncNow(){
      if(!Number.isFinite(batch)) break;
    }
 
+   state.kaspiOrderFeed=latestOrderFeed.slice(0,500);
    state.settings.lastSync=Date.now();
    save();
    render();
 
    alert(
-     'Kaspi синхронизирован\\n'+
-     'Заказов: '+totalOrders+'\\n'+
-     'Совпало по артикулам: '+matched+'\\n'+
-     'Не привязано: '+unmatched+'\\n'+
-     'В резерв: '+reservedCount+' шт.\\n'+
-     'Продано: '+soldCount+' шт.\\n'+
+     'Kaspi синхронизирован\n'+
+     'Заказов: '+totalOrders+'\n'+
+     'Строк заказов: '+latestOrderFeed.length+'\n'+
+     'Совпало по артикулам: '+matched+'\n'+
+     'Не привязано: '+unmatched+'\n'+
+     'В резерв: '+reservedCount+' шт.\n'+
+     'Продано: '+soldCount+' шт.\n'+
      'Снято с резерва: '+cancelledCount+' шт.'
    );
 
  }catch(e){
-   alert('Ошибка синхронизации Kaspi:\\n'+String(e.message||e));
+   alert('Ошибка синхронизации Kaspi:\n'+String(e.message||e));
  }finally{
    if(btn){
      btn.disabled=false;
@@ -360,7 +387,7 @@ async function syncNow(){
  }
 }
 function backup(){let blob=new Blob([JSON.stringify(state,null,2)],{type:'application/json'}),a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download='sklad-backup-'+new Date().toISOString().slice(0,10)+'.json';a.click()}
-function restore(){let i=document.createElement('input');i.type='file';i.accept='.json';i.onchange=()=>{let r=new FileReader();r.onload=()=>{try{state=JSON.parse(r.result);save();render();alert('Восстановлено')}catch(e){alert('Неверная копия')}};r.readAsText(i.files[0])};i.click()}
+function restore(){let i=document.createElement('input');i.type='file';i.accept='.json';i.onchange=()=>{let r=new FileReader();r.onload=()=>{try{state=JSON.parse(r.result);state.products||=[];state.movements||=[];state.sales||=[];state.purchases||=[];state.reservations||=[];state.settings||={};state.kaspiOrders||={};state.kaspiOrderFeed||=[];save();render();alert('Восстановлено')}catch(e){alert('Неверная копия')}};r.readAsText(i.files[0])};i.click()}
 function openView(view, remember=true){
  const target=document.getElementById(view);
  const button=document.querySelector(`nav button[data-view="${view}"]`);
