@@ -98,7 +98,7 @@ jobs:
           set -e
           curl -fsSL --retry 4 --retry-delay 3 --max-time 25 'https://millioner-api.7masok.workers.dev/api/sync-status' | jq .
 
-      - name: Inspect D1 order counts and exact Kaspi orders
+      - name: Inspect D1 exact Kaspi orders
         run: |
           set -e
           body=$(curl -fsSL --retry 4 --retry-delay 3 --max-time 25 'https://millioner-api.7masok.workers.dev/api/orders?market=Kaspi&limit=1000')
@@ -106,14 +106,13 @@ jobs:
           for id in 1028072690 1028169317 1028174494; do
             matches=$(echo "$body" | jq --arg id "$id" '[.orders[] | select((.code|tostring)==$id or (.orderId|tostring)==$id)]')
             echo "KASPI_EXACT_${id}=$(echo "$matches" | jq 'length')"
-            echo "$matches" | jq .
           done
 
-      - name: Inspect half-day Kaspi Worker feed
+      - name: Probe active Kaspi Worker filter
         run: |
           set -e
-          body=$(curl -fsSL --max-time 60 'https://fragrant-shadow-72ed.7masok.workers.dev/kaspi/sync?days=0.5&batch=0')
-          echo "KASPI_WORKER=$(echo "$body" | jq '{ok,totalOrders,hasMore,nextBatch,orders:(.orders|length)}')"
+          body=$(curl -fsSL --max-time 60 'https://fragrant-shadow-72ed.7masok.workers.dev/kaspi/sync?days=1&status=ACCEPTED_BY_MERCHANT&state=KASPI_DELIVERY&batch=0')
+          echo "FILTERED_WORKER=$(echo "$body" | jq '{ok,totalOrders,hasMore,nextBatch,orders:(.orders|length)}')"
           for id in 1028072690 1028169317 1028174494; do
             row=$(echo "$body" | jq --arg id "$id" '[.orders[] | select((.code|tostring)==$id)]')
             echo "WORKER_EXACT_${id}=$(echo "$row" | jq 'length')"
