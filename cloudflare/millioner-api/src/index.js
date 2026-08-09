@@ -1,9 +1,8 @@
 const DEFAULT_CORS_ORIGIN = 'https://7masok.github.io';
 const KASPI_SCHEDULE_MS = 10 * 60 * 1000;
 const KASPI_MAX_BATCHES = 4;
-// WB Statistics API can be limited seller-wide to one request per three hours.
-// Keep a small safety margin so background checks do not keep the seller in 429.
-const WB_MIN_SYNC_MS = (3 * 60 + 5) * 60 * 1000;
+const WB_MIN_SYNC_MS = 10 * 60 * 1000;
+const WB_MARKETPLACE_BASE = 'https://marketplace-api.wildberries.ru';
 
 export default {
   async fetch(request, env, ctx) {
@@ -61,7 +60,7 @@ export default {
       }
 
       if (url.pathname === '/api/market-status' && request.method === 'GET') {
-        const markets = await getMarketStatuses(env.DB);
+        const markets = await getMarketStatuses(env);
         return json({ ok: true, serverTime: Date.now(), markets }, 200, cors);
       }
 
@@ -140,7 +139,8 @@ async function getWbSyncGate(db) {
   return { allowed: !lastAttempt || Date.now() >= nextSyncAt, lastAttempt, nextSyncAt };
 }
 
-async function getMarketStatuses(db) {
+async function getMarketStatuses(env) {
+  const db = env.DB;
   const result = [];
   for (const market of ['Kaspi', 'WB', 'Ozon']) {
     const latest = await db.prepare('SELECT * FROM sync_runs WHERE market=? ORDER BY id DESC LIMIT 1').bind(market).first();
@@ -152,7 +152,8 @@ async function getMarketStatuses(db) {
     if (market === 'WB') nextSyncAt = lastAttempt ? lastAttempt + WB_MIN_SYNC_MS : Date.now();
     result.push({
       market,
-      configured: market !== 'Ozon',
+      configured: market === 'Kaspi' ? Boolean(env.KASPI_WORKER_URL) : market === 'WB' ? Boolean(env.WB_TOKEN) : false,
+      mode: market === 'WB' ? (env.WB_TOKEN ? 'marketplace-api' : 'missing-token') : market === 'Kaspi' ? 'worker' : 'off',
       latest: latest || null,
       lastSuccessAt: Number(success?.lastSuccessAt || 0) || null,
       orderLines: Number(count?.n || 0),
@@ -210,18 +211,57 @@ async function fetchKaspi(env) {
 }
 
 async function fetchWb(env) {
-  const base = cleanUrl(env.WB_WORKER_URL);
-  if (!base) throw new Error('WB_WORKER_URL is not configured');
-  const r = await fetch(`${base}/wb/sync?days=14`, { headers: { 'Accept': 'application/json' } });
-  const data = await safeJson(r, 'WB Worker');
-  if (!r.ok || data?.ok === false) {
-    const detail = String(data?.error || data?.message || `WB Worker HTTP ${r.status}`);
-    if (r.status === 429 || /\b429\b|too many requests|global limiter/i.test(detail)) {
-      throw new Error(`WB rate limited by Statistics API. Automatic sync waits at least 3h05m between attempts. ${detail}`);
-    }
-    throw new Error(detail);
+  const token = String(env.WB_TOKEN || '').trim();
+  if (!token) throw new Error('WB_TOKEN is not configured in millioner-api');
+
+  const headers = { 'Accept': 'application/json', 'Authorization': token };
+  const dateFrom = Math.floor((Date.now() - 14 * 86400000) / 1000);
+  const orders = [];
+  let next = 0;
+
+  for (let safety = 0; safety < 10; safety++) {
+    const url = `${WB_MARKETPLACE_BASE}/api/v3/orders?limit=1000&next=${next}&dateFrom=${dateFrom}`;
+    const r = await fetch(url, { headers });
+    const data = await safeJson(r, 'WB Marketplace orders');
+    if (!r.ok) throw new Error(wbError('WB Marketplace orders', r.status, data));
+    const batch = Array.isArray(data?.orders) ? data.orders : [];
+    orders.push(...batch);
+    const newNext = Number(data?.next || 0);
+    if (!batch.length || !newNext || newNext === next) break;
+    next = newNext;
   }
-  return normalizeWb(data);
+
+  const statuses = new Map();
+  const ids = orders.map(o => Number(o?.id)).filter(Number.isFinite);
+  for (let i = 0; i < ids.length; i += 1000) {
+    const chunk = ids.slice(i, i + 1000);
+    const r = await fetch(`${WB_MARKETPLACE_BASE}/api/v3/orders/status`, {
+      method: 'POST', headers: { ...headers, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ orders: chunk })
+    });
+    const data = await safeJson(r, 'WB Marketplace statuses');
+    if (!r.ok) throw new Error(wbError('WB Marketplace statuses', r.status, data));
+    for (const item of data?.orders || []) statuses.set(Number(item.id), item);
+  }
+
+  return orders.map((order, oi) => {
+    const st = statuses.get(Number(order?.id)) || {};
+    const price = Number(order?.convertedFinalPrice ?? order?.finalPrice ?? order?.convertedPrice ?? order?.price ?? 0) || 0;
+    const sku = String(order?.article ?? order?.nmId ?? order?.skus?.[0] ?? '').trim();
+    const orderId = String(order?.id ?? order?.orderUid ?? `wb-${oi}`);
+    return {
+      orderId, code: String(order?.id ?? order?.orderUid ?? orderId), entryId: orderId,
+      status: String(st?.supplierStatus || 'new'),
+      state: String(st?.wbStatus || order?.deliveryType || 'fbs'),
+      creationDate: toTimestamp(order?.createdAt), sku, productName: '', qty: 1,
+      unitPrice: price, totalPrice: price, raw: { order, status: st }
+    };
+  });
+}
+
+function wbError(label, status, data) {
+  const detail = String(data?.message || data?.errorText || data?.error || data?.code || '').trim();
+  return `${label} HTTP ${status}${detail ? `: ${detail}` : ''}`;
 }
 
 function normalizeWb(data) {
