@@ -15,6 +15,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
+          ref: main
           fetch-depth: 0
 
       - name: Patch Kaspi stage labels
@@ -41,20 +42,6 @@ jobs:
               raise SystemExit(f'state render marker count={s.count(old_state)}')
           s=s.replace(old_state,new_state,1)
           p.write_text(s,encoding='utf-8')
-
-          p=Path('.github/workflows/smoke-test.yml')
-          s=p.read_text(encoding='utf-8')
-          anchor='              \'sync in-progress UI\': "\'Синхронизация\',\'warn\'",\n'
-          addition=(
-              '              \'Kaspi packaging stage\': "if(u===\'ACCEPTED_BY_MERCHANT\'){if(st===\'KASPI_DELIVERY\')return \'Упаковка\'",\n'
-              '              \'Kaspi handoff stage\': "if(u===\'ASSEMBLE\')return \'Передача\'",\n'
-              '              \'Kaspi delivery label\': "KASPI_DELIVERY:\'Kaspi Доставка\'",\n'
-          )
-          if 'Kaspi packaging stage' not in s:
-              if s.count(anchor)!=1:
-                  raise SystemExit(f'smoke anchor count={s.count(anchor)}')
-              s=s.replace(anchor,anchor+addition,1)
-          p.write_text(s,encoding='utf-8')
           PY
 
       - name: Validate
@@ -73,10 +60,11 @@ jobs:
           PY
           node --check /tmp/app.js
 
-      - name: Commit
+      - name: Commit safely
         run: |
           git config user.name 'millioner-maintenance'
           git config user.email 'actions@users.noreply.github.com'
-          git add index.html .github/workflows/smoke-test.yml
+          git add index.html
           git commit -m 'Show Kaspi packaging and handoff stages correctly'
+          git pull --rebase origin main
           git push origin HEAD:main
