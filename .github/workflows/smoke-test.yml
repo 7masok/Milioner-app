@@ -1,4 +1,4 @@
-# FIFO lot accounting checks.
+# FIFO lot accounting and Kaspi sale-on-delivery checks.
 name: Millioner smoke test
 
 on:
@@ -56,6 +56,9 @@ jobs:
               'FIFO remaining quantity': 'remainingQty:q',
               'FIFO landed unit cost': 'landedUnitCost',
               'FIFO sale audit': 'fifoLots:fifo.lots',
+              'Kaspi sale classifier': "function isMarketplaceSaleOrder(market,status,state='')",
+              'Kaspi sale on transit': "st==='KASPI_DELIVERY_TRANSIT'",
+              'Kaspi transition uses sale state': 'saleState=isMarketplaceSaleOrder(market,status,o.state)',
               'sync in-progress UI': "'Синхронизация','warn'",
               'marketplace stock transitions': 'function applyMarketplaceTransitions(market,feed)',
               'late marketplace link reconciliation': 'if(active&&!existingSale&&!existingReservation)',
@@ -103,6 +106,9 @@ jobs:
           curl -fsSL --retry 6 --retry-delay 5 --max-time 25 'https://7masok.github.io/Milioner-app/' -o /tmp/site.html
           grep -q 'Склад' /tmp/site.html
           grep -q 'function applyMarketplaceTransitions' /tmp/site.html
+          grep -q "function isMarketplaceSaleOrder(market,status,state='')" /tmp/site.html
+          grep -q "st==='KASPI_DELIVERY_TRANSIT'" /tmp/site.html
+          grep -q 'saleState=isMarketplaceSaleOrder(market,status,o.state)' /tmp/site.html
           grep -q 'if(active&&!existingSale&&!existingReservation)' /tmp/site.html
           grep -q 'function groupMarketplaceOrders(feed)' /tmp/site.html
           grep -q 'id="koUnmatchedCard"' /tmp/site.html
