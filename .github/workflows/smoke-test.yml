@@ -1,4 +1,4 @@
-# Retried after the Pages deployment is live.
+# FIFO lot accounting checks.
 name: Millioner smoke test
 
 on:
@@ -50,7 +50,12 @@ jobs:
               'marketplace financial sales': 'function financialSales()',
               'computed product profit': 'function profitForProduct(',
               'profit on product card': 'Прибыль 30д',
-              'arrival weighted cost': 'newPositiveQty=oldQty+q',
+              'arrival date input': 'id="ar" type="date"',
+              'FIFO lot selector': 'function fifoLots(productId)',
+              'FIFO lot consumption': 'function fifoConsume(productId,qty)',
+              'FIFO remaining quantity': 'remainingQty:q',
+              'FIFO landed unit cost': 'landedUnitCost',
+              'FIFO sale audit': 'fifoLots:fifo.lots',
               'sync in-progress UI': "'Синхронизация','warn'",
               'marketplace stock transitions': 'function applyMarketplaceTransitions(market,feed)',
               'late marketplace link reconciliation': 'if(active&&!existingSale&&!existingReservation)',
@@ -102,6 +107,9 @@ jobs:
           grep -q 'function groupMarketplaceOrders(feed)' /tmp/site.html
           grep -q 'id="koUnmatchedCard"' /tmp/site.html
           grep -q 'function toggleUnmatchedOrderFilter()' /tmp/site.html
+          grep -q 'id="ar" type="date"' /tmp/site.html
+          grep -q 'function fifoConsume(productId,qty)' /tmp/site.html
+          grep -q 'remainingQty:q' /tmp/site.html
           grep -q '300000' /tmp/site.html
 
       - name: Check Millioner API health
