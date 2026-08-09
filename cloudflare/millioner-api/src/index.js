@@ -187,20 +187,33 @@ async function fetchKaspi(env) {
   const base = cleanUrl(env.KASPI_WORKER_URL);
   if (!base) throw new Error('KASPI_WORKER_URL is not configured');
 
-  const orders = [];
-  let batch = 0;
-  let workerRequests = 0;
-  for (let safety = 0; safety < KASPI_MAX_BATCHES; safety++) {
-    const r = await fetch(`${base}/kaspi/sync?days=1&batch=${batch}`, { headers: { 'Accept': 'application/json' } });
-    workerRequests++;
-    const data = await safeJson(r, 'Kaspi Worker');
-    if (!r.ok || data?.ok === false) throw new Error(data?.error || `Kaspi Worker HTTP ${r.status}`);
-    orders.push(...(Array.isArray(data?.orders) ? data.orders : []));
-    if (!data.hasMore) break;
-    const next = Number(data.nextBatch);
-    if (!Number.isFinite(next)) break;
-    batch = next;
+  // Packing orders are the most time-sensitive. Asking the dedicated Kaspi
+  // Worker for this smaller set first keeps its per-invocation subrequest
+  // budget available for line/product expansion. A broad pass then refreshes
+  // lifecycle states for cached orders. When both feeds contain an order, keep
+  // the version that has populated lines.
+  const activeFeed = await fetchKaspiWorkerFeed(base, {
+    days: '1',
+    status: 'ACCEPTED_BY_MERCHANT',
+    state: 'KASPI_DELIVERY'
+  });
+  const broadFeed = await fetchKaspiWorkerFeed(base, { days: '1' });
+  const workerRequests = activeFeed.requests + broadFeed.requests;
+
+  const byId = new Map();
+  for (const order of broadFeed.orders) {
+    const key = String(order?.id || order?.code || '');
+    if (key) byId.set(key, order);
   }
+  for (const order of activeFeed.orders) {
+    const key = String(order?.id || order?.code || '');
+    if (!key) continue;
+    const previous = byId.get(key);
+    const activeHasLines = Array.isArray(order?.lines) && order.lines.length > 0;
+    const previousHasLines = Array.isArray(previous?.lines) && previous.lines.length > 0;
+    if (!previous || activeHasLines || !previousHasLines) byId.set(key, order);
+  }
+  const orders = [...byId.values()];
 
   const result = [];
   const missing = [];
@@ -257,6 +270,25 @@ async function fetchKaspi(env) {
   }
 
   return result;
+}
+
+async function fetchKaspiWorkerFeed(base, params) {
+  const orders = [];
+  let batch = 0;
+  let requests = 0;
+  for (let safety = 0; safety < KASPI_MAX_BATCHES; safety++) {
+    const q = new URLSearchParams({ ...params, batch: String(batch) });
+    const r = await fetch(`${base}/kaspi/sync?${q.toString()}`, { headers: { 'Accept': 'application/json' } });
+    requests++;
+    const data = await safeJson(r, 'Kaspi Worker');
+    if (!r.ok || data?.ok === false) throw new Error(data?.error || `Kaspi Worker HTTP ${r.status}`);
+    orders.push(...(Array.isArray(data?.orders) ? data.orders : []));
+    if (!data.hasMore) break;
+    const next = Number(data.nextBatch);
+    if (!Number.isFinite(next)) break;
+    batch = next;
+  }
+  return { orders, requests };
 }
 
 function isKaspiActive(order) {
