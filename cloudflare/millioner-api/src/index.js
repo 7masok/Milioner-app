@@ -219,7 +219,7 @@ async function fetchKaspi(env) {
   // Packing orders are the most time-sensitive. Asking the dedicated Kaspi
   // Worker for this smaller set first keeps its per-invocation subrequest
   // budget available for line/product expansion. A broad pass then refreshes
-  // lifecycle states for cached orders. When both feeds contain an order, keep
+  // transit lifecycle states for cached orders. When both feeds contain an order, keep
   // the version that has populated lines.
   let activeFeed = { orders: [], requests: 0 };
   let broadFeed = { orders: [], requests: 0 };
@@ -227,7 +227,7 @@ async function fetchKaspi(env) {
   let broadError = null;
   try {
     activeFeed = await fetchKaspiWorkerFeed(base, {
-      days: '7',
+      days: '1',
       status: 'ACCEPTED_BY_MERCHANT',
       state: 'KASPI_DELIVERY',
       size: '12'
@@ -237,7 +237,12 @@ async function fetchKaspi(env) {
     console.warn('Kaspi active feed failed', activeError);
   }
   try {
-    broadFeed = await fetchKaspiWorkerFeed(base, { days: '1', size: '12' });
+    broadFeed = await fetchKaspiWorkerFeed(base, {
+      days: '1',
+      status: 'ACCEPTED_BY_MERCHANT',
+      state: 'KASPI_DELIVERY_TRANSIT',
+      size: '12'
+    });
   } catch (e) {
     broadError = String(e?.message || e);
     console.warn('Kaspi broad feed failed', broadError);
