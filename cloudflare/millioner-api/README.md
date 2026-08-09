@@ -13,13 +13,13 @@ This directory is the server-side data layer for the Millioner app.
 
 Kaspi Worker ─┐
               ├─> `millioner-api` Cron Worker ─> D1 `millioner-db` ─> website
-WB Worker ────┘
+WB FBS API ───┘
 
-The Worker runs every 10 minutes using a Cron Trigger. It calls the existing Kaspi and WB Workers, normalizes their order lines and upserts them into D1.
+The Worker runs every 10 minutes using a Cron Trigger, normalizes marketplace order lines, and upserts them into D1.
 
-Kaspi polling intentionally uses a recent one-day window. The dedicated Kaspi Worker enriches order lines with separate API requests and can hit the Cloudflare Free external-subrequest limit when a large 14-day history is expanded in one invocation. Older rows remain cached in D1; the short window prioritizes new and currently actionable orders.
+Kaspi's dedicated Worker enriches each order with separate entry/product requests. Large pages can exceed the Cloudflare external-subrequest limit, so the central sync deliberately reads the seven-day active Kaspi Delivery feed in small `size=12` pages. Each Worker invocation then stays inside its own subrequest budget. Current packing orders remain `KASPI_DELIVERY`; handed-off Kaspi Delivery orders are normalized to `KASPI_DELIVERY_TRANSIT` for the website. When `KASPI_TOKEN` is configured, the direct API path can use `courierTransmissionDate` as the authoritative handoff marker.
 
-Operational verification should use `/api/sync-status` together with `/api/orders?market=Kaspi&limit=1000`, because a successful sync run alone does not prove that a specific new order was persisted.
+Operational verification should use `/api/market-status` together with `/api/orders?market=Kaspi&limit=1000`, because a successful sync run alone does not prove that a specific new order was persisted.
 
 ## Cloudflare setup
 
@@ -29,6 +29,8 @@ Operational verification should use `/api/sync-status` together with `/api/order
 4. Deploy this Worker with root directory `cloudflare/millioner-api`.
 5. Add a Secret named `APP_ADMIN_TOKEN` with a long random value. It protects write/import/manual-sync endpoints.
 6. Confirm the D1 binding variable is `DB`.
+7. Add `WB_TOKEN` as a Worker Secret for `millioner-api` to enable current Wildberries FBS order synchronization. The backend uses the WB Marketplace API (`/api/v3/orders` and `/api/v3/orders/status`), not the Statistics API.
+8. `KASPI_TOKEN` is optional while the dedicated Kaspi Worker is available; adding it enables direct recovery and authoritative courier handoff metadata.
 
 The Worker creates its tables automatically on first request. `schema.sql` is also included as the canonical schema for inspection/manual migration.
 
@@ -38,11 +40,10 @@ The Worker creates its tables automatically on first request. `schema.sql` is al
 - `GET /api/orders?market=Kaspi|WB|Ozon` — returns normalized shared orders.
 - `GET /api/products` — returns shared products and marketplace links.
 - `GET /api/sync-status` — latest background sync result per marketplace.
+- `GET /api/market-status` — integration status, last success, line counts, and next scheduled sync.
 - `POST /admin/sync?market=Kaspi|WB` — manual server-side sync; requires `Authorization: Bearer <APP_ADMIN_TOKEN>`.
 - `POST /admin/import-products` — imports current product cards into D1; requires the same authorization header.
 
 ## Secrets
 
-Do not put `APP_ADMIN_TOKEN`, `KASPI_TOKEN`, `WB_TOKEN`, or future Ozon credentials into `index.html` or commit them to GitHub.
-
-Kaspi and WB marketplace tokens remain inside their dedicated marketplace Workers. This central Worker only talks to those Workers.
+Do not put `APP_ADMIN_TOKEN`, `KASPI_TOKEN`, `WB_TOKEN`, or future Ozon credentials into `index.html` or commit them to GitHub. Configure them as Cloudflare Worker Secrets.
