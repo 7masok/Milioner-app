@@ -118,14 +118,21 @@ jobs:
           echo "$body" | jq .
           echo "$body" | jq -e '.ok == true'
 
-      - name: Inspect D1 order counts
+      - name: Inspect D1 order counts and exact Kaspi orders
         run: |
           set -e
           for market in Kaspi WB; do
             body=$(curl -fsSL --retry 4 --retry-delay 3 --max-time 25 \
-              "https://millioner-api.7masok.workers.dev/api/orders?market=${market}&limit=500")
+              "https://millioner-api.7masok.workers.dev/api/orders?market=${market}&limit=1000")
             count=$(echo "$body" | jq '.orders | length')
             echo "${market} D1 lines: ${count}"
+            if [ "$market" = "Kaspi" ]; then
+              for id in 1028072690 1028169317 1028174494; do
+                matches=$(echo "$body" | jq --arg id "$id" '[.orders[] | select((.code|tostring)==$id or (.orderId|tostring)==$id)]')
+                echo "KASPI_EXACT_${id}=$(echo "$matches" | jq 'length')"
+                echo "$matches" | jq .
+              done
+            fi
           done
 
       - name: Check Kaspi Worker
