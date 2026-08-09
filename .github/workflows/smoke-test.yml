@@ -38,6 +38,7 @@ jobs:
           python - <<'PY'
           from pathlib import Path
           html = Path('index.html').read_text(encoding='utf-8')
+          api = Path('cloudflare/millioner-api/src/index.js').read_text(encoding='utf-8')
           required = {
               'product cost input': 'id="pcost"',
               'product cost edit': 'id="ecost"',
@@ -47,13 +48,18 @@ jobs:
               'computed product profit': 'function profitForProduct(',
               'profit on product card': 'Прибыль 30д',
               'arrival weighted cost': 'newPositiveQty=oldQty+q',
+              'sync in-progress UI': "'Синхронизация','warn'",
           }
           missing = [name for name, marker in required.items() if marker not in html]
           if missing:
               raise SystemExit('Missing warehouse features: ' + ', '.join(missing))
           if 'recalcCostAfterLoss' in html:
               raise SystemExit('Legacy incorrect writeoff cost recalculation is still present')
-          print('Warehouse core contract OK')
+          if 'const KASPI_MAX_BATCHES = 4;' not in api:
+              raise SystemExit('Kaspi background pagination is not bounded')
+          if 'await upsertOrderLines(env.DB, market, lines);' not in api:
+              raise SystemExit('D1 marketplace upserts are not batched')
+          print('Warehouse and sync contract OK')
           PY
 
       - name: Check published site
