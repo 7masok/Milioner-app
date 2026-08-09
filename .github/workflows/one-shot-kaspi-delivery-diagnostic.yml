@@ -10,7 +10,7 @@ jobs:
   inspect:
     runs-on: ubuntu-latest
     steps:
-      - name: Inspect live Millioner Kaspi states after scheduled sync
+      - name: Confirm completed Kaspi sync states
         run: |
           set -e
           status=$(curl -fsSL --retry 4 --retry-delay 3 --max-time 30 'https://millioner-api.7masok.workers.dev/api/market-status')
