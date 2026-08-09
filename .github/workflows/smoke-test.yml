@@ -33,6 +33,29 @@ jobs:
           node --check /tmp/app.js
           node --check cloudflare/millioner-api/src/index.js
 
+      - name: Check warehouse core contract
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          html = Path('index.html').read_text(encoding='utf-8')
+          required = {
+              'product cost input': 'id="pcost"',
+              'product cost edit': 'id="ecost"',
+              'initial stock input': 'id="pstock"',
+              'manual sale expenses': 'id="sfee"',
+              'marketplace financial sales': 'function financialSales()',
+              'computed product profit': 'function profitForProduct(',
+              'profit on product card': 'Прибыль 30д',
+              'arrival weighted cost': 'newPositiveQty=oldQty+q',
+          }
+          missing = [name for name, marker in required.items() if marker not in html]
+          if missing:
+              raise SystemExit('Missing warehouse features: ' + ', '.join(missing))
+          if 'recalcCostAfterLoss' in html:
+              raise SystemExit('Legacy incorrect writeoff cost recalculation is still present')
+          print('Warehouse core contract OK')
+          PY
+
       - name: Check published site
         run: |
           set -e
