@@ -1,0 +1,97 @@
+name: Millioner smoke test
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - 'index.html'
+      - 'cloudflare/**'
+      - '.github/workflows/smoke-test.yml'
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Check browser JavaScript syntax
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import re
+          html = Path('index.html').read_text(encoding='utf-8')
+          scripts = re.findall(r'<script>(.*?)</script>', html, flags=re.S|re.I)
+          if not scripts:
+              raise SystemExit('No inline script found')
+          Path('/tmp/app.js').write_text('\n'.join(scripts), encoding='utf-8')
+          PY
+          node --check /tmp/app.js
+
+      - name: Check published site
+        run: |
+          set -e
+          curl -fsSL --retry 4 --retry-delay 3 --max-time 25 \
+            'https://7masok.github.io/Milioner-app/' -o /tmp/site.html
+          grep -q 'Склад' /tmp/site.html
+          echo "Published site is reachable"
+
+      - name: Check Millioner API health
+        run: |
+          set -e
+          body=$(curl -fsSL --retry 4 --retry-delay 3 --max-time 25 \
+            'https://millioner-api.7masok.workers.dev/health')
+          echo "$body"
+          echo "$body" | jq -e '.ok == true and .d1 == true'
+
+      - name: Inspect background sync status
+        run: |
+          set -e
+          body=$(curl -fsSL --retry 4 --retry-delay 3 --max-time 25 \
+            'https://millioner-api.7masok.workers.dev/api/sync-status')
+          echo "$body" | jq .
+          echo "$body" | jq -e '.ok == true'
+
+      - name: Inspect D1 order counts
+        run: |
+          set -e
+          for market in Kaspi WB; do
+            body=$(curl -fsSL --retry 4 --retry-delay 3 --max-time 25 \
+              "https://millioner-api.7masok.workers.dev/api/orders?market=${market}&limit=500")
+            count=$(echo "$body" | jq '.orders | length')
+            echo "${market} D1 lines: ${count}"
+          done
+
+      - name: Check Kaspi Worker
+        run: |
+          set -e
+          body=$(curl -fsSL --retry 4 --retry-delay 3 --max-time 25 \
+            'https://fragrant-shadow-72ed.7masok.workers.dev/health')
+          echo "$body"
+          echo "$body" | jq -e '.ok == true'
+
+      - name: Diagnose WB Worker
+        run: |
+          set +e
+          code=$(curl -sS --retry 2 --retry-delay 8 --max-time 45 \
+            -o /tmp/wb.json -w '%{http_code}' \
+            'https://wb-sync.7masok.workers.dev/wb/sync?days=1')
+          rc=$?
+          echo "WB curl rc=${rc}, HTTP=${code}"
+          cat /tmp/wb.json 2>/dev/null || true
+          echo
+          if [ "$rc" -ne 0 ]; then
+            echo 'WB Worker request itself failed' >&2
+            exit 1
+          fi
+          if [ "$code" = '429' ]; then
+            echo 'WB Worker is reachable but upstream WB is rate-limiting requests (HTTP 429).'
+            exit 0
+          fi
+          if [ "$code" -lt 200 ] || [ "$code" -ge 300 ]; then
+            echo "WB Worker returned HTTP ${code}" >&2
+            exit 1
+          fi
+          jq . /tmp/wb.json >/dev/null
