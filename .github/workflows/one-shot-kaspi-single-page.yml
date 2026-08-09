@@ -19,8 +19,17 @@ jobs:
       - name: Validate
         run: |
           node --check cloudflare/millioner-api/src/index.js
-          grep -A6 "activeFeed = await fetchKaspiWorkerFeed" cloudflare/millioner-api/src/index.js | grep -q "size: '100'"
-          ! grep -q "state: 'KASPI_DELIVERY_TRANSIT'" cloudflare/millioner-api/src/index.js
+          python - <<'PY'
+          from pathlib import Path
+          s=Path('cloudflare/millioner-api/src/index.js').read_text(encoding='utf-8')
+          start=s.index('activeFeed = await fetchKaspiWorkerFeed')
+          end=s.index('} catch (e)', start)
+          block=s[start:end]
+          assert "days: '1'" in block
+          assert "state: 'KASPI_DELIVERY'" in block
+          assert "size: '100'" in block
+          assert "broadFeed = await fetchKaspiWorkerFeed" not in s
+          PY
       - name: Commit patch
         run: |
           git config user.name 'millioner-maintenance'
