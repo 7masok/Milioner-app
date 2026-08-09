@@ -17,6 +17,8 @@ WB Worker ────┘
 
 The Worker runs every 10 minutes using a Cron Trigger. It calls the existing Kaspi and WB Workers, normalizes their order lines and upserts them into D1.
 
+Kaspi polling intentionally uses a recent one-day window. The dedicated Kaspi Worker enriches order lines with separate API requests and can hit the Cloudflare Free external-subrequest limit when a large 14-day history is expanded in one invocation. Older rows remain cached in D1; the short window prioritizes new and currently actionable orders.
+
 ## Cloudflare setup
 
 1. Create a D1 database named `millioner-db`.
