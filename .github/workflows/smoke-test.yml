@@ -37,6 +37,7 @@ jobs:
         run: |
           python - <<'PY'
           from pathlib import Path
+          import re
           html = Path('index.html').read_text(encoding='utf-8')
           api = Path('cloudflare/millioner-api/src/index.js').read_text(encoding='utf-8')
           required = {
@@ -49,12 +50,23 @@ jobs:
               'profit on product card': 'Прибыль 30д',
               'arrival weighted cost': 'newPositiveQty=oldQty+q',
               'sync in-progress UI': "'Синхронизация','warn'",
+              'marketplace stock transitions': 'function applyMarketplaceTransitions(market,feed)',
+              'Kaspi cache transition': "applyMarketplaceTransitions('Kaspi',state.kaspiOrderFeed)",
+              'WB cache transition': "applyMarketplaceTransitions('WB',state.wbOrderFeed)",
+              'manual sale stock guard': 'Недостаточно свободного остатка',
+              'writeoff stock guard': 'Нельзя списать больше остатка',
+              'inventory stock guard': 'Фактический остаток не может быть отрицательным',
           }
           missing = [name for name, marker in required.items() if marker not in html]
           if missing:
               raise SystemExit('Missing warehouse features: ' + ', '.join(missing))
           if 'recalcCostAfterLoss' in html:
               raise SystemExit('Legacy incorrect writeoff cost recalculation is still present')
+          sync = re.search(r'async function syncNow\(\)\{.*?\}\nfunction backup', html, flags=re.S)
+          if not sync:
+              raise SystemExit('syncNow function missing')
+          if 'KASPI_WORKER' in sync.group(0):
+              raise SystemExit('Browser syncNow still calls Kaspi Worker directly')
           if 'const KASPI_MAX_BATCHES = 4;' not in api:
               raise SystemExit('Kaspi background pagination is not bounded')
           if 'await upsertOrderLines(env.DB, market, lines);' not in api:
@@ -68,7 +80,8 @@ jobs:
           curl -fsSL --retry 4 --retry-delay 3 --max-time 25 \
             'https://7masok.github.io/Milioner-app/' -o /tmp/site.html
           grep -q 'Склад' /tmp/site.html
-          echo "Published site is reachable"
+          grep -q 'function applyMarketplaceTransitions' /tmp/site.html
+          echo "Published site is reachable and current"
 
       - name: Check Millioner API health
         run: |
