@@ -19,17 +19,21 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Repair guarded patch typo in working copy
+      - name: Repair guarded patch typos in working copy
         run: |
           python - <<'PY'
           from pathlib import Path
           p=Path('tools/overnight_upgrade.py')
           s=p.read_text(encoding='utf-8')
-          old="for(const o of(remote||[]){"
-          new="for(const o of(remote||[])){"
-          if old not in s:
-              raise SystemExit('Expected patch typo marker not found')
-          p.write_text(s.replace(old,new,1),encoding='utf-8')
+          fixes={
+            "for(const o of(local||[])map.set":"for(const o of(local||[]))map.set",
+            "for(const o of(remote||[]){":"for(const o of(remote||[])){",
+          }
+          for old,new in fixes.items():
+              if old not in s:
+                  raise SystemExit(f'Expected patch typo marker not found: {old}')
+              s=s.replace(old,new,1)
+          p.write_text(s,encoding='utf-8')
           PY
 
       - name: Apply guarded index upgrade
