@@ -193,11 +193,12 @@ async function fetchKaspi(env) {
   // lifecycle states for cached orders. When both feeds contain an order, keep
   // the version that has populated lines.
   const activeFeed = await fetchKaspiWorkerFeed(base, {
-    days: '1',
+    days: '7',
     status: 'ACCEPTED_BY_MERCHANT',
-    state: 'KASPI_DELIVERY'
+    state: 'KASPI_DELIVERY',
+    size: '12'
   });
-  const broadFeed = await fetchKaspiWorkerFeed(base, { days: '1' });
+  const broadFeed = await fetchKaspiWorkerFeed(base, { days: '1', size: '12' });
   const token = String(env.KASPI_TOKEN || '').trim();
   const deliveryFeed = token
     ? await fetchKaspiOrdersDirect(token, { days: 7, state: 'KASPI_DELIVERY' })
@@ -209,7 +210,15 @@ async function fetchKaspi(env) {
     const key = String(order?.id || order?.code || '');
     if (key) byId.set(key, order);
   }
-  for (const order of activeFeed.orders) {
+  for (const originalOrder of activeFeed.orders) {
+    // In worker-only mode Kaspi does not expose courierTransmissionDate.
+    // For the current Kaspi Delivery feed, deliveryCostForSeller is 0 while an
+    // order is still in packing and becomes positive after courier handoff.
+    // If KASPI_TOKEN is later configured, the direct feed below overrides this
+    // fallback with the authoritative courierTransmissionDate marker.
+    const order = Number(originalOrder?.deliveryCostForSeller || 0) > 0
+      ? { ...originalOrder, state: 'KASPI_DELIVERY_TRANSIT' }
+      : originalOrder;
     const key = String(order?.id || order?.code || '');
     if (!key) continue;
     const previous = byId.get(key);
