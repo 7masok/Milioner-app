@@ -1,0 +1,93 @@
+name: Stage WB Marketplace API migration
+
+on:
+  push:
+    branches: [tmp-wb-marketplace-fix-stage]
+    paths:
+      - '.github/workflows/tmp-wb-marketplace-fix.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: tmp-wb-marketplace-fix-stage
+          fetch-depth: 0
+
+      - name: Patch central Worker to WB Marketplace API
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          p = Path('cloudflare/millioner-api/src/index.js')
+          s = p.read_text(encoding='utf-8')
+
+          def once(old, new, label):
+              global s
+              n = s.count(old)
+              if n != 1:
+                  raise SystemExit(f'{label}: expected 1 match, got {n}')
+              s = s.replace(old, new, 1)
+
+          once(
+              "// WB Statistics API can be limited seller-wide to one request per three hours.\n// Keep a small safety margin so background checks do not keep the seller in 429.\nconst WB_MIN_SYNC_MS = (3 * 60 + 5) * 60 * 1000;",
+              "const WB_MIN_SYNC_MS = 10 * 60 * 1000;\nconst WB_MARKETPLACE_BASE = 'https://marketplace-api.wildberries.ru';",
+              'WB schedule constants'
+          )
+
+          once(
+              "        const markets = await getMarketStatuses(env.DB);",
+              "        const markets = await getMarketStatuses(env);",
+              'market status env'
+          )
+
+          once(
+              "async function getMarketStatuses(db) {\n  const result = [];",
+              "async function getMarketStatuses(env) {\n  const db = env.DB;\n  const result = [];",
+              'market status signature'
+          )
+
+          once(
+              "      configured: market !== 'Ozon',",
+              "      configured: market === 'Kaspi' ? Boolean(env.KASPI_WORKER_URL) : market === 'WB' ? Boolean(env.WB_TOKEN) : false,\n      mode: market === 'WB' ? (env.WB_TOKEN ? 'marketplace-api' : 'missing-token') : market === 'Kaspi' ? 'worker' : 'off',",
+              'market configured state'
+          )
+
+          old_fetch = """async function fetchWb(env) {\n  const base = cleanUrl(env.WB_WORKER_URL);\n  if (!base) throw new Error('WB_WORKER_URL is not configured');\n  const r = await fetch(`${base}/wb/sync?days=14`, { headers: { 'Accept': 'application/json' } });\n  const data = await safeJson(r, 'WB Worker');\n  if (!r.ok || data?.ok === false) {\n    const detail = String(data?.error || data?.message || `WB Worker HTTP ${r.status}`);\n    if (r.status === 429 || /\\b429\\b|too many requests|global limiter/i.test(detail)) {\n      throw new Error(`WB rate limited by Statistics API. Automatic sync waits at least 3h05m between attempts. ${detail}`);\n    }\n    throw new Error(detail);\n  }\n  return normalizeWb(data);\n}\n"""
+
+          new_fetch = """async function fetchWb(env) {\n  const token = String(env.WB_TOKEN || '').trim();\n  if (!token) throw new Error('WB_TOKEN is not configured in millioner-api');\n\n  const headers = { 'Accept': 'application/json', 'Authorization': token };\n  const dateFrom = Math.floor((Date.now() - 14 * 86400000) / 1000);\n  const orders = [];\n  let next = 0;\n\n  for (let safety = 0; safety < 10; safety++) {\n    const url = `${WB_MARKETPLACE_BASE}/api/v3/orders?limit=1000&next=${next}&dateFrom=${dateFrom}`;\n    const r = await fetch(url, { headers });\n    const data = await safeJson(r, 'WB Marketplace orders');\n    if (!r.ok) throw new Error(wbError('WB Marketplace orders', r.status, data));\n    const batch = Array.isArray(data?.orders) ? data.orders : [];\n    orders.push(...batch);\n    const newNext = Number(data?.next || 0);\n    if (!batch.length || !newNext || newNext === next) break;\n    next = newNext;\n  }\n\n  const statuses = new Map();\n  const ids = orders.map(o => Number(o?.id)).filter(Number.isFinite);\n  for (let i = 0; i < ids.length; i += 1000) {\n    const chunk = ids.slice(i, i + 1000);\n    const r = await fetch(`${WB_MARKETPLACE_BASE}/api/v3/orders/status`, {\n      method: 'POST', headers: { ...headers, 'Content-Type': 'application/json' },\n      body: JSON.stringify({ orders: chunk })\n    });\n    const data = await safeJson(r, 'WB Marketplace statuses');\n    if (!r.ok) throw new Error(wbError('WB Marketplace statuses', r.status, data));\n    for (const item of data?.orders || []) statuses.set(Number(item.id), item);\n  }\n\n  return orders.map((order, oi) => {\n    const st = statuses.get(Number(order?.id)) || {};\n    const price = Number(order?.convertedFinalPrice ?? order?.finalPrice ?? order?.convertedPrice ?? order?.price ?? 0) || 0;\n    const sku = String(order?.article ?? order?.nmId ?? order?.skus?.[0] ?? '').trim();\n    const orderId = String(order?.id ?? order?.orderUid ?? `wb-${oi}`);\n    return {\n      orderId, code: String(order?.id ?? order?.orderUid ?? orderId), entryId: orderId,\n      status: String(st?.supplierStatus || 'new'),\n      state: String(st?.wbStatus || order?.deliveryType || 'fbs'),\n      creationDate: toTimestamp(order?.createdAt), sku, productName: '', qty: 1,\n      unitPrice: price, totalPrice: price, raw: { order, status: st }\n    };\n  });\n}\n\nfunction wbError(label, status, data) {\n  const detail = String(data?.message || data?.errorText || data?.error || data?.code || '').trim();\n  return `${label} HTTP ${status}${detail ? `: ${detail}` : ''}`;\n}\n"""
+          once(old_fetch, new_fetch, 'WB fetch implementation')
+
+          p.write_text(s, encoding='utf-8')
+          PY
+
+      - name: Validate
+        run: |
+          node --check cloudflare/millioner-api/src/index.js
+          python - <<'PY'
+          from pathlib import Path
+          s=Path('cloudflare/millioner-api/src/index.js').read_text(encoding='utf-8')
+          required=[
+            "WB_MARKETPLACE_BASE = 'https://marketplace-api.wildberries.ru'",
+            "/api/v3/orders?limit=1000",
+            "/api/v3/orders/status",
+            "WB_TOKEN is not configured in millioner-api",
+            "mode: market === 'WB' ? (env.WB_TOKEN ? 'marketplace-api' : 'missing-token')",
+          ]
+          missing=[x for x in required if x not in s]
+          if missing: raise SystemExit('Missing markers: '+repr(missing))
+          if '3h05m' in s: raise SystemExit('Legacy WB 3h gate remains')
+          print('WB Marketplace migration syntax/contract OK')
+          PY
+
+      - name: Commit staged patch
+        run: |
+          git config user.name 'millioner-maintenance'
+          git config user.email 'actions@users.noreply.github.com'
+          git add cloudflare/millioner-api/src/index.js
+          git commit -m 'Use WB Marketplace API for FBS orders'
+          git push origin HEAD:tmp-wb-marketplace-fix-stage
