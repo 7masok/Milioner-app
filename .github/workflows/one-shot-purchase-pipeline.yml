@@ -1,4 +1,4 @@
-name: One-time purchase shipment editor patch
+name: One-time global marketplace totals patch
 on:
   push:
     branches: [main]
@@ -11,9 +11,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Apply purchase shipment editor patch
+      - name: Apply global marketplace totals patch
         run: python tools/patch_purchase_pipeline.py
-      - name: Validate JavaScript and editor markers
+      - name: Validate JavaScript and totals markers
         run: |
           python - <<'PY'
           from pathlib import Path
@@ -24,14 +24,14 @@ jobs:
           Path('/tmp/app.js').write_text('\n'.join(scripts),encoding='utf-8')
           PY
           node --check /tmp/app.js
-          grep -q 'function openEditPurchaseShipment(' index.html
-          grep -q 'function savePurchaseShipmentEdit(' index.html
-          grep -q 'Редактировать поставку' index.html
-          grep -q 'Полученную поставку редактировать нельзя' index.html
-      - name: Commit purchase shipment editor
+          grep -q 'function allMarketplaceOrderTotalsForPeriod()' index.html
+          grep -q 'allOrderTotals=allMarketplaceOrderTotalsForPeriod()' index.html
+          grep -q "eQty.textContent=allOrderTotals.qty" index.html
+          grep -q "eAmount.textContent=fmt(allOrderTotals.amount)" index.html
+      - name: Commit global marketplace totals
         run: |
           git config user.name '7masok'
           git config user.email '7masok@gmail.com'
           git add index.html
-          git commit -m 'Add purchase shipment editing'
+          git commit -m 'Show global order totals above marketplace tabs'
           git push
