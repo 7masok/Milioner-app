@@ -27,7 +27,9 @@ jobs:
               if n!=1: raise SystemExit(f'{label}: expected 1 match, got {n}')
               s=s.replace(old,new,1)
 
-          once("[p.name,p.kaspi,p.wb,p.ozon]","[p.name,p.kaspi,p.wb,p.wb2,p.ozon]",'product search WB2')
+          search_old="[p.name,p.kaspi,p.wb,p.ozon]"
+          if s.count(search_old)!=2: raise SystemExit(f'product search WB2: expected 2 matches, got {s.count(search_old)}')
+          s=s.replace(search_old,"[p.name,p.kaspi,p.wb,p.wb2,p.ozon]")
           once("Kaspi: ${esc(p.kaspi||'—')} · WB: ${esc(p.wb||'—')} · Ozon: ${esc(p.ozon||'—')}","Kaspi: ${esc(p.kaspi||'—')} · WB1: ${esc(p.wb||'—')} · WB2: ${esc(p.wb2||'—')} · Ozon: ${esc(p.ozon||'—')}",'product detail SKUs')
           once("Kaspi: ${esc(p.kaspi||'—')} · WB: ${esc(p.wb||'—')} · Ozon: ${esc(p.ozon||'—')}","Kaspi: ${esc(p.kaspi||'—')} · WB1: ${esc(p.wb||'—')} · WB2: ${esc(p.wb2||'—')} · Ozon: ${esc(p.ozon||'—')}",'link suggestion SKUs')
 
