@@ -1,0 +1,46 @@
+name: Fix WB waiting label
+on:
+  push:
+    paths:
+      - .github/workflows/wb-waiting-label-fix.yml
+permissions:
+  contents: write
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+      - name: Patch WB waiting semantics
+        shell: python
+        run: |
+          from pathlib import Path
+          import re
+          p=Path('index.html')
+          s=p.read_text(encoding='utf-8')
+          start=s.index('function marketplaceStatusLabel(')
+          end=s.index('\nfunction marketplaceStateLabel(',start)
+          new="""function marketplaceStatusLabel(market,status,state=''){const s=String(status||''),u=s.toUpperCase(),st=String(state||'').toUpperCase();if(market==='WB'){if(['CANCELED','CANCELLED','CANCELED_BY_CLIENT','DECLINED_BY_CLIENT','DEFECT'].includes(st)||['CANCEL','CANCELLED'].includes(u))return 'Отменён';if(st==='SOLD')return 'Завершён';if(st==='READY_FOR_PICKUP')return 'В ПВЗ';if(st==='SORTED')return 'Принят WB';if(st==='WAITING')return u==='NEW'?'Новый':u==='CONFIRM'?'На сборке':'Ожидает передачи WB';return ({NEW:'Новый',CONFIRM:'На сборке',COMPLETE:'Ожидает передачи WB'})[u]||s||st||'—'}if(u==='APPROVED_BY_BANK'||u==='APPROVED')return 'Новый';if(u==='ASSEMBLE')return 'Передача';if(u==='ACCEPTED_BY_MERCHANT'){if(st==='KASPI_DELIVERY_TRANSIT')return 'В доставке';if(st==='KASPI_DELIVERY')return 'Упаковка';if(st==='DELIVERY')return 'Моя доставка';if(st==='PICKUP')return 'Самовывоз';if(st==='SIGN_REQUIRED')return 'На подписании';return 'Принят'}return ({COMPLETED:'Выдан',CANCELLED:'Отменён',CANCELLING:'Отменяется',KASPI_DELIVERY_RETURN_REQUESTED:'Ожидает возврата',RETURNED:'Возвращён',DELIVERY:'Доставка',PICKUP:'Самовывоз'})[u]||s||'—'}"""
+          s=s[:start]+new+s[end:]
+          old="function marketplaceStateLabel(market,state){const s=String(state||''),u=s.toUpperCase();if(market!=='Kaspi')return s||'—';return ({KASPI_DELIVERY_TRANSIT:'Kaspi Доставка',KASPI_DELIVERY:'Kaspi Доставка',DELIVERY:'Моя доставка',PICKUP:'Самовывоз',SIGN_REQUIRED:'На подписании',NEW:'Новый',ARCHIVE:'Архив'})[u]||s||'—'}"
+          new2="function marketplaceStateLabel(market,state){const s=String(state||''),u=s.toUpperCase();if(market==='WB')return ({WAITING:'Не передан WB',SORTED:'Принят WB',READY_FOR_PICKUP:'В ПВЗ',SOLD:'Получен покупателем',CANCELED:'Отменён',CANCELED_BY_CLIENT:'Отменён покупателем',DECLINED_BY_CLIENT:'Отменён покупателем',DEFECT:'Брак'})[u]||s||'—';if(market!=='Kaspi')return s||'—';return ({KASPI_DELIVERY_TRANSIT:'Kaspi Доставка',KASPI_DELIVERY:'Kaspi Доставка',DELIVERY:'Моя доставка',PICKUP:'Самовывоз',SIGN_REQUIRED:'На подписании',NEW:'Новый',ARCHIVE:'Архив'})[u]||s||'—'}"
+          if old not in s: raise SystemExit('marketplaceStateLabel marker not found')
+          s=s.replace(old,new2,1)
+          old3="const statusClass=['CANCELLED','CANCELLING','CANCEL'].includes(statusUpper)?'bad':['COMPLETED','COMPLETE'].includes(statusUpper)?'ok':'warn';"
+          new3="const wbStateUpper=String(g.state||'').toUpperCase(),statusClass=market==='WB'?(['CANCELED','CANCELLED','CANCELED_BY_CLIENT','DECLINED_BY_CLIENT','DEFECT'].includes(wbStateUpper)||['CANCELLED','CANCELLING','CANCEL'].includes(statusUpper)?'bad':wbStateUpper==='SOLD'?'ok':'warn'):['CANCELLED','CANCELLING','CANCEL'].includes(statusUpper)?'bad':['COMPLETED','COMPLETE'].includes(statusUpper)?'ok':'warn';"
+          if old3 not in s: raise SystemExit('statusClass marker not found')
+          s=s.replace(old3,new3,1)
+          p.write_text(s,encoding='utf-8')
+          scripts=re.findall(r'<script>(.*?)</script>',s,flags=re.S|re.I)
+          Path('/tmp/app.js').write_text('\n'.join(scripts),encoding='utf-8')
+          Path('.github/workflows/wb-waiting-label-fix.yml').unlink()
+      - name: Check JS
+        run: node --check /tmp/app.js
+      - name: Commit
+        run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add -A
+          git commit -m "Show WB waiting orders as not handed over"
+          git push origin HEAD:main
