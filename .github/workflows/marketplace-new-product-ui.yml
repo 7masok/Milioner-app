@@ -1,0 +1,45 @@
+name: Marketplace new product UI
+on:
+  push:
+    paths:
+      - '.github/workflows/marketplace-new-product-ui.yml'
+permissions:
+  contents: write
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+      - name: Add direct new-product action from marketplace orders
+        shell: python
+        run: |
+          from pathlib import Path
+          import re
+
+          page = Path('index.html')
+          s = page.read_text(encoding='utf-8')
+          start = s.index('function openMarketplaceLink(')
+          end = s.index('\nfunction renderLinkSuggestions()', start)
+          replacement = r'''function openMarketplaceLink(market,sku,context='',feedKey='',productName=''){const safeMarket=esc(market),safeSku=esc(sku||'—'),safeContext=esc(context||''),safeProductName=esc(productName||'');showSheet(`<h3>Привязать товар</h3><div class="item"><b>${safeMarket}${safeContext?' · заказ '+safeContext:''}</b><div class="muted">Артикул: ${safeSku}</div></div><div class="link-note">Выберите существующий товар ниже или создайте новый. Артикул маркетплейса привяжется автоматически.</div><div class="field"><label>Название товара</label><input id="linkProductName" autocomplete="off" value="${safeProductName}" placeholder="Например: Чехол для ключа" oninput="renderLinkSuggestions()"></div><button type="button" class="btn dark full" onclick="openNewMarketplaceProductForm()">+ Создать новый товар</button><div id="linkSuggestions" class="suggestions"></div>`);window.pendingMarketplaceLink={market:String(market),sku:String(sku||''),context:String(context||''),feedKey:String(feedKey||''),productName:String(productName||'')};setTimeout(()=>{const i=document.getElementById('linkProductName');if(i){i.focus();renderLinkSuggestions()}},0)}
+function openNewMarketplaceProductForm(){const link=window.pendingMarketplaceLink;if(!link)return alert('Строка заказа не найдена. Обновите синхронизацию.');const typed=String(document.getElementById('linkProductName')?.value||'').trim();const suggested=typed||String(link.productName||'').trim()||String(link.sku||'').trim();showSheet(`<h3>Новый товар</h3><div class="item"><b>${esc(link.market)}${link.context?' · заказ '+esc(link.context):''}</b><div class="muted">Артикул ${esc(link.market)}: ${esc(link.sku||'—')}</div></div><div class="field"><label>Название товара</label><input id="newMarketplaceProductName" value="${esc(suggested)}" placeholder="Название товара"></div><div class="two"><div class="field"><label>Начальный остаток</label><input id="newMarketplaceProductStock" type="number" min="0" value="0"></div><div class="field"><label>Себестоимость/шт. ₸</label><input id="newMarketplaceProductCost" type="number" min="0" value="0"></div></div><button class="btn dark full" onclick="createMarketplaceProductFromOrder()">Создать и привязать</button><button class="btn full" onclick="openMarketplaceLink('${esc(link.market)}','${esc(link.sku)}','${esc(link.context)}','${esc(link.feedKey)}','${esc(link.productName)}')">Назад</button>`)}
+function createMarketplaceProductFromOrder(){const link=window.pendingMarketplaceLink;if(!link)return;const name=String(document.getElementById('newMarketplaceProductName')?.value||'').trim();if(!name)return alert('Введите название товара');const exact=state.products.find(p=>normalizeName(p.name)===normalizeName(name));if(exact){if(!confirm('Товар с таким названием уже есть. Привязать заказ к нему?'))return;if(attachMarketplaceSku(exact,link.market,link.sku,link.feedKey)!==false){closeModal();render()}return}const stock=Math.max(0,Number(document.getElementById('newMarketplaceProductStock')?.value)||0),cost=Math.max(0,Number(document.getElementById('newMarketplaceProductCost')?.value)||0),p={id:id(),name,category:'',photo:'',kaspi:'',wb:'',ozon:'',min:0,stock,cost,totalProfit:0};state.products.push(p);if(stock>0){const now=Date.now();state.purchases.unshift({id:id(),productId:p.id,qty:stock,remainingQty:stock,unitCost:cost,delivery:0,landedUnitCost:cost,batch:'Начальный остаток',receivedAt:now,date:now,initialStock:true});log('приход',p.id,stock,'Начальный остаток')}attachMarketplaceSku(p,link.market,link.sku,link.feedKey);closeModal();render()}
+'''
+          s = s[:start] + replacement + s[end:]
+          page.write_text(s, encoding='utf-8')
+
+          # Validate inline JavaScript before committing.
+          html = page.read_text(encoding='utf-8')
+          scripts = re.findall(r'<script>(.*?)</script>', html, flags=re.S|re.I)
+          Path('/tmp/app.js').write_text('\n'.join(scripts), encoding='utf-8')
+          Path('.github/workflows/marketplace-new-product-ui.yml').unlink()
+      - name: Check JavaScript syntax
+        run: node --check /tmp/app.js
+      - name: Commit UI improvement
+        run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add -A
+          git commit -m "Add direct product creation from marketplace orders"
+          git push origin HEAD:main
