@@ -12,7 +12,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Apply purchase pipeline patch
-        run: python tools/patch_purchase_pipeline.py
+        run: |
+          python tools/patch_purchase_pipeline.py
+          git checkout -- .github/workflows/smoke-test.yml
       - name: Validate JavaScript
         run: |
           python - <<'PY'
@@ -32,6 +34,6 @@ jobs:
         run: |
           git config user.name '7masok'
           git config user.email '7masok@gmail.com'
-          git add index.html .github/workflows/smoke-test.yml
+          git add index.html
           git commit -m 'Add purchase transit pipeline'
           git push
