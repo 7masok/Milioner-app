@@ -1,0 +1,33 @@
+name: One-time Kaspi ads D1 persistence
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/one-shot-kaspi-ads-d1.yml'
+permissions:
+  contents: write
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Preserve Kaspi advertising in warehouse state
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          p=Path('cloudflare/millioner-api/src/index.js')
+          s=p.read_text(encoding='utf-8')
+          old="return { products:arr('products').slice(0,20000), movements:arr('movements').slice(0,5000), sales:arr('sales').slice(0,20000), purchases:arr('purchases').slice(0,20000), reservations:arr('reservations').slice(0,20000), settings, marketOrderState:obj('marketOrderState'), marketplaceLiveSince:obj('marketplaceLiveSince'), kaspiBaselineAt:x.kaspiBaselineAt||null };"
+          new="return { products:arr('products').slice(0,20000), movements:arr('movements').slice(0,5000), sales:arr('sales').slice(0,20000), purchases:arr('purchases').slice(0,20000), reservations:arr('reservations').slice(0,20000), kaspiAdExpenses:arr('kaspiAdExpenses').slice(0,5000), settings, marketOrderState:obj('marketOrderState'), marketplaceLiveSince:obj('marketplaceLiveSince'), kaspiBaselineAt:x.kaspiBaselineAt||null };"
+          if s.count(old)!=1:
+              raise SystemExit(f'sanitize marker count={s.count(old)}')
+          p.write_text(s.replace(old,new,1),encoding='utf-8')
+          PY
+          node --check cloudflare/millioner-api/src/index.js
+      - name: Commit API persistence fix
+        run: |
+          git config user.name '7masok'
+          git config user.email '7masok@gmail.com'
+          git add cloudflare/millioner-api/src/index.js
+          git commit -m 'Persist Kaspi advertising in D1 warehouse state'
+          git push
