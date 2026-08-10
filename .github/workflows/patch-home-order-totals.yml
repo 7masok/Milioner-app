@@ -1,0 +1,55 @@
+name: One-time home order totals patch
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/patch-home-order-totals.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Move order totals beside warehouse stock
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          p = Path('index.html')
+          s = p.read_text(encoding='utf-8')
+
+          old_css = '.metrics{display:grid;grid-template-columns:1fr;gap:8px}'
+          new_css = '.metrics{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px}.metrics .card{min-width:0;padding:12px}.metrics .num{font-size:18px}'
+          if s.count(old_css) != 1:
+              raise SystemExit(f'Expected one metrics CSS marker, found {s.count(old_css)}')
+          s = s.replace(old_css, new_css, 1)
+
+          old_top = '  <div class="metrics"><div class="card"><div class="label">Остаток склада</div><div class="num" id="mStock">0</div><div class="small">шт.</div></div></div>'
+          new_top = '  <div class="metrics"><div class="card"><div class="label">Остаток склада</div><div class="num" id="mStock">0</div><div class="small">шт.</div></div><div class="card"><div class="label">Заказано, шт.</div><div class="num" id="koQty">0 шт.</div></div><div class="card"><div class="label">Заказано на сумму</div><div class="num" id="koAmount">0 ₸</div></div></div>'
+          if s.count(old_top) != 1:
+              raise SystemExit(f'Expected one home metrics block, found {s.count(old_top)}')
+          s = s.replace(old_top, new_top, 1)
+
+          old_totals = '  <div class="order-totals"><div class="card"><div class="label">Заказано, шт.</div><div class="num" id="koQty">0 шт.</div></div><div class="card"><div class="label">Заказано на сумму</div><div class="num" id="koAmount">0 ₸</div></div></div>\n'
+          if s.count(old_totals) != 1:
+              raise SystemExit(f'Expected one old order totals block, found {s.count(old_totals)}')
+          s = s.replace(old_totals, '', 1)
+
+          if s.count('id="koQty"') != 1 or s.count('id="koAmount"') != 1:
+              raise SystemExit('Order total IDs are not unique after patch')
+          p.write_text(s, encoding='utf-8')
+          PY
+      - name: Commit patch
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add index.html
+          git diff --cached --quiet && exit 0
+          git commit -m 'Move order totals beside warehouse stock'
+          git push origin HEAD:main
