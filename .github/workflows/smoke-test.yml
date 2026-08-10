@@ -46,11 +46,11 @@ jobs:
             'function reserved(p)',
             'state.reservations.push',
             "active=stage==='new'||stage==='transfer'",
-            "if(!['new','transfer'].includes(stage))continue",
             "else if(stage==='delivery')",
             'Недостаточно свободного остатка',
             'Остаток не может быть ниже количества в активных заказах',
             'function marketplaceOrderTotals(',
+            "if(stage==='cancelled')continue;for(const o of(g.lines||[]))",
             'function reportMarketplaceSales()',
             'function financialSales()',
             'price:Number(o.unitPrice)||Number(old?.price)||0',
@@ -64,6 +64,8 @@ jobs:
           ]
           missing=[x for x in required if x not in html and x not in api]
           if missing: raise SystemExit('Missing lifecycle markers: '+', '.join(missing))
+          if "if(!['new','transfer'].includes(stage))continue;for(const o of(g.lines||[]))" in html:
+              raise SystemExit('Order-period totals incorrectly exclude delivered orders')
           if '<option value="reserve">' in html or '<option value="резерв">' in html or '<option value="отмена резерва">' in html:
               raise SystemExit('Internal order reservation must not be exposed as a standalone UI operation')
           if "log('резерв'" in html or "log('отмена резерва'" in html:
@@ -76,7 +78,7 @@ jobs:
               raise SystemExit('Pages index redirects incorrectly')
           if 'client_secret' in html.lower(): raise SystemExit('client secret in browser')
           if '"crons": ["*/5 * * * *"]' not in wrangler: raise SystemExit('cron mismatch')
-          print('Unified Kaspi/WB order lifecycle and current-price report contract OK')
+          print('Unified lifecycle, historical order totals and current-price report contract OK')
           PY
 
       - name: Check published site
@@ -89,6 +91,7 @@ jobs:
               && grep -q "stage==='new'?'Новый':stage==='transfer'?'Передача':stage==='delivery'?'Доставка'" /tmp/site.html \
               && grep -q "active=stage==='new'||stage==='transfer'" /tmp/site.html \
               && grep -q "else if(stage==='delivery')" /tmp/site.html \
+              && grep -q "if(stage==='cancelled')continue;for(const o of(g.lines||\[\]))" /tmp/site.html \
               && grep -q 'price:Number(o.unitPrice)||Number(old?.price)||0' /tmp/site.html \
               && grep -q 'if(existingSale&&Number(o.unitPrice)>0)existingSale.price=Number(o.unitPrice)' /tmp/site.html \
               && grep -q 'id="koQty"' /tmp/site.html \
@@ -107,6 +110,7 @@ jobs:
           grep -q "stage==='new'?'Новый':stage==='transfer'?'Передача':stage==='delivery'?'Доставка'" /tmp/site.html
           grep -q "active=stage==='new'||stage==='transfer'" /tmp/site.html
           grep -q "else if(stage==='delivery')" /tmp/site.html
+          grep -q "if(stage==='cancelled')continue;for(const o of(g.lines||\[\]))" /tmp/site.html
           grep -q 'price:Number(o.unitPrice)||Number(old?.price)||0' /tmp/site.html
           grep -q 'if(existingSale&&Number(o.unitPrice)>0)existingSale.price=Number(o.unitPrice)' /tmp/site.html
           grep -q 'id="koQty"' /tmp/site.html
