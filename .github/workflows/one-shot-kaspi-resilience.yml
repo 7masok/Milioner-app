@@ -19,13 +19,15 @@ jobs:
       - name: Validate
         run: |
           node --check cloudflare/millioner-api/src/index.js
-          grep -A6 "activeFeed = await fetchKaspiWorkerFeed" cloudflare/millioner-api/src/index.js | grep -q "size: '12'"
-          grep -q "Kaspi sync unavailable: worker=" cloudflare/millioner-api/src/index.js
+          grep -q "env.KASPI_WORKER" cloudflare/millioner-api/src/index.js
+          grep -q "serviceBinding.fetch" cloudflare/millioner-api/src/index.js
+          grep -q '"binding":"KASPI_WORKER"' cloudflare/millioner-api/wrangler.jsonc
+          grep -q '"service":"fragrant-shadow-72ed"' cloudflare/millioner-api/wrangler.jsonc
       - name: Commit patch
         run: |
           git config user.name 'millioner-maintenance'
           git config user.email 'actions@users.noreply.github.com'
-          git add cloudflare/millioner-api/src/index.js
-          git diff --cached --quiet || git commit -m 'Keep Kaspi Worker calls within subrequest budget'
+          git add cloudflare/millioner-api/src/index.js cloudflare/millioner-api/wrangler.jsonc
+          git diff --cached --quiet || git commit -m 'Use Cloudflare Service Binding for Kaspi sync'
           git push origin main
-# trigger 2026-08-10 bounded-kaspi-pages
+# trigger 2026-08-10 kaspi-service-binding
