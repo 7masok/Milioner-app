@@ -9,16 +9,13 @@ permissions:
 jobs:
   probe:
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     steps:
-      - uses: actions/checkout@v4
-      - name: Inspect writeoff implementation
+      - name: Wait for next server cron and inspect central status
         run: |
-          python - <<'PY'
-          from pathlib import Path
-          s=Path('index.html').read_text(encoding='utf-8')
-          for needle in ['Недостаточно свободного остатка','Нельзя списать больше остатка','списание','writeoff','openModal(\'writeoff\')']:
-              print('===',needle,'===')
-              pos=s.find(needle)
-              print('POS',pos)
-              if pos>=0: print(s[max(0,pos-1200):pos+1800])
-          PY
+          set -euo pipefail
+          sleep 90
+          echo '=== MARKET_STATUS ==='
+          curl -fsSL --retry 4 --retry-delay 2 --max-time 25 'https://millioner-api.7masok.workers.dev/api/market-status' | jq .
+          echo '=== SYNC_STATUS ==='
+          curl -fsSL --retry 4 --retry-delay 2 --max-time 25 'https://millioner-api.7masok.workers.dev/api/sync-status' | jq .
