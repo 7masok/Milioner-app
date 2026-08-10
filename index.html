@@ -99,7 +99,7 @@ const id=()=>Date.now().toString(36)+Math.random().toString(36).slice(2,7);const
 function stockTotal(){return state.products.reduce((a,p)=>a+(Number(p.stock)||0),0)}
 function reserved(p){return state.reservations.filter(r=>r.productId===p.id&&r.active).reduce((a,r)=>a+(Number(r.qty)||0),0)}
 function isCompletedOrder(market,status,state=''){const s=String(status||'').toUpperCase(),st=String(state||'').toUpperCase();return market==='WB'?st==='SOLD':s==='COMPLETED'}
-function isMarketplaceSaleOrder(market,status,state=''){const s=String(status||'').toUpperCase(),st=String(state||'').toUpperCase();if(market==='Kaspi')return s==='COMPLETED'||(s==='ACCEPTED_BY_MERCHANT'&&st==='KASPI_DELIVERY_TRANSIT');if(market==='WB')return st==='SOLD';return isCompletedOrder(market,s,st)}
+function isMarketplaceSaleOrder(market,status,state=''){const s=String(status||'').toUpperCase(),st=String(state||'').toUpperCase();if(market==='Kaspi')return s==='COMPLETED'||(s==='ACCEPTED_BY_MERCHANT'&&st==='KASPI_DELIVERY_TRANSIT');if(market==='WB')return ['SORTED','ACCEPTED_BY_CARRIER','SENT_TO_CARRIER','READY_FOR_PICKUP','SOLD'].includes(st);return isCompletedOrder(market,s,st)}
 function marketplaceSaleTimestamp(market,o){if(market==='Kaspi'&&String(o?.state||'').toUpperCase()==='KASPI_DELIVERY_TRANSIT')return toTimestamp(o?.courierTransmissionDate||o?.deliveryStartDate||o?.updatedAt||Date.now());return toTimestamp(o?.creationDate)}
 function financialSales(){return [...(state.sales||[])]}
 function salesDays(p,days=30){let since=Date.now()-days*86400000;return financialSales().filter(s=>s.productId===p.id&&s.date>=since).reduce((a,s)=>a+(Number(s.qty)||0),0)/days}
