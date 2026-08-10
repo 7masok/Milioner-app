@@ -661,7 +661,7 @@ function sanitizeWarehouseState(input) {
   const obj = key => x[key] && typeof x[key] === 'object' && !Array.isArray(x[key]) ? x[key] : {};
   const settings = { ...obj('settings') };
   delete settings.serverMarketStatus; delete settings.wbToken; delete settings.kaspiToken;
-  return { products:arr('products').slice(0,20000), movements:arr('movements').slice(0,5000), sales:arr('sales').slice(0,20000), purchases:arr('purchases').slice(0,20000), reservations:arr('reservations').slice(0,20000), settings, marketOrderState:obj('marketOrderState'), marketplaceLiveSince:obj('marketplaceLiveSince'), kaspiBaselineAt:x.kaspiBaselineAt||null };
+  return { products:arr('products').slice(0,20000), movements:arr('movements').slice(0,5000), sales:arr('sales').slice(0,20000), purchases:arr('purchases').slice(0,20000), reservations:arr('reservations').slice(0,20000), kaspiAdExpenses:arr('kaspiAdExpenses').slice(0,5000), settings, marketOrderState:obj('marketOrderState'), marketplaceLiveSince:obj('marketplaceLiveSince'), kaspiBaselineAt:x.kaspiBaselineAt||null };
 }
 function isTrustedBrowserOrigin(origin, env) {
   const allowed = String(env.CORS_ORIGIN || DEFAULT_CORS_ORIGIN).replace(/\/$/, '');
