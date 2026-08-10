@@ -1,6 +1,7 @@
 from pathlib import Path
 
-# Central Worker: call the Kaspi Worker through a Cloudflare Service Binding.
+# Central Worker: call the Kaspi Worker through a Cloudflare Service Binding and
+# keep every nested invocation small enough to stay inside the Kaspi Worker CPU budget.
 p = Path('cloudflare/millioner-api/src/index.js')
 s = p.read_text(encoding='utf-8')
 
@@ -15,13 +16,32 @@ new_call = """    activeFeed = await fetchKaspiWorkerFeed(base, {
       days: '1',
       status: 'ACCEPTED_BY_MERCHANT',
       state: 'KASPI_DELIVERY',
-      size: '12'
+      size: '6'
     }, env.KASPI_WORKER);
 """
 if '}, env.KASPI_WORKER);' not in s:
     if s.count(old_call) != 1:
         raise SystemExit(f'active service call marker count={s.count(old_call)}')
     s = s.replace(old_call, new_call, 1)
+
+# Existing Service Binding call may already be present from the previous patch;
+# in that case only shrink the Worker page size from 12 to 6.
+old_bound = """    activeFeed = await fetchKaspiWorkerFeed(base, {
+      days: '1',
+      status: 'ACCEPTED_BY_MERCHANT',
+      state: 'KASPI_DELIVERY',
+      size: '12'
+    }, env.KASPI_WORKER);
+"""
+new_bound = """    activeFeed = await fetchKaspiWorkerFeed(base, {
+      days: '1',
+      status: 'ACCEPTED_BY_MERCHANT',
+      state: 'KASPI_DELIVERY',
+      size: '6'
+    }, env.KASPI_WORKER);
+"""
+if old_bound in s:
+    s = s.replace(old_bound, new_bound, 1)
 
 old_fn = """async function fetchKaspiWorkerFeed(base, params) {
   const orders = [];
@@ -48,6 +68,9 @@ if 'serviceBinding.fetch(workerRequest)' not in s:
     if s.count(old_fetch) != 1:
         raise SystemExit(f'worker fetch marker count={s.count(old_fetch)}')
     s = s.replace(old_fetch, new_fetch, 1)
+
+if "size: '6'" not in s:
+    raise SystemExit('Kaspi active feed size=6 was not applied')
 p.write_text(s, encoding='utf-8')
 
 # Wrangler: bind the central Worker to the dedicated Kaspi Worker by script name.
@@ -69,4 +92,4 @@ if '"binding": "KASPI_WORKER"' not in w and '"binding":"KASPI_WORKER"' not in w:
         raise SystemExit(f'wrangler trigger marker count={w.count(marker)}')
     w = w.replace(marker, insert, 1)
 p.write_text(w, encoding='utf-8')
-print('patched Kaspi Service Binding')
+print('patched Kaspi Service Binding and page size=6')
