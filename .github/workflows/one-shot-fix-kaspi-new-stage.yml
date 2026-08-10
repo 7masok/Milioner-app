@@ -33,11 +33,11 @@ jobs:
                   raise SystemExit(f'smoke marker count={s.count(marker)}')
               s=s.replace(marker,marker+guard,1)
           stale="          if 'price:Number(old?.price)||Number(o.unitPrice)||0' in html:\n              raise SystemExit('Marketplace reports prefer stale sale price over current D1 price')\n"
-          extra="          if \"u==='ASSEMBLE'||u==='ACCEPTED_BY_MERCHANT'\" in html:\n              raise SystemExit('Kaspi ACCEPTED_BY_MERCHANT must stay New until ASSEMBLE')\n          if \"['KASPI_DELIVERY_TRANSIT','DELIVERY'].includes(st)\" in html:\n              raise SystemExit('Kaspi DELIVERY state is a delivery type, not a completed handoff')\n"
-          if extra not in s:
+          old_guard="          old_kaspi=\"if(u==='COMPLETED'||(u==='ACCEPTED_BY_MERCHANT'&&['KASPI_DELIVERY_TRANSIT','DELIVERY'].includes(st)))return 'delivery';if(u==='ASSEMBLE'||u==='ACCEPTED_BY_MERCHANT')return 'transfer';return 'new'\"\n          if old_kaspi in html:\n              raise SystemExit('Kaspi ACCEPTED_BY_MERCHANT must stay New until ASSEMBLE')\n"
+          if old_guard not in s:
               if s.count(stale)!=1:
                   raise SystemExit(f'smoke stale-price marker count={s.count(stale)}')
-              s=s.replace(stale,stale+extra,1)
+              s=s.replace(stale,stale+old_guard,1)
           pub="              && grep -q \"else if(stage==='delivery')\" /tmp/site.html \\\n"
           pub_guard="              && grep -Fq \"if(u==='ASSEMBLE')return 'transfer';return 'new'\" /tmp/site.html \\\n"
           if pub_guard not in s:
@@ -52,8 +52,10 @@ jobs:
           from pathlib import Path
           import re
           s=Path('index.html').read_text(encoding='utf-8')
-          assert "if(u==='COMPLETED'||st==='KASPI_DELIVERY_TRANSIT')return 'delivery';if(u==='ASSEMBLE')return 'transfer';return 'new'" in s
-          assert "u==='ASSEMBLE'||u==='ACCEPTED_BY_MERCHANT'" not in s
+          old="if(u==='COMPLETED'||(u==='ACCEPTED_BY_MERCHANT'&&['KASPI_DELIVERY_TRANSIT','DELIVERY'].includes(st)))return 'delivery';if(u==='ASSEMBLE'||u==='ACCEPTED_BY_MERCHANT')return 'transfer';return 'new'"
+          new="if(u==='COMPLETED'||st==='KASPI_DELIVERY_TRANSIT')return 'delivery';if(u==='ASSEMBLE')return 'transfer';return 'new'"
+          assert new in s
+          assert old not in s
           scripts=re.findall(r'<script>(.*?)</script>',s,flags=re.S|re.I)
           Path('/tmp/app.js').write_text('\n'.join(scripts),encoding='utf-8')
           PY
