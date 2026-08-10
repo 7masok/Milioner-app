@@ -66,6 +66,10 @@ jobs:
               'WB2 browser cache': 'market=WB2&limit=500',
               'WB account-safe merge': "String(o.market||'')+'|'",
               'WB account-safe transitions': "filter(o=>String(o.market||'WB')===market)",
+              'WB2 visible settings': 'Wildberries 2 API',
+              'WB2 visible badge': 'id="wb2ApiBadge"',
+              'WB2 visible status': 'id="wb2ApiStatus"',
+              'WB2 header dot': 'id="dotWb2"',
               'WB2 token binding': 'WB_TOKEN_2',
               'WB2 server market': "'WB2'",
               'WB2 product link': "['WB2','wb2']",
@@ -105,7 +109,7 @@ jobs:
           set -e
           for attempt in 1 2 3 4 5 6 7 8; do
             curl -fsSL --max-time 25 'https://7masok.github.io/Milioner-app/' -o /tmp/site.html || true
-            if grep -q 'id="wbAccountTabs"' /tmp/site.html 2>/dev/null && grep -q 'market=WB2&limit=500' /tmp/site.html; then
+            if grep -q 'id="wbAccountTabs"' /tmp/site.html 2>/dev/null && grep -q 'Wildberries 2 API' /tmp/site.html; then
               break
             fi
             sleep 5
@@ -114,6 +118,9 @@ jobs:
           grep -q 'id="wbAccountTabs"' /tmp/site.html
           grep -q 'function selectWbAccount(account)' /tmp/site.html
           grep -q 'market=WB2&limit=500' /tmp/site.html
+          grep -q 'Wildberries 2 API' /tmp/site.html
+          grep -q 'id="wb2ApiBadge"' /tmp/site.html
+          grep -q 'id="dotWb2"' /tmp/site.html
           grep -q 'function applyMarketplaceTransitions' /tmp/site.html
           grep -q 'function fifoConsume(productId,qty)' /tmp/site.html
           grep -q 'Google Drive · резервные копии' /tmp/site.html
