@@ -7,23 +7,46 @@ on:
 jobs:
   probe:
     runs-on: ubuntu-latest
-    timeout-minutes: 4
+    timeout-minutes: 12
     steps:
-      - name: Probe live central and worker
+      - name: Check published site and dedicated Kaspi Worker
         run: |
           set -euo pipefail
-          echo CENTRAL
-          curl -fsSL --max-time 25 'https://millioner-api.7masok.workers.dev/api/market-status' | jq .
+          curl -fsSL --max-time 25 'https://7masok.github.io/Milioner-app/' >/tmp/site.html
+          grep -q '<title' /tmp/site.html
           spec='days=1&status=ACCEPTED_BY_MERCHANT&state=KASPI_DELIVERY&size=6&batch=0'
-          echo "WORKER $spec"
           code=$(curl -sS -o /tmp/w.body -w '%{http_code}' --max-time 75 "https://fragrant-shadow-72ed.7masok.workers.dev/kaspi/sync?$spec" || true)
-          echo "HTTP=$code"
-          head -c 800 /tmp/w.body || true
-          echo
+          echo "WORKER_HTTP=$code"
           test "$code" = 200
           jq -e '.ok==true and .pageSize==6 and (.orders|length)<=6' /tmp/w.body
-          jq '{ok,totalOrders,totalOrdersOnPage,detailedOrders,pageCount,hasMore,nextBatch,orders:(.orders|length)}' /tmp/w.body
           for id in 1028072690 1028169317 1028174494; do
             n=$(jq --arg id "$id" '[.orders[]|select((.code|tostring)==$id)]|length' /tmp/w.body)
-            echo "CONTROL_${id}_PAGE0=$n"
+            echo "WORKER_CONTROL_${id}=$n"
+            test "$n" -gt 0
           done
+      - name: Wait for successful central Kaspi cron and D1 controls
+        run: |
+          set -euo pipefail
+          initial=$(curl -fsSL --max-time 25 'https://millioner-api.7masok.workers.dev/api/market-status')
+          baseline=$(printf '%s' "$initial" | jq -r '.markets[]|select(.market=="Kaspi")|.latest.started_at // 0')
+          echo "BASELINE_STARTED_AT=$baseline"
+          ok=0
+          for i in $(seq 1 24); do
+            status=$(curl -fsSL --max-time 25 'https://millioner-api.7masok.workers.dev/api/market-status')
+            printf '%s' "$status" | jq '.markets[]|select(.market=="Kaspi")'
+            started=$(printf '%s' "$status" | jq -r '.markets[]|select(.market=="Kaspi")|.latest.started_at // 0')
+            success=$(printf '%s' "$status" | jq -r '.markets[]|select(.market=="Kaspi")|.latest.ok // 0')
+            if [ "$started" -gt "$baseline" ] && [ "$success" = "1" ]; then
+              orders=$(curl -fsSL --max-time 25 'https://millioner-api.7masok.workers.dev/api/orders?market=Kaspi&limit=1000')
+              printf '%s' "$orders" | jq '{ok,orders:(.orders|length)}'
+              all=1
+              for id in 1028072690 1028169317 1028174494; do
+                n=$(printf '%s' "$orders" | jq --arg id "$id" '[.orders[]|select((.code|tostring)==$id)]|length')
+                echo "D1_CONTROL_${id}=$n"
+                if [ "$n" -lt 1 ]; then all=0; fi
+              done
+              if [ "$all" = "1" ]; then ok=1; break; fi
+            fi
+            sleep 20
+          done
+          test "$ok" = 1
