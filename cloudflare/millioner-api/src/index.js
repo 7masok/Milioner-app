@@ -31,7 +31,8 @@ export default {
         const sql = `
           SELECT o.market,o.order_id AS orderId,o.code,o.entry_id AS entryId,o.status,o.state,
                  o.creation_date AS creationDate,o.sku,o.product_name AS productName,o.qty,
-                 o.unit_price AS unitPrice,o.total_price AS totalPrice,l.product_id AS productId
+                 o.unit_price AS unitPrice,o.total_price AS totalPrice,o.seller_delivery_cost AS sellerDeliveryCost,
+                 o.marketplace_fee AS marketplaceFee,o.fee_source AS feeSource,l.product_id AS productId
           FROM marketplace_order_lines o
           LEFT JOIN product_links l ON l.market=o.market AND l.sku=o.sku
           ${where}
@@ -128,7 +129,7 @@ async function ensureSchema(db) {
   const statements = [
     `CREATE TABLE IF NOT EXISTS products (id TEXT PRIMARY KEY,name TEXT NOT NULL,category TEXT NOT NULL DEFAULT '',photo TEXT NOT NULL DEFAULT '',min_stock INTEGER NOT NULL DEFAULT 0,stock INTEGER NOT NULL DEFAULT 0,cost REAL NOT NULL DEFAULT 0,total_profit REAL NOT NULL DEFAULT 0,created_at INTEGER NOT NULL,updated_at INTEGER NOT NULL)`,
     `CREATE TABLE IF NOT EXISTS product_links (id INTEGER PRIMARY KEY AUTOINCREMENT,product_id TEXT NOT NULL,market TEXT NOT NULL,sku TEXT NOT NULL,created_at INTEGER NOT NULL,updated_at INTEGER NOT NULL,FOREIGN KEY(product_id) REFERENCES products(id) ON DELETE CASCADE,UNIQUE(market,sku))`,
-    `CREATE TABLE IF NOT EXISTS marketplace_order_lines (id INTEGER PRIMARY KEY AUTOINCREMENT,market TEXT NOT NULL,order_id TEXT NOT NULL,code TEXT NOT NULL DEFAULT '',entry_id TEXT NOT NULL,status TEXT NOT NULL DEFAULT '',state TEXT NOT NULL DEFAULT '',creation_date INTEGER NOT NULL DEFAULT 0,sku TEXT NOT NULL DEFAULT '',product_name TEXT NOT NULL DEFAULT '',qty REAL NOT NULL DEFAULT 0,unit_price REAL NOT NULL DEFAULT 0,total_price REAL NOT NULL DEFAULT 0,raw_json TEXT NOT NULL DEFAULT '',first_seen_at INTEGER NOT NULL,updated_at INTEGER NOT NULL,UNIQUE(market,order_id,entry_id))`,
+    `CREATE TABLE IF NOT EXISTS marketplace_order_lines (id INTEGER PRIMARY KEY AUTOINCREMENT,market TEXT NOT NULL,order_id TEXT NOT NULL,code TEXT NOT NULL DEFAULT '',entry_id TEXT NOT NULL,status TEXT NOT NULL DEFAULT '',state TEXT NOT NULL DEFAULT '',creation_date INTEGER NOT NULL DEFAULT 0,sku TEXT NOT NULL DEFAULT '',product_name TEXT NOT NULL DEFAULT '',qty REAL NOT NULL DEFAULT 0,unit_price REAL NOT NULL DEFAULT 0,total_price REAL NOT NULL DEFAULT 0,seller_delivery_cost REAL NOT NULL DEFAULT 0,marketplace_fee REAL NOT NULL DEFAULT 0,fee_source TEXT NOT NULL DEFAULT '',raw_json TEXT NOT NULL DEFAULT '',first_seen_at INTEGER NOT NULL,updated_at INTEGER NOT NULL,UNIQUE(market,order_id,entry_id))`,
     `CREATE TABLE IF NOT EXISTS sync_runs (id INTEGER PRIMARY KEY AUTOINCREMENT,market TEXT NOT NULL,started_at INTEGER NOT NULL,finished_at INTEGER,ok INTEGER NOT NULL DEFAULT 0,items INTEGER NOT NULL DEFAULT 0,error TEXT NOT NULL DEFAULT '')`,
     `CREATE TABLE IF NOT EXISTS warehouse_state (id INTEGER PRIMARY KEY CHECK(id=1),payload TEXT NOT NULL DEFAULT '{}',revision INTEGER NOT NULL DEFAULT 0,updated_at INTEGER NOT NULL DEFAULT 0)`,
     `CREATE INDEX IF NOT EXISTS idx_product_links_product ON product_links(product_id)`,
@@ -137,7 +138,11 @@ async function ensureSchema(db) {
     `CREATE INDEX IF NOT EXISTS idx_sync_runs_market_started ON sync_runs(market,started_at DESC)`
   ];
   for (const sql of statements) await db.prepare(sql).run();
+  await ensureColumn(db,'marketplace_order_lines','seller_delivery_cost','REAL NOT NULL DEFAULT 0');
+  await ensureColumn(db,'marketplace_order_lines','marketplace_fee','REAL NOT NULL DEFAULT 0');
+  await ensureColumn(db,'marketplace_order_lines','fee_source',"TEXT NOT NULL DEFAULT ''");
 }
+async function ensureColumn(db,table,column,definition){const info=await db.prepare(`PRAGMA table_info(${table})`).all();if((info.results||[]).some(x=>String(x.name)===column))return;await db.prepare(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`).run();}
 
 async function syncAll(env, { scheduled = false } = {}) {
   const results = {};
@@ -314,6 +319,7 @@ async function fetchKaspi(env) {
       SET status=?,state=?,creation_date=?,updated_at=?
       WHERE market='Kaspi' AND order_id=?
     `).bind(String(order?.status || ''),String(order?.state || ''),toTimestamp(order?.creationDate),now,orderId).run();
+    await updateKaspiOrderFinancials(env.DB,order);
   }
 
   if (!token) {
@@ -355,6 +361,8 @@ async function fetchKaspi(env) {
 
   return result;
 }
+
+async function updateKaspiOrderFinancials(db,order){const orderId=String(order?.id||'').trim();if(!orderId)return;const rows=await db.prepare(`SELECT id,total_price AS totalPrice FROM marketplace_order_lines WHERE market='Kaspi' AND order_id=? AND entry_id<>'__pending__'`).bind(orderId).all(),items=rows.results||[];if(!items.length)return;const revenue=items.reduce((sum,x)=>sum+Math.max(0,Number(x.totalPrice)||0),0),delivery=Math.max(0,Number(order?.deliveryCostForSeller)||0),commission=kaspiExplicitCommission(order);if(delivery<=0&&commission<=0)return;await db.batch(items.map(x=>{const weight=revenue>0?Math.max(0,Number(x.totalPrice)||0)/revenue:1/items.length,d=delivery*weight,c=commission*weight,source=[d>0?'Kaspi API доставка':'',c>0?'Kaspi API комиссия':''].filter(Boolean).join(' + ');return db.prepare('UPDATE marketplace_order_lines SET seller_delivery_cost=?,marketplace_fee=?,fee_source=?,updated_at=? WHERE id=?').bind(d,c,source,Date.now(),x.id)}))}
 
 async function fetchKaspiWorkerFeed(base, params, serviceBinding = null) {
   const orders = [];
@@ -399,18 +407,9 @@ function isKaspiActive(order) {
   return status === 'APPROVED_BY_BANK' || status === 'ACCEPTED_BY_MERCHANT' || status === 'ASSEMBLE';
 }
 
-function appendKaspiLines(result, order, lines) {
-  for (const line of lines || []) {
-    const qty = Math.max(0, Number(line?.quantity || 1));
-    const total = Number(line?.totalPrice || (Number(line?.basePrice || 0) * qty) || 0);
-    result.push({
-      orderId: String(order?.id || ''), code: String(order?.code || ''), entryId: String(line?.entryId || line?.id || ''),
-      status: String(order?.status || ''), state: String(order?.state || ''), creationDate: toTimestamp(order?.creationDate),
-      sku: String(line?.merchantCode || line?.sku || '').trim(), productName: String(line?.productName || line?.name || ''), qty,
-      unitPrice: qty ? total / qty : Number(line?.basePrice || 0), totalPrice: total, raw: { order, line }
-    });
-  }
-}
+function firstMoney(obj,keys){for(const key of keys){const value=Number(obj?.[key]);if(Number.isFinite(value)&&value>0)return value}return 0}
+function kaspiExplicitCommission(obj){return firstMoney(obj,['commissionAmount','commissionForSeller','sellerCommission','marketplaceFee','serviceFee','serviceCostForSeller','commission'])}
+function appendKaspiLines(result,order,lines){const prepared=(lines||[]).map(line=>{const qty=Math.max(0,Number(line?.quantity||1)),total=Number(line?.totalPrice||(Number(line?.basePrice||0)*qty)||0);return {line,qty,total}}),revenue=prepared.reduce((sum,x)=>sum+Math.max(0,x.total),0),orderDelivery=Math.max(0,Number(order?.deliveryCostForSeller)||0),orderCommission=kaspiExplicitCommission(order);for(const {line,qty,total} of prepared){const weight=revenue>0?Math.max(0,total)/revenue:(prepared.length?1/prepared.length:0),lineCommission=kaspiExplicitCommission(line),sellerDeliveryCost=orderDelivery*weight,marketplaceFee=lineCommission||orderCommission*weight,sources=[];if(sellerDeliveryCost>0)sources.push('Kaspi API доставка');if(marketplaceFee>0)sources.push('Kaspi API комиссия');result.push({orderId:String(order?.id||''),code:String(order?.code||''),entryId:String(line?.entryId||line?.id||''),status:String(order?.status||''),state:String(order?.state||''),creationDate:toTimestamp(order?.creationDate),sku:String(line?.merchantCode||line?.sku||'').trim(),productName:String(line?.productName||line?.name||''),qty,unitPrice:qty?total/qty:Number(line?.basePrice||0),totalPrice:total,sellerDeliveryCost,marketplaceFee,feeSource:sources.join(' + '),raw:{order,line}})}}
 
 async function fetchKaspiOrdersDirect(token, { days = 7, state = 'KASPI_DELIVERY' } = {}) {
   const headers = {
@@ -472,6 +471,7 @@ function appendKaspiPlaceholder(result, order) {
     qty: 0,
     unitPrice: 0,
     totalPrice: Number(order?.totalPrice || 0),
+    sellerDeliveryCost:Math.max(0,Number(order?.deliveryCostForSeller)||0),marketplaceFee:kaspiExplicitCommission(order),feeSource:Math.max(0,Number(order?.deliveryCostForSeller)||0)>0?'Kaspi API доставка':'',
     raw: { order, pending: true }
   });
 }
@@ -614,12 +614,12 @@ async function upsertOrderLines(db, market, lines) {
   if (!lines.length) return;
   const sql = `
     INSERT INTO marketplace_order_lines
-      (market,order_id,code,entry_id,status,state,creation_date,sku,product_name,qty,unit_price,total_price,raw_json,first_seen_at,updated_at)
-    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+      (market,order_id,code,entry_id,status,state,creation_date,sku,product_name,qty,unit_price,total_price,seller_delivery_cost,marketplace_fee,fee_source,raw_json,first_seen_at,updated_at)
+    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
     ON CONFLICT(market,order_id,entry_id) DO UPDATE SET
       code=excluded.code,status=excluded.status,state=excluded.state,creation_date=excluded.creation_date,
       sku=excluded.sku,product_name=excluded.product_name,qty=excluded.qty,unit_price=excluded.unit_price,
-      total_price=excluded.total_price,raw_json=excluded.raw_json,updated_at=excluded.updated_at
+      total_price=excluded.total_price,seller_delivery_cost=excluded.seller_delivery_cost,marketplace_fee=excluded.marketplace_fee,fee_source=excluded.fee_source,raw_json=excluded.raw_json,updated_at=excluded.updated_at
   `;
   for (let i = 0; i < lines.length; i += 50) {
     const now = Date.now();
@@ -639,7 +639,7 @@ async function upsertOrderLines(db, market, lines) {
 }
 
 function envlessOrderStatement(db, sql, market, o, now) {
-  return db.prepare(sql).bind(market,o.orderId,o.code,o.entryId,o.status,o.state,o.creationDate,o.sku,o.productName,o.qty,o.unitPrice,o.totalPrice,JSON.stringify(o.raw || {}),now,now);
+  return db.prepare(sql).bind(market,o.orderId,o.code,o.entryId,o.status,o.state,o.creationDate,o.sku,o.productName,o.qty,o.unitPrice,o.totalPrice,Number(o.sellerDeliveryCost)||0,Number(o.marketplaceFee)||0,String(o.feeSource||''),JSON.stringify(o.raw || {}),now,now);
 }
 
 async function upsertOrderLine(db, market, o) {
