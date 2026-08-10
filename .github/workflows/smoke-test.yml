@@ -53,6 +53,8 @@ jobs:
             'function marketplaceOrderTotals(',
             'function reportMarketplaceSales()',
             'function financialSales()',
+            'price:Number(o.unitPrice)||Number(old?.price)||0',
+            'if(existingSale&&Number(o.unitPrice)>0)existingSale.price=Number(o.unitPrice)',
             'function fifoConsume(productId,qty)',
             'id="koQty"','id="koAmount"','id="orderPeriod"',
             'data-order-period="today"','data-order-period="yesterday"','data-order-period="week"','data-order-period="month"','data-order-period="custom"',
@@ -68,11 +70,13 @@ jobs:
               raise SystemExit('Internal order reservation must not create Movement rows')
           if 'Доступно к продаже' in html:
               raise SystemExit('Old reserve-derived product detail returned')
+          if 'price:Number(old?.price)||Number(o.unitPrice)||0' in html:
+              raise SystemExit('Marketplace reports prefer stale sale price over current D1 price')
           if 'raw.githubusercontent.com' in html or 'http-equiv="refresh"' in html.lower():
               raise SystemExit('Pages index redirects incorrectly')
           if 'client_secret' in html.lower(): raise SystemExit('client secret in browser')
           if '"crons": ["*/5 * * * *"]' not in wrangler: raise SystemExit('cron mismatch')
-          print('Unified Kaspi/WB order lifecycle contract OK')
+          print('Unified Kaspi/WB order lifecycle and current-price report contract OK')
           PY
 
       - name: Check published site
@@ -85,11 +89,14 @@ jobs:
               && grep -q "stage==='new'?'Новый':stage==='transfer'?'Передача':stage==='delivery'?'Доставка'" /tmp/site.html \
               && grep -q "active=stage==='new'||stage==='transfer'" /tmp/site.html \
               && grep -q "else if(stage==='delivery')" /tmp/site.html \
+              && grep -q 'price:Number(o.unitPrice)||Number(old?.price)||0' /tmp/site.html \
+              && grep -q 'if(existingSale&&Number(o.unitPrice)>0)existingSale.price=Number(o.unitPrice)' /tmp/site.html \
               && grep -q 'id="koQty"' /tmp/site.html \
               && grep -q 'id="koAmount"' /tmp/site.html \
               && ! grep -q '<option value="reserve">' /tmp/site.html \
               && ! grep -q "log('резерв'" /tmp/site.html \
               && ! grep -q 'Доступно к продаже' /tmp/site.html \
+              && ! grep -q 'price:Number(old?.price)||Number(o.unitPrice)||0' /tmp/site.html \
               && ! grep -q 'raw.githubusercontent.com' /tmp/site.html; then
               break
             fi
@@ -100,11 +107,14 @@ jobs:
           grep -q "stage==='new'?'Новый':stage==='transfer'?'Передача':stage==='delivery'?'Доставка'" /tmp/site.html
           grep -q "active=stage==='new'||stage==='transfer'" /tmp/site.html
           grep -q "else if(stage==='delivery')" /tmp/site.html
+          grep -q 'price:Number(o.unitPrice)||Number(old?.price)||0' /tmp/site.html
+          grep -q 'if(existingSale&&Number(o.unitPrice)>0)existingSale.price=Number(o.unitPrice)' /tmp/site.html
           grep -q 'id="koQty"' /tmp/site.html
           grep -q 'id="koAmount"' /tmp/site.html
           ! grep -q '<option value="reserve">' /tmp/site.html
           ! grep -q "log('резерв'" /tmp/site.html
           ! grep -q 'Доступно к продаже' /tmp/site.html
+          ! grep -q 'price:Number(old?.price)||Number(o.unitPrice)||0' /tmp/site.html
           ! grep -q 'raw.githubusercontent.com' /tmp/site.html
           ! grep -qi 'client_secret' /tmp/site.html
 
