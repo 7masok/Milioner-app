@@ -51,17 +51,20 @@ jobs:
               'arrival date input': 'id="ar" type="date"',
               'FIFO lot selector': 'function fifoLots(productId)',
               'FIFO lot consumption': 'function fifoConsume(productId,qty)',
-              'FIFO remaining quantity': 'remainingQty:q',
+              'FIFO remaining quantity': 'remainingQty:x.qty',
               'FIFO landed unit cost': 'landedUnitCost',
               'FIFO sale audit': 'fifoLots:fifo.lots',
               'Kaspi sale classifier': "function isMarketplaceSaleOrder(market,status,state='')",
               'Kaspi sale on transit': "st==='KASPI_DELIVERY_TRANSIT'",
               'Kaspi transition uses sale state': 'saleState=isMarketplaceSaleOrder(market,status,o.state)',
-              'sync in-progress UI': "'Синхронизация','warn'",
+              'sync in-progress UI': "setIntegrationBadge('kaspiApiBadge','Синхронизация'",
               'marketplace stock transitions': 'function applyMarketplaceTransitions(market,feed)',
               'late marketplace link reconciliation': 'if(active&&!existingSale&&!existingReservation)',
               'Kaspi cache transition': "applyMarketplaceTransitions('Kaspi',state.kaspiOrderFeed)",
               'WB cache transition': "applyMarketplaceTransitions('WB',state.wbOrderFeed)",
+              'WB transient classifier': 'function isWbTransient(error)',
+              'independent marketplace cache refresh': 'Promise.allSettled',
+              'WB stale-cache UI': 'Последняя копия',
               'manual sale stock guard': 'Недостаточно свободного остатка',
               'writeoff stock guard': 'Нельзя списать зарезервированный товар',
               'inventory stock guard': 'Фактический остаток не может быть отрицательным',
@@ -124,7 +127,9 @@ jobs:
           grep -q 'function toggleUnmatchedOrderFilter()' /tmp/site.html
           grep -q 'id="ar" type="date"' /tmp/site.html
           grep -q 'function fifoConsume(productId,qty)' /tmp/site.html
-          grep -q 'remainingQty:q' /tmp/site.html
+          grep -q 'remainingQty:x.qty' /tmp/site.html
+          grep -q 'function isWbTransient(error)' /tmp/site.html
+          grep -q 'Promise.allSettled' /tmp/site.html
           grep -q '300000' /tmp/site.html
           grep -q 'Google Drive · резервные копии' /tmp/site.html
           grep -q 'https://www.googleapis.com/auth/drive.file' /tmp/site.html
