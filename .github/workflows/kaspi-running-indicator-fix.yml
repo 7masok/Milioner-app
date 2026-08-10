@@ -1,0 +1,44 @@
+name: Fix Kaspi running indicator
+on:
+  push:
+    paths:
+      - .github/workflows/kaspi-running-indicator-fix.yml
+permissions:
+  contents: write
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+      - name: Keep Kaspi green during healthy background sync
+        shell: python
+        run: |
+          from pathlib import Path
+          import re
+          p=Path('index.html')
+          s=p.read_text(encoding='utf-8')
+          old="if(kRunning){setIntegrationBadge('kaspiApiBadge','Синхронизация','warn');setDot('dotKaspi','warn');if(ks)ks.textContent=`Статус: идёт фоновая синхронизация · старт ${shortClock(k.latest.started_at)}`}"
+          new="if(kRunning){const hasRecentSuccess=Number(k?.lastSuccessAt||0)>0&&Date.now()-Number(k.lastSuccessAt)<15*60*1000;setIntegrationBadge('kaspiApiBadge','Синхронизация',hasRecentSuccess?'ok':'warn');setDot('dotKaspi',hasRecentSuccess?'':'warn');if(ks)ks.textContent=`Статус: идёт фоновая синхронизация · старт ${shortClock(k.latest.started_at)}`}"
+          if old not in s: raise SystemExit('Kaspi running indicator marker not found')
+          s=s.replace(old,new,1)
+          p.write_text(s,encoding='utf-8')
+          scripts=re.findall(r'<script>(.*?)</script>',s,flags=re.S|re.I)
+          Path('/tmp/app.js').write_text('\n'.join(scripts),encoding='utf-8')
+          Path('.github/workflows/kaspi-running-indicator-fix.yml').unlink()
+      - name: Check JS
+        run: node --check /tmp/app.js
+      - name: Probe live API
+        run: |
+          curl -fsSL --max-time 25 'https://millioner-api.7masok.workers.dev/api/market-status' | jq .
+          curl -fsSL --max-time 25 'https://millioner-api.7masok.workers.dev/api/orders?market=Kaspi&limit=1000' | jq -e '[.orders[] | select((.code|tostring)=="1028072690" or (.orderId|tostring)=="1028072690")] | length > 0'
+          curl -fsSL --max-time 25 'https://millioner-api.7masok.workers.dev/api/orders?market=Kaspi&limit=1000' | jq -e '[.orders[] | select((.code|tostring)=="1028169317" or (.orderId|tostring)=="1028169317")] | length > 0'
+          curl -fsSL --max-time 25 'https://millioner-api.7masok.workers.dev/api/orders?market=Kaspi&limit=1000' | jq -e '[.orders[] | select((.code|tostring)=="1028174494" or (.orderId|tostring)=="1028174494")] | length > 0'
+      - name: Commit
+        run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add -A
+          git commit -m "Keep Kaspi green during healthy background sync"
+          git push origin HEAD:main
