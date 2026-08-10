@@ -1,0 +1,44 @@
+name: One-time order period totals repair
+on:
+  push:
+    branches: [main]
+    paths: ['.github/workflows/one-shot-fix-order-period-totals.yml']
+permissions:
+  contents: write
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Patch historical order totals
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          p=Path('index.html')
+          s=p.read_text(encoding='utf-8')
+          old="function marketplaceOrderTotals(orders){let qty=0,amount=0;for(const g of(orders||[])){const stage=marketplaceLifecycleStage(String(g?.market||selectedOrderMarket),g?.status,g?.state);if(!['new','transfer'].includes(stage))continue;for(const o of(g.lines||[])){if(isPendingMarketplaceLine(o))continue;const q=Math.max(0,Number(o.qty)||0),lineTotal=Math.max(0,Number(o.totalPrice)||0),unit=Math.max(0,Number(o.unitPrice)||0);qty+=q;amount+=lineTotal>0?lineTotal:q*unit}}return {qty,amount}}"
+          new="function marketplaceOrderTotals(orders){let qty=0,amount=0;for(const g of(orders||[])){const stage=marketplaceLifecycleStage(String(g?.market||selectedOrderMarket),g?.status,g?.state);if(stage==='cancelled')continue;for(const o of(g.lines||[])){if(isPendingMarketplaceLine(o))continue;const q=Math.max(0,Number(o.qty)||0),lineTotal=Math.max(0,Number(o.totalPrice)||0),unit=Math.max(0,Number(o.unitPrice)||0);qty+=q;amount+=lineTotal>0?lineTotal:q*unit}}return {qty,amount}}"
+          if s.count(old)!=1: raise SystemExit(f'order totals marker count={s.count(old)}')
+          s=s.replace(old,new,1)
+          p.write_text(s,encoding='utf-8')
+          PY
+      - name: Validate JavaScript and semantics
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import re
+          s=Path('index.html').read_text(encoding='utf-8')
+          assert "function marketplaceOrderTotals(orders)" in s
+          assert "if(stage==='cancelled')continue;for(const o of(g.lines||[]))" in s
+          assert "if(!['new','transfer'].includes(stage))continue;for(const o of(g.lines||[]))" not in s
+          scripts=re.findall(r'<script>(.*?)</script>',s,flags=re.S|re.I)
+          Path('/tmp/app.js').write_text('\n'.join(scripts),encoding='utf-8')
+          PY
+          node --check /tmp/app.js
+      - name: Commit repair
+        run: |
+          git config user.name '7masok'
+          git config user.email '7masok@gmail.com'
+          git add index.html
+          git commit -m 'Fix order totals across periods'
+          git push
