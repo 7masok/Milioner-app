@@ -63,10 +63,13 @@ jobs:
             'data-order-period="today"','data-order-period="yesterday"','data-order-period="week"','data-order-period="month"','data-order-period="custom"',
             'id="wbAccountTabs"','market=WB2&limit=500',
             'function productKaspiDelivery(','Расход на доставку Kaspi',
-            'seller_delivery_cost','marketplace_fee','fee_source'
+            'seller_delivery_cost','marketplace_fee','fee_source',
+            'id="rAds"','function importKaspiAdsFile()','function kaspiAdsBreakdown(',
+            'state.kaspiAdExpenses ||= []','kaspiAdExpenses:state.kaspiAdExpenses||[]',
+            'Реклама Kaspi без привязки','xlsx@0.18.5'
           ]
           missing=[x for x in required if x not in html and x not in api]
-          if missing: raise SystemExit('Missing lifecycle markers: '+', '.join(missing))
+          if missing: raise SystemExit('Missing lifecycle/financial markers: '+', '.join(missing))
           if old_kaspi_stage in html:
               raise SystemExit('Kaspi ACCEPTED_BY_MERCHANT must stay New until ASSEMBLE')
           if "if(!['new','transfer'].includes(stage))continue;for(const o of(g.lines||[]))" in html:
@@ -83,7 +86,7 @@ jobs:
               raise SystemExit('Pages index redirects incorrectly')
           if 'client_secret' in html.lower(): raise SystemExit('client secret in browser')
           if '"crons": ["*/5 * * * *"]' not in wrangler: raise SystemExit('cron mismatch')
-          print('Unified lifecycle, Kaspi stage mapping, historical order totals and current-price report contract OK')
+          print('Unified lifecycle, Kaspi advertising, historical order totals and financial contract OK')
           PY
 
       - name: Check published site
@@ -103,6 +106,9 @@ jobs:
               && grep -q 'if(existingSale&&Number(o.unitPrice)>0)existingSale.price=Number(o.unitPrice)' /tmp/site.html \
               && grep -q 'id="koQty"' /tmp/site.html \
               && grep -q 'id="koAmount"' /tmp/site.html \
+              && grep -q 'id="rAds"' /tmp/site.html \
+              && grep -q 'function importKaspiAdsFile()' /tmp/site.html \
+              && grep -q 'function kaspiAdsBreakdown(' /tmp/site.html \
               && ! grep -q '<option value="reserve">' /tmp/site.html \
               && ! grep -q "log('резерв'" /tmp/site.html \
               && ! grep -q 'Доступно к продаже' /tmp/site.html \
@@ -123,6 +129,9 @@ jobs:
           grep -q 'if(existingSale&&Number(o.unitPrice)>0)existingSale.price=Number(o.unitPrice)' /tmp/site.html
           grep -q 'id="koQty"' /tmp/site.html
           grep -q 'id="koAmount"' /tmp/site.html
+          grep -q 'id="rAds"' /tmp/site.html
+          grep -q 'function importKaspiAdsFile()' /tmp/site.html
+          grep -q 'function kaspiAdsBreakdown(' /tmp/site.html
           ! grep -q '<option value="reserve">' /tmp/site.html
           ! grep -q "log('резерв'" /tmp/site.html
           ! grep -q 'Доступно к продаже' /tmp/site.html
@@ -133,16 +142,19 @@ jobs:
       - name: Check Millioner API health
         run: curl -fsSL --retry 4 --retry-delay 3 --max-time 25 'https://millioner-api.7masok.workers.dev/health' | jq -e '.ok == true and .d1 == true'
 
-      - name: Check marketplace status
+      - name: Check marketplace and sync status
         run: |
           body=$(curl -fsSL --retry 4 --retry-delay 3 --max-time 25 'https://millioner-api.7masok.workers.dev/api/market-status')
-          echo "$body" | jq -e '[.markets[]|select(.market=="WB2")][0].configured==true'
+          echo "$body" | jq -e '.ok==true and ([.markets[]|select(.market=="WB2")][0].configured==true)'
+          sync=$(curl -fsSL --retry 4 --retry-delay 3 --max-time 25 'https://millioner-api.7masok.workers.dev/api/sync-status')
+          echo "$sync" | jq -e '.ok==true and (.markets|type=="array")'
 
-      - name: Check order feeds and Kaspi finance fields
+      - name: Check D1 order feeds and Kaspi finance fields
         run: |
           for market in Kaspi WB WB2; do
             body=$(curl -fsSL --retry 4 --retry-delay 3 --max-time 25 "https://millioner-api.7masok.workers.dev/api/orders?market=${market}&limit=1000")
             echo "$body" | jq -e '.ok==true and (.orders|type=="array")'
+            echo "D1 ${market} order rows: $(echo "$body" | jq '.orders|length')"
             if [ "$market" = Kaspi ] && [ "$(echo "$body" | jq '.orders|length')" -gt 0 ]; then
               echo "$body" | jq -e '.orders[0] | has("sellerDeliveryCost") and has("marketplaceFee") and has("feeSource")'
             fi
