@@ -17,6 +17,17 @@ jobs:
           fetch-depth: 0
       - name: Sync latest main
         run: git pull --rebase origin main
+      - name: Limit patch to WB2 status and order visibility
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          p=Path('tools/fix_wb2_visibility.py')
+          s=p.read_text(encoding='utf-8')
+          marker='# Product WB2 linkage must be editable and searchable.'
+          if marker in s:
+              s=s.split(marker,1)[0]+"\np.write_text(s,encoding='utf-8')\n"
+          p.write_text(s,encoding='utf-8')
+          PY
       - name: Patch current index
         run: python tools/fix_wb2_visibility.py
       - name: Validate browser code and WB2 UI contract
@@ -28,7 +39,7 @@ jobs:
           scripts=re.findall(r'<script>(.*?)</script>',html,flags=re.S|re.I)
           if not scripts: raise SystemExit('No inline script')
           Path('/tmp/app.js').write_text('\n'.join(scripts),encoding='utf-8')
-          for marker in ['Wildberries 1 API','Wildberries 2 API','id="wb2ApiBadge"','id="wb2ApiStatus"','id="dotWb2"',"checkMarketStatus('WB2')","refreshWbFromServer('WB2')",'WB 2 артикул','id="ew2"','id="pw2"']:
+          for marker in ['Wildberries 1 API','Wildberries 2 API','id="wb2ApiBadge"','id="wb2ApiStatus"','id="dotWb2"',"checkMarketStatus('WB2')","refreshWbFromServer('WB2')",'function renderWbIntegration(']:
               if marker not in html: raise SystemExit('missing '+marker)
           PY
           node --check /tmp/app.js
