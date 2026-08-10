@@ -231,7 +231,7 @@ async function fetchKaspi(env) {
       status: 'ACCEPTED_BY_MERCHANT',
       state: 'KASPI_DELIVERY',
       size: '12'
-    });
+    }, env.KASPI_WORKER);
   } catch (e) {
     activeError = String(e?.message || e);
     console.warn('Kaspi active feed failed', activeError);
