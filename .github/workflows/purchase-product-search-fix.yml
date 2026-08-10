@@ -1,0 +1,79 @@
+name: Add purchase product search
+on:
+  push:
+    paths:
+      - .github/workflows/purchase-product-search-fix.yml
+permissions:
+  contents: write
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+      - name: Add searchable product picker to arrival modal
+        shell: python
+        run: |
+          from pathlib import Path
+          import re
+          p=Path('index.html')
+          s=p.read_text(encoding='utf-8')
+          css="""
+.purchase-search-wrap{margin:0 0 9px}.purchase-search-wrap input{width:100%;padding:11px;border:1px solid var(--line);border-radius:11px;background:#fff}.purchase-search-hint{font-size:11px;color:var(--muted);margin-top:5px}
+"""
+          if '.purchase-search-wrap{' not in s:
+              s=s.replace('</style>',css+'</style>',1)
+          js=r'''
+function enhanceArrivalProductSearch(){
+  const modal=document.getElementById('modal');
+  if(!modal||!modal.classList.contains('open'))return;
+  const sheet=modal.querySelector('.sheet');
+  if(!sheet||!/Создать\s+приход/i.test(sheet.textContent||''))return;
+  if(sheet.querySelector('#arrivalProductSearch'))return;
+  const selects=[...sheet.querySelectorAll('select')];
+  const productSelect=selects.find(sel=>[...sel.options].some(o=>state.products.some(p=>String(p.id)===String(o.value))))||selects[0];
+  if(!productSelect)return;
+  const wrap=document.createElement('div');
+  wrap.className='purchase-search-wrap';
+  wrap.innerHTML='<label style="display:block;font-size:11px;color:var(--muted);margin-bottom:5px">Поиск товара</label><input id="arrivalProductSearch" autocomplete="off" placeholder="Название или артикул Kaspi / WB / Ozon"><div class="purchase-search-hint">Начните вводить — список товаров отфильтруется.</div>';
+  productSelect.parentElement.insertBefore(wrap,productSelect);
+  const input=wrap.querySelector('input');
+  const all=[...productSelect.options].map(o=>({value:String(o.value),text:o.textContent||''}));
+  function apply(){
+    const q=normalizeName(input.value);
+    const selected=String(productSelect.value||'');
+    productSelect.innerHTML='';
+    let visible=0;
+    for(const item of all){
+      const p=state.products.find(x=>String(x.id)===item.value);
+      const hay=normalizeName([item.text,p?.name,p?.kaspi,p?.wb,p?.ozon].filter(Boolean).join(' '));
+      if(q&&!hay.includes(q))continue;
+      const o=document.createElement('option');o.value=item.value;o.textContent=item.text;productSelect.appendChild(o);visible++;
+    }
+    if(selected&&[...productSelect.options].some(o=>o.value===selected))productSelect.value=selected;
+    if(!visible){const o=document.createElement('option');o.value='';o.textContent='Ничего не найдено';o.disabled=true;o.selected=true;productSelect.appendChild(o)}
+  }
+  input.addEventListener('input',apply);
+  setTimeout(()=>input.focus(),50);
+}
+const arrivalSearchObserver=new MutationObserver(()=>enhanceArrivalProductSearch());
+arrivalSearchObserver.observe(document.body,{subtree:true,childList:true,attributes:true,attributeFilter:['class']});
+'''
+          if 'function enhanceArrivalProductSearch()' not in s:
+              pos=s.rfind('</script>')
+              if pos<0: raise SystemExit('closing script tag not found')
+              s=s[:pos]+js+'\n'+s[pos:]
+          p.write_text(s,encoding='utf-8')
+          scripts=re.findall(r'<script>(.*?)</script>',s,flags=re.S|re.I)
+          Path('/tmp/app.js').write_text('\n'.join(scripts),encoding='utf-8')
+          Path('.github/workflows/purchase-product-search-fix.yml').unlink()
+      - name: Check JS
+        run: node --check /tmp/app.js
+      - name: Commit
+        run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add -A
+          git commit -m "Add product search to stock arrivals"
+          git push origin HEAD:main
