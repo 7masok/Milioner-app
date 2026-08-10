@@ -1,0 +1,45 @@
+name: Apply Kaspi financial patch
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'tools/kaspi_financials_patch.py'
+      - '.github/workflows/kaspi-financials-apply.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - run: git pull --rebase origin main
+      - run: python tools/kaspi_financials_patch.py
+      - name: Validate
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import re
+          html=Path('index.html').read_text(encoding='utf-8')
+          api=Path('cloudflare/millioner-api/src/index.js').read_text(encoding='utf-8')
+          scripts=re.findall(r'<script>(.*?)</script>',html,flags=re.S|re.I)
+          if not scripts: raise SystemExit('No inline script')
+          Path('/tmp/app.js').write_text('\n'.join(scripts),encoding='utf-8')
+          for marker in ['seller_delivery_cost','marketplace_fee','updateKaspiOrderFinancials','kaspiExplicitCommission','apiFeeTotal','fee:apiFeePerUnit','расходы МП ${fmt(x.fees)}']:
+              if marker not in html and marker not in api: raise SystemExit('missing '+marker)
+          PY
+          node --check /tmp/app.js
+          node --check cloudflare/millioner-api/src/index.js
+          git diff --check
+      - name: Commit
+        run: |
+          git config user.name 'millioner-maintenance'
+          git config user.email 'actions@users.noreply.github.com'
+          git add index.html cloudflare/millioner-api/src/index.js
+          git commit -m 'Account for Kaspi delivery costs in marketplace profit'
+          git push origin HEAD:main
