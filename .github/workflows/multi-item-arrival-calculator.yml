@@ -1,0 +1,52 @@
+name: Multi-item arrival calculator
+on:
+  push:
+    paths:
+      - .github/workflows/multi-item-arrival-calculator.yml
+permissions:
+  contents: write
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+      - name: Patch multi-item arrival form and calculator
+        shell: python
+        run: |
+          from pathlib import Path
+          import re
+          p=Path('index.html')
+          s=p.read_text(encoding='utf-8')
+          start=s.index('function arrivalForm()')
+          end=s.index('\nfunction saleForm()', start)
+          new=r'''function arrivalProductOptions(selected=''){return state.products.map(p=>`<option value="${p.id}" ${String(p.id)===String(selected)?'selected':''}>${esc(p.name)}</option>`).join('')}
+function arrivalForm(){return `<h3>Создать поставку</h3><div class="field"><label>Дата поступления на склад</label><input id="ar" type="date" value="${localDateInputValue()}"></div><div class="field"><label>Название / партия</label><input id="ab" placeholder="Например: Китай 10.08"></div><div id="arrivalItems"></div><button type="button" class="btn full" onclick="addArrivalItem()">+ Добавить товар</button><div class="field"><label>Доставка всей поставки ₸</label><input id="ad" type="number" min="0" value="0" oninput="updateArrivalCalculator()"></div><div id="arrivalCalc" class="link-note"></div><div class="link-note">Доставка распределяется между товарами пропорционально сумме закупки. Если сумма закупки по всем строкам равна нулю — пропорционально количеству. Каждая строка сохраняется отдельной FIFO-партией, но с общим номером поставки.</div><button class="btn dark full" onclick="createArrival()">Оприходовать поставку</button>`}
+function addArrivalItem(selected=''){const box=document.getElementById('arrivalItems');if(!box)return;const key='ai'+Date.now().toString(36)+Math.random().toString(36).slice(2,5),wrap=document.createElement('div');wrap.className='item arrival-item';wrap.dataset.key=key;wrap.style.marginBottom='9px';wrap.innerHTML=`<div class="field"><label>Поиск товара</label><input class="arrival-q" autocomplete="off" placeholder="Название или артикул" oninput="filterArrivalProducts(this)"></div><div class="field"><label>Товар</label><select class="arrival-product">${arrivalProductOptions(selected)}</select></div><div class="two"><div class="field"><label>Количество</label><input class="arrival-qty" type="number" min="1" oninput="updateArrivalCalculator()"></div><div class="field"><label>Сумма закупки ₸</label><input class="arrival-buy" type="number" min="0" oninput="updateArrivalCalculator()"></div></div><div class="muted arrival-cost">Себестоимость: —</div><button type="button" class="btn danger full" onclick="removeArrivalItem(this)">Убрать товар</button>`;box.appendChild(wrap);updateArrivalCalculator();setTimeout(()=>wrap.querySelector('.arrival-q')?.focus(),0)}
+function removeArrivalItem(btn){const rows=document.querySelectorAll('.arrival-item');if(rows.length<=1)return alert('В поставке должен остаться хотя бы один товар');btn.closest('.arrival-item')?.remove();updateArrivalCalculator()}
+function filterArrivalProducts(input){const row=input.closest('.arrival-item'),sel=row?.querySelector('.arrival-product');if(!sel)return;const q=normalizeName(input.value),selected=String(sel.value||'');sel.innerHTML='';for(const p of state.products){const hay=normalizeName([p.name,p.kaspi,p.wb,p.ozon].filter(Boolean).join(' '));if(q&&!hay.includes(q))continue;const o=document.createElement('option');o.value=p.id;o.textContent=p.name;sel.appendChild(o)}if(selected&&[...sel.options].some(o=>o.value===selected))sel.value=selected;if(!sel.options.length){const o=document.createElement('option');o.value='';o.textContent='Ничего не найдено';o.disabled=true;o.selected=true;sel.appendChild(o)}updateArrivalCalculator()}
+function arrivalDraftRows(){return [...document.querySelectorAll('.arrival-item')].map(row=>({row,productId:row.querySelector('.arrival-product')?.value||'',qty:Math.max(0,Number(row.querySelector('.arrival-qty')?.value)||0),buy:Math.max(0,Number(row.querySelector('.arrival-buy')?.value)||0)}))}
+function updateArrivalCalculator(){const rows=arrivalDraftRows(),delivery=Math.max(0,Number(document.getElementById('ad')?.value)||0),totalQty=rows.reduce((a,x)=>a+x.qty,0),totalBuy=rows.reduce((a,x)=>a+x.buy,0),valid=rows.filter(x=>x.qty>0),weightBase=totalBuy>0?totalBuy:totalQty;for(const x of rows){const cost=x.row.querySelector('.arrival-cost');if(!cost)continue;if(x.qty<=0){cost.textContent='Себестоимость: —';continue}const weight=totalBuy>0?x.buy:x.qty,share=weightBase>0?delivery*(weight/weightBase):0,landed=(x.buy+share)/x.qty,unitBuy=x.buy/x.qty;cost.textContent=`Закуп: ${fmt(unitBuy)}/шт. · доставка: ${fmt(share)} · себестоимость: ${fmt(landed)}/шт.`}const box=document.getElementById('arrivalCalc');if(box)box.innerHTML=`<b>Калькулятор поставки</b><div style="margin-top:6px">Позиций: ${valid.length} · товаров: ${totalQty} шт.</div><div>Закупка: ${fmt(totalBuy)} · доставка: ${fmt(delivery)}</div><div><b>Итого вложено: ${fmt(totalBuy+delivery)}</b></div>`}
+function createArrival(){const rows=arrivalDraftRows(),delivery=Math.max(0,Number(document.getElementById('ad')?.value)||0),b=document.getElementById('ab')?.value||'',receivedAt=localDateStart(document.getElementById('ar')?.value),valid=rows.filter(x=>x.productId&&x.qty>0);if(!valid.length)return alert('Добавьте хотя бы один товар и количество');if(valid.some(x=>!prod(x.productId)))return alert('Проверьте выбранные товары');const ids=valid.map(x=>x.productId);if(new Set(ids).size!==ids.length)return alert('Один и тот же товар добавлен в поставку несколько раз. Объедините количество в одну строку.');const totalQty=valid.reduce((a,x)=>a+x.qty,0),totalBuy=valid.reduce((a,x)=>a+x.buy,0),weightBase=totalBuy>0?totalBuy:totalQty,shipmentId='ship-'+id(),now=Date.now();for(const x of valid){const p=prod(x.productId),weight=totalBuy>0?x.buy:x.qty,deliveryShare=weightBase>0?delivery*(weight/weightBase):0,unitCost=x.buy/x.qty,landedUnitCost=(x.buy+deliveryShare)/x.qty;p.stock=(Number(p.stock)||0)+x.qty;state.purchases.unshift({id:id(),shipmentId,shipmentPurchaseTotal:totalBuy,shipmentDeliveryTotal:delivery,productId:p.id,qty:x.qty,remainingQty:x.qty,unitCost,delivery:deliveryShare,landedUnitCost,batch:b,receivedAt,date:now});refreshProductAverageCost(p);log('приход',p.id,x.qty,`поставка ${b||shipmentId} · закуп ${fmt(x.buy)} · доставка ${fmt(deliveryShare)} · себестоимость ${fmt(landedUnitCost)}/шт.`)}save();closeModal();render()}
+'''
+          s=s[:start]+new+s[end:]
+          old="else if(type==='arrival')s=arrivalForm();"
+          newopen="else if(type==='arrival'){s=arrivalForm();setTimeout(()=>{if(!document.querySelector('.arrival-item'))addArrivalItem()},0);}"
+          if old not in s: raise SystemExit('openModal arrival marker not found')
+          s=s.replace(old,newopen,1)
+          # old arrival search enhancer is now obsolete and can interfere; make it a no-op if present
+          s=re.sub(r'function enhanceArrivalProductSearch\(\)\{.*?\}\nconst arrivalSearchObserver=.*?;\n',"function enhanceArrivalProductSearch(){}\n",s,flags=re.S)
+          scripts=re.findall(r'<script>(.*?)</script>',s,flags=re.S|re.I)
+          Path('/tmp/app.js').write_text('\n'.join(scripts),encoding='utf-8')
+          p.write_text(s,encoding='utf-8')
+          Path('.github/workflows/multi-item-arrival-calculator.yml').unlink()
+      - name: Check JS
+        run: node --check /tmp/app.js
+      - name: Commit
+        run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add -A
+          git commit -m "Support multi-item arrivals with landed-cost calculator"
+          git push origin HEAD:main
