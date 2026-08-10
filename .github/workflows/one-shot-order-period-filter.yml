@@ -60,20 +60,6 @@ jobs:
           once(old_empty,new_empty,'period empty state')
 
           p.write_text(s,encoding='utf-8')
-
-          smoke=Path('.github/workflows/smoke-test.yml')
-          t=smoke.read_text(encoding='utf-8')
-          marker="'id=\"koQty\"','id=\"koAmount\"','function marketplaceOrderTotals('"
-          replacement="'id=\"koQty\"','id=\"koAmount\"','id=\"orderPeriod\"','data-order-period=\"yesterday\"','data-order-period=\"week\"','data-order-period=\"month\"','id=\"orderCustomRange\"','function orderPeriodBounds()','function filterMarketplaceOrdersByPeriod(','function marketplaceOrderTotals('"
-          if marker not in t:
-              raise SystemExit('smoke marker insertion point not found')
-          t=t.replace(marker,replacement,1)
-          live="grep -q 'id=\"koAmount\"' /tmp/site.html\n"
-          live_new=live+"          grep -q 'id=\"orderPeriod\"' /tmp/site.html\n          grep -q 'data-order-period=\"yesterday\"' /tmp/site.html\n          grep -q 'data-order-period=\"week\"' /tmp/site.html\n          grep -q 'data-order-period=\"month\"' /tmp/site.html\n          grep -q 'id=\"orderCustomRange\"' /tmp/site.html\n          grep -q 'function filterMarketplaceOrdersByPeriod(' /tmp/site.html\n"
-          if live not in t:
-              raise SystemExit('live smoke insertion point not found')
-          t=t.replace(live,live_new,1)
-          smoke.write_text(t,encoding='utf-8')
           PY
       - name: Validate syntax
         run: |
@@ -87,9 +73,8 @@ jobs:
           node --check /tmp/app.js
       - name: Commit patch
         run: |
-          rm .github/workflows/one-shot-order-period-filter.yml
           git config user.name '7masok'
           git config user.email '7masok@gmail.com'
-          git add index.html .github/workflows/smoke-test.yml .github/workflows/one-shot-order-period-filter.yml
+          git add index.html
           git commit -m 'Add order date period filter'
           git push
