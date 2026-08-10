@@ -1,5 +1,5 @@
 # Warehouse, marketplace cache, shared-stock and financial checks.
-# Re-run after product detail delivery-expense update.
+# Re-run after home section cleanup.
 name: Millioner smoke test
 
 on:
