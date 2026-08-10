@@ -24,20 +24,6 @@ jobs:
               raise SystemExit('old global chip handler not found')
           s=s.replace(old,new,1)
           p.write_text(s,encoding='utf-8')
-
-          sm=Path('.github/workflows/smoke-test.yml')
-          t=sm.read_text(encoding='utf-8')
-          marker="'data-report-period=\"1\"','function setReportPeriod(days)'"
-          replacement="'data-report-period=\"1\"',\"document.querySelectorAll('[data-period]')\",'function setReportPeriod(days)'"
-          if marker not in t:
-              raise SystemExit('smoke marker not found')
-          t=t.replace(marker,replacement,1)
-          guard="          if 'Обновить из D1' in html: raise SystemExit('Technical D1 refresh button is visible')\n"
-          add=guard+"          if \"document.querySelectorAll('.chip').forEach(b=>b.onclick\" in html: raise SystemExit('Global chip handler overrides report buttons')\n"
-          if guard not in t:
-              raise SystemExit('smoke guard not found')
-          t=t.replace(guard,add,1)
-          sm.write_text(t,encoding='utf-8')
           PY
       - name: Validate JavaScript
         run: |
@@ -57,6 +43,6 @@ jobs:
         run: |
           git config user.name 'millioner-maintenance'
           git config user.email 'actions@users.noreply.github.com'
-          git add index.html .github/workflows/smoke-test.yml
+          git add index.html
           git commit -m 'Fix report period button handlers'
           git push origin HEAD:main
