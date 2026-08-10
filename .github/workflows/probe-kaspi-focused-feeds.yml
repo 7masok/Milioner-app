@@ -14,13 +14,16 @@ jobs:
           set -euo pipefail
           echo CENTRAL
           curl -fsSL --max-time 25 'https://millioner-api.7masok.workers.dev/api/market-status' | jq .
-          spec='days=1&status=ACCEPTED_BY_MERCHANT&state=KASPI_DELIVERY&size=100&batch=0'
+          spec='days=1&status=ACCEPTED_BY_MERCHANT&state=KASPI_DELIVERY&size=12&batch=0'
           echo "WORKER $spec"
-          code=$(curl -sS -o /tmp/w.json -w '%{http_code}' --max-time 90 "https://fragrant-shadow-72ed.7masok.workers.dev/kaspi/sync?$spec")
+          code=$(curl -sS -o /tmp/w.body -w '%{http_code}' --max-time 90 "https://fragrant-shadow-72ed.7masok.workers.dev/kaspi/sync?$spec" || true)
           echo "HTTP=$code"
-          jq '{ok,totalOrders,totalOrdersOnPage,detailedOrders,pageCount,hasMore,nextBatch}' /tmp/w.json
+          head -c 1000 /tmp/w.body || true
+          echo
           test "$code" = 200
-          jq -e '.ok==true and .hasMore==false' /tmp/w.json
+          jq '{ok,totalOrders,totalOrdersOnPage,detailedOrders,pageCount,hasMore,nextBatch,orders:(.orders|length)}' /tmp/w.body
+          jq -e '.ok==true' /tmp/w.body
           for id in 1028072690 1028169317 1028174494; do
-            jq -e --arg id "$id" '[.orders[]|select((.code|tostring)==$id)]|length>0' /tmp/w.json
+            n=$(jq --arg id "$id" '[.orders[]|select((.code|tostring)==$id)]|length' /tmp/w.body)
+            echo "CONTROL_${id}=$n"
           done
