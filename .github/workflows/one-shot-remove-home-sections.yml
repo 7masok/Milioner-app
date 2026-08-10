@@ -1,0 +1,42 @@
+name: One-shot remove home sections
+on:
+  push:
+    branches: [main]
+    paths: ['.github/workflows/one-shot-remove-home-sections.yml']
+permissions:
+  contents: write
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Remove attention and recent sections from home
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          p = Path('index.html')
+          s = p.read_text(encoding='utf-8')
+          old = '<div id="kaspiOrderList" class="order-list"></div><h2>Товары, требующие внимания</h2><div id="attention" class="list"></div><h2>Последние движения</h2><div id="recent" class="list"></div>'
+          new = '<div id="kaspiOrderList" class="order-list"></div><div id="attention" hidden></div><div id="recent" hidden></div>'
+          if old not in s:
+              raise SystemExit('home sections marker missing')
+          s = s.replace(old, new, 1)
+          if 'Товары, требующие внимания' in s or 'Последние движения</h2>' in s:
+              raise SystemExit('home sections still visible')
+          p.write_text(s, encoding='utf-8')
+          PY
+          python - <<'PY' > /tmp/app.js
+          from pathlib import Path
+          import re
+          s = Path('index.html').read_text(encoding='utf-8')
+          print('\n'.join(re.findall(r'<script>(.*?)</script>', s, flags=re.S|re.I)))
+          PY
+          node --check /tmp/app.js
+      - name: Commit
+        run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add index.html
+          git diff --cached --quiet && exit 0
+          git commit -m 'Remove attention and recent sections from home'
+          git push
