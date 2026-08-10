@@ -1,5 +1,5 @@
 # Warehouse, marketplace cache, shared-stock and financial checks.
-# Guard home stock/order summary placement, date filters and published Pages host.
+# Guard home order periods, reserve-free warehouse flow and published Pages host.
 name: Millioner smoke test
 
 on:
@@ -18,6 +18,7 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
       - name: Check JavaScript syntax
         run: |
           python - <<'PY'
@@ -30,34 +31,87 @@ jobs:
           PY
           node --check /tmp/app.js
           node --check cloudflare/millioner-api/src/index.js
+
       - name: Check warehouse core contract
         run: |
           python - <<'PY'
           from pathlib import Path
-          html=Path('index.html').read_text(encoding='utf-8'); api=Path('cloudflare/millioner-api/src/index.js').read_text(encoding='utf-8'); wrangler=Path('cloudflare/millioner-api/wrangler.jsonc').read_text(encoding='utf-8')
-          markers=['id="pcost"','id="ecost"','id="pstock"','id="sfee"','function financialSales()','function profitForProduct(','Прибыль 30д','id="ar" type="date"','function fifoLots(productId)','function fifoConsume(productId,qty)','landedUnitCost','fifoLots:fifo.lots','function applyMarketplaceTransitions(market,feed)','Недостаточно свободного остатка','Нельзя списать зарезервированный товар','Фактический остаток не может быть отрицательным','Promise.allSettled','function isWbTransient(error)','Последняя копия','id="wbAccountTabs"','function selectWbAccount(account)','market=WB2&limit=500','Wildberries 2 API','id="wb2ApiBadge"','id="wb2ApiStatus"','id="dotWb2"','WB_TOKEN_2',"['WB2','wb2']",'function groupMarketplaceOrders(feed)','setInterval(()=>loadSharedOrderCache({silent:true}),300000)','Google Drive · резервные копии','function backupToGoogleDrive(interactive=true)','function restoreGoogleDriveBackup(fileId)','seller_delivery_cost','marketplace_fee','fee_source','deliveryCostForSeller','function kaspiExplicitCommission(','updateKaspiOrderFinancials','apiFeeTotal','fee:apiFeePerUnit','id="pw2"','id="ew2"','WB1 артикул','WB2 артикул',"p.wb2=document.getElementById('ew2').value","wb2:document.getElementById('pw2').value",'[p.name,p.kaspi,p.wb,p.wb2,p.ozon]','Всего на складе','Доступно к продаже','Артикулы маркетплейсов',"function openProduct(pid,market='',days=30)","x.channel===market","profitLabel=market?`Прибыль ${esc(market)}",'data-report-period="1"',"document.querySelectorAll('[data-period]')",'function setReportPeriod(days)','function marketplaceProductStats(market,days=reportPeriod)','function setMarketplaceReportPeriod(days)','function reportPeriodStart(days)','function reportMarketplaceSales()','since=reportPeriodStart(reportPeriod)','since=reportPeriodStart(days)','Прибыль / шт.','Общая прибыль','function productKaspiDelivery(','Расход на доставку Kaspi','id="koQty"','id="koAmount"','id="orderPeriod"','data-order-period="today"','data-order-period="yesterday"','data-order-period="week"','data-order-period="month"','data-order-period="custom"','id="orderCustomRange"','function orderPeriodBounds()','function filterMarketplaceOrdersByPeriod(','function marketplaceOrderTotals(','grid-template-columns:repeat(3,minmax(0,1fr))']
+          html=Path('index.html').read_text(encoding='utf-8')
+          api=Path('cloudflare/millioner-api/src/index.js').read_text(encoding='utf-8')
+          wrangler=Path('cloudflare/millioner-api/wrangler.jsonc').read_text(encoding='utf-8')
+          markers=[
+            'id="pcost"','id="ecost"','id="pstock"','id="sfee"',
+            'function financialSales()','function profitForProduct(','Прибыль 30д',
+            'id="ar" type="date"','function fifoLots(productId)','function fifoConsume(productId,qty)',
+            'landedUnitCost','fifoLots:fifo.lots','function applyMarketplaceTransitions(market,feed)',
+            'Недостаточно остатка','Фактический остаток не может быть отрицательным',
+            'Promise.allSettled','function isWbTransient(error)','Последняя копия',
+            'id="wbAccountTabs"','function selectWbAccount(account)','market=WB2&limit=500',
+            'Wildberries 2 API','id="wb2ApiBadge"','id="wb2ApiStatus"','id="dotWb2"','WB_TOKEN_2',"['WB2','wb2']",
+            'function groupMarketplaceOrders(feed)','setInterval(()=>loadSharedOrderCache({silent:true}),300000)',
+            'Google Drive · резервные копии','function backupToGoogleDrive(interactive=true)','function restoreGoogleDriveBackup(fileId)',
+            'seller_delivery_cost','marketplace_fee','fee_source','deliveryCostForSeller','function kaspiExplicitCommission(',
+            'updateKaspiOrderFinancials','apiFeeTotal','fee:apiFeePerUnit','id="pw2"','id="ew2"','WB1 артикул','WB2 артикул',
+            "p.wb2=document.getElementById('ew2').value","wb2:document.getElementById('pw2').value",'[p.name,p.kaspi,p.wb,p.wb2,p.ozon]',
+            'Всего на складе','Артикулы маркетплейсов',"function openProduct(pid,market='',days=30)","x.channel===market",
+            "profitLabel=market?`Прибыль ${esc(market)}",'data-report-period="1"',"document.querySelectorAll('[data-period]')",
+            'function setReportPeriod(days)','function marketplaceProductStats(market,days=reportPeriod)',
+            'function setMarketplaceReportPeriod(days)','function reportPeriodStart(days)','function reportMarketplaceSales()',
+            'since=reportPeriodStart(reportPeriod)','since=reportPeriodStart(days)','Прибыль / шт.','Общая прибыль',
+            'function productKaspiDelivery(','Расход на доставку Kaspi','id="koQty"','id="koAmount"','id="orderPeriod"',
+            'data-order-period="today"','data-order-period="yesterday"','data-order-period="week"','data-order-period="month"',
+            'data-order-period="custom"','id="orderCustomRange"','function orderPeriodBounds()','function filterMarketplaceOrdersByPeriod(',
+            'function marketplaceOrderTotals(','grid-template-columns:repeat(3,minmax(0,1fr))'
+          ]
           missing=[m for m in markers if m not in html and m not in api]
           if missing: raise SystemExit('Missing: '+', '.join(missing))
           if 'Обновить из D1' in html: raise SystemExit('Technical D1 refresh button is visible')
           if "document.querySelectorAll('.chip').forEach(b=>b.onclick" in html: raise SystemExit('Global chip handler overrides report buttons')
           if 'raw.githubusercontent.com' in html or 'http-equiv="refresh"' in html.lower(): raise SystemExit('Pages index redirects to raw GitHub content')
+          if '<option value="reserve">' in html or '<option value="резерв">' in html or '<option value="отмена резерва">' in html:
+              raise SystemExit('Stock reserve is still exposed in UI')
+          if 'function reserved(' in html or 'state.reservations.find' in html or 'state.reservations.push' in html or "log('резерв'" in html:
+              raise SystemExit('Stock reserve runtime logic is still active')
           home=html[html.index('<section id="home"'):html.index('</section>',html.index('<section id="home"'))]
-          if not (home.index('id="mStock"') < home.index('id="koQty"') < home.index('id="koAmount"') < home.index('id="orderPeriod"') < home.index('<h2>Заказы</h2>')): raise SystemExit('Home order totals/date filters placement is wrong')
+          if not (home.index('id="mStock"') < home.index('id="koQty"') < home.index('id="koAmount"') < home.index('id="orderPeriod"') < home.index('<h2>Заказы</h2>')):
+              raise SystemExit('Home order totals/date filters placement is wrong')
           if '<div class="order-totals">' in home: raise SystemExit('Old order totals block is still below order filters')
-          start=html.index("function openProduct(pid,market='',days=30){"); end=html.index('function openModal(',start); block=html[start:end]
+          start=html.index("function openProduct(pid,market='',days=30){")
+          end=html.index('function openModal(',start)
+          block=html[start:end]
           if 'Стоимость всего остатка' in block: raise SystemExit('Stock value is still visible in product detail')
-          if 'В резерве:' in block: raise SystemExit('Reserve callout is still visible in product detail')
+          if 'В резерве:' in block or 'Доступно к продаже' in block: raise SystemExit('Reserve-derived product detail is still visible')
           if '"crons": ["*/5 * * * *"]' not in wrangler: raise SystemExit('cron mismatch')
           if 'client_secret' in html.lower(): raise SystemExit('client secret in browser')
           if 'await upsertOrderLines(env.DB, market, lines);' not in api: raise SystemExit('D1 upserts not batched')
-          print('Warehouse, two-WB, home order date filters, report periods, product delivery and marketplace profit contract OK')
+          print('Warehouse, two-WB, reserve-free stock, order periods, delivery and profit contract OK')
           PY
+
       - name: Check published site
         run: |
           set -e
           for attempt in 1 2 3 4 5 6 7 8 9 10 11 12; do
             curl -fsSL --max-time 25 'https://7masok.github.io/Milioner-app/' -o /tmp/site.html || true
-            if grep -q 'id="wbAccountTabs"' /tmp/site.html 2>/dev/null && grep -q 'id="koQty"' /tmp/site.html && grep -q 'id="koAmount"' /tmp/site.html && grep -q 'id="orderPeriod"' /tmp/site.html && grep -q 'data-order-period="yesterday"' /tmp/site.html && grep -q 'data-order-period="week"' /tmp/site.html && grep -q 'data-order-period="month"' /tmp/site.html && grep -q 'id="orderCustomRange"' /tmp/site.html && grep -q 'function filterMarketplaceOrdersByPeriod(' /tmp/site.html && grep -Fq 'grid-template-columns:repeat(3,minmax(0,1fr))' /tmp/site.html && grep -q 'function marketplaceOrderTotals(' /tmp/site.html && grep -q 'data-report-period="1"' /tmp/site.html && grep -Fq "document.querySelectorAll('[data-period]')" /tmp/site.html && ! grep -Fq "document.querySelectorAll('.chip').forEach(b=>b.onclick" /tmp/site.html && grep -q 'function reportMarketplaceSales()' /tmp/site.html && grep -q 'since=reportPeriodStart(reportPeriod)' /tmp/site.html && grep -q 'since=reportPeriodStart(days)' /tmp/site.html && grep -q 'Прибыль / шт.' /tmp/site.html && grep -q 'apiFeeTotal' /tmp/site.html && grep -q 'function productKaspiDelivery(' /tmp/site.html && grep -q 'Расход на доставку Kaspi' /tmp/site.html && ! grep -q 'Обновить из D1' /tmp/site.html && ! grep -q 'raw.githubusercontent.com' /tmp/site.html && ! grep -qi 'http-equiv="refresh"' /tmp/site.html; then break; fi
+            if grep -q 'id="wbAccountTabs"' /tmp/site.html 2>/dev/null \
+              && grep -q 'id="koQty"' /tmp/site.html \
+              && grep -q 'id="koAmount"' /tmp/site.html \
+              && grep -q 'id="orderPeriod"' /tmp/site.html \
+              && grep -q 'data-order-period="yesterday"' /tmp/site.html \
+              && grep -q 'data-order-period="week"' /tmp/site.html \
+              && grep -q 'data-order-period="month"' /tmp/site.html \
+              && grep -q 'id="orderCustomRange"' /tmp/site.html \
+              && grep -q 'function filterMarketplaceOrdersByPeriod(' /tmp/site.html \
+              && grep -q 'function marketplaceOrderTotals(' /tmp/site.html \
+              && grep -q 'function reportMarketplaceSales()' /tmp/site.html \
+              && grep -q 'function productKaspiDelivery(' /tmp/site.html \
+              && grep -q 'Расход на доставку Kaspi' /tmp/site.html \
+              && ! grep -q '<option value="reserve">' /tmp/site.html \
+              && ! grep -q '<option value="резерв">' /tmp/site.html \
+              && ! grep -q 'function reserved(' /tmp/site.html \
+              && ! grep -q 'Доступно к продаже' /tmp/site.html \
+              && ! grep -q 'Обновить из D1' /tmp/site.html \
+              && ! grep -q 'raw.githubusercontent.com' /tmp/site.html \
+              && ! grep -qi 'http-equiv="refresh"' /tmp/site.html; then break; fi
             sleep 5
           done
           grep -q 'Склад' /tmp/site.html
@@ -66,7 +120,6 @@ jobs:
           grep -q 'id="ew2"' /tmp/site.html
           grep -q 'WB2 артикул' /tmp/site.html
           grep -q 'Всего на складе' /tmp/site.html
-          grep -q 'Доступно к продаже' /tmp/site.html
           grep -q 'Артикулы маркетплейсов' /tmp/site.html
           grep -q 'id="koQty"' /tmp/site.html
           grep -q 'id="koAmount"' /tmp/site.html
@@ -79,7 +132,6 @@ jobs:
           grep -q 'id="orderCustomRange"' /tmp/site.html
           grep -q 'function orderPeriodBounds()' /tmp/site.html
           grep -q 'function filterMarketplaceOrdersByPeriod(' /tmp/site.html
-          grep -Fq 'grid-template-columns:repeat(3,minmax(0,1fr))' /tmp/site.html
           grep -q 'function marketplaceOrderTotals(' /tmp/site.html
           grep -q 'data-report-period="1"' /tmp/site.html
           grep -Fq "document.querySelectorAll('[data-period]')" /tmp/site.html
@@ -94,18 +146,28 @@ jobs:
           grep -q 'apiFeeTotal' /tmp/site.html
           grep -q 'function productKaspiDelivery(' /tmp/site.html
           grep -q 'Расход на доставку Kaspi' /tmp/site.html
+          ! grep -q '<option value="reserve">' /tmp/site.html
+          ! grep -q '<option value="резерв">' /tmp/site.html
+          ! grep -q 'function reserved(' /tmp/site.html
+          ! grep -q 'state.reservations.find' /tmp/site.html
+          ! grep -q 'state.reservations.push' /tmp/site.html
+          ! grep -q 'Доступно к продаже' /tmp/site.html
           ! grep -q 'Обновить из D1' /tmp/site.html
           ! grep -q 'raw.githubusercontent.com' /tmp/site.html
           ! grep -qi 'http-equiv="refresh"' /tmp/site.html
           ! grep -qi 'client_secret' /tmp/site.html
+
       - name: Check Millioner API health
         run: curl -fsSL --retry 4 --retry-delay 3 --max-time 25 'https://millioner-api.7masok.workers.dev/health' | jq -e '.ok == true and .d1 == true'
+
       - name: Check marketplace status and WB2 configuration
         run: |
           body=$(curl -fsSL --retry 4 --retry-delay 3 --max-time 25 'https://millioner-api.7masok.workers.dev/api/market-status')
           echo "$body" | jq -e '[.markets[]|select(.market=="WB2")][0].configured==true'
+
       - name: Inspect background sync status
         run: curl -fsSL --retry 4 --retry-delay 3 --max-time 25 'https://millioner-api.7masok.workers.dev/api/sync-status' | jq .
+
       - name: Inspect D1 marketplace order counts and Kaspi finance fields
         run: |
           for market in Kaspi WB WB2; do
@@ -117,5 +179,6 @@ jobs:
               echo "Kaspi rows with delivery cost: $(echo "$body" | jq '[.orders[]|select((.sellerDeliveryCost//0)>0)]|length')"
             fi
           done
+
       - name: Avoid unnecessary WB calls
         run: echo 'No direct WB Worker requests.'
