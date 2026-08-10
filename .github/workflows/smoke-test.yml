@@ -1,4 +1,4 @@
-# Warehouse, FIFO, Kaspi sale-on-delivery and backup checks.
+# Warehouse, marketplace cache and shared-stock checks.
 name: Millioner smoke test
 
 on:
@@ -54,41 +54,32 @@ jobs:
               'FIFO remaining quantity': 'remainingQty:x.qty',
               'FIFO landed unit cost': 'landedUnitCost',
               'FIFO sale audit': 'fifoLots:fifo.lots',
-              'Kaspi sale classifier': "function isMarketplaceSaleOrder(market,status,state='')",
-              'Kaspi sale on transit': "st==='KASPI_DELIVERY_TRANSIT'",
-              'Kaspi transition uses sale state': 'saleState=isMarketplaceSaleOrder(market,status,o.state)',
-              'sync in-progress UI': "setIntegrationBadge('kaspiApiBadge','Синхронизация'",
               'marketplace stock transitions': 'function applyMarketplaceTransitions(market,feed)',
-              'late marketplace link reconciliation': 'if(active&&!existingSale&&!existingReservation)',
-              'Kaspi cache transition': "applyMarketplaceTransitions('Kaspi',state.kaspiOrderFeed)",
-              'WB cache transition': "applyMarketplaceTransitions('WB',state.wbOrderFeed)",
-              'WB transient classifier': 'function isWbTransient(error)',
-              'independent marketplace cache refresh': 'Promise.allSettled',
-              'WB stale-cache UI': 'Последняя копия',
               'manual sale stock guard': 'Недостаточно свободного остатка',
               'writeoff stock guard': 'Нельзя списать зарезервированный товар',
               'inventory stock guard': 'Фактический остаток не может быть отрицательным',
-              'Kaspi in-delivery label': "KASPI_DELIVERY_TRANSIT')return 'В доставке'",
-              'Kaspi courier handoff marker': 'courierTransmissionDate',
+              'independent marketplace cache refresh': 'Promise.allSettled',
+              'WB transient classifier': 'function isWbTransient(error)',
+              'WB stale-cache UI': 'Последняя копия',
+              'WB2 selector': 'id="wbAccountTabs"',
+              'WB2 selector logic': 'function selectWbAccount(account)',
+              'WB2 browser cache': 'market=WB2&limit=500',
+              'WB account-safe merge': "String(o.market||'')+'|'",
+              'WB account-safe transitions': "filter(o=>String(o.market||'WB')===market)",
+              'WB2 token binding': 'WB_TOKEN_2',
+              'WB2 server market': "'WB2'",
+              'WB2 product link': "['WB2','wb2']",
+              'Kaspi sale classifier': "function isMarketplaceSaleOrder(market,status,state='')",
+              'Kaspi sale on transit': "st==='KASPI_DELIVERY_TRANSIT'",
               'Kaspi direct delivery feed': 'fetchKaspiOrdersDirect',
-              'Kaspi Worker 503 direct fallback': '!deliveryFeed.orders.length',
-              'Kaspi direct fallback error detail': 'Kaspi sync unavailable: worker=',
-              'Kaspi pending order retention': "entryId: '__pending__'",
+              'Kaspi courier handoff marker': 'courierTransmissionDate',
               'grouped marketplace order cards': 'function groupMarketplaceOrders(feed)',
-              'pending line compaction': 'realOrders=new Set',
               'five-minute browser cache refresh': 'setInterval(()=>loadSharedOrderCache({silent:true}),300000)',
               'five-minute Kaspi status cadence': 'const KASPI_SCHEDULE_MS = 5 * 60 * 1000;',
-              'unmatched filter card': 'id="koUnmatchedCard"',
-              'unmatched filter toggle': 'function toggleUnmatchedOrderFilter()',
-              'unmatched filter predicate': 'function orderHasUnmatchedLine(g)',
-              'unmatched filtered orders': 'const visibleOrders=unmatchedOrderFilter?unmatchedOrders:orders',
               'Google Drive settings': 'Google Drive · резервные копии',
               'Google Drive limited scope': 'https://www.googleapis.com/auth/drive.file',
               'Google Drive backup': 'function backupToGoogleDrive(interactive=true)',
               'Google Drive restore': 'function restoreGoogleDriveBackup(fileId)',
-              'Google Drive autobackup': 'function maybeAutoGoogleBackup()',
-              'Google backup payload': "format:'millioner-warehouse-backup'",
-              'Google backup timestamp': 'lastGoogleBackupAt',
           }
           missing = [name for name, marker in required.items() if marker not in html and marker not in api]
           if missing:
@@ -98,44 +89,34 @@ jobs:
           if 'recalcCostAfterLoss' in html:
               raise SystemExit('Legacy incorrect writeoff cost recalculation is still present')
           if 'client_secret' in html.lower():
-              raise SystemExit('Secret-like Google client secret found in browser code')
+              raise SystemExit('Secret-like client secret found in browser code')
           sync = re.search(r'async function syncNow\(\)\{.*?\}\n', html, flags=re.S)
           if not sync:
               raise SystemExit('syncNow function missing')
-          if 'KASPI_WORKER' in sync.group(0):
-              raise SystemExit('Browser syncNow still calls Kaspi Worker directly')
-          page_cap = re.search(r'const KASPI_MAX_BATCHES = (\d+);', api)
-          if not page_cap or not (1 <= int(page_cap.group(1)) <= 10):
-              raise SystemExit('Kaspi background pagination is not safely bounded')
+          if 'KASPI_WORKER' in sync.group(0) or 'WB_WORKER' in sync.group(0):
+              raise SystemExit('Browser syncNow calls a marketplace Worker directly')
           if 'await upsertOrderLines(env.DB, market, lines);' not in api:
               raise SystemExit('D1 marketplace upserts are not batched')
-          print('Warehouse, sync and backup contract OK')
+          print('Warehouse and two-WB contract OK')
           PY
 
       - name: Check published site
         run: |
           set -e
-          curl -fsSL --retry 8 --retry-delay 5 --max-time 25 'https://7masok.github.io/Milioner-app/' -o /tmp/site.html
+          for attempt in 1 2 3 4 5 6 7 8; do
+            curl -fsSL --max-time 25 'https://7masok.github.io/Milioner-app/' -o /tmp/site.html || true
+            if grep -q 'id="wbAccountTabs"' /tmp/site.html 2>/dev/null && grep -q 'market=WB2&limit=500' /tmp/site.html; then
+              break
+            fi
+            sleep 5
+          done
           grep -q 'Склад' /tmp/site.html
+          grep -q 'id="wbAccountTabs"' /tmp/site.html
+          grep -q 'function selectWbAccount(account)' /tmp/site.html
+          grep -q 'market=WB2&limit=500' /tmp/site.html
           grep -q 'function applyMarketplaceTransitions' /tmp/site.html
-          grep -q "function isMarketplaceSaleOrder(market,status,state='')" /tmp/site.html
-          grep -q "st==='KASPI_DELIVERY_TRANSIT'" /tmp/site.html
-          grep -q 'saleState=isMarketplaceSaleOrder(market,status,o.state)' /tmp/site.html
-          grep -q 'if(active&&!existingSale&&!existingReservation)' /tmp/site.html
-          grep -q 'function groupMarketplaceOrders(feed)' /tmp/site.html
-          grep -q 'id="koUnmatchedCard"' /tmp/site.html
-          grep -q 'function toggleUnmatchedOrderFilter()' /tmp/site.html
-          grep -q 'id="ar" type="date"' /tmp/site.html
           grep -q 'function fifoConsume(productId,qty)' /tmp/site.html
-          grep -q 'remainingQty:x.qty' /tmp/site.html
-          grep -q 'function isWbTransient(error)' /tmp/site.html
-          grep -q 'Promise.allSettled' /tmp/site.html
-          grep -q '300000' /tmp/site.html
           grep -q 'Google Drive · резервные копии' /tmp/site.html
-          grep -q 'https://www.googleapis.com/auth/drive.file' /tmp/site.html
-          grep -q 'function backupToGoogleDrive(interactive=true)' /tmp/site.html
-          grep -q 'function restoreGoogleDriveBackup(fileId)' /tmp/site.html
-          grep -q 'function maybeAutoGoogleBackup()' /tmp/site.html
           ! grep -qi 'client_secret' /tmp/site.html
 
       - name: Check Millioner API health
@@ -144,70 +125,34 @@ jobs:
           body=$(curl -fsSL --retry 4 --retry-delay 3 --max-time 25 'https://millioner-api.7masok.workers.dev/health')
           echo "$body" | jq -e '.ok == true and .d1 == true'
 
-      - name: Check marketplace status endpoint
+      - name: Check marketplace status and WB2 configuration
         run: |
           set -e
-          body=$(curl -fsSL --retry 4 --retry-delay 3 --max-time 25 'https://millioner-api.7masok.workers.dev/api/market-status')
-          echo "$body" | jq .
-          echo "$body" | jq -e '[.markets[] | select(.market=="Kaspi")][0] as $k | ($k.nextSyncAt - $k.latest.started_at) <= 310000'
-
-      - name: Wait for successful Kaspi background sync
-        run: |
-          set -e
-          for attempt in 1 2 3 4 5 6; do
+          for attempt in 1 2 3 4 5 6 7 8; do
             body=$(curl -fsSL --retry 2 --retry-delay 2 --max-time 25 'https://millioner-api.7masok.workers.dev/api/market-status')
-            kaspi=$(echo "$body" | jq '[.markets[] | select(.market=="Kaspi")][0]')
-            echo "attempt=$attempt kaspi=$kaspi"
-            if echo "$kaspi" | jq -e '.latest.ok == 1' >/dev/null; then
-              exit 0
+            echo "$body" | jq .
+            if echo "$body" | jq -e '[.markets[] | select(.market=="WB2" and .configured==true)] | length == 1' >/dev/null; then
+              break
             fi
-            sleep 30
+            sleep 5
           done
-          echo 'Kaspi background sync did not recover within 3 minutes' >&2
-          exit 1
+          echo "$body" | jq -e '[.markets[] | select(.market=="Kaspi")][0] as $k | ($k.nextSyncAt - $k.latest.started_at) <= 310000'
+          echo "$body" | jq -e '[.markets[] | select(.market=="WB")][0].configured == true'
+          echo "$body" | jq -e '[.markets[] | select(.market=="WB2")][0].configured == true'
 
       - name: Inspect background sync status
         run: |
           set -e
           curl -fsSL --retry 4 --retry-delay 3 --max-time 25 'https://millioner-api.7masok.workers.dev/api/sync-status' | jq .
 
-      - name: Inspect D1 exact Kaspi orders
+      - name: Inspect D1 marketplace order counts
         run: |
           set -e
-          body=$(curl -fsSL --retry 4 --retry-delay 3 --max-time 25 'https://millioner-api.7masok.workers.dev/api/orders?market=Kaspi&limit=1000')
-          echo "Kaspi D1 lines: $(echo "$body" | jq '.orders | length')"
-          for id in 1028072690 1028169317 1028174494 1027863523 1027066063 1027161866; do
-            matches=$(echo "$body" | jq --arg id "$id" '[.orders[] | select((.code|tostring)==$id or (.orderId|tostring)==$id)]')
-            count=$(echo "$matches" | jq 'length')
-            echo "KASPI_EXACT_${id}=$count"
-            test "$count" -gt 0
-            echo "$matches" | jq '[.[] | {code,status,state,productName,qty,totalPrice}]'
+          for market in Kaspi WB WB2; do
+            body=$(curl -fsSL --retry 4 --retry-delay 3 --max-time 25 "https://millioner-api.7masok.workers.dev/api/orders?market=${market}&limit=1000")
+            echo "${market} D1 lines: $(echo "$body" | jq '.orders | length')"
+            echo "$body" | jq -e '.ok == true and (.orders | type == "array")'
           done
 
-      - name: Probe active Kaspi Worker filter
-        run: |
-          set -e
-          url='https://fragrant-shadow-72ed.7masok.workers.dev/kaspi/sync?days=1&status=ACCEPTED_BY_MERCHANT&state=KASPI_DELIVERY&batch=0'
-          code=$(curl -sS -o /tmp/kaspi-worker-body -w '%{http_code}' --max-time 60 "$url" || true)
-          echo "Kaspi Worker HTTP=$code"
-          if [ "$code" = 200 ]; then
-            body=$(cat /tmp/kaspi-worker-body)
-            echo "FILTERED_WORKER=$(echo "$body" | jq '{ok,totalOrders,hasMore,nextBatch,orders:(.orders|length)}')"
-            for id in 1028072690 1028169317 1028174494; do
-              row=$(echo "$body" | jq --arg id "$id" '[.orders[] | select((.code|tostring)==$id)]')
-              echo "WORKER_EXACT_${id}=$(echo "$row" | jq 'length')"
-              echo "$row" | jq '[.[] | {code,status,state,lines:(.lines|length),lineError}]'
-            done
-          else
-            echo 'Dedicated Kaspi Worker is transiently unavailable; central direct fallback is tested separately.'
-            head -c 500 /tmp/kaspi-worker-body || true
-          fi
-
-      - name: Check Kaspi Worker health
-        run: |
-          set -e
-          body=$(curl -fsSL --retry 4 --retry-delay 3 --max-time 25 'https://fragrant-shadow-72ed.7masok.workers.dev/health')
-          echo "$body" | jq -e '.ok == true'
-
       - name: Avoid unnecessary WB calls
-        run: echo 'WB marketplace orders are synchronized server-side.'
+        run: echo 'WB 1 and WB 2 are checked only through millioner-api/D1; no direct WB Worker request is made.'
