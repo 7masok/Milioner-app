@@ -19,6 +19,20 @@ jobs:
         run: git pull --rebase origin main
       - name: Patch current files
         run: python tools/add_wb2.py
+      - name: Fix generated JS escaping
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          p=Path('index.html')
+          s=p.read_text(encoding='utf-8')
+          bad="alert('Ошибка общей базы:\n'+String(e.message||e))"
+          # In the generated working copy the Python triple-quoted loader may contain a literal newline.
+          bad_literal="alert('Ошибка общей базы:\n'+String(e.message||e))".replace('\\n','\n')
+          good="alert('Ошибка общей базы:\\n'+String(e.message||e))"
+          if bad_literal in s:
+              s=s.replace(bad_literal,good,1)
+          p.write_text(s,encoding='utf-8')
+          PY
       - name: Validate
         run: |
           python - <<'PY'
