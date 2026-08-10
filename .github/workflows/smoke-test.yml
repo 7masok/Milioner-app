@@ -63,7 +63,7 @@ jobs:
               'Kaspi cache transition': "applyMarketplaceTransitions('Kaspi',state.kaspiOrderFeed)",
               'WB cache transition': "applyMarketplaceTransitions('WB',state.wbOrderFeed)",
               'manual sale stock guard': 'Недостаточно свободного остатка',
-              'writeoff stock guard': 'Нельзя списать больше остатка',
+              'writeoff stock guard': 'Нельзя списать зарезервированный товар',
               'inventory stock guard': 'Фактический остаток не может быть отрицательным',
               'Kaspi in-delivery label': "KASPI_DELIVERY_TRANSIT')return 'В доставке'",
               'Kaspi courier handoff marker': 'courierTransmissionDate',
