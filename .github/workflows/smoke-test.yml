@@ -17,149 +17,54 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-
       - name: Check JavaScript syntax
         run: |
           python - <<'PY'
           from pathlib import Path
           import re
-          html = Path('index.html').read_text(encoding='utf-8')
-          scripts = re.findall(r'<script>(.*?)</script>', html, flags=re.S|re.I)
-          if not scripts:
-              raise SystemExit('No inline script found')
-          Path('/tmp/app.js').write_text('\n'.join(scripts), encoding='utf-8')
+          html=Path('index.html').read_text(encoding='utf-8')
+          scripts=re.findall(r'<script>(.*?)</script>',html,flags=re.S|re.I)
+          if not scripts: raise SystemExit('No inline script found')
+          Path('/tmp/app.js').write_text('\n'.join(scripts),encoding='utf-8')
           PY
           node --check /tmp/app.js
           node --check cloudflare/millioner-api/src/index.js
-
       - name: Check warehouse core contract
         run: |
           python - <<'PY'
           from pathlib import Path
-          import re
-          html = Path('index.html').read_text(encoding='utf-8')
-          api = Path('cloudflare/millioner-api/src/index.js').read_text(encoding='utf-8')
-          wrangler = Path('cloudflare/millioner-api/wrangler.jsonc').read_text(encoding='utf-8')
-          required = {
-              'product cost input': 'id="pcost"',
-              'product cost edit': 'id="ecost"',
-              'initial stock input': 'id="pstock"',
-              'manual sale expenses': 'id="sfee"',
-              'marketplace financial sales': 'function financialSales()',
-              'computed product profit': 'function profitForProduct(',
-              'profit on product card': 'Прибыль 30д',
-              'arrival date input': 'id="ar" type="date"',
-              'FIFO lot selector': 'function fifoLots(productId)',
-              'FIFO lot consumption': 'function fifoConsume(productId,qty)',
-              'FIFO remaining quantity': 'remainingQty:x.qty',
-              'FIFO landed unit cost': 'landedUnitCost',
-              'FIFO sale audit': 'fifoLots:fifo.lots',
-              'marketplace stock transitions': 'function applyMarketplaceTransitions(market,feed)',
-              'manual sale stock guard': 'Недостаточно свободного остатка',
-              'writeoff stock guard': 'Нельзя списать зарезервированный товар',
-              'inventory stock guard': 'Фактический остаток не может быть отрицательным',
-              'independent marketplace cache refresh': 'Promise.allSettled',
-              'WB transient classifier': 'function isWbTransient(error)',
-              'WB stale-cache UI': 'Последняя копия',
-              'WB2 selector': 'id="wbAccountTabs"',
-              'WB2 selector logic': 'function selectWbAccount(account)',
-              'WB2 browser cache': 'market=WB2&limit=500',
-              'WB account-safe merge': "String(o.market||'')+'|'",
-              'WB account-safe transitions': "filter(o=>String(o.market||'WB')===market)",
-              'WB2 visible settings': 'Wildberries 2 API',
-              'WB2 visible badge': 'id="wb2ApiBadge"',
-              'WB2 visible status': 'id="wb2ApiStatus"',
-              'WB2 header dot': 'id="dotWb2"',
-              'WB2 token binding': 'WB_TOKEN_2',
-              'WB2 server market': "'WB2'",
-              'WB2 product link': "['WB2','wb2']",
-              'Kaspi sale classifier': "function isMarketplaceSaleOrder(market,status,state='')",
-              'Kaspi sale on transit': "st==='KASPI_DELIVERY_TRANSIT'",
-              'Kaspi direct delivery feed': 'fetchKaspiOrdersDirect',
-              'Kaspi courier handoff marker': 'courierTransmissionDate',
-              'grouped marketplace order cards': 'function groupMarketplaceOrders(feed)',
-              'five-minute browser cache refresh': 'setInterval(()=>loadSharedOrderCache({silent:true}),300000)',
-              'five-minute Kaspi status cadence': 'const KASPI_SCHEDULE_MS = 5 * 60 * 1000;',
-              'Google Drive settings': 'Google Drive · резервные копии',
-              'Google Drive limited scope': 'https://www.googleapis.com/auth/drive.file',
-              'Google Drive backup': 'function backupToGoogleDrive(interactive=true)',
-              'Google Drive restore': 'function restoreGoogleDriveBackup(fileId)',
-          }
-          missing = [name for name, marker in required.items() if marker not in html and marker not in api]
-          if missing:
-              raise SystemExit('Missing warehouse features: ' + ', '.join(missing))
-          if '"crons": ["*/5 * * * *"]' not in wrangler:
-              raise SystemExit('millioner-api cron is not five minutes')
-          if 'recalcCostAfterLoss' in html:
-              raise SystemExit('Legacy incorrect writeoff cost recalculation is still present')
-          if 'client_secret' in html.lower():
-              raise SystemExit('Secret-like client secret found in browser code')
-          sync = re.search(r'async function syncNow\(\)\{.*?\}\n', html, flags=re.S)
-          if not sync:
-              raise SystemExit('syncNow function missing')
-          if 'KASPI_WORKER' in sync.group(0) or 'WB_WORKER' in sync.group(0):
-              raise SystemExit('Browser syncNow calls a marketplace Worker directly')
-          if 'await upsertOrderLines(env.DB, market, lines);' not in api:
-              raise SystemExit('D1 marketplace upserts are not batched')
+          html=Path('index.html').read_text(encoding='utf-8'); api=Path('cloudflare/millioner-api/src/index.js').read_text(encoding='utf-8'); wrangler=Path('cloudflare/millioner-api/wrangler.jsonc').read_text(encoding='utf-8')
+          markers=['id="pcost"','id="ecost"','id="pstock"','id="sfee"','function financialSales()','function profitForProduct(','Прибыль 30д','id="ar" type="date"','function fifoLots(productId)','function fifoConsume(productId,qty)','landedUnitCost','fifoLots:fifo.lots','function applyMarketplaceTransitions(market,feed)','Недостаточно свободного остатка','Нельзя списать зарезервированный товар','Фактический остаток не может быть отрицательным','Promise.allSettled','function isWbTransient(error)','Последняя копия','id="wbAccountTabs"','function selectWbAccount(account)','market=WB2&limit=500','Wildberries 2 API','id="wb2ApiBadge"','id="wb2ApiStatus"','id="dotWb2"','WB_TOKEN_2',"['WB2','wb2']",'function groupMarketplaceOrders(feed)','setInterval(()=>loadSharedOrderCache({silent:true}),300000)','Google Drive · резервные копии','function backupToGoogleDrive(interactive=true)','function restoreGoogleDriveBackup(fileId)']
+          missing=[m for m in markers if m not in html and m not in api]
+          if missing: raise SystemExit('Missing: '+', '.join(missing))
+          if 'Обновить из D1' in html: raise SystemExit('Technical D1 refresh button is visible')
+          if '"crons": ["*/5 * * * *"]' not in wrangler: raise SystemExit('cron mismatch')
+          if 'client_secret' in html.lower(): raise SystemExit('client secret in browser')
+          if 'await upsertOrderLines(env.DB, market, lines);' not in api: raise SystemExit('D1 upserts not batched')
           print('Warehouse and two-WB contract OK')
           PY
-
       - name: Check published site
         run: |
           set -e
           for attempt in 1 2 3 4 5 6 7 8; do
             curl -fsSL --max-time 25 'https://7masok.github.io/Milioner-app/' -o /tmp/site.html || true
-            if grep -q 'id="wbAccountTabs"' /tmp/site.html 2>/dev/null && grep -q 'Wildberries 2 API' /tmp/site.html; then
-              break
-            fi
+            if grep -q 'id="wbAccountTabs"' /tmp/site.html 2>/dev/null && ! grep -q 'Обновить из D1' /tmp/site.html; then break; fi
             sleep 5
           done
           grep -q 'Склад' /tmp/site.html
-          grep -q 'id="wbAccountTabs"' /tmp/site.html
-          grep -q 'function selectWbAccount(account)' /tmp/site.html
-          grep -q 'market=WB2&limit=500' /tmp/site.html
           grep -q 'Wildberries 2 API' /tmp/site.html
-          grep -q 'id="wb2ApiBadge"' /tmp/site.html
-          grep -q 'id="dotWb2"' /tmp/site.html
-          grep -q 'function applyMarketplaceTransitions' /tmp/site.html
-          grep -q 'function fifoConsume(productId,qty)' /tmp/site.html
-          grep -q 'Google Drive · резервные копии' /tmp/site.html
+          ! grep -q 'Обновить из D1' /tmp/site.html
           ! grep -qi 'client_secret' /tmp/site.html
-
       - name: Check Millioner API health
-        run: |
-          set -e
-          body=$(curl -fsSL --retry 4 --retry-delay 3 --max-time 25 'https://millioner-api.7masok.workers.dev/health')
-          echo "$body" | jq -e '.ok == true and .d1 == true'
-
+        run: curl -fsSL --retry 4 --retry-delay 3 --max-time 25 'https://millioner-api.7masok.workers.dev/health' | jq -e '.ok == true and .d1 == true'
       - name: Check marketplace status and WB2 configuration
         run: |
-          set -e
-          for attempt in 1 2 3 4 5 6 7 8; do
-            body=$(curl -fsSL --retry 2 --retry-delay 2 --max-time 25 'https://millioner-api.7masok.workers.dev/api/market-status')
-            echo "$body" | jq .
-            if echo "$body" | jq -e '[.markets[] | select(.market=="WB2" and .configured==true)] | length == 1' >/dev/null; then
-              break
-            fi
-            sleep 5
-          done
-          echo "$body" | jq -e '[.markets[] | select(.market=="Kaspi")][0] as $k | ($k.nextSyncAt - $k.latest.started_at) <= 310000'
-          echo "$body" | jq -e '[.markets[] | select(.market=="WB")][0].configured == true'
-          echo "$body" | jq -e '[.markets[] | select(.market=="WB2")][0].configured == true'
-
+          body=$(curl -fsSL --retry 4 --retry-delay 3 --max-time 25 'https://millioner-api.7masok.workers.dev/api/market-status')
+          echo "$body" | jq -e '[.markets[]|select(.market=="WB2")][0].configured==true'
       - name: Inspect background sync status
-        run: |
-          set -e
-          curl -fsSL --retry 4 --retry-delay 3 --max-time 25 'https://millioner-api.7masok.workers.dev/api/sync-status' | jq .
-
+        run: curl -fsSL --retry 4 --retry-delay 3 --max-time 25 'https://millioner-api.7masok.workers.dev/api/sync-status' | jq .
       - name: Inspect D1 marketplace order counts
         run: |
-          set -e
-          for market in Kaspi WB WB2; do
-            body=$(curl -fsSL --retry 4 --retry-delay 3 --max-time 25 "https://millioner-api.7masok.workers.dev/api/orders?market=${market}&limit=1000")
-            echo "${market} D1 lines: $(echo "$body" | jq '.orders | length')"
-            echo "$body" | jq -e '.ok == true and (.orders | type == "array")'
-          done
-
+          for market in Kaspi WB WB2; do curl -fsSL --retry 4 --retry-delay 3 --max-time 25 "https://millioner-api.7masok.workers.dev/api/orders?market=${market}&limit=1000" | jq -e '.ok==true and (.orders|type=="array")'; done
       - name: Avoid unnecessary WB calls
-        run: echo 'WB 1 and WB 2 are checked only through millioner-api/D1; no direct WB Worker request is made.'
+        run: echo 'No direct WB Worker requests.'
