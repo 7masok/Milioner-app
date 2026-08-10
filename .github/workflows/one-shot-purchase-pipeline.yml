@@ -1,4 +1,4 @@
-name: One-time purchase totals patch
+name: One-time purchase shipment editor patch
 on:
   push:
     branches: [main]
@@ -11,9 +11,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Apply purchase totals patch
+      - name: Apply purchase shipment editor patch
         run: python tools/patch_purchase_pipeline.py
-      - name: Validate JavaScript
+      - name: Validate JavaScript and editor markers
         run: |
           python - <<'PY'
           from pathlib import Path
@@ -24,15 +24,14 @@ jobs:
           Path('/tmp/app.js').write_text('\n'.join(scripts),encoding='utf-8')
           PY
           node --check /tmp/app.js
-          grep -q 'id="porBuyTotal"' index.html
-          grep -q 'id="porDelivery"' index.html
-          grep -q 'Всего оплачено' index.html
-          grep -q 'deliveryValue=Math.round(t.delivery' index.html
-          ! grep -q 'class="purchase-buy"' index.html
-      - name: Commit purchase totals UX
+          grep -q 'function openEditPurchaseShipment(' index.html
+          grep -q 'function savePurchaseShipmentEdit(' index.html
+          grep -q 'Редактировать поставку' index.html
+          grep -q 'Полученную поставку редактировать нельзя' index.html
+      - name: Commit purchase shipment editor
         run: |
           git config user.name '7masok'
           git config user.email '7masok@gmail.com'
           git add index.html
-          git commit -m 'Add total purchase and delivery inputs'
+          git commit -m 'Add purchase shipment editing'
           git push
