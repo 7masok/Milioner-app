@@ -230,7 +230,7 @@ async function fetchKaspi(env) {
       days: '1',
       status: 'ACCEPTED_BY_MERCHANT',
       state: 'KASPI_DELIVERY',
-      size: '100'
+      size: '12'
     });
   } catch (e) {
     activeError = String(e?.message || e);
