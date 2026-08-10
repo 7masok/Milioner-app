@@ -15,8 +15,8 @@ jobs:
           fetch-depth: 0
       - name: Sync latest main
         run: git pull --rebase origin main
-      - name: Patch report
-        run: python .github/scripts/patch-marketplace-product-report.py
+      - name: Patch report periods and product metrics
+        run: python .github/scripts/patch-report-period-ui.py
       - name: Validate JavaScript
         run: |
           python - <<'PY'
@@ -26,7 +26,7 @@ jobs:
           scripts=re.findall(r'<script>(.*?)</script>',html,flags=re.S|re.I)
           if not scripts: raise SystemExit('script missing')
           Path('/tmp/app.js').write_text('\n'.join(scripts),encoding='utf-8')
-          for marker in ['function marketplaceProductStats(market)','function openMarketplaceReport(market)']:
+          for marker in ['data-report-period="1"','function setReportPeriod(days)','function marketplaceProductStats(market,days=reportPeriod)','Прибыль / шт.','Общая прибыль','function setMarketplaceReportPeriod(days)']:
               if marker not in html: raise SystemExit('missing '+marker)
           PY
           node --check /tmp/app.js
@@ -35,5 +35,5 @@ jobs:
           git config user.name 'millioner-maintenance'
           git config user.email 'actions@users.noreply.github.com'
           git add index.html
-          git commit -m 'Open marketplace reports by product'
+          git commit -m 'Improve report periods and marketplace product metrics'
           git push origin HEAD:main
