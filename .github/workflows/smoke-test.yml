@@ -59,6 +59,12 @@ jobs:
             'price:Number(o.unitPrice)||Number(old?.price)||0',
             'if(existingSale&&Number(o.unitPrice)>0)existingSale.price=Number(o.unitPrice)',
             'function fifoConsume(productId,qty)',
+            "purchaseStatus(x)==='received'",
+            'function purchaseShipmentGroups()',
+            'function createPurchaseOrder()',
+            'function advancePurchaseShipment(',
+            'function receivePurchaseShipment(',
+            'В пути, вложено',
             'id="koQty"','id="koAmount"','id="orderPeriod"',
             'data-order-period="today"','data-order-period="yesterday"','data-order-period="week"','data-order-period="month"','data-order-period="custom"',
             'id="wbAccountTabs"','market=WB2&limit=500',
@@ -87,7 +93,7 @@ jobs:
               raise SystemExit('Pages index redirects incorrectly')
           if 'client_secret' in html.lower(): raise SystemExit('client secret in browser')
           if '"crons": ["*/5 * * * *"]' not in wrangler: raise SystemExit('cron mismatch')
-          print('Unified lifecycle, Kaspi advertising D1 persistence, historical order totals and financial contract OK')
+          print('Unified lifecycle, purchase transit, Kaspi advertising D1 persistence and financial contract OK')
           PY
 
       - name: Check published site
@@ -107,6 +113,9 @@ jobs:
               && grep -q 'if(existingSale&&Number(o.unitPrice)>0)existingSale.price=Number(o.unitPrice)' /tmp/site.html \
               && grep -q 'id="koQty"' /tmp/site.html \
               && grep -q 'id="koAmount"' /tmp/site.html \
+              && grep -q 'function createPurchaseOrder()' /tmp/site.html \
+              && grep -q 'function receivePurchaseShipment(' /tmp/site.html \
+              && grep -q 'В пути, вложено' /tmp/site.html \
               && grep -q 'id="rAds"' /tmp/site.html \
               && grep -q 'function importKaspiAdsFile()' /tmp/site.html \
               && grep -q 'function kaspiAdsBreakdown(' /tmp/site.html \
@@ -130,6 +139,9 @@ jobs:
           grep -q 'if(existingSale&&Number(o.unitPrice)>0)existingSale.price=Number(o.unitPrice)' /tmp/site.html
           grep -q 'id="koQty"' /tmp/site.html
           grep -q 'id="koAmount"' /tmp/site.html
+          grep -q 'function createPurchaseOrder()' /tmp/site.html
+          grep -q 'function receivePurchaseShipment(' /tmp/site.html
+          grep -q 'В пути, вложено' /tmp/site.html
           grep -q 'id="rAds"' /tmp/site.html
           grep -q 'function importKaspiAdsFile()' /tmp/site.html
           grep -q 'function kaspiAdsBreakdown(' /tmp/site.html
