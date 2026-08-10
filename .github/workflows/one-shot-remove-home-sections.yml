@@ -1,4 +1,4 @@
-name: One-shot remove home sections
+name: One-shot simplify home metrics
 on:
   push:
     branches: [main]
@@ -10,19 +10,45 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Remove attention and recent sections from home
+      - name: Remove sales and profit from home
         run: |
           python - <<'PY'
           from pathlib import Path
           p = Path('index.html')
           s = p.read_text(encoding='utf-8')
-          old = '<div id="kaspiOrderList" class="order-list"></div><h2>Товары, требующие внимания</h2><div id="attention" class="list"></div><h2>Последние движения</h2><div id="recent" class="list"></div>'
-          new = '<div id="kaspiOrderList" class="order-list"></div><div id="attention" hidden></div><div id="recent" hidden></div>'
-          if old not in s:
-              raise SystemExit('home sections marker missing')
-          s = s.replace(old, new, 1)
-          if 'Товары, требующие внимания' in s or 'Последние движения</h2>' in s:
-              raise SystemExit('home sections still visible')
+
+          old_css = '.metrics{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}'
+          new_css = '.metrics{display:grid;grid-template-columns:1fr;gap:8px}'
+          if old_css not in s:
+              raise SystemExit('metrics CSS marker missing')
+          s = s.replace(old_css, new_css, 1)
+
+          old_home = '''  <div class="metrics"><div class="card"><div class="label">Остаток склада</div><div class="num" id="mStock">0</div><div class="small">шт.</div></div><div class="card"><div class="label">Продажи</div><div class="num" id="mSales">0 ₸</div><div class="small" id="periodLabel">сегодня</div></div><div class="card"><div class="label">Прибыль</div><div class="num" id="mProfit">0 ₸</div><div class="small">сегодня</div></div></div>
+  <div class="period"><button class="chip active" data-period="1">Сегодня</button><button class="chip" data-period="7">7 дней</button><button class="chip" data-period="30">30 дней</button><button class="chip" data-period="0">Свой период</button></div>
+'''
+          new_home = '''  <div class="metrics"><div class="card"><div class="label">Остаток склада</div><div class="num" id="mStock">0</div><div class="small">шт.</div></div></div>
+'''
+          if old_home not in s:
+              raise SystemExit('home metric block marker missing')
+          s = s.replace(old_home, new_home, 1)
+
+          old_render = '''  let since=Date.now()-selectedPeriod*86400000;
+  let ss=financialSales().filter(s=>s.date>=since);
+  let rev=ss.reduce((a,s)=>a+s.qty*s.price,0);
+  let pr=ss.reduce((a,s)=>a+s.qty*(s.price-s.cost-s.fee),0);
+  document.getElementById('mSales').textContent=fmt(rev);
+  document.getElementById('mProfit').textContent=fmt(pr);
+  document.getElementById('periodLabel').textContent=selectedPeriod===1?'сегодня':selectedPeriod+' дней';
+'''
+          if old_render not in s:
+              raise SystemExit('home render block marker missing')
+          s = s.replace(old_render, '', 1)
+
+          for marker in ['id="mSales"','id="mProfit"','id="periodLabel"','data-period="1"']:
+              if marker in s:
+                  raise SystemExit('home sales/profit marker still present: '+marker)
+          if 'document.getElementById(\'mSales\')' in s or 'document.getElementById(\'mProfit\')' in s:
+              raise SystemExit('removed home metric still referenced')
           p.write_text(s, encoding='utf-8')
           PY
           python - <<'PY' > /tmp/app.js
@@ -38,5 +64,5 @@ jobs:
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
           git add index.html
           git diff --cached --quiet && exit 0
-          git commit -m 'Remove attention and recent sections from home'
+          git commit -m 'Remove sales and profit from home'
           git push
