@@ -239,13 +239,22 @@ async function fetchKaspi(env) {
   // Kaspi's API rejects KASPI_DELIVERY_TRANSIT as an order-state filter.
   // Handoff is derived from deliveryCostForSeller on the accepted delivery feed,
   // so a second invalid/heavy broad request only makes the cron less reliable.
-  if (!activeFeed.orders.length && !broadFeed.orders.length) {
-    throw new Error(`Kaspi Worker unavailable: ${activeError || broadError || 'empty feeds'}`);
-  }
   const token = String(env.KASPI_TOKEN || '').trim();
-  const deliveryFeed = token
-    ? await fetchKaspiOrdersDirect(token, { days: 7, state: 'KASPI_DELIVERY' })
-    : { orders: [], requests: 0 };
+  let deliveryFeed = { orders: [], requests: 0 };
+  let directError = null;
+  if (token) {
+    try {
+      deliveryFeed = await fetchKaspiOrdersDirect(token, { days: 7, state: 'KASPI_DELIVERY' });
+    } catch (e) {
+      directError = String(e?.message || e);
+      console.warn('Kaspi direct order feed failed', directError);
+    }
+  }
+  if (!activeFeed.orders.length && !broadFeed.orders.length && !deliveryFeed.orders.length) {
+    const workerMessage = activeError || broadError || 'empty worker feed';
+    const directMessage = token ? (directError || 'empty direct feed') : 'KASPI_TOKEN is not configured';
+    throw new Error(`Kaspi sync unavailable: worker=${workerMessage}; direct=${directMessage}`);
+  }
   const workerRequests = activeFeed.requests + broadFeed.requests + deliveryFeed.requests;
 
   const byId = new Map();
