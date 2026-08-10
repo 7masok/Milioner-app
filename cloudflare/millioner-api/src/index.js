@@ -46,6 +46,7 @@ export default {
           SELECT p.id,p.name,p.category,p.photo,p.min_stock AS min,p.stock,p.cost,p.total_profit AS totalProfit,
                  MAX(CASE WHEN l.market='Kaspi' THEN l.sku END) AS kaspi,
                  MAX(CASE WHEN l.market='WB' THEN l.sku END) AS wb,
+                 MAX(CASE WHEN l.market='WB2' THEN l.sku END) AS wb2,
                  MAX(CASE WHEN l.market='Ozon' THEN l.sku END) AS ozon
           FROM products p LEFT JOIN product_links l ON l.product_id=p.id
           GROUP BY p.id ORDER BY p.name COLLATE NOCASE`).all();
@@ -140,10 +141,10 @@ async function ensureSchema(db) {
 
 async function syncAll(env, { scheduled = false } = {}) {
   const results = {};
-  for (const market of ['Kaspi', 'WB']) {
+  for (const market of ['Kaspi', 'WB', 'WB2']) {
     try {
-      if (scheduled && market === 'WB') {
-        const gate = await getWbSyncGate(env.DB);
+      if (scheduled && (market === 'WB' || market === 'WB2')) {
+        const gate = await getWbSyncGate(env.DB, market);
         if (!gate.allowed) {
           results[market] = {
             ok: true,
@@ -162,8 +163,8 @@ async function syncAll(env, { scheduled = false } = {}) {
   return results;
 }
 
-async function getWbSyncGate(db) {
-  const row = await db.prepare(`SELECT MAX(started_at) AS lastAttempt FROM sync_runs WHERE market='WB'`).first();
+async function getWbSyncGate(db, market='WB') {
+  const row = await db.prepare('SELECT MAX(started_at) AS lastAttempt FROM sync_runs WHERE market=?').bind(market).first();
   const lastAttempt = Number(row?.lastAttempt || 0);
   const nextSyncAt = lastAttempt ? lastAttempt + WB_MIN_SYNC_MS : Date.now();
   return { allowed: !lastAttempt || Date.now() >= nextSyncAt, lastAttempt, nextSyncAt };
@@ -172,18 +173,18 @@ async function getWbSyncGate(db) {
 async function getMarketStatuses(env) {
   const db = env.DB;
   const result = [];
-  for (const market of ['Kaspi', 'WB', 'Ozon']) {
+  for (const market of ['Kaspi', 'WB', 'WB2', 'Ozon']) {
     const latest = await db.prepare('SELECT * FROM sync_runs WHERE market=? ORDER BY id DESC LIMIT 1').bind(market).first();
     const success = await db.prepare('SELECT MAX(finished_at) AS lastSuccessAt FROM sync_runs WHERE market=? AND ok=1').bind(market).first();
     const count = await db.prepare('SELECT COUNT(*) AS n FROM marketplace_order_lines WHERE market=?').bind(market).first();
     const lastAttempt = Number(latest?.started_at || 0);
     let nextSyncAt = null;
     if (market === 'Kaspi') nextSyncAt = lastAttempt ? lastAttempt + KASPI_SCHEDULE_MS : Date.now();
-    if (market === 'WB') nextSyncAt = lastAttempt ? lastAttempt + WB_MIN_SYNC_MS : Date.now();
+    if (market === 'WB' || market === 'WB2') nextSyncAt = lastAttempt ? lastAttempt + WB_MIN_SYNC_MS : Date.now();
     result.push({
       market,
-      configured: market === 'Kaspi' ? Boolean(env.KASPI_WORKER_URL) : market === 'WB' ? Boolean(env.WB_TOKEN) : false,
-      mode: market === 'WB' ? (env.WB_TOKEN ? 'marketplace-api' : 'missing-token') : market === 'Kaspi' ? (env.KASPI_TOKEN ? 'worker+direct-recovery' : 'worker-only') : 'off',
+      configured: market === 'Kaspi' ? Boolean(env.KASPI_WORKER_URL) : market === 'WB' ? Boolean(env.WB_TOKEN) : market === 'WB2' ? Boolean(env.WB_TOKEN_2) : false,
+      mode: market === 'WB' ? (env.WB_TOKEN ? 'marketplace-api' : 'missing-token') : market === 'WB2' ? (env.WB_TOKEN_2 ? 'marketplace-api' : 'missing-token') : market === 'Kaspi' ? (env.KASPI_TOKEN ? 'worker+direct-recovery' : 'worker-only') : 'off',
       directRecoveryConfigured: market === 'Kaspi' ? Boolean(env.KASPI_TOKEN) : null,
       latest: latest || null,
       lastSuccessAt: Number(success?.lastSuccessAt || 0) || null,
@@ -200,7 +201,7 @@ async function syncMarket(env, market) {
   try {
     let lines = [];
     if (market === 'Kaspi') lines = await fetchKaspi(env);
-    else if (market === 'WB') lines = await fetchWb(env);
+    else if (market === 'WB' || market === 'WB2') lines = await fetchWb(env, market);
     else throw new Error('Unsupported market');
 
     await upsertOrderLines(env.DB, market, lines);
@@ -526,9 +527,9 @@ async function fetchKaspiOrderLinesDirect(token, order, budget) {
   return { lines, budget };
 }
 
-async function fetchWb(env) {
-  const token = String(env.WB_TOKEN || '').trim();
-  if (!token) throw new Error('WB_TOKEN is not configured in millioner-api');
+async function fetchWb(env, market='WB') {
+  const token = String((market === 'WB2' ? env.WB_TOKEN_2 : env.WB_TOKEN) || '').trim();
+  if (!token) throw new Error((market === 'WB2' ? 'WB_TOKEN_2' : 'WB_TOKEN') + ' is not configured in millioner-api');
 
   const headers = { 'Accept': 'application/json', 'Authorization': token };
   const dateFrom = Math.floor((Date.now() - 14 * 86400000) / 1000);
@@ -679,7 +680,7 @@ async function importProducts(db, products) {
       min_stock=excluded.min_stock,stock=excluded.stock,cost=excluded.cost,total_profit=excluded.total_profit,updated_at=excluded.updated_at
     `).bind(String(p.id),String(p.name),String(p.category || ''),String(p.photo || ''),Number(p.min || 0),Number(p.stock || 0),Number(p.cost || 0),Number(p.totalProfit || 0),now,now).run();
 
-    for (const [market, field] of [['Kaspi','kaspi'],['WB','wb'],['Ozon','ozon']]) {
+    for (const [market, field] of [['Kaspi','kaspi'],['WB','wb'],['WB2','wb2'],['Ozon','ozon']]) {
       const sku = String(p[field] || '').trim();
       if (!sku) continue;
       await db.prepare(`
@@ -702,7 +703,8 @@ function normalizeMarket(v) {
   const x = String(v || '').toLowerCase();
   if (!x) return '';
   if (x === 'kaspi') return 'Kaspi';
-  if (x === 'wb' || x === 'wildberries') return 'WB';
+  if (x === 'wb' || x === 'wildberries' || x === 'wb1') return 'WB';
+  if (x === 'wb2' || x === 'wildberries2') return 'WB2';
   if (x === 'ozon') return 'Ozon';
   throw Object.assign(new Error('Unknown market'), { status: 400 });
 }
