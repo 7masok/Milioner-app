@@ -46,7 +46,7 @@ jobs:
       - name: Check published site
         run: |
           set -e
-          for attempt in 1 2 3 4 5 6 7 8; do
+          for attempt in 1 2 3 4 5 6 7 8 9 10 11 12; do
             curl -fsSL --max-time 25 'https://7masok.github.io/Milioner-app/' -o /tmp/site.html || true
             if grep -q 'id="wbAccountTabs"' /tmp/site.html 2>/dev/null && grep -q 'id="ew2"' /tmp/site.html && grep -q 'apiFeeTotal' /tmp/site.html && ! grep -q 'Обновить из D1' /tmp/site.html; then break; fi
             sleep 5
