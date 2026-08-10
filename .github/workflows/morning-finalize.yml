@@ -1,0 +1,49 @@
+name: Finalize morning QA
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/morning-finalize.yml'
+permissions:
+  contents: write
+jobs:
+  finalize:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Disable overnight smoke schedule and clean QA probes
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          p=Path('.github/workflows/smoke-test.yml')
+          s=p.read_text(encoding='utf-8')
+          old="""  schedule:\n    - cron: '*/5 * * * *'\n"""
+          old10="""  schedule:\n    - cron: '*/10 * * * *'\n"""
+          if old in s:
+              s=s.replace(old,'',1)
+          elif old10 in s:
+              s=s.replace(old10,'',1)
+          else:
+              raise SystemExit('No overnight smoke schedule found')
+          if '  workflow_dispatch:' not in s or '  push:' not in s:
+              raise SystemExit('Required manual/push triggers missing')
+          if '\n  schedule:' in s:
+              raise SystemExit('Schedule trigger still present')
+          p.write_text(s,encoding='utf-8')
+          for name in ['.github/workflows/morning-qa-probe.yml','.github/workflows/morning-finalize.yml']:
+              q=Path(name)
+              if q.exists(): q.unlink()
+          PY
+      - name: Commit cleanup
+        run: |
+          git config user.name 'millioner-morning-qa'
+          git config user.email 'actions@users.noreply.github.com'
+          git add -A
+          git commit -m 'Disable overnight smoke schedule after morning QA'
+          for attempt in 1 2 3; do
+            if git push origin HEAD:main; then exit 0; fi
+            git pull --rebase origin main
+          done
+          exit 1
