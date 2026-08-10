@@ -18,7 +18,7 @@ new_call = """    activeFeed = await fetchKaspiWorkerFeed(base, {
       size: '12'
     }, env.KASPI_WORKER);
 """
-if 'env.KASPI_WORKER' not in s:
+if '}, env.KASPI_WORKER);' not in s:
     if s.count(old_call) != 1:
         raise SystemExit(f'active service call marker count={s.count(old_call)}')
     s = s.replace(old_call, new_call, 1)
