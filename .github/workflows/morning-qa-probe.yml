@@ -1,0 +1,43 @@
+name: Morning production QA probe
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/morning-qa-probe.yml'
+permissions:
+  contents: read
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - name: Probe production
+        run: |
+          set -euo pipefail
+          echo '=== SITE ==='
+          curl -fsSL --retry 4 --retry-delay 2 --max-time 25 'https://7masok.github.io/Milioner-app/' -o /tmp/site.html
+          grep -q 'Склад' /tmp/site.html
+          grep -q 'function fifoConsume(productId,qty)' /tmp/site.html
+          grep -q "st==='KASPI_DELIVERY_TRANSIT'" /tmp/site.html
+          echo "SITE_BYTES=$(wc -c </tmp/site.html)"
+
+          echo '=== HEALTH ==='
+          curl -fsSL --retry 4 --retry-delay 2 --max-time 25 'https://millioner-api.7masok.workers.dev/health' | jq .
+
+          echo '=== MARKET_STATUS ==='
+          curl -fsSL --retry 4 --retry-delay 2 --max-time 25 'https://millioner-api.7masok.workers.dev/api/market-status' | jq .
+
+          echo '=== SYNC_STATUS ==='
+          curl -fsSL --retry 4 --retry-delay 2 --max-time 25 'https://millioner-api.7masok.workers.dev/api/sync-status' | jq .
+
+          echo '=== KASPI D1 ==='
+          kaspi=$(curl -fsSL --retry 4 --retry-delay 2 --max-time 25 'https://millioner-api.7masok.workers.dev/api/orders?market=Kaspi&limit=1000')
+          echo "$kaspi" | jq '{count:(.orders|length), states:(.orders|group_by(.state)|map({state:.[0].state,count:length})), statuses:(.orders|group_by(.status)|map({status:.[0].status,count:length}))}'
+          for id in 1028072690 1028169317 1028174494 1027863523 1027066063 1027161866; do
+            echo -n "$id="
+            echo "$kaspi" | jq --arg id "$id" '[.orders[] | select((.code|tostring)==$id or (.orderId|tostring)==$id)] | {count:length, rows:map({code,status,state,productName,qty,totalPrice})}'
+          done
+
+          echo '=== WB D1 ONLY ==='
+          wb=$(curl -fsSL --retry 4 --retry-delay 2 --max-time 25 'https://millioner-api.7masok.workers.dev/api/orders?market=WB&limit=1000')
+          echo "$wb" | jq '{count:(.orders|length), newest:([.orders[].creationDate]|max // null), statuses:(.orders|group_by(.status)|map({status:.[0].status,count:length}))}'
