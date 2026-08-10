@@ -562,7 +562,8 @@ async function fetchWb(env) {
 
   return orders.map((order, oi) => {
     const st = statuses.get(Number(order?.id)) || {};
-    const price = Number(order?.convertedFinalPrice ?? order?.finalPrice ?? order?.convertedPrice ?? order?.price ?? 0) || 0;
+    const priceMinor = Number(order?.convertedFinalPrice ?? order?.finalPrice ?? order?.convertedPrice ?? order?.price ?? 0) || 0;
+    const price = priceMinor / 100; // WB Marketplace API monetary fields are minor currency units
     const sku = String(order?.article ?? order?.nmId ?? order?.skus?.[0] ?? '').trim();
     const orderId = String(order?.id ?? order?.orderUid ?? `wb-${oi}`);
     return {
