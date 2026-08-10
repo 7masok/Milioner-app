@@ -66,6 +66,7 @@ jobs:
             'seller_delivery_cost','marketplace_fee','fee_source',
             'id="rAds"','function importKaspiAdsFile()','function kaspiAdsBreakdown(',
             'state.kaspiAdExpenses ||= []','kaspiAdExpenses:state.kaspiAdExpenses||[]',
+            "kaspiAdExpenses:arr('kaspiAdExpenses').slice(0,5000)",
             'Реклама Kaspi без привязки','xlsx@0.18.5'
           ]
           missing=[x for x in required if x not in html and x not in api]
@@ -86,7 +87,7 @@ jobs:
               raise SystemExit('Pages index redirects incorrectly')
           if 'client_secret' in html.lower(): raise SystemExit('client secret in browser')
           if '"crons": ["*/5 * * * *"]' not in wrangler: raise SystemExit('cron mismatch')
-          print('Unified lifecycle, Kaspi advertising, historical order totals and financial contract OK')
+          print('Unified lifecycle, Kaspi advertising D1 persistence, historical order totals and financial contract OK')
           PY
 
       - name: Check published site
