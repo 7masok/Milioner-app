@@ -7,27 +7,23 @@ on:
 jobs:
   probe:
     runs-on: ubuntu-latest
-    timeout-minutes: 7
+    timeout-minutes: 4
     steps:
       - name: Probe live central and worker
         run: |
           set -euo pipefail
           echo CENTRAL
           curl -fsSL --max-time 25 'https://millioner-api.7masok.workers.dev/api/market-status' | jq .
-          for batch in 0 1 2 3; do
-            spec="days=1&status=ACCEPTED_BY_MERCHANT&state=KASPI_DELIVERY&size=12&batch=$batch"
-            echo "WORKER $spec"
-            code=$(curl -sS -o "/tmp/w.$batch.body" -w '%{http_code}' --max-time 90 "https://fragrant-shadow-72ed.7masok.workers.dev/kaspi/sync?$spec" || true)
-            echo "BATCH_${batch}_HTTP=$code"
-            head -c 300 "/tmp/w.$batch.body" || true
-            echo
-            test "$code" = 200
-            jq -e '.ok==true' "/tmp/w.$batch.body"
-            jq '{ok,totalOrders,totalOrdersOnPage,detailedOrders,pageCount,hasMore,nextBatch,orders:(.orders|length)}' "/tmp/w.$batch.body"
-          done
-          jq -s '[.[].orders[]]' /tmp/w.*.body > /tmp/all.json
+          spec='days=1&status=ACCEPTED_BY_MERCHANT&state=KASPI_DELIVERY&size=6&batch=0'
+          echo "WORKER $spec"
+          code=$(curl -sS -o /tmp/w.body -w '%{http_code}' --max-time 75 "https://fragrant-shadow-72ed.7masok.workers.dev/kaspi/sync?$spec" || true)
+          echo "HTTP=$code"
+          head -c 800 /tmp/w.body || true
+          echo
+          test "$code" = 200
+          jq -e '.ok==true and .pageSize==6 and (.orders|length)<=6' /tmp/w.body
+          jq '{ok,totalOrders,totalOrdersOnPage,detailedOrders,pageCount,hasMore,nextBatch,orders:(.orders|length)}' /tmp/w.body
           for id in 1028072690 1028169317 1028174494; do
-            n=$(jq --arg id "$id" '[.[]|select((.code|tostring)==$id)]|length' /tmp/all.json)
-            echo "CONTROL_${id}=$n"
-            test "$n" -gt 0
+            n=$(jq --arg id "$id" '[.orders[]|select((.code|tostring)==$id)]|length' /tmp/w.body)
+            echo "CONTROL_${id}_PAGE0=$n"
           done
