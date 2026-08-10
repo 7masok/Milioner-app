@@ -1,4 +1,4 @@
-name: One-time purchase transit pipeline
+name: One-time purchase totals patch
 on:
   push:
     branches: [main]
@@ -11,10 +11,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Apply purchase pipeline patch
-        run: |
-          python tools/patch_purchase_pipeline.py
-          git checkout -- .github/workflows/smoke-test.yml
+      - name: Apply purchase totals patch
+        run: python tools/patch_purchase_pipeline.py
       - name: Validate JavaScript
         run: |
           python - <<'PY'
@@ -26,14 +24,15 @@ jobs:
           Path('/tmp/app.js').write_text('\n'.join(scripts),encoding='utf-8')
           PY
           node --check /tmp/app.js
-          grep -q 'function createPurchaseOrder()' index.html
-          grep -q 'function advancePurchaseShipment(' index.html
-          grep -q 'function receivePurchaseShipment(' index.html
-          grep -q 'В пути, вложено' index.html
-      - name: Commit purchase pipeline
+          grep -q 'id="porBuyTotal"' index.html
+          grep -q 'id="porDelivery"' index.html
+          grep -q 'Всего оплачено' index.html
+          grep -q 'deliveryValue=Math.round(t.delivery' index.html
+          ! grep -q 'class="purchase-buy"' index.html
+      - name: Commit purchase totals UX
         run: |
           git config user.name '7masok'
           git config user.email '7masok@gmail.com'
           git add index.html
-          git commit -m 'Add purchase transit pipeline'
+          git commit -m 'Add total purchase and delivery inputs'
           git push
