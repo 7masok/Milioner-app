@@ -34,21 +34,21 @@ jobs:
           python - <<'PY'
           from pathlib import Path
           html=Path('index.html').read_text(encoding='utf-8'); api=Path('cloudflare/millioner-api/src/index.js').read_text(encoding='utf-8'); wrangler=Path('cloudflare/millioner-api/wrangler.jsonc').read_text(encoding='utf-8')
-          markers=['id="pcost"','id="ecost"','id="pstock"','id="sfee"','function financialSales()','function profitForProduct(','Прибыль 30д','id="ar" type="date"','function fifoLots(productId)','function fifoConsume(productId,qty)','landedUnitCost','fifoLots:fifo.lots','function applyMarketplaceTransitions(market,feed)','Недостаточно свободного остатка','Нельзя списать зарезервированный товар','Фактический остаток не может быть отрицательным','Promise.allSettled','function isWbTransient(error)','Последняя копия','id="wbAccountTabs"','function selectWbAccount(account)','market=WB2&limit=500','Wildberries 2 API','id="wb2ApiBadge"','id="wb2ApiStatus"','id="dotWb2"','WB_TOKEN_2',"['WB2','wb2']",'function groupMarketplaceOrders(feed)','setInterval(()=>loadSharedOrderCache({silent:true}),300000)','Google Drive · резервные копии','function backupToGoogleDrive(interactive=true)','function restoreGoogleDriveBackup(fileId)','seller_delivery_cost','marketplace_fee','fee_source','deliveryCostForSeller','function kaspiExplicitCommission(','updateKaspiOrderFinancials','apiFeeTotal','fee:apiFeePerUnit','расходы МП ${fmt(x.fees)}','id="pw2"','id="ew2"','WB1 артикул','WB2 артикул',"p.wb2=document.getElementById('ew2').value","wb2:document.getElementById('pw2').value",'[p.name,p.kaspi,p.wb,p.wb2,p.ozon]','Всего на складе','Доступно к продаже','Артикулы маркетплейсов']
+          markers=['id="pcost"','id="ecost"','id="pstock"','id="sfee"','function financialSales()','function profitForProduct(','Прибыль 30д','id="ar" type="date"','function fifoLots(productId)','function fifoConsume(productId,qty)','landedUnitCost','fifoLots:fifo.lots','function applyMarketplaceTransitions(market,feed)','Недостаточно свободного остатка','Нельзя списать зарезервированный товар','Фактический остаток не может быть отрицательным','Promise.allSettled','function isWbTransient(error)','Последняя копия','id="wbAccountTabs"','function selectWbAccount(account)','market=WB2&limit=500','Wildberries 2 API','id="wb2ApiBadge"','id="wb2ApiStatus"','id="dotWb2"','WB_TOKEN_2',"['WB2','wb2']",'function groupMarketplaceOrders(feed)','setInterval(()=>loadSharedOrderCache({silent:true}),300000)','Google Drive · резервные копии','function backupToGoogleDrive(interactive=true)','function restoreGoogleDriveBackup(fileId)','seller_delivery_cost','marketplace_fee','fee_source','deliveryCostForSeller','function kaspiExplicitCommission(','updateKaspiOrderFinancials','apiFeeTotal','fee:apiFeePerUnit','расходы МП ${fmt(x.fees)}','id="pw2"','id="ew2"','WB1 артикул','WB2 артикул',"p.wb2=document.getElementById('ew2').value","wb2:document.getElementById('pw2').value",'[p.name,p.kaspi,p.wb,p.wb2,p.ozon]','Всего на складе','Доступно к продаже','Артикулы маркетплейсов',"openProduct('${x.productId}','${market}',${selectedPeriod})","function openProduct(pid,market='',days=30)","x.channel===market","profitLabel=market?`Прибыль ${esc(market)}"]
           missing=[m for m in markers if m not in html and m not in api]
           if missing: raise SystemExit('Missing: '+', '.join(missing))
           if 'Обновить из D1' in html: raise SystemExit('Technical D1 refresh button is visible')
           if '"crons": ["*/5 * * * *"]' not in wrangler: raise SystemExit('cron mismatch')
           if 'client_secret' in html.lower(): raise SystemExit('client secret in browser')
           if 'await upsertOrderLines(env.DB, market, lines);' not in api: raise SystemExit('D1 upserts not batched')
-          print('Warehouse, two-WB, WB2 SKU, product clarity and Kaspi expense contract OK')
+          print('Warehouse, two-WB, marketplace-scoped product profit and Kaspi expense contract OK')
           PY
       - name: Check published site
         run: |
           set -e
           for attempt in 1 2 3 4 5 6 7 8 9 10 11 12; do
             curl -fsSL --max-time 25 'https://7masok.github.io/Milioner-app/' -o /tmp/site.html || true
-            if grep -q 'id="wbAccountTabs"' /tmp/site.html 2>/dev/null && grep -q 'id="ew2"' /tmp/site.html && grep -q 'Доступно к продаже' /tmp/site.html && grep -q 'apiFeeTotal' /tmp/site.html && ! grep -q 'Обновить из D1' /tmp/site.html; then break; fi
+            if grep -q 'id="wbAccountTabs"' /tmp/site.html 2>/dev/null && grep -q "function openProduct(pid,market='',days=30)" /tmp/site.html && grep -q 'apiFeeTotal' /tmp/site.html && ! grep -q 'Обновить из D1' /tmp/site.html; then break; fi
             sleep 5
           done
           grep -q 'Склад' /tmp/site.html
@@ -59,6 +59,8 @@ jobs:
           grep -q 'Всего на складе' /tmp/site.html
           grep -q 'Доступно к продаже' /tmp/site.html
           grep -q 'Артикулы маркетплейсов' /tmp/site.html
+          grep -q "function openProduct(pid,market='',days=30)" /tmp/site.html
+          grep -q 'x.channel===market' /tmp/site.html
           grep -q 'apiFeeTotal' /tmp/site.html
           grep -q 'расходы МП' /tmp/site.html
           ! grep -q 'Обновить из D1' /tmp/site.html
