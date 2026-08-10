@@ -355,7 +355,7 @@ async function fetchKaspi(env) {
   return result;
 }
 
-async function fetchKaspiWorkerFeed(base, params) {
+async function fetchKaspiWorkerFeed(base, params, serviceBinding = null) {
   const orders = [];
   let batch = 0;
   let requests = 0;
@@ -366,7 +366,9 @@ async function fetchKaspiWorkerFeed(base, params) {
     let lastError = null;
     for (let attempt = 0; attempt < 2; attempt++) {
       try {
-        const r = await fetch(`${base}/kaspi/sync?${q.toString()}`, { headers: { 'Accept': 'application/json' } });
+        const workerUrl = `${base}/kaspi/sync?${q.toString()}`;
+        const workerRequest = new Request(workerUrl, { headers: { 'Accept': 'application/json' } });
+        const r = serviceBinding ? await serviceBinding.fetch(workerRequest) : await fetch(workerRequest);
         requests++;
         const text = await r.text();
         try { data = JSON.parse(text); }

@@ -12,6 +12,12 @@
   "triggers": {
     "crons": ["*/5 * * * *"]
   },
+  "services": [
+    {
+      "binding": "KASPI_WORKER",
+      "service": "fragrant-shadow-72ed"
+    }
+  ],
   "d1_databases": [
     {
       "binding": "DB",
