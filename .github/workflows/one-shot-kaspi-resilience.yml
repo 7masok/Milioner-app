@@ -19,7 +19,7 @@ jobs:
       - name: Validate
         run: |
           node --check cloudflare/millioner-api/src/index.js
-          grep -q "env.KASPI_WORKER" cloudflare/millioner-api/src/index.js
+          grep -q "}, env.KASPI_WORKER);" cloudflare/millioner-api/src/index.js
           grep -q "serviceBinding.fetch" cloudflare/millioner-api/src/index.js
           grep -Eq '"binding"[[:space:]]*:[[:space:]]*"KASPI_WORKER"' cloudflare/millioner-api/wrangler.jsonc
           grep -Eq '"service"[[:space:]]*:[[:space:]]*"fragrant-shadow-72ed"' cloudflare/millioner-api/wrangler.jsonc
@@ -28,6 +28,6 @@ jobs:
           git config user.name 'millioner-maintenance'
           git config user.email 'actions@users.noreply.github.com'
           git add cloudflare/millioner-api/src/index.js cloudflare/millioner-api/wrangler.jsonc
-          git diff --cached --quiet || git commit -m 'Use Cloudflare Service Binding for Kaspi sync'
+          git diff --cached --quiet || git commit -m 'Route Kaspi sync through Cloudflare Service Binding'
           git push origin main
-# trigger 2026-08-10 kaspi-service-binding-retry
+# trigger 2026-08-10 kaspi-service-binding-call
