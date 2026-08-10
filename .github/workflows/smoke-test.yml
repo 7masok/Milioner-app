@@ -39,8 +39,11 @@ jobs:
           html=Path('index.html').read_text(encoding='utf-8')
           api=Path('cloudflare/millioner-api/src/index.js').read_text(encoding='utf-8')
           wrangler=Path('cloudflare/millioner-api/wrangler.jsonc').read_text(encoding='utf-8')
+          kaspi_stage="if(u==='COMPLETED'||st==='KASPI_DELIVERY_TRANSIT')return 'delivery';if(u==='ASSEMBLE')return 'transfer';return 'new'"
+          old_kaspi_stage="if(u==='COMPLETED'||(u==='ACCEPTED_BY_MERCHANT'&&['KASPI_DELIVERY_TRANSIT','DELIVERY'].includes(st)))return 'delivery';if(u==='ASSEMBLE'||u==='ACCEPTED_BY_MERCHANT')return 'transfer';return 'new'"
           required=[
             'function marketplaceLifecycleStage(',
+            kaspi_stage,
             "stage==='new'?'Новый':stage==='transfer'?'Передача':stage==='delivery'?'Доставка'",
             "function isMarketplaceSaleOrder(market,status,state=''){return marketplaceLifecycleStage(market,status,state)==='delivery'}",
             'function reserved(p)',
@@ -64,6 +67,8 @@ jobs:
           ]
           missing=[x for x in required if x not in html and x not in api]
           if missing: raise SystemExit('Missing lifecycle markers: '+', '.join(missing))
+          if old_kaspi_stage in html:
+              raise SystemExit('Kaspi ACCEPTED_BY_MERCHANT must stay New until ASSEMBLE')
           if "if(!['new','transfer'].includes(stage))continue;for(const o of(g.lines||[]))" in html:
               raise SystemExit('Order-period totals incorrectly exclude delivered orders')
           if '<option value="reserve">' in html or '<option value="резерв">' in html or '<option value="отмена резерва">' in html:
@@ -78,15 +83,17 @@ jobs:
               raise SystemExit('Pages index redirects incorrectly')
           if 'client_secret' in html.lower(): raise SystemExit('client secret in browser')
           if '"crons": ["*/5 * * * *"]' not in wrangler: raise SystemExit('cron mismatch')
-          print('Unified lifecycle, historical order totals and current-price report contract OK')
+          print('Unified lifecycle, Kaspi stage mapping, historical order totals and current-price report contract OK')
           PY
 
       - name: Check published site
         run: |
           set -e
+          KASPI_STAGE="if(u==='COMPLETED'||st==='KASPI_DELIVERY_TRANSIT')return 'delivery';if(u==='ASSEMBLE')return 'transfer';return 'new'"
           for attempt in 1 2 3 4 5 6 7 8 9 10 11 12; do
             curl -fsSL --max-time 25 'https://7masok.github.io/Milioner-app/' -o /tmp/site.html || true
             if grep -q 'function marketplaceLifecycleStage(' /tmp/site.html 2>/dev/null \
+              && grep -Fq "$KASPI_STAGE" /tmp/site.html \
               && grep -q "function reserved(p)" /tmp/site.html \
               && grep -q "stage==='new'?'Новый':stage==='transfer'?'Передача':stage==='delivery'?'Доставка'" /tmp/site.html \
               && grep -q "active=stage==='new'||stage==='transfer'" /tmp/site.html \
@@ -106,6 +113,7 @@ jobs:
             sleep 5
           done
           grep -q 'function marketplaceLifecycleStage(' /tmp/site.html
+          grep -Fq "$KASPI_STAGE" /tmp/site.html
           grep -q "function reserved(p)" /tmp/site.html
           grep -q "stage==='new'?'Новый':stage==='transfer'?'Передача':stage==='delivery'?'Доставка'" /tmp/site.html
           grep -q "active=stage==='new'||stage==='transfer'" /tmp/site.html
