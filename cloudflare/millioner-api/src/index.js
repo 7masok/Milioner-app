@@ -576,6 +576,24 @@ async function readWbCachedStockLinks(db, market, linked) {
   return (linked || []).map(x => ({ product:x.product, sku:x.sku, chrtId:Number(map.get(String(x.sku)) || 0) }));
 }
 
+async function readWbActualStocks(token, warehouseId, items) {
+  const ids=[...new Set((items||[]).map(x=>Number(x.chrtId)||0).filter(Boolean))];
+  const actual=new Map();
+  const headers={ 'Accept':'application/json', 'Content-Type':'application/json', 'Authorization':token };
+  for(let i=0;i<ids.length;i+=1000){
+    const chunk=ids.slice(i,i+1000);
+    const r=await fetch(WB_MARKETPLACE_BASE + '/api/v3/stocks/' + encodeURIComponent(warehouseId), { method:'POST', headers, body:JSON.stringify({ chrtIds:chunk }) });
+    const text=await r.text();
+    let data=null; if(text){ try{data=JSON.parse(text)}catch{data={message:text.slice(0,500)}} }
+    if(!r.ok) throw new Error(wbError('WB stocks read',r.status,data||{}));
+    for(const row of Array.isArray(data?.stocks)?data.stocks:[]){
+      const chrtId=Number(row?.chrtId)||0;
+      if(chrtId) actual.set(chrtId,Math.max(0,Math.floor(Number(row?.amount)||0)));
+    }
+  }
+  return actual;
+}
+
 async function syncWbStockMarket(env, market='WB', { force = false } = {}) {
   if (!['WB','WB2'].includes(market)) throw new Error('Unsupported WB stock market');
   const token = String((market === 'WB2' ? env.WB_TOKEN_2 : env.WB_TOKEN) || '').trim();
@@ -609,7 +627,18 @@ async function syncWbStockMarket(env, market='WB', { force = false } = {}) {
   const hash = await stockPayloadHash(items);
   const previous = await env.DB.prepare('SELECT * FROM wb_stock_state WHERE market=?').bind(market).first();
   if (!force && previous && String(previous.warehouse_id || '') === warehouseId && String(previous.payload_hash || '') === hash) {
-    return { ok:true, market, skipped:true, reason:'unchanged', sent:false, warehouseId, items:items.length, lastSentAt:Number(previous.last_sent_at || 0) };
+    let actual;
+    try {
+      actual=await readWbActualStocks(token,warehouseId,items);
+    } catch(e) {
+      return { ok:true, market, skipped:true, reason:'verify-failed-safety', sent:false, warehouseId, items:items.length, lastSentAt:Number(previous.last_sent_at || 0), error:String(e?.message||e).slice(0,500) };
+    }
+    const drift=items.filter(x=>{
+      const chrtId=Number(x.chrtId)||0;
+      const current=actual.has(chrtId)?Number(actual.get(chrtId)||0):0;
+      return current!==Math.max(0,Math.floor(Number(x.amount)||0));
+    });
+    if(!drift.length) return { ok:true, market, skipped:true, reason:'unchanged', verified:true, sent:false, warehouseId, items:items.length, lastSentAt:Number(previous.last_sent_at || 0) };
   }
 
   const startedAt = Date.now();
