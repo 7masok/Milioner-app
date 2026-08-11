@@ -1,0 +1,157 @@
+name: One-shot protected Kaspi stock XML feed
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/one-shot-kaspi-stock-feed.yml'
+      - 'tools/patch_kaspi_stock_feed.py'
+
+permissions:
+  contents: write
+  actions: write
+
+jobs:
+  patch-deploy-verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 18
+    steps:
+      - name: Checkout current main
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Confirm current index before patch
+        run: |
+          test -s index.html
+          echo "Current main: $(git rev-parse HEAD)"
+          echo "index bytes: $(wc -c < index.html)"
+
+      - name: Apply protected Kaspi XML stock patch
+        run: python tools/patch_kaspi_stock_feed.py
+
+      - name: Validate Kaspi stock safety contract
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import re
+          html=Path('index.html').read_text(encoding='utf-8')
+          api=Path('cloudflare/millioner-api/src/index.js').read_text(encoding='utf-8')
+          required_api=[
+            'CREATE TABLE IF NOT EXISTS kaspi_price_template',
+            "'/api/kaspi-stock-feed-status'",
+            "'/api/kaspi-price-template'",
+            "'/kaspi/price-list.xml'",
+            'async function buildKaspiPriceListXml(',
+            'function kaspiTemplateInfo(',
+            'function kaspiLinkedProducts(',
+            'computeSharedAvailableStocks(warehouse, orderRows.results || [])',
+            'Warehouse is empty; Kaspi feed blocked by safety gate.',
+            'No Kaspi-linked products; feed blocked by safety gate.',
+            "suppliedKey !== String(row.feedKey)",
+            "setKaspiXmlAttr(next, 'stockCount', String(amount))",
+            "setKaspiXmlAttr(next, 'stockCount', '0')",
+            "'Cache-Control': 'no-store, max-age=0'",
+            "feature: 'kaspi-xml-stock-v1'"
+          ]
+          required_html=[
+            'Настроить остатки Kaspi',
+            'async function openKaspiStockSetup()',
+            'async function uploadKaspiStockTemplate()',
+            'async function saveKaspiPrimaryStore()',
+            'async function copyKaspiStockFeed()',
+            'Автоматическая загрузка',
+            'Скачать в XML'
+          ]
+          missing=[x for x in required_api if x not in api]+[x for x in required_html if x not in html]
+          if missing: raise SystemExit('Missing Kaspi stock markers: '+', '.join(missing))
+          if 'KASPI_TOKEN=' in html or 'client_secret' in html.lower(): raise SystemExit('Secret leaked to browser')
+          if "if (!(warehouse.products || []).length)" not in api: raise SystemExit('D1 empty stock safety missing')
+          if api.count('computeSharedAvailableStocks(warehouse, orderRows.results || [])') < 2: raise SystemExit('Kaspi must reuse shared stock calculation')
+          scripts=re.findall(r'<script>(.*?)</script>',html,flags=re.S|re.I)
+          if not scripts: raise SystemExit('No inline script')
+          Path('/tmp/app.js').write_text('\n'.join(scripts),encoding='utf-8')
+          print('Kaspi XML stock safety markers OK')
+          PY
+          node --check /tmp/app.js
+          node --check cloudflare/millioner-api/src/index.js
+          git diff --check
+
+      - name: Commit protected Kaspi stock feed
+        id: commit
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add index.html cloudflare/millioner-api/src/index.js
+          git commit -m 'Add protected Kaspi stock XML feed'
+          git push origin HEAD:main
+          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Deploy millioner-api when Cloudflare credentials are available
+        working-directory: cloudflare/millioner-api
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          if [ -z "$CLOUDFLARE_API_TOKEN" ] || [ -z "$CLOUDFLARE_ACCOUNT_ID" ]; then
+            echo 'No repository Cloudflare credentials; waiting for configured Worker Builds/Git deployment.'
+            exit 0
+          fi
+          npx --yes wrangler@4 deploy
+
+      - name: Wait for Kaspi stock feature on public Worker
+        run: |
+          set -e
+          live=''
+          for attempt in $(seq 1 48); do
+            code=$(curl -sS -H 'Origin: https://7masok.github.io' -o /tmp/kaspi-stock.json -w '%{http_code}' --max-time 20 'https://millioner-api.7masok.workers.dev/api/kaspi-stock-feed-status' || true)
+            if [ "$code" = '200' ] && jq -e '.ok==true and .feature=="kaspi-xml-stock-v1"' /tmp/kaspi-stock.json >/dev/null 2>&1; then
+              live=1
+              jq '{ok,feature,configured,ready,offerCount,linked,matched,storeIds,primaryStoreId}' /tmp/kaspi-stock.json
+              break
+            fi
+            sleep 5
+          done
+          test -n "$live"
+
+      - name: Wait for Kaspi stock UI on GitHub Pages
+        run: |
+          set -e
+          live=''
+          for attempt in $(seq 1 48); do
+            curl -fsSL --max-time 20 'https://7masok.github.io/Milioner-app/' -o /tmp/site.html || true
+            if grep -q 'openKaspiStockSetup' /tmp/site.html 2>/dev/null && grep -q 'Настроить остатки Kaspi' /tmp/site.html 2>/dev/null; then
+              live=1
+              break
+            fi
+            sleep 5
+          done
+          test -n "$live"
+
+      - name: Check safe public central API endpoints
+        run: |
+          set -e
+          curl -fsSL --max-time 25 'https://millioner-api.7masok.workers.dev/health' | jq -e '.ok==true and .d1==true'
+          curl -fsSL --max-time 25 'https://millioner-api.7masok.workers.dev/api/market-status' | jq -e '.ok==true and (.markets|type=="array")'
+          curl -fsSL --max-time 25 'https://millioner-api.7masok.workers.dev/api/sync-status' | jq -e '.ok==true and (.markets|type=="array")'
+          for market in Kaspi WB WB2; do
+            body=$(curl -fsSL --max-time 25 "https://millioner-api.7masok.workers.dev/api/orders?market=${market}&limit=1000")
+            echo "$body" | jq -e '.ok==true and (.orders|type=="array")'
+            echo "D1 ${market} order rows: $(echo "$body" | jq '.orders|length')"
+          done
+
+      - name: Dispatch smoke test for exact app commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SHA: ${{ steps.commit.outputs.sha }}
+        run: |
+          gh workflow run smoke-test.yml --ref main
+          run_id=''
+          for attempt in $(seq 1 30); do
+            run_id=$(gh run list --workflow smoke-test.yml --branch main --event workflow_dispatch --limit 40 --json databaseId,headSha --jq ".[] | select(.headSha == \"$SHA\") | .databaseId" | head -n1)
+            if [ -n "$run_id" ]; then break; fi
+            sleep 3
+          done
+          test -n "$run_id"
+          echo "Smoke run: $run_id"
+          gh run watch "$run_id" --exit-status
