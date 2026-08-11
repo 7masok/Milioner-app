@@ -1,4 +1,4 @@
-name: One-time shipment card detail and search patch
+name: One-time selected marketplace order totals patch
 on:
   push:
     branches: [main]
@@ -11,9 +11,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Apply shipment card detail and search patch
+      - name: Apply selected marketplace totals patch
         run: python tools/patch_purchase_pipeline.py
-      - name: Validate JavaScript and shipment UI markers
+      - name: Validate JavaScript and selected marketplace totals
         run: |
           python - <<'PY'
           from pathlib import Path
@@ -22,17 +22,24 @@ jobs:
           scripts=re.findall(r'<script>(.*?)</script>',s,flags=re.S|re.I)
           if not scripts: raise SystemExit('No inline script found')
           Path('/tmp/app.js').write_text('\n'.join(scripts),encoding='utf-8')
-          if 'id="purchaseSearch"' not in s: raise SystemExit('purchase search missing')
-          if 'function openPurchaseShipment(' not in s: raise SystemExit('shipment detail opener missing')
-          if 'onclick="openPurchaseShipment(' not in s: raise SystemExit('shipment cards are not clickable')
-          if 'Поиск поставки по трек-коду' not in s: raise SystemExit('tracking search placeholder missing')
-          if "${status!=='received'?`<button class=\"btn full\" onclick=\"openEditPurchaseShipment" in s: raise SystemExit('old inline edit button remains in purchase cards')
+          required=[
+            '<div class="label">Заказано, шт.</div><div class="num" id="koTotal">0 шт.</div>',
+            '<div class="label">Заказано на сумму</div><div class="num" id="koMatched">0 ₸</div>',
+            'selectedOrderTotals=marketplaceOrderTotals(orders)',
+            "eTotal.textContent=selectedOrderTotals.qty.toLocaleString('ru-RU')+' шт.'",
+            'eMatched.textContent=fmt(selectedOrderTotals.amount)',
+            'eUnmatched.textContent=unmatched',
+            "eQty.textContent=allOrderTotals.qty.toLocaleString('ru-RU')+' шт.'",
+            'eAmount.textContent=fmt(allOrderTotals.amount)',
+          ]
+          missing=[x for x in required if x not in s]
+          if missing: raise SystemExit('Missing selected marketplace totals markers: '+', '.join(missing))
           PY
           node --check /tmp/app.js
-      - name: Commit shipment UI patch
+      - name: Commit selected marketplace totals
         run: |
           git config user.name '7masok'
           git config user.email '7masok@gmail.com'
           git add index.html
-          git commit -m 'Open purchase shipments as detail cards and add tracking search'
+          git commit -m 'Show selected marketplace quantity and amount in order summary'
           git push
