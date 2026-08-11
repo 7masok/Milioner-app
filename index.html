@@ -67,6 +67,7 @@ table{width:100%;border-collapse:collapse;background:#fff;border-radius:14px;ove
   <div class="muted">Фоновая синхронизация: Kaspi Worker → общая база D1. API-токен остаётся в Cloudflare Secret и в сайт не попадает.</div>
   <div id="kaspiApiStatus" class="muted integration-status">Статус: проверяем сервер…</div>
   <div class="integration-actions"><button class="btn" onclick="checkMarketStatus('Kaspi')">Проверить</button><button class="btn dark" onclick="syncNow()">Обновить Kaspi</button></div>
+  <button class="btn full" onclick="openKaspiStockSetup()">Настроить остатки Kaspi</button>
 </div>
 <div class="setting" style="display:block">
   <div class="integration-title"><b>Wildberries 1 API</b><span id="wbApiBadge" class="badge warn">Проверяем</span></div>
@@ -285,6 +286,60 @@ function writeoffForm(pid){let opts=stockProducts().map(p=>`<option value="${p.i
 function createWriteoff(){let p=prod(document.getElementById('wp').value),q=+document.getElementById('wq').value||0,r=document.getElementById('wr').value;if(!p||q<=0||isBundleProduct(p))return alert('Проверьте данные');const available=productAvailableStock(p);if(q>available)return alert('Недостаточно свободного остатка. Доступно: '+available+' шт.');const fifo=fifoConsume(p.id,q);p.stock=(Number(p.stock)||0)-q;refreshProductAverageCost(p);log('списание',p.id,-q,r+' · FIFO '+fmt(fifo.totalCost));save();closeModal();render()}function inventoryForm(pid){const selected=(!isBundleProduct(prod(pid))?prod(pid):null)||stockProducts()[0]||null,stock=Math.max(0,Number(selected?.stock)||0),unit=Math.max(0,Number(selected?.cost)||0);let opts=stockProducts().map(p=>`<option value="${p.id}" ${p.id===selected?.id?'selected':''}>${esc(p.name)}</option>`).join('');return `<h3>Инвентаризация</h3><div class="field"><label>Товар</label><select id="ip" onchange="syncInventoryFields()">${opts}</select></div><div class="two"><div class="field"><label>Фактический остаток</label><input id="iq" type="number" min="0" value="${stock}"></div><div class="field"><label>Себестоимость 1 шт. ₸</label><input id="icost" type="number" min="0" step="0.01" value="${Math.round(unit*100)/100}"></div></div><div class="link-note">Для исходных остатков без FIFO себестоимость создаёт начальную партию на фактический остаток. Количество, добавленное инвентаризацией, получает эту же себестоимость. Полученные закупки с уже записанной FIFO-себестоимостью не переписываются.</div><button class="btn dark full" onclick="doInventory()">Сохранить</button>`}
 function syncInventoryFields(){const p=prod(document.getElementById('ip')?.value);if(!p)return;const q=document.getElementById('iq'),c=document.getElementById('icost');if(q)q.value=Math.max(0,Number(p.stock)||0);if(c)c.value=Math.round(Math.max(0,Number(p.cost)||0)*100)/100}
 function doInventory(){let p=prod(document.getElementById('ip').value);if(!p)return;if(isBundleProduct(p))return alert('Набор не инвентаризируется отдельно: его остаток считается по компонентам.');let actual=Number(document.getElementById('iq').value),unit=Math.max(0,Number(document.getElementById('icost')?.value)||0);if(!Number.isFinite(actual))actual=0;if(actual<0)return alert('Фактический остаток не может быть отрицательным');const ordered=reserved(p);if(actual<ordered)return alert('Остаток не может быть ниже количества в активных заказах: '+ordered+' шт.');const old=Math.max(0,Number(p.stock)||0),delta=actual-old,now=Date.now(),lotsBefore=fifoLots(p.id),trackedBefore=lotsBefore.reduce((a,x)=>a+Math.max(0,Number(x.remainingQty)||0),0),legacyQty=Math.max(0,old-trackedBefore),realLots=lotsBefore.filter(x=>!x.inventoryAdjustment),inventoryLots=lotsBefore.filter(x=>x.inventoryAdjustment);if(!realLots.length&&inventoryLots.length){for(const lot of inventoryLots){lot.unitCost=unit;lot.landedUnitCost=unit}}if(legacyQty>0){state.purchases.unshift({id:id(),productId:p.id,qty:legacyQty,remainingQty:legacyQty,unitCost:unit,delivery:0,landedUnitCost:unit,batch:'Инвентаризация · исходный остаток',receivedAt:now,date:now,inventoryAdjustment:true,inventoryCostBaseline:true})}if(delta<0){fifoConsume(p.id,-delta)}else if(delta>0){state.purchases.unshift({id:id(),productId:p.id,qty:delta,remainingQty:delta,unitCost:unit,delivery:0,landedUnitCost:unit,batch:'Инвентаризация +',receivedAt:now+1,date:now+1,inventoryAdjustment:true})}p.stock=actual;if(fifoLots(p.id).length)refreshProductAverageCost(p);else p.cost=unit;log('инвентаризация',p.id,delta,`было ${old}, стало ${actual} · себестоимость ${fmt(unit)}/шт.`);save();closeModal();render()}function showSheet(x){document.getElementById('sheet').innerHTML=x;document.getElementById('modal').classList.add('open')}function closeModal(){document.getElementById('modal').classList.remove('open')}
+async function kaspiStockRequest(path, options={}) {
+  const r = await fetch(MILLIONER_API + path, { cache:'no-store', ...options, headers:{ ...(options.headers||{}) } });
+  let data = null;
+  try { data = await r.json(); } catch { data = {}; }
+  if (!r.ok || data?.ok === false) throw new Error(data?.error || ('HTTP ' + r.status));
+  return data;
+}
+
+async function openKaspiStockSetup() {
+  showSheet('<h3>Остатки Kaspi</h3><div class="empty">Проверяю настройку…</div>');
+  try { renderKaspiStockSetup(await kaspiStockRequest('/api/kaspi-stock-feed-status')); }
+  catch (e) { showSheet(`<h3>Остатки Kaspi</h3><div class="empty">${esc(String(e.message||e))}</div><button class="btn full" onclick="openKaspiStockSetup()">Повторить</button>`); }
+}
+
+function renderKaspiStockSetup(status={}) {
+  const stores = Array.isArray(status.storeIds) ? status.storeIds : [];
+  const selected = String(status.primaryStoreId || '');
+  const storeControl = stores.length > 1 ? `<div class="field"><label>Основной склад Kaspi для общего остатка</label><select id="kaspiPrimaryStore">${stores.map(x=>`<option value="${esc(x)}" ${x===selected?'selected':''}>${esc(x)}</option>`).join('')}</select></div><div class="link-note">У нас один общий физический остаток. Для привязанных товаров полное доступное количество будет передаваться на выбранный склад, а остальные склады в XML получат 0 — так один и тот же товар не будет продаваться дважды.</div><button class="btn full" onclick="saveKaspiPrimaryStore()">Сохранить склад</button>` : stores.length===1 ? `<div class="link-note">Склад Kaspi: <b>${esc(stores[0])}</b></div>` : '';
+  const missing = Array.isArray(status.missingSkus) ? status.missingSkus : [];
+  const missingStore = Array.isArray(status.missingPrimaryStore) ? status.missingPrimaryStore : [];
+  const summary = status.configured ? `<div class="item"><div><b>${status.ready?'XML готов к синхронизации':'XML загружен, нужна настройка'}</b></div><div class="muted" style="margin-top:7px">Товаров в XML: ${Number(status.offerCount||0)} · привязано к Kaspi в складе: ${Number(status.linked||0)} · найдено в XML: ${Number(status.matched||0)}</div>${missing.length?`<div class="muted" style="margin-top:5px">Нет в XML: ${esc(missing.slice(0,12).join(', '))}${missing.length>12?'…':''}. Они останутся в исходном XML без изменений.</div>`:''}${missingStore.length?`<div class="muted" style="margin-top:5px;color:#a40000">У выбранного склада нет availability у SKU: ${esc(missingStore.slice(0,12).join(', '))}</div>`:''}${status.error?`<div class="muted" style="margin-top:5px;color:#a40000">${esc(status.error)}</div>`:''}</div>` : '<div class="link-note">Нужно один раз загрузить <b>полный текущий XML-прайс</b> из Kaspi. Мы сохраняем цены, бренды и остальные товары как есть и автоматически меняем только наличие/остатки привязанных SKU.</div>';
+  const feed = status.ready && status.feedUrl ? `<div class="field"><label>Защищённая ссылка для Kaspi</label><input id="kaspiFeedUrl" readonly value="${esc(status.feedUrl)}"></div><button class="btn dark full" onclick="copyKaspiStockFeed()">Скопировать ссылку</button><div class="link-note">В кабинете Kaspi вставьте её: <b>Товары → Загрузить прайс-лист → Автоматическая загрузка</b>. Kaspi будет забирать актуальный XML с нашего склада автоматически.</div>` : '';
+  showSheet(`<h3>Остатки Kaspi</h3>${summary}${storeControl}<div class="field"><label>${status.configured?'Заменить текущий XML-прайс':'Текущий XML-прайс Kaspi'}</label><input id="kaspiStockXmlFile" type="file" accept=".xml,text/xml,application/xml"></div><button class="btn ${status.configured?'':'dark'} full" onclick="uploadKaspiStockTemplate()">${status.configured?'Загрузить новый XML':'Загрузить XML Kaspi'}</button>${feed}<div class="link-note">Скачать файл: веб-кабинет Kaspi → <b>Управление товарами → Прайс-лист → Скачать в XML</b>.</div>`);
+}
+
+async function uploadKaspiStockTemplate() {
+  const file = document.getElementById('kaspiStockXmlFile')?.files?.[0];
+  if (!file) return alert('Выберите XML-прайс Kaspi');
+  if (file.size > 6_000_000) return alert('XML больше 6 МБ. Напишите мне — сделаем хранение для большого прайса.');
+  const xml = await file.text();
+  try {
+    const currentStore = document.getElementById('kaspiPrimaryStore')?.value || '';
+    const data = await kaspiStockRequest('/api/kaspi-price-template', { method:'PUT', headers:{'Content-Type':'application/json'}, body:JSON.stringify({xml,primaryStoreId:currentStore}) });
+    renderKaspiStockSetup(data);
+    alert(data.ready ? 'XML сохранён. Остатки Kaspi готовы к автоматической загрузке.' : 'XML сохранён. Проверьте выбор склада Kaspi.');
+  } catch (e) { alert('Не удалось сохранить XML Kaspi:\n' + String(e.message||e)); }
+}
+
+async function saveKaspiPrimaryStore() {
+  const primaryStoreId = document.getElementById('kaspiPrimaryStore')?.value || '';
+  if (!primaryStoreId) return alert('Выберите склад Kaspi');
+  try {
+    const data = await kaspiStockRequest('/api/kaspi-price-template', { method:'PUT', headers:{'Content-Type':'application/json'}, body:JSON.stringify({primaryStoreId}) });
+    renderKaspiStockSetup(data);
+  } catch (e) { alert('Не удалось сохранить склад Kaspi:\n' + String(e.message||e)); }
+}
+
+async function copyKaspiStockFeed() {
+  const input = document.getElementById('kaspiFeedUrl');
+  if (!input?.value) return;
+  try { await navigator.clipboard.writeText(input.value); alert('Ссылка скопирована. Вставьте её в Kaspi → Автоматическая загрузка.'); }
+  catch { input.focus(); input.select(); document.execCommand('copy'); alert('Ссылка скопирована.'); }
+}
+
 async function testKaspiWorker(){const status=document.getElementById('kaspiApiStatus');if(status)status.textContent='Статус: проверяем Worker...';try{const r=await fetch(KASPI_WORKER+'/health',{cache:'no-store'});const data=await r.json();if(!r.ok||!data.ok)throw new Error(data.error||('HTTP '+r.status));if(status)status.textContent='Статус: Worker подключён';alert('Kaspi Worker работает.')}catch(e){if(status)status.textContent='Статус: ошибка Worker';alert('Ошибка Worker:\n'+String(e.message||e))}}
 function cleanWorkerUrl(value){return String(value||'').trim().replace(/\/+$/,'')}
 function getWbWorkerUrl(){return cleanWorkerUrl(state.settings.wbWorkerUrl||WB_WORKER)}
