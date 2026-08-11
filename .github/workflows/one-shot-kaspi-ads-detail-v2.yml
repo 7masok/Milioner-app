@@ -1,10 +1,10 @@
-name: One-shot reusable product categories
+name: One-shot product bundles
 on:
   push:
     branches: [main]
     paths:
       - '.github/workflows/one-shot-kaspi-ads-detail-v2.yml'
-      - 'tools/patch_category_picker.py'
+      - 'tools/patch_product_bundles.py'
 permissions:
   contents: write
   actions: write
@@ -18,60 +18,76 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Apply reusable category picker patch
-        run: python tools/patch_category_picker.py
+      - name: Apply product bundle patch
+        run: python tools/patch_product_bundles.py
 
-      - name: Validate category reuse behavior
+      - name: Validate bundle stock reservation and FIFO behavior
         run: |
           python - <<'PY'
           from pathlib import Path
           import re
           html=Path('index.html').read_text(encoding='utf-8')
           required=[
-            "function knownCategories(selected='')",
-            "function categoryPickerHtml(selectId,inputId,selected='')",
-            'function rememberCategory(value)',
-            "categoryPickerHtml('pc','pcnew')",
-            "categoryPickerHtml('ec','ecnew',p.category||'')",
-            "readCategoryPicker('pc','pcnew')",
-            "readCategoryPicker('ec','ecnew')",
-            '＋ Новая категория',
-            'Без категории'
+            'function isBundleProduct(p)',
+            'function bundleAvailableStock(p)',
+            'function consumeSellableProduct(p,qty',
+            'function readBundleComponents(',
+            'Тип товара',
+            'Состав набора',
+            "kind==='bundle'",
+            'productAvailableStock(p)',
+            "Набор не инвентаризируется отдельно",
+            "он используется в наборе"
           ]
           missing=[x for x in required if x not in html]
-          if missing: raise SystemExit('Missing category-picker markers: '+', '.join(missing))
-          if '<label>Категория</label><input id="pc">' in html or '<label>Категория</label><input id="ec"' in html:
-              raise SystemExit('Old free-text category field is still active')
+          if missing: raise SystemExit('Missing bundle markers: '+', '.join(missing))
           scripts=re.findall(r'<script>(.*?)</script>',html,flags=re.S|re.I)
           if not scripts: raise SystemExit('No inline script found')
           app='\n'.join(scripts)
           Path('/tmp/app.js').write_text(app,encoding='utf-8')
-          i=app.index("function knownCategories(selected='')")
-          j=app.index('function stockTotal()',i)
-          helpers=app[i:j]
+          a=app.index('function isBundleProduct(p)')
+          b=app.index('function isWbMarket(',a)
+          helpers=app[a:b]
           test=helpers+r'''
-          let state={settings:{categories:['Брелоки']},products:[{category:'Авто'},{category:'брелоки'},{category:''}]};
-          const esc=s=>String(s??'').replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[m]));
-          let cats=knownCategories();
-          if(cats.length!==2||!cats.includes('Брелоки')||!cats.includes('Авто'))throw new Error('Existing categories were not collected/deduplicated');
-          rememberCategory('Ножи'); rememberCategory('ножи');
-          if(state.settings.categories.filter(x=>x.toLowerCase()==='ножи').length!==1)throw new Error('Remembered category duplicated');
-          const opts=categoryOptions('Брелоки');
-          if(!opts.includes('Брелоки')||!opts.includes('selected')||!opts.includes('＋ Новая категория'))throw new Error('Category options are incomplete');
-          console.log('Reusable category regression OK');
+          let state={
+            products:[
+              {id:'g',name:'Зелёный',stock:10,cost:100},
+              {id:'y',name:'Жёлтый',stock:8,cost:110},
+              {id:'r',name:'Красный',stock:12,cost:120},
+              {id:'b',name:'Синий',stock:6,cost:130},
+              {id:'set',name:'Набор',kind:'bundle',stock:0,cost:0,components:[
+                {productId:'g',qty:1},{productId:'y',qty:1},{productId:'r',qty:1},{productId:'b',qty:1}
+              ]}
+            ],
+            reservations:[{id:'res',productId:'set',qty:2,active:true}],movements:[]
+          };
+          const prod=id=>state.products.find(p=>p.id===id);
+          const fifoConsume=(productId,qty)=>{const p=prod(productId),unit=Number(p.cost)||0;return {totalCost:unit*qty,unitCost:unit,lots:[{productId,qty,unitCost:unit}]}};
+          const refreshProductAverageCost=()=>{};
+          const log=(type,productId,qty,extra)=>state.movements.push({type,productId,qty,extra});
+          if(reserved(prod('g'))!==2)throw new Error('Bundle reservation did not reserve green component');
+          if(reserved(prod('b'))!==2)throw new Error('Bundle reservation did not reserve blue component');
+          if(bundleAvailableStock(prod('set'))!==4)throw new Error('Bundle availability must be limited by blue stock after reservations');
+          state.reservations[0].active=false;
+          if(bundleAvailableStock(prod('set'))!==6)throw new Error('Cancelled bundle reservation was not released');
+          const used=consumeSellableProduct(prod('set'),1,'Kaspi test');
+          if(prod('g').stock!==9||prod('y').stock!==7||prod('r').stock!==11||prod('b').stock!==5)throw new Error('Bundle sale did not decrement every component');
+          if(used.unitCost!==460)throw new Error('Bundle FIFO cost must equal sum of component costs');
+          if(state.movements.length!==4)throw new Error('Bundle component sale movements missing');
+          console.log('Bundle stock/reservation/FIFO regression OK');
           '''
-          Path('/tmp/category-regression.js').write_text(test,encoding='utf-8')
+          Path('/tmp/bundle-regression.js').write_text(test,encoding='utf-8')
           PY
           node --check /tmp/app.js
-          node /tmp/category-regression.js
+          node /tmp/bundle-regression.js
 
-      - name: Commit reusable categories
+      - name: Commit product bundles
         id: commit
         run: |
           git config user.name '7masok'
           git config user.email '7masok@gmail.com'
           git add index.html
-          git commit -m 'Reuse saved product categories'
+          git commit -m 'Add component-based product bundles'
           git push origin HEAD:main
           echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
