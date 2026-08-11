@@ -108,9 +108,13 @@ jobs:
           '''
           create_start=app.index('function createPurchaseOrder()')
           create_end=app.index('function purchaseShipmentRows(',create_start)
+          cost_start=app.index('function purchaseDraftCosts(')
+          cost_end=app.index('function updatePurchaseOrderCalculator(',cost_start)
+          due_start=app.index('function purchaseShipmentTotals(')
+          due_end=app.index('function renderPurchasePlan(',due_start)
           button_start=app.index('function openRecommendedPurchase(')
           button_end=app.index('function renderPurchases(',button_start)
-          test=helpers+app[start:end]+app[button_start:button_end]+app[create_start:create_end]+r'''
+          test=helpers+app[start:end]+app[button_start:button_end]+app[cost_start:cost_end]+app[due_start:due_end]+app[create_start:create_end]+r'''
           const row=purchaseRecommendation(products[0]);
           if(purchaseDemandQty(products[0])!==18)throw new Error('Bundle component demand was not included');
           if(row.available!==2||row.inbound!==4||row.qty!==14)throw new Error('Recommendation must create a fresh 25-day batch: '+JSON.stringify(row));
@@ -120,6 +124,11 @@ jobs:
           openRecommendedPurchase('a');
           if(openedModal!=='purchase'||window.pendingPurchaseRecommendations.length!==1)throw new Error('Per-product Buy button did not open a single-product purchase');
           if(window.pendingPurchaseRecommendations[0].qty!==14||window.pendingPurchaseHint.estimatedCost!==700)throw new Error('Per-product Buy prefill mismatch');
+          const costs=purchaseDraftCosts(purchaseDraftRows(),80);
+          if(costs[0].deliveryShare!==20||costs[0].landedUnitCost!==110)throw new Error('First line landed unit cost mismatch');
+          if(costs[1].deliveryShare!==60||costs[1].landedUnitCost!==220)throw new Error('Second line landed unit cost mismatch');
+          const due=purchaseDeliveryDue([{status:'to_me',rows:[{qty:2,buyTotal:200,delivery:20}]},{status:'to_forwarder',rows:[{qty:3,buyTotal:600,delivery:60}]}]);
+          if(due!==20)throw new Error('Only delivery for shipments going to me must be payable');
           createPurchaseOrder();
           const created=state.purchases.filter(x=>x.shipmentId);
           if(created.length!==2)throw new Error('Purchase line count mismatch');
@@ -162,6 +171,7 @@ jobs:
             'function fifoConsume(productId,qty)',
             "purchaseStatus(x)==='received'",
             'function purchaseShipmentGroups()',
+            'function purchaseDeliveryDue(',
             'function createPurchaseOrder()',
             'const PURCHASE_COVER_DAYS=25;',
             'function purchaseDemandQty(',
@@ -173,6 +183,9 @@ jobs:
             'purchase-buy-total',
             'edit-purchase-buy-total',
             'Сумма за всю партию ₸',
+            'Закуп: ${fmt(x.unitCost)}/шт. · с доставкой:',
+            'id="pDeliveryDue"',
+            'Оплатить доставку при получении',
             'Едет на склад',
             'function advancePurchaseShipment(',
             'function receivePurchaseShipment(',
@@ -255,6 +268,10 @@ jobs:
               && grep -q 'purchase-buy-total' /tmp/site.html \
               && grep -q 'edit-purchase-buy-total' /tmp/site.html \
               && grep -q 'Сумма за всю партию ₸' /tmp/site.html \
+              && grep -q 'function purchaseDeliveryDue(' /tmp/site.html \
+              && grep -q 'id="pDeliveryDue"' /tmp/site.html \
+              && grep -q 'Оплатить доставку при получении' /tmp/site.html \
+              && grep -q 'с доставкой:' /tmp/site.html \
               && grep -q 'Едет на склад' /tmp/site.html \
               && grep -q 'function receivePurchaseShipment(' /tmp/site.html \
               && grep -q 'В пути, вложено' /tmp/site.html \
@@ -301,6 +318,10 @@ jobs:
           grep -q 'purchase-buy-total' /tmp/site.html
           grep -q 'edit-purchase-buy-total' /tmp/site.html
           grep -q 'Сумма за всю партию ₸' /tmp/site.html
+          grep -q 'function purchaseDeliveryDue(' /tmp/site.html
+          grep -q 'id="pDeliveryDue"' /tmp/site.html
+          grep -q 'Оплатить доставку при получении' /tmp/site.html
+          grep -q 'с доставкой:' /tmp/site.html
           grep -q 'Едет на склад' /tmp/site.html
           grep -q 'function receivePurchaseShipment(' /tmp/site.html
           grep -q 'В пути, вложено' /tmp/site.html
