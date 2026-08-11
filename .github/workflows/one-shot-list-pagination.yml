@@ -1,11 +1,11 @@
-name: One-shot product pagination
+name: One-shot product metrics
 
 on:
   push:
     branches: [main]
     paths:
       - '.github/workflows/one-shot-list-pagination.yml'
-      - 'tools/patch_product_pagination.py'
+      - 'tools/patch_product_metrics.py'
 
 permissions:
   contents: write
@@ -26,6 +26,7 @@ jobs:
           test -s index.html
           echo "Current main: $(git rev-parse HEAD)"
           echo "index bytes: $(wc -c < index.html)"
+          grep -q 'PRODUCT_PAGE_SIZE=15' index.html
           grep -q 'ORDER_PAGE_SIZE=15' index.html
           grep -q 'MOVEMENT_PAGE_SIZE=15' index.html
 
@@ -33,62 +34,67 @@ jobs:
         run: |
           set -e
           curl -fsSL --max-time 25 'https://7masok.github.io/Milioner-app/' -o /tmp/current-site.html
-          grep -q 'ORDER_PAGE_SIZE=15' /tmp/current-site.html
-          grep -q 'MOVEMENT_PAGE_SIZE=15' /tmp/current-site.html
+          grep -q 'PRODUCT_PAGE_SIZE=15' /tmp/current-site.html
           curl -fsSL --max-time 25 'https://millioner-api.7masok.workers.dev/health' | jq -e '.ok==true and .d1==true'
           curl -fsSL --max-time 25 'https://millioner-api.7masok.workers.dev/api/market-status' | jq -e '.ok==true and (.markets|type=="array")'
           curl -fsSL --max-time 25 'https://millioner-api.7masok.workers.dev/api/sync-status' | jq -e '.ok==true and (.markets|type=="array")'
 
-      - name: Apply product pagination patch
-        run: python tools/patch_product_pagination.py
+      - name: Apply product metrics patch
+        run: python tools/patch_product_metrics.py
 
-      - name: Validate product pagination
+      - name: Validate product metrics
         run: |
           python - <<'PY'
           from pathlib import Path
           import re
           s=Path('index.html').read_text(encoding='utf-8')
           required=[
+            'function productLifetimeAverageCost(p)',
+            "function productAverageDailySales(p,days='all')",
+            'cost=productLifetimeAverageCost(p)',
+            'displayCost=productLifetimeAverageCost(p)',
+            'Средняя себестоимость ${isBundleProduct(p)?',
+            'Среднесуточные продажи · 7 дней',
+            'Среднесуточные продажи · всё время',
+            "daily7=productAverageDailySales(p,7)",
+            "dailyAll=productAverageDailySales(p,'all')",
             'const PRODUCT_PAGE_SIZE=15;',
-            'function productFilterChanged()',
-            'function setProductPage(page)',
-            'id="productPager"',
-            'pageProducts=a.slice((productPage-1)*PRODUCT_PAGE_SIZE,productPage*PRODUCT_PAGE_SIZE)',
-            'Страница ${productPage} из ${totalPages}',
-            'oninput="productFilterChanged()"',
-            'id="filter" class="select" onchange="productFilterChanged()"',
-            'id="sort" class="select" onchange="productFilterChanged()"',
             'const ORDER_PAGE_SIZE=15;',
             'const MOVEMENT_PAGE_SIZE=15;',
             'const PURCHASE_PAGE_SIZE=15;'
           ]
           missing=[x for x in required if x not in s]
-          if missing: raise SystemExit('Missing product pagination markers: '+', '.join(missing))
+          if missing: raise SystemExit('Missing product metric markers: '+', '.join(missing))
+          m=re.search(r"function openProduct\(pid,market='',days=30\)\{.*?\}\nfunction deleteProduct",s,flags=re.S)
+          if not m: raise SystemExit('openProduct region missing')
+          detail=m.group(0)
+          if 'deliveryLabel' in detail or 'kaspiDelivery' in detail or 'Расход на доставку Kaspi' in detail:
+              raise SystemExit('Kaspi delivery row still present in product detail')
           scripts=re.findall(r'<script>(.*?)</script>',s,flags=re.S|re.I)
           if not scripts: raise SystemExit('No inline script')
           Path('/tmp/app.js').write_text('\n'.join(scripts),encoding='utf-8')
-          print('Product pagination contract OK')
+          print('Product metrics contract OK')
           PY
           node --check /tmp/app.js
           git diff --check
 
-      - name: Commit product pagination
+      - name: Commit product metrics
         id: commit
         run: |
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add index.html
-          git commit -m 'Paginate products'
+          git commit -m 'Improve product cost and sales metrics'
           git push origin HEAD:main
           echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
-      - name: Wait for published product pagination
+      - name: Wait for published product metrics
         run: |
           set -e
           live=''
           for attempt in $(seq 1 48); do
             curl -fsSL --max-time 20 'https://7masok.github.io/Milioner-app/' -o /tmp/site.html || true
-            if grep -q 'PRODUCT_PAGE_SIZE=15' /tmp/site.html 2>/dev/null; then
+            if grep -q 'productLifetimeAverageCost' /tmp/site.html 2>/dev/null && grep -q 'Среднесуточные продажи · 7 дней' /tmp/site.html 2>/dev/null; then
               live=1
               break
             fi
