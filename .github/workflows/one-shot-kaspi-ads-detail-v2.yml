@@ -1,4 +1,4 @@
-name: One-shot exact Kaspi ads detail import
+name: One-shot fix Kaspi ad spend column
 on:
   push:
     branches: [main]
@@ -17,8 +17,19 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Apply narrow Kaspi ads patch
-        run: python tools/patch_kaspi_ads_detail_v2.py
+      - name: Prefer explicit advertising-expense column
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          p=Path('index.html')
+          s=p.read_text(encoding='utf-8')
+          old="const costKey=(normalized.find(([,n])=>n==='стоимость')||normalized.find(([,n])=>/^стоимость\\b/.test(n))||normalized.find(([,n])=>/расход.*реклам|затрат.*реклам|стоимост.*реклам/.test(n)))?.[0];"
+          new="const adCostKey=(normalized.find(([,n])=>/расход.*реклам|реклам.*расход|затрат.*реклам|реклам.*затрат|стоимост.*реклам/.test(n)))?.[0]||'',costKey=adCostKey||(normalized.find(([,n])=>n==='стоимость')||normalized.find(([,n])=>/^стоимость\\b/.test(n)))?.[0];"
+          if s.count(old)!=1:
+              raise SystemExit('Kaspi cost-column anchor changed; refusing unsafe patch')
+          s=s.replace(old,new,1)
+          p.write_text(s,encoding='utf-8')
+          PY
 
       - name: Validate before commit
         run: |
@@ -26,33 +37,24 @@ jobs:
           from pathlib import Path
           import re
           html=Path('index.html').read_text(encoding='utf-8')
+          if "const adCostKey=(normalized.find(([,n])=>/расход.*реклам" not in html:
+              raise SystemExit('Explicit Kaspi advertising-cost priority missing')
+          old="const costKey=(normalized.find(([,n])=>n==='стоимость')||normalized.find(([,n])=>/^стоимость\\b/.test(n))||normalized.find(([,n])=>/расход.*реклам|затрат.*реклам|стоимост.*реклам/.test(n)))?.[0];"
+          if old in html:
+              raise SystemExit('Old ambiguous Kaspi cost-column priority remains')
           scripts=re.findall(r'<script>(.*?)</script>',html,flags=re.S|re.I)
           if not scripts: raise SystemExit('No inline script found')
           Path('/tmp/app.js').write_text('\n'.join(scripts),encoding='utf-8')
-          required=[
-            'function kaspiAdsIsoDate(',
-            'function kaspiAdsMatchProduct(',
-            'Array.isArray(batch.lines)',
-            'Обзорный отчёт не подходит',
-            'Многодневный расход без дат не распределяется между днями',
-            'detailHash',
-            "if((state.kaspiAdExpenses||[]).some(x=>(hash&&x.hash===hash)||(detailHash&&x.detailHash===detailHash)))",
-          ]
-          missing=[x for x in required if x not in html]
-          if missing: raise SystemExit('Missing exact Kaspi ads markers: '+', '.join(missing))
-          banned=['factor=Math.min(1,overlap/span)','расход распределится по дням этого периода равномерно']
-          bad=[x for x in banned if x in html]
-          if bad: raise SystemExit('Old proportional ads logic remains: '+', '.join(bad))
           PY
           node --check /tmp/app.js
 
-      - name: Commit exact product/date advertising import
+      - name: Commit corrected advertising column selection
         id: commit
         run: |
           git config user.name '7masok'
           git config user.email '7masok@gmail.com'
           git add index.html
-          git commit -m 'Use exact Kaspi ad spend by product and date'
+          git commit -m 'Prefer explicit Kaspi ad-spend column'
           git push origin HEAD:main
           echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
