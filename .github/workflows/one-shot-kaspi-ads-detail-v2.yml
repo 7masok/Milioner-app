@@ -46,12 +46,13 @@ jobs:
               hits=[x for x in app.splitlines() if x.startswith(prefix)]
               if len(hits)!=1: raise SystemExit(f'Expected one {prefix}, got {len(hits)}')
               return hits[0]
+          do_inventory=line('function doInventory(){').split('function showSheet(',1)[0]
           js='\n'.join([
               line('function purchaseStatus('),
               line('function fifoLots('),
               line('function fifoConsume('),
               line('function refreshProductAverageCost('),
-              line('function doInventory(){'),
+              do_inventory,
           ])+r'''
           let seq=0;
           let state={products:[],purchases:[],movements:[]};
