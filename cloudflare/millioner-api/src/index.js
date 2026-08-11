@@ -105,7 +105,7 @@ export default {
       if (url.pathname === '/api/kaspi-stock-feed-status' && request.method === 'GET') {
         if (!isTrustedBrowserOrigin(origin, env)) return json({ ok: false, error: 'Forbidden origin' }, 403, cors);
         const status = await getKaspiStockFeedStatus(env, request.url);
-        return json({ ok: true, feature: 'kaspi-xml-stock-v1', ...status }, 200, cors);
+        return json({ ok: true, feature: 'kaspi-xml-stock-v1', fetchTracking: 'kaspi-xml-access-v1', ...status }, 200, cors);
       }
 
       if (url.pathname === '/api/kaspi-price-template' && request.method === 'PUT') {
@@ -117,6 +117,7 @@ export default {
 
       if (url.pathname === '/kaspi/price-list.xml' && request.method === 'GET') {
         const built = await buildKaspiPriceListXml(env, url);
+        if (url.searchParams.get('check') !== '1') await recordKaspiPriceFeedFetch(env.DB, request);
         return new Response(built.xml, { status: 200, headers: {
           'Content-Type': 'application/xml; charset=utf-8',
           'Cache-Control': 'no-store, max-age=0',
@@ -178,6 +179,7 @@ async function ensureSchema(db) {
     `CREATE TABLE IF NOT EXISTS wb_stock_links (market TEXT NOT NULL,sku TEXT NOT NULL,chrt_id INTEGER NOT NULL,source TEXT NOT NULL DEFAULT '',updated_at INTEGER NOT NULL,PRIMARY KEY(market,sku))`,
     `CREATE TABLE IF NOT EXISTS wb_stock_state (market TEXT PRIMARY KEY,warehouse_id TEXT NOT NULL DEFAULT '',payload_hash TEXT NOT NULL DEFAULT '',last_sent_at INTEGER NOT NULL DEFAULT 0,last_items INTEGER NOT NULL DEFAULT 0,last_error TEXT NOT NULL DEFAULT '',updated_at INTEGER NOT NULL DEFAULT 0)`,
     `CREATE TABLE IF NOT EXISTS kaspi_price_template (id INTEGER PRIMARY KEY CHECK(id=1),raw_xml TEXT NOT NULL DEFAULT '',feed_key TEXT NOT NULL DEFAULT '',primary_store_id TEXT NOT NULL DEFAULT '',offer_count INTEGER NOT NULL DEFAULT 0,store_ids TEXT NOT NULL DEFAULT '[]',merchant_id TEXT NOT NULL DEFAULT '',updated_at INTEGER NOT NULL DEFAULT 0)`,
+    `CREATE TABLE IF NOT EXISTS kaspi_price_feed_access (id INTEGER PRIMARY KEY CHECK(id=1),last_fetched_at INTEGER NOT NULL DEFAULT 0,fetch_count INTEGER NOT NULL DEFAULT 0,last_user_agent TEXT NOT NULL DEFAULT '')`,
     `CREATE INDEX IF NOT EXISTS idx_stock_sync_runs_market_started ON stock_sync_runs(market,started_at DESC)`,
     `CREATE INDEX IF NOT EXISTS idx_product_links_product ON product_links(product_id)`,
     `CREATE INDEX IF NOT EXISTS idx_order_lines_market_date ON marketplace_order_lines(market,creation_date DESC)`,
@@ -657,15 +659,32 @@ async function readKaspiTemplateRow(db) {
   return await db.prepare('SELECT raw_xml AS rawXml,feed_key AS feedKey,primary_store_id AS primaryStoreId,offer_count AS offerCount,store_ids AS storeIds,merchant_id AS merchantId,updated_at AS updatedAt FROM kaspi_price_template WHERE id=1').first();
 }
 
+async function readKaspiPriceFeedAccess(db) {
+  return await db.prepare('SELECT last_fetched_at AS lastFetchedAt,fetch_count AS fetchCount,last_user_agent AS lastUserAgent FROM kaspi_price_feed_access WHERE id=1').first();
+}
+
+function kaspiFeedAccessFields(row) {
+  return { lastFetchedAt:Number(row?.lastFetchedAt||0), fetchCount:Number(row?.fetchCount||0), lastFetchUserAgent:String(row?.lastUserAgent||'') };
+}
+
+async function recordKaspiPriceFeedFetch(db, request) {
+  const now=Date.now();
+  const userAgent=String(request.headers.get('User-Agent')||'').slice(0,300);
+  await db.prepare(`INSERT INTO kaspi_price_feed_access(id,last_fetched_at,fetch_count,last_user_agent) VALUES(1,?,1,?)
+    ON CONFLICT(id) DO UPDATE SET last_fetched_at=excluded.last_fetched_at,fetch_count=kaspi_price_feed_access.fetch_count+1,last_user_agent=excluded.last_user_agent`)
+    .bind(now,userAgent).run();
+}
+
 async function getKaspiStockFeedStatus(env, requestUrl) {
   const row = await readKaspiTemplateRow(env.DB);
-  if (!row?.rawXml) return { configured:false, ready:false, feedUrl:'', offerCount:0, storeIds:[], primaryStoreId:'', linked:0, matched:0, missingSkus:[], missingPrimaryStore:[] };
+  const accessFields = kaspiFeedAccessFields(await readKaspiPriceFeedAccess(env.DB));
+  if (!row?.rawXml) return { configured:false, ready:false, feedUrl:'', offerCount:0, storeIds:[], primaryStoreId:'', linked:0, matched:0, missingSkus:[], missingPrimaryStore:[], ...accessFields };
   let info;
   try { info = kaspiTemplateInfo(row.rawXml); }
-  catch (e) { return { configured:true, ready:false, error:String(e?.message || e), feedUrl:'', offerCount:Number(row.offerCount || 0), storeIds:[], primaryStoreId:String(row.primaryStoreId || ''), linked:0, matched:0, missingSkus:[], missingPrimaryStore:[] }; }
+  catch (e) { return { configured:true, ready:false, error:String(e?.message || e), feedUrl:'', offerCount:Number(row.offerCount || 0), storeIds:[], primaryStoreId:String(row.primaryStoreId || ''), linked:0, matched:0, missingSkus:[], missingPrimaryStore:[], ...accessFields }; }
   let warehouse;
   try { warehouse = await loadWarehouseSnapshotForStock(env.DB); }
-  catch (e) { return { configured:true, ready:false, error:String(e?.message || e), feedUrl:kaspiFeedUrl(requestUrl,row.feedKey), offerCount:info.offerSkus.size, storeIds:info.storeIds, primaryStoreId:String(row.primaryStoreId || ''), linked:0, matched:0, missingSkus:[], missingPrimaryStore:[] }; }
+  catch (e) { return { configured:true, ready:false, error:String(e?.message || e), feedUrl:kaspiFeedUrl(requestUrl,row.feedKey), offerCount:info.offerSkus.size, storeIds:info.storeIds, primaryStoreId:String(row.primaryStoreId || ''), linked:0, matched:0, missingSkus:[], missingPrimaryStore:[], ...accessFields }; }
   const linked = kaspiLinkedProducts(warehouse);
   const matchedRows = linked.filter(x => info.offerSkus.has(x.sku));
   const missingSkus = linked.filter(x => !info.offerSkus.has(x.sku)).map(x => x.sku);
@@ -677,7 +696,7 @@ async function getKaspiStockFeedStatus(env, requestUrl) {
     offerCount:info.offerSkus.size, storeIds:info.storeIds, primaryStoreId:selected,
     linked:linked.length, matched:matchedRows.length, missingSkus:missingSkus.slice(0,200),
     missingPrimaryStore:missingPrimaryStore.slice(0,200), updatedAt:Number(row.updatedAt || 0),
-    multiStoreMode:info.storeIds.length > 1 ? 'primary-store-only-for-managed-skus' : 'single-store'
+    multiStoreMode:info.storeIds.length > 1 ? 'primary-store-only-for-managed-skus' : 'single-store', ...accessFields
   };
 }
 
