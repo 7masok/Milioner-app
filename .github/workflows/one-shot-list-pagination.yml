@@ -1,4 +1,4 @@
-name: Verify product metrics deployment
+name: One-shot persist product sort
 
 on:
   push:
@@ -7,47 +7,95 @@ on:
       - '.github/workflows/one-shot-list-pagination.yml'
 
 permissions:
-  contents: read
-  actions: write
+  contents: write
+  actions: read
 
 jobs:
-  verify:
+  patch-verify:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
       - name: Checkout current main
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
-      - name: Validate current product metrics
+      - name: Confirm current app before patch
         run: |
           set -e
-          test -f .nojekyll
-          grep -q 'function productLifetimeAverageCost' index.html
-          grep -q 'function productAverageDailySales' index.html
-          grep -q 'Среднесуточные продажи · 7 дней' index.html
-          grep -q 'Среднесуточные продажи · всё время' index.html
-          grep -q 'Средняя себестоимость' index.html
+          grep -q 'id="sort"' index.html
+          grep -q 'function productFilterChanged()' index.html
+          grep -q 'function renderProducts()' index.html
           python - <<'PY'
           from pathlib import Path
           import re
           s=Path('index.html').read_text(encoding='utf-8')
-          m=re.search(r"function openProduct\(pid,market='',days=30\)\{.*?\}\nfunction deleteProduct",s,flags=re.S)
-          if not m: raise SystemExit('openProduct region missing')
-          detail=m.group(0)
-          if 'deliveryLabel' in detail or 'kaspiDelivery' in detail or 'Расход на доставку Kaspi' in detail:
-              raise SystemExit('Kaspi delivery row still present')
+          scripts=re.findall(r'<script>(.*?)</script>',s,flags=re.S|re.I)
+          if not scripts: raise SystemExit('No inline script found')
+          Path('/tmp/app-before.js').write_text('\n'.join(scripts),encoding='utf-8')
+          PY
+          node --check /tmp/app-before.js
+
+      - name: Check current published app and safe central APIs
+        run: |
+          set -e
+          curl -fsSL --max-time 25 'https://7masok.github.io/Milioner-app/' -o /tmp/site-before.html
+          grep -q 'id="sort"' /tmp/site-before.html
+          curl -fsSL --max-time 25 'https://millioner-api.7masok.workers.dev/health' | jq -e '.ok==true and .d1==true'
+          curl -fsSL --max-time 25 'https://millioner-api.7masok.workers.dev/api/market-status' | jq -e '.ok==true and (.markets|type=="array")'
+          curl -fsSL --max-time 25 'https://millioner-api.7masok.workers.dev/api/sync-status' | jq -e '.ok==true and (.markets|type=="array")'
+          for market in Kaspi WB WB2; do
+            body=$(curl -fsSL --max-time 25 "https://millioner-api.7masok.workers.dev/api/orders?market=${market}&limit=1000")
+            echo "$body" | jq -e '.ok==true and (.orders|type=="array")'
+            echo "D1 ${market} order rows: $(echo "$body" | jq '.orders|length')"
+          done
+
+      - name: Apply product sort persistence patch
+        run: python tools/patch_product_sort_persistence.py
+
+      - name: Validate product sort persistence
+        run: |
+          set -e
+          grep -q 'onchange="productSortChanged()"' index.html
+          grep -q "const PRODUCT_SORT_VALUES=\['name','stock','sales','profit','days'\]" index.html
+          grep -q 'function normalizeProductSort(value)' index.html
+          grep -q 'function productSortChanged()' index.html
+          grep -q 'state.settings.productSort=normalizeProductSort' index.html
+          grep -q 'sort=normalizeProductSort(state.settings.productSort)' index.html
+          python - <<'PY'
+          from pathlib import Path
+          import re
+          s=Path('index.html').read_text(encoding='utf-8')
           scripts=re.findall(r'<script>(.*?)</script>',s,flags=re.S|re.I)
           Path('/tmp/app.js').write_text('\n'.join(scripts),encoding='utf-8')
+          if 'onchange="productFilterChanged()" style="width:100%"><option value="name">По названию</option>' in s:
+              raise SystemExit('Sort select still uses generic filter handler')
           PY
           node --check /tmp/app.js
+          git diff --check
 
-      - name: Wait for published product metrics
+      - name: Commit product sort persistence
+        id: commit
+        run: |
+          set -e
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          if ! git diff --quiet -- index.html; then
+            git add index.html
+            git commit -m 'Persist product sort selection'
+            git push origin HEAD:main
+          fi
+          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Wait for published saved sort
         run: |
           set -e
           live=''
           for attempt in $(seq 1 60); do
             curl -fsSL --max-time 20 'https://7masok.github.io/Milioner-app/' -o /tmp/site.html || true
-            if grep -q 'productLifetimeAverageCost' /tmp/site.html 2>/dev/null && grep -q 'Среднесуточные продажи · 7 дней' /tmp/site.html 2>/dev/null; then
+            if grep -q 'function productSortChanged()' /tmp/site.html 2>/dev/null \
+              && grep -q 'state.settings.productSort=normalizeProductSort' /tmp/site.html \
+              && grep -q 'sort=normalizeProductSort(state.settings.productSort)' /tmp/site.html; then
               live=1
               break
             fi
@@ -55,26 +103,15 @@ jobs:
           done
           test -n "$live"
 
-      - name: Check safe public central API endpoints
-        run: |
-          set -e
-          curl -fsSL --max-time 25 'https://millioner-api.7masok.workers.dev/health' | jq -e '.ok==true and .d1==true'
-          curl -fsSL --max-time 25 'https://millioner-api.7masok.workers.dev/api/market-status' | jq -e '.ok==true and (.markets|type=="array")'
-          curl -fsSL --max-time 25 'https://millioner-api.7masok.workers.dev/api/sync-status' | jq -e '.ok==true and (.markets|type=="array")'
-          for market in Kaspi WB WB2; do
-            body=$(curl -fsSL --max-time 25 "https://millioner-api.7masok.workers.dev/api/orders?market=${market}&limit=1000")
-            echo "$body" | jq -e '.ok==true and (.orders|type=="array")'
-          done
-
-      - name: Dispatch smoke test for current head
+      - name: Wait for exact smoke test
         env:
           GH_TOKEN: ${{ github.token }}
-          SHA: ${{ github.sha }}
+          SHA: ${{ steps.commit.outputs.sha }}
         run: |
-          gh workflow run smoke-test.yml --ref main
+          set -e
           run_id=''
-          for attempt in $(seq 1 30); do
-            run_id=$(gh run list --workflow smoke-test.yml --branch main --event workflow_dispatch --limit 40 --json databaseId,headSha --jq ".[] | select(.headSha == \"$SHA\") | .databaseId" | head -n1)
+          for attempt in $(seq 1 60); do
+            run_id=$(gh run list --workflow smoke-test.yml --branch main --limit 50 --json databaseId,headSha --jq ".[] | select(.headSha == \"$SHA\") | .databaseId" | head -n1)
             if [ -n "$run_id" ]; then break; fi
             sleep 3
           done
