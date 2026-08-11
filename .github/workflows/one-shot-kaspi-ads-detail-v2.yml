@@ -1,4 +1,4 @@
-name: One-shot fix Kaspi product CSV decimals
+name: One-shot fix Kaspi ad cost header
 on:
   push:
     branches: [main]
@@ -17,8 +17,8 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Apply Kaspi CSV decimal-comma fix
-        run: python tools/patch_kaspi_ads_overview_reconcile.py
+      - name: Apply Kaspi ad cost-header fix
+        run: python tools/patch_kaspi_ads_cost_header.py
 
       - name: Validate before commit
         run: |
@@ -31,11 +31,14 @@ jobs:
             "new TextDecoder('utf-8').decode(buffer)",
             "n==='рекламируемый товар'",
             "parserVersion:'kaspi-product-csv-v2'",
+            '^расход.*реклам|^реклам.*расход|затрат.*реклам|реклам.*затрат|стоимост.*реклам',
             'Расходы на рекламу',
             'Рекламируемый товар'
           ]
           missing=[x for x in required if x not in html]
           if missing: raise SystemExit('Missing Kaspi product-CSV markers: '+', '.join(missing))
+          old='^расход.*реклам$|^реклам.*расход$|затрат.*реклам|реклам.*затрат|стоимост.*реклам'
+          if old in html: raise SystemExit('Old strict Kaspi ad cost-header matcher remains')
           forbidden=['kaspiAdsControlFile','function kaspiAdsOverviewTotals(','function kaspiAdsPickCostColumn(']
           present=[x for x in forbidden if x in html]
           if present: raise SystemExit('Old overview-reconciliation code remains: '+', '.join(present))
@@ -45,28 +48,31 @@ jobs:
           Path('/tmp/app.js').write_text(app,encoding='utf-8')
           def cut(a,b):
               i=app.index(a); j=app.index(b,i); return app[i:j]
-          regression=cut('function adsMoney(','function adsColumn(')+"\n"+cut('function kaspiAdsParseDelimitedText(','async function kaspiAdsParseFile(')+r'''
+          regression=cut('function adsMoney(','function adsSkuEqual(')+"\n"+cut('function kaspiAdsParseDelimitedText(','async function kaspiAdsParseFile(')+r'''
           const sample='\uFEFFРекламируемый товар;Товар;Расходы на рекламу\r\n166859382;Товар 1;164,69\r\n166859005;Товар 2;166,06\r\n';
           const rows=kaspiAdsParseDelimitedText(sample);
           if(rows.length!==2)throw new Error('CSV row count mismatch');
           if(rows[0]['Рекламируемый товар']!=='166859382')throw new Error('Kaspi product id lost');
           if(rows[0]['Расходы на рекламу']!=='164,69')throw new Error('Decimal comma was mutated');
-          const total=rows.reduce((n,r)=>n+adsMoney(r['Расходы на рекламу']),0);
+          const normalized=Object.keys(rows[0]).map(k=>[k,adsColumn(k)]);
+          const adCostKey=(normalized.find(([,n])=>/^расход.*реклам|^реклам.*расход|затрат.*реклам|реклам.*затрат|стоимост.*реклам/.test(n)))?.[0]||'');
+          if(adCostKey!=='Расходы на рекламу')throw new Error('Advertising cost header was not detected: '+adCostKey);
+          const total=rows.reduce((n,r)=>n+adsMoney(r[adCostKey]),0);
           if(Math.abs(total-330.75)>1e-9)throw new Error('Advertising total mismatch: '+total);
-          console.log('Kaspi CSV decimal-comma regression OK:',total);
+          console.log('Kaspi ad header + decimal-comma regression OK:',adCostKey,total);
           '''
           Path('/tmp/kaspi-ads-regression.js').write_text(regression,encoding='utf-8')
           PY
           node --check /tmp/app.js
           node /tmp/kaspi-ads-regression.js
 
-      - name: Commit corrected Kaspi product CSV import
+      - name: Commit corrected Kaspi ad header matcher
         id: commit
         run: |
           git config user.name '7masok'
           git config user.email '7masok@gmail.com'
           git add index.html
-          git commit -m 'Preserve decimal commas in Kaspi product ad CSV'
+          git commit -m 'Accept Kaspi ad expense header endings'
           git push origin HEAD:main
           echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
