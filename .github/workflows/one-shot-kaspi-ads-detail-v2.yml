@@ -1,4 +1,4 @@
-name: One-shot add inventory unit cost
+name: One-shot add safe product deletion
 on:
   push:
     branches: [main]
@@ -17,80 +17,81 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Apply inventory unit-cost patch
-        run: python tools/patch_inventory_unit_cost.py
+      - name: Apply safe product deletion patch
+        run: python tools/patch_delete_product.py
 
-      - name: Validate inventory cost and FIFO behavior
+      - name: Validate product deletion and stale-link protection
         run: |
           python - <<'PY'
           from pathlib import Path
           import re
           html=Path('index.html').read_text(encoding='utf-8')
           required=[
-            'id="icost"',
-            'Себестоимость 1 шт. ₸',
-            'function syncInventoryFields()',
-            'inventoryCostBaseline:true',
-            "batch:'Инвентаризация · исходный остаток'",
-            'realLots=lotsBefore.filter(x=>!x.inventoryAdjustment)',
-            'if(!realLots.length&&inventoryLots.length)',
-            'Полученные закупки с уже записанной FIFO-себестоимостью не переписываются.'
+            'function deleteProduct(pid)',
+            'Удалить товар',
+            'state.settings.deletedProductNames||={}',
+            'state.products=state.products.filter(x=>x.id!==p.id)',
+            "linked=o.productId?prod(o.productId):null",
+            'const productNameById=',
+            'Нельзя удалить товар: в активных заказах зарезервировано',
+            'Нельзя удалить товар: есть незавершённая закупка'
           ]
           missing=[x for x in required if x not in html]
-          if missing: raise SystemExit('Missing inventory unit-cost markers: '+', '.join(missing))
+          if missing: raise SystemExit('Missing safe-delete markers: '+', '.join(missing))
           scripts=re.findall(r'<script>(.*?)</script>',html,flags=re.S|re.I)
           if not scripts: raise SystemExit('No inline script found')
           app='\n'.join(scripts)
           Path('/tmp/app.js').write_text(app,encoding='utf-8')
-          def line(prefix):
-              hits=[x for x in app.splitlines() if x.startswith(prefix)]
-              if len(hits)!=1: raise SystemExit(f'Expected one {prefix}, got {len(hits)}')
-              return hits[0]
-          do_inventory=line('function doInventory(){').split('function showSheet(',1)[0]
-          js='\n'.join([
-              line('function purchaseStatus('),
-              line('function fifoLots('),
-              line('function fifoConsume('),
-              line('function refreshProductAverageCost('),
-              do_inventory,
-          ])+r'''
-          let seq=0;
-          let state={products:[],purchases:[],movements:[]};
+          def cut(a,b):
+              i=app.index(a); j=app.index(b,i); return app[i:j]
+          delete_fn=cut('function deleteProduct(pid)','function openModal(')
+          normalize_fn=cut('function normalizeServerFeed(','function mergeOrderFeeds(')
+          test=delete_fn+'\n'+normalize_fn+r'''
+          let state={
+            products:[{id:'p1',name:'Старый дубль',stock:-1,kaspi:'111'},{id:'p2',name:'Нужный товар',stock:10,kaspi:'222'}],
+            purchases:[{id:'old',productId:'p1',status:'received',qty:1}],
+            sales:[{productId:'p1',qty:3}],reservations:[],settings:{},
+            kaspiOrderFeed:[{productId:'p1'}],wbOrderFeed:[{productId:'p1'}],ozonOrderFeed:[]
+          };
           const prod=id=>state.products.find(p=>p.id===id);
-          const reserved=()=>0;
-          const id=()=>`id${++seq}`;
-          const fmt=n=>`${Math.round(Number(n)||0)} ₸`;
-          const log=(type,productId,qty,extra)=>state.movements.push({type,productId,qty,extra});
-          const save=()=>{}; const closeModal=()=>{}; const render=()=>{};
-          let fields={};
-          const document={getElementById:id=>fields[id]};
-          function run(product,purchases,actual,cost){
-            state={products:[product],purchases:purchases||[],movements:[]};
-            fields={ip:{value:product.id},iq:{value:String(actual)},icost:{value:String(cost)}};
-            doInventory();
-            return {product:state.products[0],purchases:state.purchases};
-          }
-          let x=run({id:'p1',stock:5,cost:0},[],5,120);
-          if(x.purchases.length!==1||x.purchases[0].remainingQty!==5||x.purchases[0].landedUnitCost!==120||!x.purchases[0].inventoryCostBaseline)throw new Error('Legacy stock baseline was not created correctly');
-          if(Math.abs(x.product.cost-120)>1e-9)throw new Error('Legacy stock product cost not refreshed');
-          x=run({id:'p2',stock:5,cost:200},[{id:'real',productId:'p2',status:'received',qty:5,remainingQty:5,unitCost:200,landedUnitCost:200,receivedAt:1}],5,120);
-          if(x.purchases[0].landedUnitCost!==200||Math.abs(x.product.cost-200)>1e-9)throw new Error('Real purchase FIFO cost was overwritten');
-          x=run({id:'p3',stock:5,cost:100},[{id:'inv',productId:'p3',status:'received',qty:5,remainingQty:5,unitCost:100,landedUnitCost:100,receivedAt:1,inventoryAdjustment:true}],5,120);
-          if(x.purchases[0].landedUnitCost!==120||Math.abs(x.product.cost-120)>1e-9)throw new Error('Inventory-only baseline cost cannot be corrected');
-          console.log('Inventory unit-cost FIFO regression OK');
+          const reserved=p=>(state.reservations||[]).filter(r=>r.productId===p.id&&r.active).reduce((a,r)=>a+(Number(r.qty)||0),0);
+          const purchaseStatus=x=>String(x?.status||'received');
+          let saved=0,closed=0,rendered=0,alerts=[];
+          const save=()=>saved++; const closeModal=()=>closed++; const render=()=>rendered++;
+          const confirm=()=>true; const alert=x=>alerts.push(String(x));
+          const marketplaceField=market=>market==='Kaspi'?'kaspi':'';
+          const toTimestamp=x=>Number(x)||0;
+
+          deleteProduct('p1');
+          if(state.products.some(p=>p.id==='p1'))throw new Error('Deleted product stayed in active catalog');
+          if(state.settings.deletedProductNames.p1!=='Старый дубль')throw new Error('Historical product name was not preserved');
+          if(state.kaspiOrderFeed[0].productId!==null||state.wbOrderFeed[0].productId!==null)throw new Error('Local feed links were not cleared');
+          if(saved!==1||closed!==1||rendered!==1)throw new Error('Delete did not persist and rerender exactly once');
+
+          state.products=[{id:'p2',name:'Нужный товар',kaspi:'222'}];
+          const stale=normalizeServerFeed([{productId:'p1',sku:'111',creationDate:1}],'Kaspi');
+          if(stale[0].productId!==null)throw new Error('Stale D1 link resurrected a deleted product');
+          const current=normalizeServerFeed([{productId:'p1',sku:'222',creationDate:1}],'Kaspi');
+          if(current[0].productId!=='p2')throw new Error('Current SKU did not remap to active product');
+
+          state.products=[{id:'p3',name:'Активный заказ',stock:2}];state.reservations=[{productId:'p3',qty:1,active:true}];
+          deleteProduct('p3');
+          if(!state.products.some(p=>p.id==='p3'))throw new Error('Product with active reservation was deleted');
+          if(!alerts.some(x=>x.includes('активных заказах')))throw new Error('Active-order deletion was not blocked visibly');
+          console.log('Safe product deletion regression OK');
           '''
-          Path('/tmp/inventory-cost-regression.js').write_text(js,encoding='utf-8')
+          Path('/tmp/delete-product-regression.js').write_text(test,encoding='utf-8')
           PY
           node --check /tmp/app.js
-          node /tmp/inventory-cost-regression.js
+          node /tmp/delete-product-regression.js
 
-      - name: Commit inventory unit cost
+      - name: Commit safe product deletion
         id: commit
         run: |
           git config user.name '7masok'
           git config user.email '7masok@gmail.com'
           git add index.html
-          git commit -m 'Add unit cost to inventory adjustment'
+          git commit -m 'Add safe product deletion'
           git push origin HEAD:main
           echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
