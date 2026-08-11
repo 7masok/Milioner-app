@@ -69,6 +69,7 @@ export default {
         if (!isTrustedBrowserOrigin(origin, env)) return json({ ok: false, error: 'Forbidden origin' }, 403, cors);
         const body = await request.json();
         const warehouse = sanitizeWarehouseState(body?.state);
+        await applyKaspiSkuAliases(env.DB, warehouse);
         const raw = JSON.stringify(warehouse);
         if (raw.length > 1500000) return json({ ok: false, error: 'Warehouse snapshot is too large' }, 413, cors);
         const current = await env.DB.prepare('SELECT revision FROM warehouse_state WHERE id=1').first();
@@ -179,6 +180,7 @@ async function ensureSchema(db) {
     `CREATE TABLE IF NOT EXISTS wb_stock_links (market TEXT NOT NULL,sku TEXT NOT NULL,chrt_id INTEGER NOT NULL,source TEXT NOT NULL DEFAULT '',updated_at INTEGER NOT NULL,PRIMARY KEY(market,sku))`,
     `CREATE TABLE IF NOT EXISTS wb_stock_state (market TEXT PRIMARY KEY,warehouse_id TEXT NOT NULL DEFAULT '',payload_hash TEXT NOT NULL DEFAULT '',last_sent_at INTEGER NOT NULL DEFAULT 0,last_items INTEGER NOT NULL DEFAULT 0,last_error TEXT NOT NULL DEFAULT '',updated_at INTEGER NOT NULL DEFAULT 0)`,
     `CREATE TABLE IF NOT EXISTS kaspi_price_template (id INTEGER PRIMARY KEY CHECK(id=1),raw_xml TEXT NOT NULL DEFAULT '',feed_key TEXT NOT NULL DEFAULT '',primary_store_id TEXT NOT NULL DEFAULT '',offer_count INTEGER NOT NULL DEFAULT 0,store_ids TEXT NOT NULL DEFAULT '[]',merchant_id TEXT NOT NULL DEFAULT '',updated_at INTEGER NOT NULL DEFAULT 0)`,
+    `CREATE TABLE IF NOT EXISTS kaspi_sku_aliases (old_sku TEXT PRIMARY KEY,seller_sku TEXT NOT NULL,updated_at INTEGER NOT NULL DEFAULT 0)`,
     `CREATE TABLE IF NOT EXISTS kaspi_price_feed_access (id INTEGER PRIMARY KEY CHECK(id=1),last_fetched_at INTEGER NOT NULL DEFAULT 0,fetch_count INTEGER NOT NULL DEFAULT 0,last_user_agent TEXT NOT NULL DEFAULT '')`,
     `CREATE INDEX IF NOT EXISTS idx_stock_sync_runs_market_started ON stock_sync_runs(market,started_at DESC)`,
     `CREATE INDEX IF NOT EXISTS idx_product_links_product ON product_links(product_id)`,
@@ -249,6 +251,31 @@ async function getMarketStatuses(env) {
   return result;
 }
 
+async function rememberKaspiSkuAlias(db, oldSku, sellerSku) {
+  const oldValue = String(oldSku || '').trim();
+  const sellerValue = String(sellerSku || '').trim();
+  if (!oldValue || !sellerValue || oldValue === sellerValue) return false;
+  await db.prepare(`INSERT INTO kaspi_sku_aliases(old_sku,seller_sku,updated_at) VALUES(?,?,?)
+    ON CONFLICT(old_sku) DO UPDATE SET seller_sku=excluded.seller_sku,updated_at=excluded.updated_at`)
+    .bind(oldValue,sellerValue,Date.now()).run();
+  return true;
+}
+
+async function applyKaspiSkuAliases(db, warehouse) {
+  if (!Array.isArray(warehouse?.products) || !warehouse.products.length) return 0;
+  const rows = await db.prepare('SELECT old_sku AS oldSku,seller_sku AS sellerSku FROM kaspi_sku_aliases').all();
+  const aliases = new Map((rows.results || []).map(x => [String(x.oldSku || '').trim(), String(x.sellerSku || '').trim()]));
+  let changed = 0;
+  for (const product of warehouse.products) {
+    const current = String(product?.kaspi || '').trim();
+    const sellerSku = aliases.get(current);
+    if (!sellerSku || sellerSku === current) continue;
+    product.kaspi = sellerSku;
+    changed++;
+  }
+  return changed;
+}
+
 async function normalizeKaspiLineSkusAgainstTemplate(db, lines) {
   let info = null;
   try {
@@ -256,13 +283,20 @@ async function normalizeKaspiLineSkusAgainstTemplate(db, lines) {
     if (row?.rawXml) info = kaspiTemplateInfo(row.rawXml);
   } catch {}
   if (!info?.offerSkus?.size) return lines || [];
-  return (lines || []).map(item => {
+  const result = [];
+  for (const item of (lines || [])) {
     const rawLine = item?.raw?.line || {};
     const candidates = [rawLine?.sku, rawLine?.merchantCode, item?.sku]
       .map(x => String(x || '').trim()).filter((x,i,a) => x && a.indexOf(x) === i);
     const matched = candidates.find(x => info.offerSkus.has(x));
-    return matched && matched !== String(item?.sku || '').trim() ? { ...item, sku: matched } : item;
-  });
+    if (matched) {
+      for (const candidate of candidates) {
+        if (candidate !== matched && !info.offerSkus.has(candidate)) await rememberKaspiSkuAlias(db, candidate, matched);
+      }
+    }
+    result.push(matched && matched !== String(item?.sku || '').trim() ? { ...item, sku: matched } : item);
+  }
+  return result;
 }
 
 async function repairLegacyKaspiSkus(env) {
@@ -318,6 +352,7 @@ async function repairLegacyKaspiSkus(env) {
   await env.DB.prepare('UPDATE warehouse_state SET payload=?,revision=?,updated_at=? WHERE id=1 AND revision=?')
     .bind(JSON.stringify(current), nextRevision, now, Number(latest.revision || 0)).run();
   for (const fix of applied) {
+    await rememberKaspiSkuAlias(env.DB, fix.oldSku, fix.sellerSku);
     await env.DB.prepare("DELETE FROM product_links WHERE market='Kaspi' AND product_id=? AND sku=?").bind(fix.productId,fix.oldSku).run();
   }
   await importProducts(env.DB, current.products || []);
