@@ -92,7 +92,7 @@ jobs:
             'id="koQty"','id="koAmount"','id="orderPeriod"',
             'data-order-period="today"','data-order-period="yesterday"','data-order-period="week"','data-order-period="month"','data-order-period="custom"',
             'id="wbAccountTabs"','market=WB2&limit=500',
-            'function productKaspiDelivery(','Расход на доставку Kaspi',
+            'function productKaspiDelivery(','function productLifetimeAverageCost(','function productAverageDailySales(',
             'seller_delivery_cost','marketplace_fee','fee_source',
             'id="rAds"','function importKaspiAdsFile()','function kaspiAdsBreakdown(',
             'state.kaspiAdExpenses ||= []','kaspiAdExpenses:state.kaspiAdExpenses||[]',
@@ -115,6 +115,8 @@ jobs:
           ]
           old_ads=[x for x in forbidden if x in html]
           if old_ads: raise SystemExit('Old Kaspi overview-reconciliation code remains: '+', '.join(old_ads))
+          if 'Расход на доставку Kaspi' in html:
+              raise SystemExit('Product detail must not show Kaspi delivery row')
           if old_kaspi_stage in html:
               raise SystemExit('Kaspi ACCEPTED_BY_MERCHANT must stay New until ASSEMBLE')
           if "if(!['new','transfer'].includes(stage))continue;for(const o of(g.lines||[]))" in html:
