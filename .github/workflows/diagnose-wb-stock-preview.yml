@@ -15,11 +15,11 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 4
     steps:
-      - name: Read WB1 preview through central millioner-api
+      - name: Read WB2 preview through central millioner-api
         run: |
-          code=$(curl -sS --max-time 60 -o wb1-preview.json -w '%{http_code}' 'https://millioner-api.7masok.workers.dev/api/stock-sync-preview?market=WB' || true)
-          printf '%s\n' "$code" > wb1-http.txt
-          test -s wb1-preview.json || printf '%s\n' '{"error":"empty response"}' > wb1-preview.json
+          code=$(curl -sS --max-time 60 -o wb2-preview.json -w '%{http_code}' 'https://millioner-api.7masok.workers.dev/api/stock-sync-preview?market=WB2' || true)
+          printf '%s\n' "$code" > wb2-http.txt
+          test -s wb2-preview.json || printf '%s\n' '{"error":"empty response"}' > wb2-preview.json
       - name: Read central stock-sync status after preview
         run: |
           curl -fsSL --retry 3 --retry-delay 2 --max-time 25 'https://millioner-api.7masok.workers.dev/api/stock-sync-status' -o stock-sync-status.json
@@ -27,9 +27,9 @@ jobs:
       - name: Upload diagnostic status
         uses: actions/upload-artifact@v4
         with:
-          name: wb-stock-preview-diagnostic
+          name: wb2-stock-preview-diagnostic
           path: |
-            wb1-http.txt
-            wb1-preview.json
+            wb2-http.txt
+            wb2-preview.json
             stock-sync-status.json
           retention-days: 1
