@@ -108,7 +108,7 @@ jobs:
           test=helpers+app[start:end]+app[create_start:create_end]+r'''
           const row=purchaseRecommendation(products[0]);
           if(purchaseDemandQty(products[0])!==18)throw new Error('Bundle component demand was not included');
-          if(row.available!==2||row.inbound!==4||row.qty!==12)throw new Error('Recommendation mismatch: '+JSON.stringify(row));
+          if(row.available!==2||row.inbound!==4||row.qty!==14)throw new Error('Recommendation must create a fresh 25-day batch: '+JSON.stringify(row));
           if(purchaseRecommendation(products[2])!==null)throw new Error('No-sales product must not be ordered automatically');
           if(purchaseRecommendations().length!==1)throw new Error('Recommendation list mismatch');
           createPurchaseOrder();
