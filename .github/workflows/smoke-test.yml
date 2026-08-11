@@ -90,8 +90,8 @@ jobs:
           function purchaseStatus(x){return x.status}
           function stockProducts(){return products.filter(x=>!isBundleProduct(x))}
           function purchaseDraftRows(){return [
-            {productId:'a',qty:2,buyTotal:200,unitCost:100},
-            {productId:'c',qty:3,buyTotal:600,unitCost:200}
+            {productId:'a',qty:2},
+            {productId:'c',qty:3}
           ]}
           function localDateStart(){return now}
           let seq=0,lastAlert='';
@@ -104,7 +104,7 @@ jobs:
           function openModal(type){openedModal=type}
           function fmt(x){return String(x)}
           function alert(x){lastAlert=String(x)}
-          const document={getElementById(id){return {value:id==='porDelivery'?'80':id==='porBatch'?'Тест':''}}};
+          const document={getElementById(id){return {value:id==='porBuyTotal'?'800':id==='porDelivery'?'80':id==='porBatch'?'Тест':''}}};
           '''
           create_start=app.index('function createPurchaseOrder()')
           create_end=app.index('function purchaseShipmentRows(',create_start)
@@ -124,17 +124,17 @@ jobs:
           openRecommendedPurchase('a');
           if(openedModal!=='purchase'||window.pendingPurchaseRecommendations.length!==1)throw new Error('Per-product Buy button did not open a single-product purchase');
           if(window.pendingPurchaseRecommendations[0].qty!==14||window.pendingPurchaseHint.estimatedCost!==700)throw new Error('Per-product Buy prefill mismatch');
-          const costs=purchaseDraftCosts(purchaseDraftRows(),80);
-          if(costs[0].deliveryShare!==20||costs[0].landedUnitCost!==110)throw new Error('First line landed unit cost mismatch');
-          if(costs[1].deliveryShare!==60||costs[1].landedUnitCost!==220)throw new Error('Second line landed unit cost mismatch');
+          const costs=purchaseDraftCosts(purchaseDraftRows(),800,80);
+          if(costs[0].buyTotal!==320||costs[0].deliveryShare!==32||costs[0].landedUnitCost!==176)throw new Error('First quantity share mismatch');
+          if(costs[1].buyTotal!==480||costs[1].deliveryShare!==48||costs[1].landedUnitCost!==176)throw new Error('Second quantity share mismatch');
           const due=purchaseDeliveryDue([{status:'to_me',rows:[{qty:2,buyTotal:200,delivery:20}]},{status:'to_forwarder',rows:[{qty:3,buyTotal:600,delivery:60}]}]);
           if(due!==20)throw new Error('Only delivery for shipments going to me must be payable');
           createPurchaseOrder();
           const created=state.purchases.filter(x=>x.shipmentId);
           if(created.length!==2)throw new Error('Purchase line count mismatch');
           const a=created.find(x=>x.productId==='a'),c=created.find(x=>x.productId==='c');
-          if(a.buyTotal!==200||a.unitCost!==100||Math.abs(a.delivery-20)>1e-9)throw new Error('First line price allocation mismatch');
-          if(c.buyTotal!==600||c.unitCost!==200||Math.abs(c.delivery-60)>1e-9)throw new Error('Second line price allocation mismatch');
+          if(a.buyTotal!==320||a.unitCost!==160||Math.abs(a.delivery-32)>1e-9)throw new Error('First line price allocation mismatch');
+          if(c.buyTotal!==480||c.unitCost!==160||Math.abs(c.delivery-48)>1e-9)throw new Error('Second line price allocation mismatch');
           if(!created.every(x=>x.status==='to_forwarder'&&x.shipmentPurchaseTotal===800&&x.shipmentDeliveryTotal===80))throw new Error('Purchase totals/status mismatch');
           console.log('25-day purchase recommendation regression OK');
           '''
@@ -180,10 +180,12 @@ jobs:
             'function openRecommendedPurchase(',
             'Прошлая закупочная цена:',
             'Нажмите «Купить» напротив нужного товара.',
-            'purchase-buy-total',
-            'edit-purchase-buy-total',
-            'Сумма за всю партию ₸',
-            'Закуп: ${fmt(x.unitCost)}/шт. · с доставкой:',
+            'id="porBuyTotal"',
+            'id="editPorBuyTotal"',
+            'purchase-row-total',
+            'Сумма за все товары партии ₸',
+            'Сумма этого товара ₸',
+            'Закуп: ${fmt(cost.unitCost)}/шт. · с доставкой:',
             'id="pDeliveryDue"',
             'Оплатить доставку при получении',
             'Едет на склад',
@@ -220,6 +222,8 @@ jobs:
               raise SystemExit('Product detail must not show Kaspi delivery row')
           if 'Создать закупку из списка' in html:
               raise SystemExit('Bulk purchase-plan button must stay removed')
+          if 'purchase-buy-total' in html or 'edit-purchase-buy-total' in html:
+              raise SystemExit('Per-product purchase amount inputs must stay removed')
           if old_kaspi_stage in html:
               raise SystemExit('Kaspi ACCEPTED_BY_MERCHANT must stay New until ASSEMBLE')
           if "if(!['new','transfer'].includes(stage))continue;for(const o of(g.lines||[]))" in html:
@@ -265,9 +269,11 @@ jobs:
               && grep -q 'function openRecommendedPurchase(' /tmp/site.html \
               && grep -q 'Прошлая закупочная цена:' /tmp/site.html \
               && grep -q 'Нажмите «Купить» напротив нужного товара.' /tmp/site.html \
-              && grep -q 'purchase-buy-total' /tmp/site.html \
-              && grep -q 'edit-purchase-buy-total' /tmp/site.html \
-              && grep -q 'Сумма за всю партию ₸' /tmp/site.html \
+              && grep -q 'id="porBuyTotal"' /tmp/site.html \
+              && grep -q 'id="editPorBuyTotal"' /tmp/site.html \
+              && grep -q 'purchase-row-total' /tmp/site.html \
+              && grep -q 'Сумма за все товары партии ₸' /tmp/site.html \
+              && grep -q 'Сумма этого товара ₸' /tmp/site.html \
               && grep -q 'function purchaseDeliveryDue(' /tmp/site.html \
               && grep -q 'id="pDeliveryDue"' /tmp/site.html \
               && grep -q 'Оплатить доставку при получении' /tmp/site.html \
@@ -292,6 +298,8 @@ jobs:
               && ! grep -q 'Доступно к продаже' /tmp/site.html \
               && ! grep -q 'price:Number(old?.price)||Number(o.unitPrice)||0' /tmp/site.html \
               && ! grep -q 'Создать закупку из списка' /tmp/site.html \
+              && ! grep -q 'purchase-buy-total' /tmp/site.html \
+              && ! grep -q 'edit-purchase-buy-total' /tmp/site.html \
               && ! grep -q 'raw.githubusercontent.com' /tmp/site.html; then
               break
             fi
@@ -315,9 +323,11 @@ jobs:
           grep -q 'function openRecommendedPurchase(' /tmp/site.html
           grep -q 'Прошлая закупочная цена:' /tmp/site.html
           grep -q 'Нажмите «Купить» напротив нужного товара.' /tmp/site.html
-          grep -q 'purchase-buy-total' /tmp/site.html
-          grep -q 'edit-purchase-buy-total' /tmp/site.html
-          grep -q 'Сумма за всю партию ₸' /tmp/site.html
+          grep -q 'id="porBuyTotal"' /tmp/site.html
+          grep -q 'id="editPorBuyTotal"' /tmp/site.html
+          grep -q 'purchase-row-total' /tmp/site.html
+          grep -q 'Сумма за все товары партии ₸' /tmp/site.html
+          grep -q 'Сумма этого товара ₸' /tmp/site.html
           grep -q 'function purchaseDeliveryDue(' /tmp/site.html
           grep -q 'id="pDeliveryDue"' /tmp/site.html
           grep -q 'Оплатить доставку при получении' /tmp/site.html
