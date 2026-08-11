@@ -8,7 +8,7 @@ on:
 
 permissions:
   contents: write
-  actions: read
+  actions: write
 
 jobs:
   patch-verify:
@@ -103,15 +103,16 @@ jobs:
           done
           test -n "$live"
 
-      - name: Wait for exact smoke test
+      - name: Dispatch and wait for exact smoke test
         env:
           GH_TOKEN: ${{ github.token }}
           SHA: ${{ steps.commit.outputs.sha }}
         run: |
           set -e
+          gh workflow run smoke-test.yml --ref main
           run_id=''
-          for attempt in $(seq 1 60); do
-            run_id=$(gh run list --workflow smoke-test.yml --branch main --limit 50 --json databaseId,headSha --jq ".[] | select(.headSha == \"$SHA\") | .databaseId" | head -n1)
+          for attempt in $(seq 1 40); do
+            run_id=$(gh run list --workflow smoke-test.yml --branch main --event workflow_dispatch --limit 50 --json databaseId,headSha --jq ".[] | select(.headSha == \"$SHA\") | .databaseId" | head -n1)
             if [ -n "$run_id" ]; then break; fi
             sleep 3
           done
