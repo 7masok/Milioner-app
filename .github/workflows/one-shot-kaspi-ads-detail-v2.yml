@@ -1,4 +1,4 @@
-name: One-shot fix Kaspi ad product matching
+name: One-shot add inventory unit cost
 on:
   push:
     branches: [main]
@@ -17,60 +17,79 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Apply safe Kaspi ad product matching fix
-        run: python tools/patch_kaspi_ads_name_match.py
+      - name: Apply inventory unit-cost patch
+        run: python tools/patch_inventory_unit_cost.py
 
-      - name: Validate before commit
+      - name: Validate inventory cost and FIFO behavior
         run: |
           python - <<'PY'
           from pathlib import Path
           import re
           html=Path('index.html').read_text(encoding='utf-8')
           required=[
-            'function kaspiAdsNameKey(value)',
-            "nn.includes(x.key)||x.key.includes(nn)",
-            "candidates.length===1||candidates.length>1&&candidates[0].key.length>candidates[1].key.length",
-            'function kaspiAdsMatchProduct(line)',
-            'function kaspiAdsBreakdown(days=reportPeriod)'
+            'id="icost"',
+            'Себестоимость 1 шт. ₸',
+            'function syncInventoryFields()',
+            'inventoryCostBaseline:true',
+            "batch:'Инвентаризация · исходный остаток'",
+            'realLots=lotsBefore.filter(x=>!x.inventoryAdjustment)',
+            'if(!realLots.length&&inventoryLots.length)',
+            'Полученные закупки с уже записанной FIFO-себестоимостью не переписываются.'
           ]
           missing=[x for x in required if x not in html]
-          if missing: raise SystemExit('Missing Kaspi ad name-match markers: '+', '.join(missing))
+          if missing: raise SystemExit('Missing inventory unit-cost markers: '+', '.join(missing))
           scripts=re.findall(r'<script>(.*?)</script>',html,flags=re.S|re.I)
           if not scripts: raise SystemExit('No inline script found')
           app='\n'.join(scripts)
           Path('/tmp/app.js').write_text(app,encoding='utf-8')
-          def cut(a,b):
-              i=app.index(a); j=app.index(b,i); return app[i:j]
-          test=(
-              cut('function adsSkuEqual(','function reportPeriodEnd(')+'\n'+
-              cut('function kaspiAdsNameKey(','function kaspiAdsBreakdown(')+'\n'+
-              cut('function normalizeName(','function marketplaceField(')+r'''
-          const state={products:[
-            {id:'p1',name:'Стикмэн Одно на двоих',kaspi:'979606368'},
-            {id:'p2',name:'Стикмэн Две половинки',kaspi:'979606369'}
-          ]};
+          def line(prefix):
+              hits=[x for x in app.splitlines() if x.startswith(prefix)]
+              if len(hits)!=1: raise SystemExit(f'Expected one {prefix}, got {len(hits)}')
+              return hits[0]
+          js='\n'.join([
+              line('function purchaseStatus('),
+              line('function fifoLots('),
+              line('function fifoConsume('),
+              line('function refreshProductAverageCost('),
+              line('function doInventory(){'),
+          ])+r'''
+          let seq=0;
+          let state={products:[],purchases:[],movements:[]};
           const prod=id=>state.products.find(p=>p.id===id);
-          const exact=kaspiAdsMatchProduct({sku:'979606368',name:''});
-          if(exact?.id!=='p1')throw new Error('Exact Kaspi SKU matching regressed');
-          const internal=kaspiAdsMatchProduct({sku:'166859382',name:'Брелок LuxAr Стикмэн Одно на двоих металл 2 шт'});
-          if(internal?.id!=='p1')throw new Error('Kaspi internal product id did not map by unique contained product name');
-          const other=kaspiAdsMatchProduct({sku:'166859005',name:'Брелок LuxAr Стикмэн Две половинки металл 2 шт'});
-          if(other?.id!=='p2')throw new Error('Second Kaspi product mapped incorrectly');
-          console.log('Kaspi ad product-name matching regression OK');
+          const reserved=()=>0;
+          const id=()=>`id${++seq}`;
+          const fmt=n=>`${Math.round(Number(n)||0)} ₸`;
+          const log=(type,productId,qty,extra)=>state.movements.push({type,productId,qty,extra});
+          const save=()=>{}; const closeModal=()=>{}; const render=()=>{};
+          let fields={};
+          const document={getElementById:id=>fields[id]};
+          function run(product,purchases,actual,cost){
+            state={products:[product],purchases:purchases||[],movements:[]};
+            fields={ip:{value:product.id},iq:{value:String(actual)},icost:{value:String(cost)}};
+            doInventory();
+            return {product:state.products[0],purchases:state.purchases};
+          }
+          let x=run({id:'p1',stock:5,cost:0},[],5,120);
+          if(x.purchases.length!==1||x.purchases[0].remainingQty!==5||x.purchases[0].landedUnitCost!==120||!x.purchases[0].inventoryCostBaseline)throw new Error('Legacy stock baseline was not created correctly');
+          if(Math.abs(x.product.cost-120)>1e-9)throw new Error('Legacy stock product cost not refreshed');
+          x=run({id:'p2',stock:5,cost:200},[{id:'real',productId:'p2',status:'received',qty:5,remainingQty:5,unitCost:200,landedUnitCost:200,receivedAt:1}],5,120);
+          if(x.purchases[0].landedUnitCost!==200||Math.abs(x.product.cost-200)>1e-9)throw new Error('Real purchase FIFO cost was overwritten');
+          x=run({id:'p3',stock:5,cost:100},[{id:'inv',productId:'p3',status:'received',qty:5,remainingQty:5,unitCost:100,landedUnitCost:100,receivedAt:1,inventoryAdjustment:true}],5,120);
+          if(x.purchases[0].landedUnitCost!==120||Math.abs(x.product.cost-120)>1e-9)throw new Error('Inventory-only baseline cost cannot be corrected');
+          console.log('Inventory unit-cost FIFO regression OK');
           '''
-          )
-          Path('/tmp/kaspi-ads-name-match.js').write_text(test,encoding='utf-8')
+          Path('/tmp/inventory-cost-regression.js').write_text(js,encoding='utf-8')
           PY
           node --check /tmp/app.js
-          node /tmp/kaspi-ads-name-match.js
+          node /tmp/inventory-cost-regression.js
 
-      - name: Commit Kaspi ad product matcher
+      - name: Commit inventory unit cost
         id: commit
         run: |
           git config user.name '7masok'
           git config user.email '7masok@gmail.com'
           git add index.html
-          git commit -m 'Match Kaspi ad rows to warehouse products by unique name'
+          git commit -m 'Add unit cost to inventory adjustment'
           git push origin HEAD:main
           echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
