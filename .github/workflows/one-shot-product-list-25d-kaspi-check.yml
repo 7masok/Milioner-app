@@ -1,0 +1,126 @@
+name: One-shot product list 25d and Kaspi stock check
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/one-shot-product-list-25d-kaspi-check.yml'
+
+permissions:
+  contents: write
+  actions: write
+
+jobs:
+  patch-check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout current main
+        uses: actions/checkout@v4
+
+      - name: Check current app and safe central APIs
+        run: |
+          set -e
+          test -s index.html
+          grep -q 'function productCard(p)' index.html
+          curl -fsSL --max-time 25 'https://millioner-api.7masok.workers.dev/health' | jq -e '.ok==true and .d1==true'
+          curl -fsSL --max-time 25 'https://millioner-api.7masok.workers.dev/api/market-status' | jq -e '.ok==true'
+          curl -fsSL --max-time 25 'https://millioner-api.7masok.workers.dev/api/sync-status' | jq -e '.ok==true'
+
+      - name: Diagnose Kaspi stock feed safely
+        run: |
+          set -e
+          status=$(curl -fsSL --max-time 25 -H 'Origin: https://7masok.github.io' 'https://millioner-api.7masok.workers.dev/api/kaspi-stock-feed-status')
+          echo "$status" | jq '{ok,configured,ready,merchantId,offerCount,storeIds,primaryStoreId,linked,matched,missingSkus,missingPrimaryStore,updatedAt,multiStoreMode}'
+          echo "$status" | jq -e '.ok==true'
+          feed=$(echo "$status" | jq -r '.feedUrl // empty')
+          if [ -n "$feed" ]; then
+            code=$(curl -sS --max-time 25 -o /tmp/kaspi-feed.xml -w '%{http_code}' "$feed")
+            echo "Kaspi feed HTTP: $code"
+            test "$code" = 200
+            grep -qi '<kaspi_catalog' /tmp/kaspi-feed.xml
+            grep -qi '<offer' /tmp/kaspi-feed.xml
+            echo "Kaspi feed offers: $(grep -oi '<offer\b' /tmp/kaspi-feed.xml | wc -l)"
+            echo "Kaspi feed stockCount attrs: $(grep -oi 'stockCount=' /tmp/kaspi-feed.xml | wc -l)"
+          else
+            echo 'Kaspi feed URL is not configured yet.'
+          fi
+
+      - name: Patch product list metrics
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import re
+          p=Path('index.html')
+          s=p.read_text(encoding='utf-8')
+          old=re.search(r"function renderProducts\(\)\{.*?\}\nfunction productCard\(p\)\{.*?\}\nlet movementPage=1;",s,flags=re.S)
+          if not old:
+              raise SystemExit('product render region not found')
+          block=old.group(0)
+          block=block.replace("sort==='sales'?salesDays(y)-salesDays(x):sort==='profit'?profitForProduct(y)-profitForProduct(x):salesDays(x)?xs/salesDays(x)-ys/salesDays(y):0", "sort==='sales'?productAverageDailySales(y,25)-productAverageDailySales(x,25):sort==='profit'?profitForProduct(y)-profitForProduct(x):productAverageDailySales(x,25)?xs/productAverageDailySales(x,25)-ys/productAverageDailySales(y,25):0")
+          card=re.search(r"function productCard\(p\)\{.*?\}\nlet movementPage=1;",block,flags=re.S)
+          if not card:
+              raise SystemExit('productCard not found')
+          new_card="""function productCard(p){let d=productAverageDailySales(p,25),stock=productDisplayStock(p),kind=isBundleProduct(p)?'Набор · ':'';return `<div class=\"item row\" onclick=\"openProduct('${p.id}')\">${p.photo?`<img class=\"thumb\" src=\"${p.photo}\">`:'<div class=\"thumb\">Фото</div>'}<div class=\"grow\"><div class=\"name\">${esc(p.name)}</div><div class=\"muted\">${kind}${esc(p.category||'Без категории')}</div><div class=\"muted\">Продажи/день за 25 дней: ${d.toFixed(1)} · Запас: ${d?(stock/d).toFixed(1):'∞'} дн.</div></div><div class=\"right\"><b>${stock}</b><div class=\"muted\">${isBundleProduct(p)?'набор.':'шт.'}</div></div></div>`}\nlet movementPage=1;"""
+          block=block[:card.start()]+new_card+block[card.end():]
+          s=s[:old.start()]+block+s[old.end():]
+          p.write_text(s,encoding='utf-8')
+          PY
+
+      - name: Validate patch
+        run: |
+          set -e
+          grep -q 'Продажи/день за 25 дней' index.html
+          python - <<'PY'
+          from pathlib import Path
+          import re
+          s=Path('index.html').read_text(encoding='utf-8')
+          m=re.search(r'function productCard\(p\)\{.*?\}\nlet movementPage=1;',s,flags=re.S)
+          if not m: raise SystemExit('productCard region missing')
+          x=m.group(0)
+          for forbidden in ['Себестоимость:', 'Прибыль 30д:']:
+              if forbidden in x: raise SystemExit(forbidden+' still in product list')
+          if 'productAverageDailySales(p,25)' not in x: raise SystemExit('25-day rate missing')
+          scripts=re.findall(r'<script>(.*?)</script>',s,flags=re.S|re.I)
+          Path('/tmp/app.js').write_text('\n'.join(scripts),encoding='utf-8')
+          PY
+          node --check /tmp/app.js
+
+      - name: Commit app change
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -e
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add index.html
+          git diff --cached --quiet && exit 0
+          git commit -m 'Show 25-day sales rate in product list'
+          git push origin HEAD:main
+
+      - name: Wait for published app
+        run: |
+          set -e
+          for attempt in $(seq 1 60); do
+            curl -fsSL --max-time 20 'https://7masok.github.io/Milioner-app/' -o /tmp/site.html || true
+            if grep -q 'Продажи/день за 25 дней' /tmp/site.html 2>/dev/null; then exit 0; fi
+            sleep 5
+          done
+          exit 1
+
+      - name: Dispatch smoke for current head
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -e
+          sha=$(git rev-parse HEAD)
+          gh workflow run smoke-test.yml --ref main
+          run_id=''
+          for attempt in $(seq 1 30); do
+            run_id=$(gh run list --workflow smoke-test.yml --branch main --event workflow_dispatch --limit 40 --json databaseId,headSha --jq ".[] | select(.headSha == \"$sha\") | .databaseId" | head -n1)
+            if [ -n "$run_id" ]; then break; fi
+            sleep 3
+          done
+          test -n "$run_id"
+          echo "Smoke run: $run_id"
+          gh run watch "$run_id" --exit-status
