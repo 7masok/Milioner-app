@@ -69,13 +69,13 @@ jobs:
           helpers=r'''
           const now=Date.now();
           const products=[
-            {id:'a',name:'Товар A',kind:'simple',available:2},
+            {id:'a',name:'Товар A',kind:'simple',available:2,stock:5,cost:70},
             {id:'b',name:'Набор',kind:'bundle',components:[{productId:'a',qty:3}]},
-            {id:'c',name:'Без продаж',kind:'simple',available:0}
+            {id:'c',name:'Без продаж',kind:'simple',available:0,stock:3,cost:20}
           ];
           const state={purchases:[
             {productId:'a',qty:4,status:'to_me'},
-            {productId:'a',qty:100,status:'received',buyTotal:5000,receivedAt:now-1}
+            {productId:'a',qty:100,status:'received',buyTotal:5000,remainingQty:3,landedUnitCost:50,receivedAt:now-1}
           ]};
           function reportPeriodStart(){return 0}
           function reportPeriodEnd(){return now+1}
@@ -112,9 +112,13 @@ jobs:
           cost_end=app.index('function updatePurchaseOrderCalculator(',cost_start)
           due_start=app.index('function purchaseShipmentTotals(')
           due_end=app.index('function renderPurchasePlan(',due_start)
+          inventory_start=app.index('function stockTotal()')
+          inventory_end=app.index('function consumeSellableProduct(',inventory_start)
+          fifo_start=app.index('function fifoLots(')
+          fifo_end=app.index('function fifoConsume(',fifo_start)
           button_start=app.index('function openRecommendedPurchase(')
           button_end=app.index('function renderPurchases(',button_start)
-          test=helpers+app[start:end]+app[button_start:button_end]+app[cost_start:cost_end]+app[due_start:due_end]+app[create_start:create_end]+r'''
+          test=helpers+app[start:end]+app[button_start:button_end]+app[cost_start:cost_end]+app[due_start:due_end]+app[inventory_start:inventory_end]+app[fifo_start:fifo_end]+app[create_start:create_end]+r'''
           const row=purchaseRecommendation(products[0]);
           if(purchaseDemandQty(products[0])!==18)throw new Error('Bundle component demand was not included');
           if(row.available!==2||row.inbound!==4||row.qty!==14)throw new Error('Recommendation must create a fresh 25-day batch: '+JSON.stringify(row));
@@ -129,6 +133,8 @@ jobs:
           if(costs[1].buyTotal!==480||costs[1].deliveryShare!==48||costs[1].landedUnitCost!==176)throw new Error('Second quantity share mismatch');
           const due=purchaseDeliveryDue([{status:'to_me',rows:[{qty:2,buyTotal:200,delivery:20}]},{status:'to_forwarder',rows:[{qty:3,buyTotal:600,delivery:60}]}]);
           if(due!==20)throw new Error('Only delivery for shipments going to me must be payable');
+          if(stockTotal()!==8)throw new Error('Warehouse stock total mismatch');
+          if(warehouseInventoryCost()!==350)throw new Error('Warehouse FIFO valuation mismatch: '+warehouseInventoryCost());
           createPurchaseOrder();
           const created=state.purchases.filter(x=>x.shipmentId);
           if(created.length!==2)throw new Error('Purchase line count mismatch');
@@ -172,6 +178,10 @@ jobs:
             "purchaseStatus(x)==='received'",
             'function purchaseShipmentGroups()',
             'function purchaseDeliveryDue(',
+            'function warehouseInventoryCost()',
+            'id="productStockQty"',
+            'id="productStockCost"',
+            'Себестоимость всех товаров',
             'function createPurchaseOrder()',
             'const PURCHASE_COVER_DAYS=25;',
             'function purchaseDemandQty(',
@@ -224,6 +234,8 @@ jobs:
               raise SystemExit('Bulk purchase-plan button must stay removed')
           if 'purchase-buy-total' in html or 'edit-purchase-buy-total' in html:
               raise SystemExit('Per-product purchase amount inputs must stay removed')
+          if 'id="mStock"' in html:
+              raise SystemExit('Warehouse stock metric must stay off the home dashboard')
           if old_kaspi_stage in html:
               raise SystemExit('Kaspi ACCEPTED_BY_MERCHANT must stay New until ASSEMBLE')
           if "if(!['new','transfer'].includes(stage))continue;for(const o of(g.lines||[]))" in html:
@@ -263,6 +275,10 @@ jobs:
               && grep -q 'id="koQty"' /tmp/site.html \
               && grep -q 'id="koAmount"' /tmp/site.html \
               && grep -q 'function createPurchaseOrder()' /tmp/site.html \
+              && grep -q 'function warehouseInventoryCost()' /tmp/site.html \
+              && grep -q 'id="productStockQty"' /tmp/site.html \
+              && grep -q 'id="productStockCost"' /tmp/site.html \
+              && grep -q 'Себестоимость всех товаров' /tmp/site.html \
               && grep -q 'const PURCHASE_COVER_DAYS=25' /tmp/site.html \
               && grep -q 'function purchaseDemandQty(' /tmp/site.html \
               && grep -q 'function purchaseLastUnitCost(' /tmp/site.html \
@@ -300,6 +316,7 @@ jobs:
               && ! grep -q 'Создать закупку из списка' /tmp/site.html \
               && ! grep -q 'purchase-buy-total' /tmp/site.html \
               && ! grep -q 'edit-purchase-buy-total' /tmp/site.html \
+              && ! grep -q 'id="mStock"' /tmp/site.html \
               && ! grep -q 'raw.githubusercontent.com' /tmp/site.html; then
               break
             fi
@@ -317,6 +334,10 @@ jobs:
           grep -q 'id="koQty"' /tmp/site.html
           grep -q 'id="koAmount"' /tmp/site.html
           grep -q 'function createPurchaseOrder()' /tmp/site.html
+          grep -q 'function warehouseInventoryCost()' /tmp/site.html
+          grep -q 'id="productStockQty"' /tmp/site.html
+          grep -q 'id="productStockCost"' /tmp/site.html
+          grep -q 'Себестоимость всех товаров' /tmp/site.html
           grep -q 'const PURCHASE_COVER_DAYS=25' /tmp/site.html
           grep -q 'function purchaseDemandQty(' /tmp/site.html
           grep -q 'function purchaseLastUnitCost(' /tmp/site.html
@@ -328,6 +349,7 @@ jobs:
           grep -q 'purchase-row-total' /tmp/site.html
           grep -q 'Сумма за все товары партии ₸' /tmp/site.html
           grep -q 'Сумма этого товара ₸' /tmp/site.html
+          ! grep -q 'id="mStock"' /tmp/site.html
           grep -q 'function purchaseDeliveryDue(' /tmp/site.html
           grep -q 'id="pDeliveryDue"' /tmp/site.html
           grep -q 'Оплатить доставку при получении' /tmp/site.html
