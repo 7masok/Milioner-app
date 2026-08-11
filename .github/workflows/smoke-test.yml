@@ -75,7 +75,9 @@ jobs:
             "kaspiAdExpenses:arr('kaspiAdExpenses').slice(0,5000)",
             'Реклама Kaspi без привязки','xlsx@0.18.5',
             'function kaspiAdsIsoDate(','function kaspiAdsMatchProduct(',
-            'Обзорный отчёт не подходит','Многодневный расход без дат не распределяется между днями',
+            'kaspiAdsControlFile','function kaspiAdsOverviewTotals(','function kaspiAdsPickCostColumn(',
+            "parserVersion:'overview-reconciled-v1'",
+            'Сумма товарного отчёта не сходится с обзорным','Контроль обзорного:','Колонка расходов:',
             'detailHash','Array.isArray(batch.lines)'
           ]
           missing=[x for x in required if x not in html and x not in api]
@@ -98,7 +100,7 @@ jobs:
               raise SystemExit('Pages index redirects incorrectly')
           if 'client_secret' in html.lower(): raise SystemExit('client secret in browser')
           if '"crons": ["*/5 * * * *"]' not in wrangler: raise SystemExit('cron mismatch')
-          print('Unified lifecycle, purchase transit, exact Kaspi advertising persistence and financial contract OK')
+          print('Unified lifecycle, purchase transit, overview-reconciled Kaspi advertising and financial contract OK')
           PY
 
       - name: Check published site
@@ -125,7 +127,11 @@ jobs:
               && grep -q 'function importKaspiAdsFile()' /tmp/site.html \
               && grep -q 'function kaspiAdsBreakdown(' /tmp/site.html \
               && grep -q 'function kaspiAdsIsoDate(' /tmp/site.html \
-              && grep -q 'Обзорный отчёт не подходит' /tmp/site.html \
+              && grep -q 'kaspiAdsControlFile' /tmp/site.html \
+              && grep -q 'function kaspiAdsOverviewTotals(' /tmp/site.html \
+              && grep -q 'function kaspiAdsPickCostColumn(' /tmp/site.html \
+              && grep -q 'overview-reconciled-v1' /tmp/site.html \
+              && grep -q 'Сумма товарного отчёта не сходится с обзорным' /tmp/site.html \
               && grep -q 'detailHash' /tmp/site.html \
               && ! grep -q 'factor=Math.min(1,overlap/span)' /tmp/site.html \
               && ! grep -q '<option value="reserve">' /tmp/site.html \
@@ -155,7 +161,11 @@ jobs:
           grep -q 'function importKaspiAdsFile()' /tmp/site.html
           grep -q 'function kaspiAdsBreakdown(' /tmp/site.html
           grep -q 'function kaspiAdsIsoDate(' /tmp/site.html
-          grep -q 'Обзорный отчёт не подходит' /tmp/site.html
+          grep -q 'kaspiAdsControlFile' /tmp/site.html
+          grep -q 'function kaspiAdsOverviewTotals(' /tmp/site.html
+          grep -q 'function kaspiAdsPickCostColumn(' /tmp/site.html
+          grep -q 'overview-reconciled-v1' /tmp/site.html
+          grep -q 'Сумма товарного отчёта не сходится с обзорным' /tmp/site.html
           grep -q 'detailHash' /tmp/site.html
           ! grep -q 'factor=Math.min(1,overlap/span)' /tmp/site.html
           ! grep -q '<option value="reserve">' /tmp/site.html
