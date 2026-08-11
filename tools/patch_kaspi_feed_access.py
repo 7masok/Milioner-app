@@ -6,7 +6,8 @@ html=html_path.read_text(encoding='utf-8')
 api=api_path.read_text(encoding='utf-8')
 
 if 'Последнее обращение Kaspi к XML' in html and 'kaspi_price_feed_access' in api:
-    raise SystemExit('Patch already applied')
+    print('Kaspi XML access tracking already applied')
+    raise SystemExit(0)
 
 route_old="""      if (url.pathname === '/api/kaspi-stock-feed-status' && request.method === 'GET') {
         if (!isTrustedBrowserOrigin(origin, env)) return json({ ok: false, error: 'Forbidden origin' }, 403, cors);
