@@ -1,0 +1,59 @@
+name: One-shot product metrics smoke update
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/one-shot-smoke-product-metrics.yml'
+      - 'tools/patch_smoke_product_metrics.py'
+
+permissions:
+  contents: write
+  actions: read
+
+jobs:
+  patch-verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout current main
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Patch smoke contract
+        run: python tools/patch_smoke_product_metrics.py
+
+      - name: Validate smoke contract
+        run: |
+          set -e
+          grep -q "function productLifetimeAverageCost(" .github/workflows/smoke-test.yml
+          grep -q "function productAverageDailySales(" .github/workflows/smoke-test.yml
+          grep -q "Product detail must not show Kaspi delivery row" .github/workflows/smoke-test.yml
+          if grep -q "'function productKaspiDelivery(','Расход на доставку Kaspi'" .github/workflows/smoke-test.yml; then exit 1; fi
+          git diff --check
+
+      - name: Commit smoke update
+        id: commit
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add .github/workflows/smoke-test.yml
+          git commit -m 'Update smoke for product metrics'
+          git push origin HEAD:main
+          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Wait for standard smoke
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SHA: ${{ steps.commit.outputs.sha }}
+        run: |
+          run_id=''
+          for attempt in $(seq 1 40); do
+            run_id=$(gh run list --workflow smoke-test.yml --branch main --limit 50 --json databaseId,headSha --jq ".[] | select(.headSha == \"$SHA\") | .databaseId" | head -n1)
+            if [ -n "$run_id" ]; then break; fi
+            sleep 3
+          done
+          test -n "$run_id"
+          echo "Smoke run: $run_id"
+          gh run watch "$run_id" --exit-status
