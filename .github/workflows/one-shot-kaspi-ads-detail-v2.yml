@@ -4,6 +4,7 @@ on:
     branches: [main]
     paths:
       - '.github/workflows/one-shot-kaspi-ads-detail-v2.yml'
+      - 'tools/patch_delete_product.py'
 permissions:
   contents: write
   actions: write
