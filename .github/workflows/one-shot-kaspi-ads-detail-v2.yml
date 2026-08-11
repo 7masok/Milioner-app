@@ -51,7 +51,7 @@ jobs:
         run: |
           git config user.name '7masok'
           git config user.email '7masok@gmail.com'
-          git add index.html .github/workflows/smoke-test.yml
+          git add index.html
           git commit -m 'Use exact Kaspi ad spend by product and date'
           git push origin HEAD:main
           echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
