@@ -27,6 +27,18 @@ jobs:
           echo "Current main: $(git rev-parse HEAD)"
           echo "index bytes: $(wc -c < index.html)"
 
+      - name: Normalize rollout patch anchor
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          p=Path('tools/patch_kaspi_stock_feed.py')
+          s=p.read_text(encoding='utf-8')
+          old='ui_anchor = """async function testKaspiWorker(){\n"""'
+          new='ui_anchor = """async function testKaspiWorker(){"""'
+          if old not in s: raise SystemExit('Expected rollout anchor source not found')
+          p.write_text(s.replace(old,new,1),encoding='utf-8')
+          PY
+
       - name: Apply protected Kaspi XML stock patch
         run: python tools/patch_kaspi_stock_feed.py
 
