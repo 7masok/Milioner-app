@@ -1,0 +1,28 @@
+name: Diagnose WB stock preview
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/diagnose-wb-stock-preview.yml'
+
+permissions:
+  contents: read
+  actions: write
+
+jobs:
+  status:
+    runs-on: ubuntu-latest
+    timeout-minutes: 4
+    steps:
+      - name: Read central stock-sync status only
+        run: |
+          curl -fsSL --retry 3 --retry-delay 2 --max-time 25 'https://millioner-api.7masok.workers.dev/api/stock-sync-status' -o stock-sync-status.json
+          jq -e '.ok==true and .mode=="preview"' stock-sync-status.json
+          jq '{ok,mode,markets}' stock-sync-status.json
+      - name: Upload diagnostic status
+        uses: actions/upload-artifact@v4
+        with:
+          name: wb-stock-preview-status
+          path: stock-sync-status.json
+          retention-days: 1
