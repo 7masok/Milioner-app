@@ -1,4 +1,4 @@
-name: One-shot add Reports Yesterday
+name: One-shot fix Kaspi ad product matching
 on:
   push:
     branches: [main]
@@ -17,8 +17,8 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Apply Reports Yesterday patch
-        run: python tools/patch_reports_yesterday.py
+      - name: Apply safe Kaspi ad product matching fix
+        run: python tools/patch_kaspi_ads_name_match.py
 
       - name: Validate before commit
         run: |
@@ -27,43 +27,50 @@ jobs:
           import re
           html=Path('index.html').read_text(encoding='utf-8')
           required=[
-            'data-report-period="-1"',
-            "onclick=\"setReportPeriod(-1)\">Вчера</button>",
-            'function reportPeriodEnd(days=1)',
-            'end=reportPeriodEnd(days)',
-            'Number(s.date)<until',
-            "days===-1?'active':''",
-            "setMarketplaceReportPeriod(-1)",
-            "periodDays===-1?'вчера'"
+            'function kaspiAdsNameKey(value)',
+            "nn.includes(x.key)||x.key.includes(nn)",
+            "candidates.length===1||candidates.length>1&&candidates[0].key.length>candidates[1].key.length",
+            'function kaspiAdsMatchProduct(line)',
+            'function kaspiAdsBreakdown(days=reportPeriod)'
           ]
           missing=[x for x in required if x not in html]
-          if missing: raise SystemExit('Missing Yesterday report markers: '+', '.join(missing))
+          if missing: raise SystemExit('Missing Kaspi ad name-match markers: '+', '.join(missing))
           scripts=re.findall(r'<script>(.*?)</script>',html,flags=re.S|re.I)
           if not scripts: raise SystemExit('No inline script found')
           app='\n'.join(scripts)
           Path('/tmp/app.js').write_text(app,encoding='utf-8')
-          def line(prefix):
-              hits=[x for x in app.splitlines() if x.startswith(prefix)]
-              if len(hits)!=1: raise SystemExit(f'Expected one {prefix}, got {len(hits)}')
-              return hits[0]
-          regression=line('function reportPeriodStart(days){')+'\n'+line('function reportPeriodEnd(days=1){')+r'''
-          const start=reportPeriodStart(-1),end=reportPeriodEnd(-1),todayStart=reportPeriodStart(1);
-          if(!(start<end && end===todayStart))throw new Error('Yesterday bounds are not exact');
-          if(reportPeriodEnd(1)<=todayStart)throw new Error('Today end is invalid');
-          console.log('Reports Yesterday bounds OK');
+          def cut(a,b):
+              i=app.index(a); j=app.index(b,i); return app[i:j]
+          test=(
+              cut('function adsSkuEqual(','function reportPeriodEnd(')+'\n'+
+              cut('function kaspiAdsNameKey(','function kaspiAdsBreakdown(')+'\n'+
+              cut('function normalizeName(','function marketplaceField(')+r'''
+          const state={products:[
+            {id:'p1',name:'Стикмэн Одно на двоих',kaspi:'979606368'},
+            {id:'p2',name:'Стикмэн Две половинки',kaspi:'979606369'}
+          ]};
+          const prod=id=>state.products.find(p=>p.id===id);
+          const exact=kaspiAdsMatchProduct({sku:'979606368',name:''});
+          if(exact?.id!=='p1')throw new Error('Exact Kaspi SKU matching regressed');
+          const internal=kaspiAdsMatchProduct({sku:'166859382',name:'Брелок LuxAr Стикмэн Одно на двоих металл 2 шт'});
+          if(internal?.id!=='p1')throw new Error('Kaspi internal product id did not map by unique contained product name');
+          const other=kaspiAdsMatchProduct({sku:'166859005',name:'Брелок LuxAr Стикмэн Две половинки металл 2 шт'});
+          if(other?.id!=='p2')throw new Error('Second Kaspi product mapped incorrectly');
+          console.log('Kaspi ad product-name matching regression OK');
           '''
-          Path('/tmp/yesterday-regression.js').write_text(regression,encoding='utf-8')
+          )
+          Path('/tmp/kaspi-ads-name-match.js').write_text(test,encoding='utf-8')
           PY
           node --check /tmp/app.js
-          node /tmp/yesterday-regression.js
+          node /tmp/kaspi-ads-name-match.js
 
-      - name: Commit Reports Yesterday
+      - name: Commit Kaspi ad product matcher
         id: commit
         run: |
           git config user.name '7masok'
           git config user.email '7masok@gmail.com'
           git add index.html
-          git commit -m 'Add Yesterday period to reports'
+          git commit -m 'Match Kaspi ad rows to warehouse products by unique name'
           git push origin HEAD:main
           echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
