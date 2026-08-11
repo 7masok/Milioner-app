@@ -1,4 +1,4 @@
-name: One-shot fix Kaspi ad cost header
+name: One-shot add Reports Yesterday
 on:
   push:
     branches: [main]
@@ -17,8 +17,8 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Apply Kaspi ad cost-header fix
-        run: python tools/patch_kaspi_ads_cost_header.py
+      - name: Apply Reports Yesterday patch
+        run: python tools/patch_reports_yesterday.py
 
       - name: Validate before commit
         run: |
@@ -27,53 +27,43 @@ jobs:
           import re
           html=Path('index.html').read_text(encoding='utf-8')
           required=[
-            'function kaspiAdsParseDelimitedText(',
-            "new TextDecoder('utf-8').decode(buffer)",
-            "n==='рекламируемый товар'",
-            "parserVersion:'kaspi-product-csv-v2'",
-            '^расход.*реклам|^реклам.*расход|затрат.*реклам|реклам.*затрат|стоимост.*реклам',
-            'Расходы на рекламу',
-            'Рекламируемый товар'
+            'data-report-period="-1"',
+            "onclick=\"setReportPeriod(-1)\">Вчера</button>",
+            'function reportPeriodEnd(days=1)',
+            'end=reportPeriodEnd(days)',
+            'Number(s.date)<until',
+            "days===-1?'active':''",
+            "setMarketplaceReportPeriod(-1)",
+            "periodDays===-1?'вчера'"
           ]
           missing=[x for x in required if x not in html]
-          if missing: raise SystemExit('Missing Kaspi product-CSV markers: '+', '.join(missing))
-          old='^расход.*реклам$|^реклам.*расход$|затрат.*реклам|реклам.*затрат|стоимост.*реклам'
-          if old in html: raise SystemExit('Old strict Kaspi ad cost-header matcher remains')
-          forbidden=['kaspiAdsControlFile','function kaspiAdsOverviewTotals(','function kaspiAdsPickCostColumn(']
-          present=[x for x in forbidden if x in html]
-          if present: raise SystemExit('Old overview-reconciliation code remains: '+', '.join(present))
+          if missing: raise SystemExit('Missing Yesterday report markers: '+', '.join(missing))
           scripts=re.findall(r'<script>(.*?)</script>',html,flags=re.S|re.I)
           if not scripts: raise SystemExit('No inline script found')
           app='\n'.join(scripts)
           Path('/tmp/app.js').write_text(app,encoding='utf-8')
-          def cut(a,b):
-              i=app.index(a); j=app.index(b,i); return app[i:j]
-          regression=cut('function adsMoney(','function adsSkuEqual(')+"\n"+cut('function kaspiAdsParseDelimitedText(','async function kaspiAdsParseFile(')+r'''
-          const sample='\uFEFFРекламируемый товар;Товар;Расходы на рекламу\r\n166859382;Товар 1;164,69\r\n166859005;Товар 2;166,06\r\n';
-          const rows=kaspiAdsParseDelimitedText(sample);
-          if(rows.length!==2)throw new Error('CSV row count mismatch');
-          if(rows[0]['Рекламируемый товар']!=='166859382')throw new Error('Kaspi product id lost');
-          if(rows[0]['Расходы на рекламу']!=='164,69')throw new Error('Decimal comma was mutated');
-          const normalized=Object.keys(rows[0]).map(k=>[k,adsColumn(k)]);
-          const hit=normalized.find(([,n])=>/^расход.*реклам|^реклам.*расход|затрат.*реклам|реклам.*затрат|стоимост.*реклам/.test(n));
-          const adCostKey=hit?.[0]||'';
-          if(adCostKey!=='Расходы на рекламу')throw new Error('Advertising cost header was not detected: '+adCostKey);
-          const total=rows.reduce((n,r)=>n+adsMoney(r[adCostKey]),0);
-          if(Math.abs(total-330.75)>1e-9)throw new Error('Advertising total mismatch: '+total);
-          console.log('Kaspi ad header + decimal-comma regression OK:',adCostKey,total);
+          def line(prefix):
+              hits=[x for x in app.splitlines() if x.startswith(prefix)]
+              if len(hits)!=1: raise SystemExit(f'Expected one {prefix}, got {len(hits)}')
+              return hits[0]
+          regression=line('function reportPeriodStart(days){')+'\n'+line('function reportPeriodEnd(days=1){')+r'''
+          const start=reportPeriodStart(-1),end=reportPeriodEnd(-1),todayStart=reportPeriodStart(1);
+          if(!(start<end && end===todayStart))throw new Error('Yesterday bounds are not exact');
+          if(reportPeriodEnd(1)<=todayStart)throw new Error('Today end is invalid');
+          console.log('Reports Yesterday bounds OK');
           '''
-          Path('/tmp/kaspi-ads-regression.js').write_text(regression,encoding='utf-8')
+          Path('/tmp/yesterday-regression.js').write_text(regression,encoding='utf-8')
           PY
           node --check /tmp/app.js
-          node /tmp/kaspi-ads-regression.js
+          node /tmp/yesterday-regression.js
 
-      - name: Commit corrected Kaspi ad header matcher
+      - name: Commit Reports Yesterday
         id: commit
         run: |
           git config user.name '7masok'
           git config user.email '7masok@gmail.com'
           git add index.html
-          git commit -m 'Accept Kaspi ad expense header endings'
+          git commit -m 'Add Yesterday period to reports'
           git push origin HEAD:main
           echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
