@@ -80,9 +80,10 @@ jobs:
           function reportPeriodStart(){return 0}
           function reportPeriodEnd(){return now+1}
           function financialSales(){return [
-            {productId:'a',qty:12,date:now},
-            {productId:'b',qty:2,date:now}
+            {productId:'a',qty:12,price:100,cost:40,fee:10,date:now},
+            {productId:'b',qty:2,price:300,cost:100,fee:20,date:now}
           ]}
+          function kaspiAdsForProduct(productId,days){return days==='all'?(productId==='a'?60:productId==='b'?20:0):0}
           function prod(id){return products.find(x=>x.id===id)}
           function isBundleProduct(p){return p?.kind==='bundle'}
           function bundleComponents(p){return p?.components||[]}
@@ -114,11 +115,13 @@ jobs:
           due_end=app.index('function renderPurchasePlan(',due_start)
           inventory_start=app.index('function stockTotal()')
           inventory_end=app.index('function consumeSellableProduct(',inventory_start)
+          profit_start=app.index('function productAllTimeProfitStats(')
+          profit_end=app.index('function productKaspiDelivery(',profit_start)
           fifo_start=app.index('function fifoLots(')
           fifo_end=app.index('function fifoConsume(',fifo_start)
           button_start=app.index('function openRecommendedPurchase(')
           button_end=app.index('function renderPurchases(',button_start)
-          test=helpers+app[start:end]+app[button_start:button_end]+app[cost_start:cost_end]+app[due_start:due_end]+app[inventory_start:inventory_end]+app[fifo_start:fifo_end]+app[create_start:create_end]+r'''
+          test=helpers+app[start:end]+app[button_start:button_end]+app[cost_start:cost_end]+app[due_start:due_end]+app[profit_start:profit_end]+app[inventory_start:inventory_end]+app[fifo_start:fifo_end]+app[create_start:create_end]+r'''
           const row=purchaseRecommendation(products[0]);
           if(purchaseDemandQty(products[0])!==18)throw new Error('Bundle component demand was not included');
           if(row.available!==2||row.inbound!==4||row.qty!==14)throw new Error('Recommendation must create a fresh 25-day batch: '+JSON.stringify(row));
@@ -135,6 +138,9 @@ jobs:
           if(due!==20)throw new Error('Only delivery for shipments going to me must be payable');
           if(stockTotal()!==8)throw new Error('Warehouse stock total mismatch');
           if(warehouseInventoryCost()!==350)throw new Error('Warehouse FIFO valuation mismatch: '+warehouseInventoryCost());
+          const profitStats=productAllTimeProfitStats(products[0]);
+          if(profitStats.qty!==12||profitStats.profit!==540||profitStats.unitProfit!==45)throw new Error('All-time average unit profit mismatch: '+JSON.stringify(profitStats));
+          if(warehouseProjectedProfit()!==225)throw new Error('Warehouse projected profit mismatch: '+warehouseProjectedProfit());
           createPurchaseOrder();
           const created=state.purchases.filter(x=>x.shipmentId);
           if(created.length!==2)throw new Error('Purchase line count mismatch');
@@ -179,9 +185,14 @@ jobs:
             'function purchaseShipmentGroups()',
             'function purchaseDeliveryDue(',
             'function warehouseInventoryCost()',
+            'function productAllTimeProfitStats(',
+            'function warehouseProjectedProfit(',
+            "allTime=days==='all'",
             'id="productStockQty"',
             'id="productStockCost"',
-            'Себестоимость всех товаров',
+            'id="productStockProfit"',
+            'Средняя прибыль/шт. за всё время:',
+            'Прибыль с остатка',
             'function createPurchaseOrder()',
             'const PURCHASE_COVER_DAYS=25;',
             'function purchaseDemandQty(',
@@ -276,9 +287,13 @@ jobs:
               && grep -q 'id="koAmount"' /tmp/site.html \
               && grep -q 'function createPurchaseOrder()' /tmp/site.html \
               && grep -q 'function warehouseInventoryCost()' /tmp/site.html \
+              && grep -q 'function productAllTimeProfitStats(' /tmp/site.html \
+              && grep -q 'function warehouseProjectedProfit(' /tmp/site.html \
               && grep -q 'id="productStockQty"' /tmp/site.html \
               && grep -q 'id="productStockCost"' /tmp/site.html \
-              && grep -q 'Себестоимость всех товаров' /tmp/site.html \
+              && grep -q 'id="productStockProfit"' /tmp/site.html \
+              && grep -q 'Средняя прибыль/шт. за всё время:' /tmp/site.html \
+              && grep -q 'Прибыль с остатка' /tmp/site.html \
               && grep -q 'const PURCHASE_COVER_DAYS=25' /tmp/site.html \
               && grep -q 'function purchaseDemandQty(' /tmp/site.html \
               && grep -q 'function purchaseLastUnitCost(' /tmp/site.html \
@@ -335,9 +350,13 @@ jobs:
           grep -q 'id="koAmount"' /tmp/site.html
           grep -q 'function createPurchaseOrder()' /tmp/site.html
           grep -q 'function warehouseInventoryCost()' /tmp/site.html
+          grep -q 'function productAllTimeProfitStats(' /tmp/site.html
+          grep -q 'function warehouseProjectedProfit(' /tmp/site.html
           grep -q 'id="productStockQty"' /tmp/site.html
           grep -q 'id="productStockCost"' /tmp/site.html
-          grep -q 'Себестоимость всех товаров' /tmp/site.html
+          grep -q 'id="productStockProfit"' /tmp/site.html
+          grep -q 'Средняя прибыль/шт. за всё время:' /tmp/site.html
+          grep -q 'Прибыль с остатка' /tmp/site.html
           grep -q 'const PURCHASE_COVER_DAYS=25' /tmp/site.html
           grep -q 'function purchaseDemandQty(' /tmp/site.html
           grep -q 'function purchaseLastUnitCost(' /tmp/site.html
