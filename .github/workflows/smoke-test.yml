@@ -75,7 +75,7 @@ jobs:
           ];
           const state={purchases:[
             {productId:'a',qty:4,status:'to_me'},
-            {productId:'a',qty:100,status:'received'}
+            {productId:'a',qty:100,status:'received',buyTotal:5000,receivedAt:now-1}
           ]};
           function reportPeriodStart(){return 0}
           function reportPeriodEnd(){return now+1}
@@ -99,18 +99,27 @@ jobs:
           function save(){}
           function closeModal(){}
           function render(){}
+          const window={};
+          let openedModal='';
+          function openModal(type){openedModal=type}
           function fmt(x){return String(x)}
           function alert(x){lastAlert=String(x)}
           const document={getElementById(id){return {value:id==='porDelivery'?'80':id==='porBatch'?'Тест':''}}};
           '''
           create_start=app.index('function createPurchaseOrder()')
           create_end=app.index('function purchaseShipmentRows(',create_start)
-          test=helpers+app[start:end]+app[create_start:create_end]+r'''
+          button_start=app.index('function openRecommendedPurchase(')
+          button_end=app.index('function renderPurchases(',button_start)
+          test=helpers+app[start:end]+app[button_start:button_end]+app[create_start:create_end]+r'''
           const row=purchaseRecommendation(products[0]);
           if(purchaseDemandQty(products[0])!==18)throw new Error('Bundle component demand was not included');
           if(row.available!==2||row.inbound!==4||row.qty!==14)throw new Error('Recommendation must create a fresh 25-day batch: '+JSON.stringify(row));
+          if(row.unitCost!==50||row.estimatedCost!==700)throw new Error('Previous purchase estimate mismatch: '+JSON.stringify(row));
           if(purchaseRecommendation(products[2])!==null)throw new Error('No-sales product must not be ordered automatically');
           if(purchaseRecommendations().length!==1)throw new Error('Recommendation list mismatch');
+          openRecommendedPurchase('a');
+          if(openedModal!=='purchase'||window.pendingPurchaseRecommendations.length!==1)throw new Error('Per-product Buy button did not open a single-product purchase');
+          if(window.pendingPurchaseRecommendations[0].qty!==14||window.pendingPurchaseHint.estimatedCost!==700)throw new Error('Per-product Buy prefill mismatch');
           createPurchaseOrder();
           const created=state.purchases.filter(x=>x.shipmentId);
           if(created.length!==2)throw new Error('Purchase line count mismatch');
@@ -157,8 +166,10 @@ jobs:
             'const PURCHASE_COVER_DAYS=25;',
             'function purchaseDemandQty(',
             'function purchaseInboundQty(',
-            'function openRecommendedPurchase()',
-            'Создать закупку из списка',
+            'function purchaseLastUnitCost(',
+            'function openRecommendedPurchase(',
+            'Прошлая закупочная цена:',
+            'Нажмите «Купить» напротив нужного товара.',
             'purchase-unit-cost',
             'Едет на склад',
             'function advancePurchaseShipment(',
@@ -192,6 +203,8 @@ jobs:
           if old_ads: raise SystemExit('Old Kaspi overview-reconciliation code remains: '+', '.join(old_ads))
           if 'Расход на доставку Kaspi' in html:
               raise SystemExit('Product detail must not show Kaspi delivery row')
+          if 'Создать закупку из списка' in html:
+              raise SystemExit('Bulk purchase-plan button must stay removed')
           if old_kaspi_stage in html:
               raise SystemExit('Kaspi ACCEPTED_BY_MERCHANT must stay New until ASSEMBLE')
           if "if(!['new','transfer'].includes(stage))continue;for(const o of(g.lines||[]))" in html:
@@ -233,8 +246,10 @@ jobs:
               && grep -q 'function createPurchaseOrder()' /tmp/site.html \
               && grep -q 'const PURCHASE_COVER_DAYS=25' /tmp/site.html \
               && grep -q 'function purchaseDemandQty(' /tmp/site.html \
-              && grep -q 'function openRecommendedPurchase()' /tmp/site.html \
-              && grep -q 'Создать закупку из списка' /tmp/site.html \
+              && grep -q 'function purchaseLastUnitCost(' /tmp/site.html \
+              && grep -q 'function openRecommendedPurchase(' /tmp/site.html \
+              && grep -q 'Прошлая закупочная цена:' /tmp/site.html \
+              && grep -q 'Нажмите «Купить» напротив нужного товара.' /tmp/site.html \
               && grep -q 'purchase-unit-cost' /tmp/site.html \
               && grep -q 'Едет на склад' /tmp/site.html \
               && grep -q 'function receivePurchaseShipment(' /tmp/site.html \
@@ -255,6 +270,7 @@ jobs:
               && ! grep -q "log('резерв'" /tmp/site.html \
               && ! grep -q 'Доступно к продаже' /tmp/site.html \
               && ! grep -q 'price:Number(old?.price)||Number(o.unitPrice)||0' /tmp/site.html \
+              && ! grep -q 'Создать закупку из списка' /tmp/site.html \
               && ! grep -q 'raw.githubusercontent.com' /tmp/site.html; then
               break
             fi
@@ -274,8 +290,10 @@ jobs:
           grep -q 'function createPurchaseOrder()' /tmp/site.html
           grep -q 'const PURCHASE_COVER_DAYS=25' /tmp/site.html
           grep -q 'function purchaseDemandQty(' /tmp/site.html
-          grep -q 'function openRecommendedPurchase()' /tmp/site.html
-          grep -q 'Создать закупку из списка' /tmp/site.html
+          grep -q 'function purchaseLastUnitCost(' /tmp/site.html
+          grep -q 'function openRecommendedPurchase(' /tmp/site.html
+          grep -q 'Прошлая закупочная цена:' /tmp/site.html
+          grep -q 'Нажмите «Купить» напротив нужного товара.' /tmp/site.html
           grep -q 'purchase-unit-cost' /tmp/site.html
           grep -q 'Едет на склад' /tmp/site.html
           grep -q 'function receivePurchaseShipment(' /tmp/site.html
@@ -296,6 +314,7 @@ jobs:
           ! grep -q "log('резерв'" /tmp/site.html
           ! grep -q 'Доступно к продаже' /tmp/site.html
           ! grep -q 'price:Number(old?.price)||Number(o.unitPrice)||0' /tmp/site.html
+          ! grep -q 'Создать закупку из списка' /tmp/site.html
           ! grep -q 'raw.githubusercontent.com' /tmp/site.html
           ! grep -qi 'client_secret' /tmp/site.html
 
