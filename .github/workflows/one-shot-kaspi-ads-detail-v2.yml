@@ -1,10 +1,10 @@
-name: One-shot product bundles
+name: One-shot safe bundle conversion
 on:
   push:
     branches: [main]
     paths:
       - '.github/workflows/one-shot-kaspi-ads-detail-v2.yml'
-      - 'tools/patch_product_bundles.py'
+      - 'tools/patch_bundle_conversion.py'
 permissions:
   contents: write
   actions: write
@@ -18,76 +18,66 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Apply product bundle patch
-        run: python tools/patch_product_bundles.py
+      - name: Apply safe bundle conversion patch
+        run: python tools/patch_bundle_conversion.py
 
-      - name: Validate bundle stock reservation and FIFO behavior
+      - name: Validate automatic simple-to-bundle conversion
         run: |
           python - <<'PY'
           from pathlib import Path
           import re
           html=Path('index.html').read_text(encoding='utf-8')
           required=[
-            'function isBundleProduct(p)',
-            'function bundleAvailableStock(p)',
-            'function consumeSellableProduct(p,qty',
-            'function readBundleComponents(',
-            'Тип товара',
-            'Состав набора',
-            "kind==='bundle'",
-            'productAvailableStock(p)',
-            "Набор не инвентаризируется отдельно",
-            "он используется в наборе"
+            'function convertSimpleProductToBundle(p)',
+            'старый самостоятельный остаток при сохранении будет безопасно обнулён',
+            'bundleConvertedAt',
+            'bundleConvertedQty',
+            'такую закупку нельзя безопасно разложить по компонентам набора',
+            "if(kind==='bundle'&&!wasBundle)convertSimpleProductToBundle(p)",
+            'История закупок и продаж сохранится',
           ]
           missing=[x for x in required if x not in html]
-          if missing: raise SystemExit('Missing bundle markers: '+', '.join(missing))
+          if missing: raise SystemExit('Missing safe bundle conversion markers: '+', '.join(missing))
+          if 'Сначала обнулите остаток обычного товара и завершите его активные заказы/закупки' in html:
+              raise SystemExit('Old manual-zero conversion blocker is still active')
           scripts=re.findall(r'<script>(.*?)</script>',html,flags=re.S|re.I)
           if not scripts: raise SystemExit('No inline script found')
           app='\n'.join(scripts)
           Path('/tmp/app.js').write_text(app,encoding='utf-8')
-          a=app.index('function isBundleProduct(p)')
-          b=app.index('function isWbMarket(',a)
-          helpers=app[a:b]
-          test=helpers+r'''
+          a=app.index('function convertSimpleProductToBundle(p)')
+          b=app.index('function saveProductEdit(pid)',a)
+          helper=app[a:b]
+          test=helper+r'''
           let state={
-            products:[
-              {id:'g',name:'Зелёный',stock:10,cost:100},
-              {id:'y',name:'Жёлтый',stock:8,cost:110},
-              {id:'r',name:'Красный',stock:12,cost:120},
-              {id:'b',name:'Синий',stock:6,cost:130},
-              {id:'set',name:'Набор',kind:'bundle',stock:0,cost:0,components:[
-                {productId:'g',qty:1},{productId:'y',qty:1},{productId:'r',qty:1},{productId:'b',qty:1}
-              ]}
+            purchases:[
+              {id:'l1',productId:'p',status:'received',remainingQty:3},
+              {id:'l2',productId:'p',status:'received',remainingQty:2}
             ],
-            reservations:[{id:'res',productId:'set',qty:2,active:true}],movements:[]
+            movements:[]
           };
-          const prod=id=>state.products.find(p=>p.id===id);
-          const fifoConsume=(productId,qty)=>{const p=prod(productId),unit=Number(p.cost)||0;return {totalCost:unit*qty,unitCost:unit,lots:[{productId,qty,unitCost:unit}]}};
-          const refreshProductAverageCost=()=>{};
+          const isBundleProduct=()=>false;
+          const fifoLots=productId=>state.purchases.filter(x=>x.productId===productId&&x.status==='received'&&Number(x.remainingQty)>0);
           const log=(type,productId,qty,extra)=>state.movements.push({type,productId,qty,extra});
-          if(reserved(prod('g'))!==2)throw new Error('Bundle reservation did not reserve green component');
-          if(reserved(prod('b'))!==2)throw new Error('Bundle reservation did not reserve blue component');
-          if(bundleAvailableStock(prod('set'))!==4)throw new Error('Bundle availability must be limited by blue stock after reservations');
-          state.reservations[0].active=false;
-          if(bundleAvailableStock(prod('set'))!==6)throw new Error('Cancelled bundle reservation was not released');
-          const used=consumeSellableProduct(prod('set'),1,'Kaspi test');
-          if(prod('g').stock!==9||prod('y').stock!==7||prod('r').stock!==11||prod('b').stock!==5)throw new Error('Bundle sale did not decrement every component');
-          if(used.unitCost!==460)throw new Error('Bundle FIFO cost must equal sum of component costs');
-          if(state.movements.length!==4)throw new Error('Bundle component sale movements missing');
-          console.log('Bundle stock/reservation/FIFO regression OK');
+          const p={id:'p',name:'M&M набор',kind:'simple',stock:5,cost:500};
+          convertSimpleProductToBundle(p);
+          if(p.stock!==0)throw new Error('Standalone stock was not zeroed automatically');
+          if(state.purchases.some(x=>Number(x.remainingQty)!==0))throw new Error('Old FIFO remainder was not archived');
+          if(!state.purchases.every(x=>x.bundleConvertedAt&&Number(x.bundleConvertedQty)>0))throw new Error('FIFO conversion audit metadata missing');
+          if(state.movements.length!==1||state.movements[0].type!=='инвентаризация'||state.movements[0].qty!==-5)throw new Error('Conversion audit movement is wrong');
+          console.log('Safe automatic bundle conversion regression OK');
           '''
-          Path('/tmp/bundle-regression.js').write_text(test,encoding='utf-8')
+          Path('/tmp/bundle-conversion-regression.js').write_text(test,encoding='utf-8')
           PY
           node --check /tmp/app.js
-          node /tmp/bundle-regression.js
+          node /tmp/bundle-conversion-regression.js
 
-      - name: Commit product bundles
+      - name: Commit safe bundle conversion
         id: commit
         run: |
           git config user.name '7masok'
           git config user.email '7masok@gmail.com'
           git add index.html
-          git commit -m 'Add component-based product bundles'
+          git commit -m 'Convert existing products to bundles safely'
           git push origin HEAD:main
           echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
