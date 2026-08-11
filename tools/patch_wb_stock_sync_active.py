@@ -138,5 +138,65 @@ if 'async function syncWbStockMarket' not in s:
     if s.count(anchor)!=1: raise SystemExit('preview function anchor mismatch')
     s=s.replace(anchor,active+anchor,1)
 
+read_anchor="async function syncWbStockMarket(env, market='WB', { force = false } = {}) {\n"
+read_helper=r'''async function readWbActualStocks(token, warehouseId, items) {
+  const ids=[...new Set((items||[]).map(x=>Number(x.chrtId)||0).filter(Boolean))];
+  const actual=new Map();
+  const headers={ 'Accept':'application/json', 'Content-Type':'application/json', 'Authorization':token };
+  for(let i=0;i<ids.length;i+=1000){
+    const chunk=ids.slice(i,i+1000);
+    const r=await fetch(WB_MARKETPLACE_BASE + '/api/v3/stocks/' + encodeURIComponent(warehouseId), { method:'POST', headers, body:JSON.stringify({ chrtIds:chunk }) });
+    const text=await r.text();
+    let data=null; if(text){ try{data=JSON.parse(text)}catch{data={message:text.slice(0,500)}} }
+    if(!r.ok) throw new Error(wbError('WB stocks read',r.status,data||{}));
+    for(const row of Array.isArray(data?.stocks)?data.stocks:[]){
+      const chrtId=Number(row?.chrtId)||0;
+      if(chrtId) actual.set(chrtId,Math.max(0,Math.floor(Number(row?.amount)||0)));
+    }
+  }
+  return actual;
+}
+
+'''
+if 'async function readWbActualStocks(' not in s:
+    if s.count(read_anchor)!=1: raise SystemExit('syncWbStockMarket read-helper anchor mismatch')
+    s=s.replace(read_anchor,read_helper+read_anchor,1)
+
+old_unchanged="""  if (!force && previous && String(previous.warehouse_id || '') === warehouseId && String(previous.payload_hash || '') === hash) {
+    return { ok:true, market, skipped:true, reason:'unchanged', sent:false, warehouseId, items:items.length, lastSentAt:Number(previous.last_sent_at || 0) };
+  }
+"""
+new_unchanged="""  if (!force && previous && String(previous.warehouse_id || '') === warehouseId && String(previous.payload_hash || '') === hash) {
+    let actual;
+    try {
+      actual=await readWbActualStocks(token,warehouseId,items);
+    } catch(e) {
+      return { ok:true, market, skipped:true, reason:'verify-failed-safety', sent:false, warehouseId, items:items.length, lastSentAt:Number(previous.last_sent_at || 0), error:String(e?.message||e).slice(0,500) };
+    }
+    const drift=items.filter(x=>{
+      const chrtId=Number(x.chrtId)||0;
+      const current=actual.has(chrtId)?Number(actual.get(chrtId)||0):0;
+      return current!==Math.max(0,Math.floor(Number(x.amount)||0));
+    });
+    if(!drift.length) return { ok:true, market, skipped:true, reason:'unchanged', verified:true, sent:false, warehouseId, items:items.length, lastSentAt:Number(previous.last_sent_at || 0) };
+  }
+"""
+if old_unchanged in s:
+    s=s.replace(old_unchanged,new_unchanged,1)
+elif "reason:'verify-failed-safety'" not in s:
+    raise SystemExit('WB unchanged hash gate anchor mismatch')
+
+required=[
+    'async function readWbActualStocks(',
+    "method:'POST'",
+    'body:JSON.stringify({ chrtIds:chunk })',
+    "reason:'verify-failed-safety'",
+    'actual.has(chrtId)',
+    'if(!drift.length)',
+    "method:'PUT'",
+]
+missing=[x for x in required if x not in s]
+if missing: raise SystemExit('WB reconciliation markers missing: '+', '.join(missing))
+
 p.write_text(s,encoding='utf-8')
-print('Active WB stock synchronization patch applied')
+print('Active WB stock synchronization with actual-stock reconciliation patch applied')
