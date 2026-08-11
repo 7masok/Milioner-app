@@ -56,6 +56,74 @@ jobs:
           PY
           node /tmp/kaspi-ads-regression.js
 
+      - name: Check 25-day purchase recommendations
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import re
+          html=Path('index.html').read_text(encoding='utf-8')
+          scripts=re.findall(r'<script>(.*?)</script>',html,flags=re.S|re.I)
+          app='\n'.join(scripts)
+          start=app.index('const PURCHASE_COVER_DAYS=25;')
+          end=app.index('function fifoLots(',start)
+          helpers=r'''
+          const now=Date.now();
+          const products=[
+            {id:'a',name:'Товар A',kind:'simple',available:2},
+            {id:'b',name:'Набор',kind:'bundle',components:[{productId:'a',qty:3}]},
+            {id:'c',name:'Без продаж',kind:'simple',available:0}
+          ];
+          const state={purchases:[
+            {productId:'a',qty:4,status:'to_me'},
+            {productId:'a',qty:100,status:'received'}
+          ]};
+          function reportPeriodStart(){return 0}
+          function reportPeriodEnd(){return now+1}
+          function financialSales(){return [
+            {productId:'a',qty:12,date:now},
+            {productId:'b',qty:2,date:now}
+          ]}
+          function prod(id){return products.find(x=>x.id===id)}
+          function isBundleProduct(p){return p?.kind==='bundle'}
+          function bundleComponents(p){return p?.components||[]}
+          function productAvailableStock(p){return p.available||0}
+          function purchaseStatus(x){return x.status}
+          function stockProducts(){return products.filter(x=>!isBundleProduct(x))}
+          function purchaseDraftRows(){return [
+            {productId:'a',qty:2,unitCost:100},
+            {productId:'c',qty:3,unitCost:200}
+          ]}
+          function localDateStart(){return now}
+          let seq=0,lastAlert='';
+          function id(){return String(++seq)}
+          function save(){}
+          function closeModal(){}
+          function render(){}
+          function fmt(x){return String(x)}
+          function alert(x){lastAlert=String(x)}
+          const document={getElementById(id){return {value:id==='porDelivery'?'80':id==='porBatch'?'Тест':''}}};
+          '''
+          create_start=app.index('function createPurchaseOrder()')
+          create_end=app.index('function purchaseShipmentRows(',create_start)
+          test=helpers+app[start:end]+app[create_start:create_end]+r'''
+          const row=purchaseRecommendation(products[0]);
+          if(purchaseDemandQty(products[0])!==18)throw new Error('Bundle component demand was not included');
+          if(row.available!==2||row.inbound!==4||row.qty!==12)throw new Error('Recommendation mismatch: '+JSON.stringify(row));
+          if(purchaseRecommendation(products[2])!==null)throw new Error('No-sales product must not be ordered automatically');
+          if(purchaseRecommendations().length!==1)throw new Error('Recommendation list mismatch');
+          createPurchaseOrder();
+          const created=state.purchases.filter(x=>x.shipmentId);
+          if(created.length!==2)throw new Error('Purchase line count mismatch');
+          const a=created.find(x=>x.productId==='a'),c=created.find(x=>x.productId==='c');
+          if(a.buyTotal!==200||a.unitCost!==100||Math.abs(a.delivery-20)>1e-9)throw new Error('First line price allocation mismatch');
+          if(c.buyTotal!==600||c.unitCost!==200||Math.abs(c.delivery-60)>1e-9)throw new Error('Second line price allocation mismatch');
+          if(!created.every(x=>x.status==='to_forwarder'&&x.shipmentPurchaseTotal===800&&x.shipmentDeliveryTotal===80))throw new Error('Purchase totals/status mismatch');
+          console.log('25-day purchase recommendation regression OK');
+          '''
+          Path('/tmp/purchase-plan-regression.js').write_text(test,encoding='utf-8')
+          PY
+          node /tmp/purchase-plan-regression.js
+
       - name: Check lifecycle contract
         run: |
           python - <<'PY'
@@ -86,6 +154,13 @@ jobs:
             "purchaseStatus(x)==='received'",
             'function purchaseShipmentGroups()',
             'function createPurchaseOrder()',
+            'const PURCHASE_COVER_DAYS=25;',
+            'function purchaseDemandQty(',
+            'function purchaseInboundQty(',
+            'function openRecommendedPurchase()',
+            'Создать закупку из списка',
+            'purchase-unit-cost',
+            'Едет на склад',
             'function advancePurchaseShipment(',
             'function receivePurchaseShipment(',
             'В пути, вложено',
@@ -156,6 +231,12 @@ jobs:
               && grep -q 'id="koQty"' /tmp/site.html \
               && grep -q 'id="koAmount"' /tmp/site.html \
               && grep -q 'function createPurchaseOrder()' /tmp/site.html \
+              && grep -q 'const PURCHASE_COVER_DAYS=25' /tmp/site.html \
+              && grep -q 'function purchaseDemandQty(' /tmp/site.html \
+              && grep -q 'function openRecommendedPurchase()' /tmp/site.html \
+              && grep -q 'Создать закупку из списка' /tmp/site.html \
+              && grep -q 'purchase-unit-cost' /tmp/site.html \
+              && grep -q 'Едет на склад' /tmp/site.html \
               && grep -q 'function receivePurchaseShipment(' /tmp/site.html \
               && grep -q 'В пути, вложено' /tmp/site.html \
               && grep -q 'id="rAds"' /tmp/site.html \
@@ -191,6 +272,12 @@ jobs:
           grep -q 'id="koQty"' /tmp/site.html
           grep -q 'id="koAmount"' /tmp/site.html
           grep -q 'function createPurchaseOrder()' /tmp/site.html
+          grep -q 'const PURCHASE_COVER_DAYS=25' /tmp/site.html
+          grep -q 'function purchaseDemandQty(' /tmp/site.html
+          grep -q 'function openRecommendedPurchase()' /tmp/site.html
+          grep -q 'Создать закупку из списка' /tmp/site.html
+          grep -q 'purchase-unit-cost' /tmp/site.html
+          grep -q 'Едет на склад' /tmp/site.html
           grep -q 'function receivePurchaseShipment(' /tmp/site.html
           grep -q 'В пути, вложено' /tmp/site.html
           grep -q 'id="rAds"' /tmp/site.html
