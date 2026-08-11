@@ -55,7 +55,8 @@ jobs:
           if(rows[0]['Рекламируемый товар']!=='166859382')throw new Error('Kaspi product id lost');
           if(rows[0]['Расходы на рекламу']!=='164,69')throw new Error('Decimal comma was mutated');
           const normalized=Object.keys(rows[0]).map(k=>[k,adsColumn(k)]);
-          const adCostKey=(normalized.find(([,n])=>/^расход.*реклам|^реклам.*расход|затрат.*реклам|реклам.*затрат|стоимост.*реклам/.test(n)))?.[0]||'');
+          const hit=normalized.find(([,n])=>/^расход.*реклам|^реклам.*расход|затрат.*реклам|реклам.*затрат|стоимост.*реклам/.test(n));
+          const adCostKey=hit?.[0]||'';
           if(adCostKey!=='Расходы на рекламу')throw new Error('Advertising cost header was not detected: '+adCostKey);
           const total=rows.reduce((n,r)=>n+adsMoney(r[adCostKey]),0);
           if(Math.abs(total-330.75)>1e-9)throw new Error('Advertising total mismatch: '+total);
