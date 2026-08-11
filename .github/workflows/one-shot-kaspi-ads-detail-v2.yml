@@ -1,10 +1,10 @@
-name: One-shot add safe product deletion
+name: One-shot reusable product categories
 on:
   push:
     branches: [main]
     paths:
       - '.github/workflows/one-shot-kaspi-ads-detail-v2.yml'
-      - 'tools/patch_delete_product.py'
+      - 'tools/patch_category_picker.py'
 permissions:
   contents: write
   actions: write
@@ -18,81 +18,60 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Apply safe product deletion patch
-        run: python tools/patch_delete_product.py
+      - name: Apply reusable category picker patch
+        run: python tools/patch_category_picker.py
 
-      - name: Validate product deletion and stale-link protection
+      - name: Validate category reuse behavior
         run: |
           python - <<'PY'
           from pathlib import Path
           import re
           html=Path('index.html').read_text(encoding='utf-8')
           required=[
-            'function deleteProduct(pid)',
-            'Удалить товар',
-            'state.settings.deletedProductNames||={}',
-            'state.products=state.products.filter(x=>x.id!==p.id)',
-            "linked=o.productId?prod(o.productId):null",
-            'const productNameById=',
-            'Нельзя удалить товар: в активных заказах зарезервировано',
-            'Нельзя удалить товар: есть незавершённая закупка'
+            "function knownCategories(selected='')",
+            "function categoryPickerHtml(selectId,inputId,selected='')",
+            'function rememberCategory(value)',
+            "categoryPickerHtml('pc','pcnew')",
+            "categoryPickerHtml('ec','ecnew',p.category||'')",
+            "readCategoryPicker('pc','pcnew')",
+            "readCategoryPicker('ec','ecnew')",
+            '＋ Новая категория',
+            'Без категории'
           ]
           missing=[x for x in required if x not in html]
-          if missing: raise SystemExit('Missing safe-delete markers: '+', '.join(missing))
+          if missing: raise SystemExit('Missing category-picker markers: '+', '.join(missing))
+          if '<label>Категория</label><input id="pc">' in html or '<label>Категория</label><input id="ec"' in html:
+              raise SystemExit('Old free-text category field is still active')
           scripts=re.findall(r'<script>(.*?)</script>',html,flags=re.S|re.I)
           if not scripts: raise SystemExit('No inline script found')
           app='\n'.join(scripts)
           Path('/tmp/app.js').write_text(app,encoding='utf-8')
-          def cut(a,b):
-              i=app.index(a); j=app.index(b,i); return app[i:j]
-          delete_fn=cut('function deleteProduct(pid)','function openModal(')
-          normalize_fn=cut('function normalizeServerFeed(','function mergeOrderFeeds(')
-          test=delete_fn+'\n'+normalize_fn+r'''
-          let state={
-            products:[{id:'p1',name:'Старый дубль',stock:-1,kaspi:'111'},{id:'p2',name:'Нужный товар',stock:10,kaspi:'222'}],
-            purchases:[{id:'old',productId:'p1',status:'received',qty:1}],
-            sales:[{productId:'p1',qty:3}],reservations:[],settings:{},
-            kaspiOrderFeed:[{productId:'p1'}],wbOrderFeed:[{productId:'p1'}],ozonOrderFeed:[]
-          };
-          const prod=id=>state.products.find(p=>p.id===id);
-          const reserved=p=>(state.reservations||[]).filter(r=>r.productId===p.id&&r.active).reduce((a,r)=>a+(Number(r.qty)||0),0);
-          const purchaseStatus=x=>String(x?.status||'received');
-          let saved=0,closed=0,rendered=0,alerts=[];
-          const save=()=>saved++; const closeModal=()=>closed++; const render=()=>rendered++;
-          const confirm=()=>true; const alert=x=>alerts.push(String(x));
-          const marketplaceField=market=>market==='Kaspi'?'kaspi':'';
-          const toTimestamp=x=>Number(x)||0;
-
-          deleteProduct('p1');
-          if(state.products.some(p=>p.id==='p1'))throw new Error('Deleted product stayed in active catalog');
-          if(state.settings.deletedProductNames.p1!=='Старый дубль')throw new Error('Historical product name was not preserved');
-          if(state.kaspiOrderFeed[0].productId!==null||state.wbOrderFeed[0].productId!==null)throw new Error('Local feed links were not cleared');
-          if(saved!==1||closed!==1||rendered!==1)throw new Error('Delete did not persist and rerender exactly once');
-
-          state.products=[{id:'p2',name:'Нужный товар',kaspi:'222'}];
-          const stale=normalizeServerFeed([{productId:'p1',sku:'111',creationDate:1}],'Kaspi');
-          if(stale[0].productId!==null)throw new Error('Stale D1 link resurrected a deleted product');
-          const current=normalizeServerFeed([{productId:'p1',sku:'222',creationDate:1}],'Kaspi');
-          if(current[0].productId!=='p2')throw new Error('Current SKU did not remap to active product');
-
-          state.products=[{id:'p3',name:'Активный заказ',stock:2}];state.reservations=[{productId:'p3',qty:1,active:true}];
-          deleteProduct('p3');
-          if(!state.products.some(p=>p.id==='p3'))throw new Error('Product with active reservation was deleted');
-          if(!alerts.some(x=>x.includes('активных заказах')))throw new Error('Active-order deletion was not blocked visibly');
-          console.log('Safe product deletion regression OK');
+          i=app.index("function knownCategories(selected='')")
+          j=app.index('function stockTotal()',i)
+          helpers=app[i:j]
+          test=helpers+r'''
+          let state={settings:{categories:['Брелоки']},products:[{category:'Авто'},{category:'брелоки'},{category:''}]};
+          const esc=s=>String(s??'').replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[m]));
+          let cats=knownCategories();
+          if(cats.length!==2||!cats.includes('Брелоки')||!cats.includes('Авто'))throw new Error('Existing categories were not collected/deduplicated');
+          rememberCategory('Ножи'); rememberCategory('ножи');
+          if(state.settings.categories.filter(x=>x.toLowerCase()==='ножи').length!==1)throw new Error('Remembered category duplicated');
+          const opts=categoryOptions('Брелоки');
+          if(!opts.includes('Брелоки')||!opts.includes('selected')||!opts.includes('＋ Новая категория'))throw new Error('Category options are incomplete');
+          console.log('Reusable category regression OK');
           '''
-          Path('/tmp/delete-product-regression.js').write_text(test,encoding='utf-8')
+          Path('/tmp/category-regression.js').write_text(test,encoding='utf-8')
           PY
           node --check /tmp/app.js
-          node /tmp/delete-product-regression.js
+          node /tmp/category-regression.js
 
-      - name: Commit safe product deletion
+      - name: Commit reusable categories
         id: commit
         run: |
           git config user.name '7masok'
           git config user.email '7masok@gmail.com'
           git add index.html
-          git commit -m 'Add safe product deletion'
+          git commit -m 'Reuse saved product categories'
           git push origin HEAD:main
           echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
