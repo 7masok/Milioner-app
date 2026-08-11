@@ -14,7 +14,7 @@ permissions:
 jobs:
   patch-deploy-verify:
     runs-on: ubuntu-latest
-    timeout-minutes: 18
+    timeout-minutes: 20
     steps:
       - name: Checkout current main
         uses: actions/checkout@v4
@@ -53,18 +53,20 @@ jobs:
           node --check cloudflare/millioner-api/src/index.js
           git diff --check
 
-      - name: Commit app and Worker change
+      - name: Commit app and Worker change if needed
         id: commit
         run: |
           set -e
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add index.html cloudflare/millioner-api/src/index.js
-          git commit -m 'Track Kaspi XML feed downloads'
-          git push origin HEAD:main
+          if ! git diff --cached --quiet; then
+            git commit -m 'Track Kaspi XML feed downloads'
+            git push origin HEAD:main
+          fi
           echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
-      - name: Deploy millioner-api
+      - name: Deploy millioner-api when credentials exist
         working-directory: cloudflare/millioner-api
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
@@ -81,7 +83,7 @@ jobs:
         run: |
           set -e
           live=''
-          for attempt in $(seq 1 48); do
+          for attempt in $(seq 1 90); do
             code=$(curl -sS -H 'Origin: https://7masok.github.io' -o /tmp/status.json -w '%{http_code}' --max-time 20 'https://millioner-api.7masok.workers.dev/api/kaspi-stock-feed-status' || true)
             if [ "$code" = '200' ] && jq -e '.ok==true and .fetchTracking=="kaspi-xml-access-v1" and (.fetchCount|type=="number") and (.lastFetchedAt|type=="number")' /tmp/status.json >/dev/null 2>&1; then
               live=1
@@ -105,7 +107,7 @@ jobs:
       - name: Wait for GitHub Pages UI
         run: |
           set -e
-          for attempt in $(seq 1 48); do
+          for attempt in $(seq 1 60); do
             curl -fsSL --max-time 20 'https://7masok.github.io/Milioner-app/' -o /tmp/site.html || true
             if grep -q 'Последнее обращение Kaspi к XML' /tmp/site.html 2>/dev/null; then exit 0; fi
             sleep 5
