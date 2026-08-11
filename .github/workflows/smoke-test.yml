@@ -90,8 +90,8 @@ jobs:
           function purchaseStatus(x){return x.status}
           function stockProducts(){return products.filter(x=>!isBundleProduct(x))}
           function purchaseDraftRows(){return [
-            {productId:'a',qty:2,unitCost:100},
-            {productId:'c',qty:3,unitCost:200}
+            {productId:'a',qty:2,buyTotal:200,unitCost:100},
+            {productId:'c',qty:3,buyTotal:600,unitCost:200}
           ]}
           function localDateStart(){return now}
           let seq=0,lastAlert='';
@@ -170,7 +170,9 @@ jobs:
             'function openRecommendedPurchase(',
             'Прошлая закупочная цена:',
             'Нажмите «Купить» напротив нужного товара.',
-            'purchase-unit-cost',
+            'purchase-buy-total',
+            'edit-purchase-buy-total',
+            'Сумма за всю партию ₸',
             'Едет на склад',
             'function advancePurchaseShipment(',
             'function receivePurchaseShipment(',
@@ -250,7 +252,9 @@ jobs:
               && grep -q 'function openRecommendedPurchase(' /tmp/site.html \
               && grep -q 'Прошлая закупочная цена:' /tmp/site.html \
               && grep -q 'Нажмите «Купить» напротив нужного товара.' /tmp/site.html \
-              && grep -q 'purchase-unit-cost' /tmp/site.html \
+              && grep -q 'purchase-buy-total' /tmp/site.html \
+              && grep -q 'edit-purchase-buy-total' /tmp/site.html \
+              && grep -q 'Сумма за всю партию ₸' /tmp/site.html \
               && grep -q 'Едет на склад' /tmp/site.html \
               && grep -q 'function receivePurchaseShipment(' /tmp/site.html \
               && grep -q 'В пути, вложено' /tmp/site.html \
@@ -294,7 +298,9 @@ jobs:
           grep -q 'function openRecommendedPurchase(' /tmp/site.html
           grep -q 'Прошлая закупочная цена:' /tmp/site.html
           grep -q 'Нажмите «Купить» напротив нужного товара.' /tmp/site.html
-          grep -q 'purchase-unit-cost' /tmp/site.html
+          grep -q 'purchase-buy-total' /tmp/site.html
+          grep -q 'edit-purchase-buy-total' /tmp/site.html
+          grep -q 'Сумма за всю партию ₸' /tmp/site.html
           grep -q 'Едет на склад' /tmp/site.html
           grep -q 'function receivePurchaseShipment(' /tmp/site.html
           grep -q 'В пути, вложено' /tmp/site.html
