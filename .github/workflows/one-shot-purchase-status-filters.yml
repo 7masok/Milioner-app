@@ -1,0 +1,109 @@
+name: One-shot purchase status filters
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/one-shot-purchase-status-filters.yml'
+      - 'tools/patch_purchase_status_filters.py'
+
+permissions:
+  contents: write
+  actions: write
+
+jobs:
+  patch-verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout current main
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Confirm current index before patch
+        run: |
+          test -s index.html
+          echo "Current main: $(git rev-parse HEAD)"
+          echo "index bytes: $(wc -c < index.html)"
+
+      - name: Apply purchase status filter patch
+        run: python tools/patch_purchase_status_filters.py
+
+      - name: Validate purchase status filters
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import re
+          s=Path('index.html').read_text(encoding='utf-8')
+          required=[
+            'id="purchaseFilterToForwarder"',
+            'id="purchaseFilterToMe"',
+            'id="purchaseFilterReset"',
+            "let purchaseStatusFilter='all';",
+            'function setPurchaseStatusFilter(status)',
+            "groups=purchaseStatusFilter==='all'?searched:searched.filter(g=>g.status===purchaseStatusFilter)",
+            "purchaseStatusFilter==='to_forwarder'",
+            "purchaseStatusFilter==='to_me'",
+            'const PURCHASE_PAGE_SIZE=15;'
+          ]
+          missing=[x for x in required if x not in s]
+          if missing: raise SystemExit('Missing purchase filter markers: '+', '.join(missing))
+          scripts=re.findall(r'<script>(.*?)</script>',s,flags=re.S|re.I)
+          if not scripts: raise SystemExit('No inline script')
+          Path('/tmp/app.js').write_text('\n'.join(scripts),encoding='utf-8')
+          print('Purchase status filter contract OK')
+          PY
+          node --check /tmp/app.js
+          git diff --check
+
+      - name: Commit purchase status filters
+        id: commit
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add index.html
+          git commit -m 'Filter purchase shipments by status'
+          git push origin HEAD:main
+          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Wait for published filters
+        run: |
+          set -e
+          live=''
+          for attempt in $(seq 1 48); do
+            curl -fsSL --max-time 20 'https://7masok.github.io/Milioner-app/' -o /tmp/site.html || true
+            if grep -q 'purchaseFilterToForwarder' /tmp/site.html 2>/dev/null && grep -q 'setPurchaseStatusFilter' /tmp/site.html 2>/dev/null; then
+              live=1
+              break
+            fi
+            sleep 5
+          done
+          test -n "$live"
+
+      - name: Check safe public central API endpoints
+        run: |
+          set -e
+          curl -fsSL --max-time 25 'https://millioner-api.7masok.workers.dev/health' | jq -e '.ok==true and .d1==true'
+          curl -fsSL --max-time 25 'https://millioner-api.7masok.workers.dev/api/market-status' | jq -e '.ok==true and (.markets|type=="array")'
+          curl -fsSL --max-time 25 'https://millioner-api.7masok.workers.dev/api/sync-status' | jq -e '.ok==true and (.markets|type=="array")'
+          for market in Kaspi WB WB2; do
+            body=$(curl -fsSL --max-time 25 "https://millioner-api.7masok.workers.dev/api/orders?market=${market}&limit=1000")
+            echo "$body" | jq -e '.ok==true and (.orders|type=="array")'
+          done
+
+      - name: Dispatch smoke test for exact app commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SHA: ${{ steps.commit.outputs.sha }}
+        run: |
+          gh workflow run smoke-test.yml --ref main
+          run_id=''
+          for attempt in $(seq 1 30); do
+            run_id=$(gh run list --workflow smoke-test.yml --branch main --event workflow_dispatch --limit 40 --json databaseId,headSha --jq ".[] | select(.headSha == \"$SHA\") | .databaseId" | head -n1)
+            if [ -n "$run_id" ]; then break; fi
+            sleep 3
+          done
+          test -n "$run_id"
+          echo "Smoke run: $run_id"
+          gh run watch "$run_id" --exit-status
