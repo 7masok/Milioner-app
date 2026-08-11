@@ -5,9 +5,13 @@ p=Path('index.html')
 s=p.read_text(encoding='utf-8')
 
 # Movement controls + pager target
-s=s.replace('id="moveType" class="select" onchange="renderMovement()"','id="moveType" class="select" onchange="movementFilterChanged()"',1)
-s=s.replace('id="moveQ" class="search" placeholder="Товар" oninput="renderMovement()"','id="moveQ" class="search" placeholder="Товар" oninput="movementFilterChanged()"',1)
-s=s.replace('<div id="movementList"></div></section>','<div id="movementList"></div><div id="movementPager"></div></section>',1)
+for old,new in [
+('id="moveType" class="select" onchange="renderMovement()"','id="moveType" class="select" onchange="movementFilterChanged()"'),
+('id="moveQ" class="search" placeholder="Товар" oninput="renderMovement()"','id="moveQ" class="search" placeholder="Товар" oninput="movementFilterChanged()"'),
+('<div id="movementList"></div></section>','<div id="movementList"></div><div id="movementPager"></div></section>'),
+('<div id="kaspiOrderList" class="order-list"></div><div id="attention" hidden></div>','<div id="kaspiOrderList" class="order-list"></div><div id="orderPager"></div><div id="attention" hidden></div>')]:
+    if s.count(old)!=1: raise SystemExit('HTML anchor mismatch: '+old[:40])
+    s=s.replace(old,new,1)
 
 movement=r'''let movementPage=1;
 const MOVEMENT_PAGE_SIZE=15;
@@ -19,9 +23,6 @@ pat=r'function renderMovement\(\)\{.*?\}\nlet purchasePage=1;'
 if len(re.findall(pat,s,flags=re.S))!=1: raise SystemExit('renderMovement anchor mismatch')
 s=re.sub(pat,movement,s,count=1,flags=re.S)
 
-# Order pager target
-s=s.replace('<div id="kaspiOrderList" class="order-list"></div><div id="attention" hidden></div>','<div id="kaspiOrderList" class="order-list"></div><div id="orderPager"></div><div id="attention" hidden></div>',1)
-
 order_helpers=r'''let orderPage=1;
 const ORDER_PAGE_SIZE=15;
 function setOrderPage(page){orderPage=Math.max(1,Number(page)||1);renderMarketplaceOrders();const list=document.getElementById('kaspiOrderList');if(list)window.scrollTo({top:Math.max(0,list.offsetTop-16),behavior:'smooth'})}
@@ -29,9 +30,9 @@ function renderOrderPager(totalItems){const box=document.getElementById('orderPa
 function renderMarketplaceOrders(){'''
 if s.count('function renderMarketplaceOrders(){')!=1: raise SystemExit('renderMarketplaceOrders anchor mismatch')
 s=s.replace('function renderMarketplaceOrders(){',order_helpers,1)
-s=s.replace("function renderMarketplaceOrders(){const list=document.getElementById('kaspiOrderList');", "function renderMarketplaceOrders(){renderOrderPager(0);const list=document.getElementById('kaspiOrderList');",1) if False else s
-# The helper replacement above already opened the function; inject pager clear immediately.
-s=s.replace("function renderMarketplaceOrders(){const list=document.getElementById('kaspiOrderList');", "function renderMarketplaceOrders(){renderOrderPager(0);const list=document.getElementById('kaspiOrderList');",1)
+anchor="function renderMarketplaceOrders(){const list=document.getElementById('kaspiOrderList');"
+if anchor not in s: raise SystemExit('order list start anchor missing')
+s=s.replace(anchor,"function renderMarketplaceOrders(){renderOrderPager(0);const list=document.getElementById('kaspiOrderList');",1)
 if 'visibleOrders.slice(0,100)' not in s: raise SystemExit('order slice anchor missing')
 s=s.replace('visibleOrders.slice(0,100)','pageOrders',1)
 needle="if(!visibleOrders.length){list.innerHTML='<div class=\"empty\">Все заказы привязаны. Нажмите «Не привязано» ещё раз, чтобы показать все заказы.</div>';return}list.innerHTML=pageOrders.map"
@@ -40,9 +41,8 @@ repl="if(!visibleOrders.length){list.innerHTML='<div class=\"empty\">Все за
 s=s.replace(needle,repl,1)
 end="}).join('')}\nfunction renderKaspiOrders(){renderMarketplaceOrders()}"
 if end not in s: raise SystemExit('order function end anchor missing')
-s=s.replace(end,").join('');renderOrderPager(visibleOrders.length)}\nfunction renderKaspiOrders(){renderMarketplaceOrders()}",1)
+s=s.replace(end,"}).join('');renderOrderPager(visibleOrders.length)}\nfunction renderKaspiOrders(){renderMarketplaceOrders()}",1)
 
-# Reset order page on context/filter changes.
 replacements={
 "function setOrderPeriod(mode){if(!['today','yesterday','week','month','custom'].includes(mode))return;":"function setOrderPeriod(mode){if(!['today','yesterday','week','month','custom'].includes(mode))return;orderPage=1;",
 "function setOrderCustomDate(which,value){if(!value)return;":"function setOrderCustomDate(which,value){if(!value)return;orderPage=1;",
