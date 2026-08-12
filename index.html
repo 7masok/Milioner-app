@@ -314,7 +314,7 @@ const wbLiveOverviewCache={};
 async function ensureWbLiveOverview(market,days){
   const key=market+':'+days,old=wbLiveOverviewCache[key];
   if(old&&Date.now()-Number(old.at||0)<60000)return old.data;
-  try{const data=await apiJson(MILLIONER_API+'/api/wb-sales-live?market='+encodeURIComponent(market)+'&days='+encodeURIComponent(days));wbLiveOverviewCache[key]={at:Date.now(),data};return data}catch(e){wbLiveOverviewCache[key]={at:Date.now(),data:old?.data||null,error:String(e.message||e)};return old?.data||null}
+  try{const data=await apiJson(MILLIONER_API+'/api/wb-buyouts-live?market='+encodeURIComponent(market)+'&days='+encodeURIComponent(days));wbLiveOverviewCache[key]={at:Date.now(),data};return data}catch(e){wbLiveOverviewCache[key]={at:Date.now(),data:old?.data||null,error:String(e.message||e)};return old?.data||null}
 }
 function renderReports(refreshWb=true){
   document.querySelectorAll('[data-report-period]').forEach(b=>b.classList.toggle('active',Number(b.dataset.reportPeriod)===reportPeriodPreset));
@@ -326,7 +326,7 @@ function renderReports(refreshWb=true){
     let a=ss.filter(s=>s.channel===n),qty=a.reduce((x,s)=>x+(Number(s.qty)||0),0),channelRev=a.reduce((x,s)=>x+(Number(s.qty)||0)*(Number(s.price)||0),0),channelProfit=a.reduce((x,s)=>x+(Number(s.qty)||0)*((Number(s.price)||0)-(Number(s.cost)||0)-(Number(s.fee)||0)),0)-(n==='Kaspi'?ads:0),finance=null,financeLabel='';
     if(n==='WB'||n==='WB2'){
       const live=wbLiveOverviewCache[n+':'+reportPeriod]?.data||null;
-      if(live){qty=Number(live.netQty||0);const lr=(live.products||[]).reduce((x,p)=>x+(Number(p.finishedPrice)||0),0);if(lr)channelRev=lr;}
+      if(live){qty=Number(live.buyoutCount||0);const lr=Number(live.buyoutSum||0);if(lr)channelRev=lr;}
       finance=wbFinanceCached(n,reportPeriod);
       if(finance){channelRev=Number(finance.retailAmount)||channelRev;channelProfit=(Number(finance.netBeforeCost)||0)-wbLocalCost(n,reportPeriod);financeLabel=' · факт WB'}
       else{ensureWbFinanceSummary(n,reportPeriod);financeLabel=live?' · выкупы WB':' · выкупы загружаются'}
@@ -341,7 +341,7 @@ async function openWbFinanceReport(market,days){
   showSheet(`<h3>Продажи ${esc(market)} · ${esc(periodText)}</h3><div class="empty">Загружаю фактические выкупы WB…</div>`);
   try{
     const [live,finance]=await Promise.all([
-      apiJson(MILLIONER_API+'/api/wb-sales-live?market='+encodeURIComponent(market)+'&days='+encodeURIComponent(periodDays)),
+      apiJson(MILLIONER_API+'/api/wb-buyouts-live?market='+encodeURIComponent(market)+'&days='+encodeURIComponent(periodDays)),
       apiJson(MILLIONER_API+'/api/wb-finance-products?market='+encodeURIComponent(market)+'&days='+encodeURIComponent(periodDays)).catch(()=>({products:[],accountAdvertising:0}))
     ]);
     const since=reportPeriodStart(periodDays),until=reportPeriodEnd(periodDays),sales=financialSales().filter(s=>s.channel===market&&Number(s.date)>=since&&Number(s.date)<until),costByProduct=new Map();
@@ -351,14 +351,14 @@ async function openWbFinanceReport(market,days){
     const rows=(live.products||[]).filter(x=>Number(x.qty)!==0).map(x=>{
       const f=financeByKey.get(String(x.vendorCode||'').trim())||financeByKey.get(String(x.nmId||'').trim())||null,pid=String(x.productId||f?.productId||''),cost=pid?(costByProduct.get(pid)||0):0;
       if(f){const net=Number(f.netBeforeCost)||0;return {...x,productId:pid,cost,profit:net-cost,exact:true,wbCharges:Number(f.wbCharges)||0,forPay:Number(f.forPay)||0}}
-      const preliminaryPayout=Number(x.forPay)||0,profit=preliminaryPayout-cost;
+      const preliminaryPayout=Number(x.buyoutSum)||0,profit=preliminaryPayout-cost;
       return {...x,productId:pid,cost,profit,exact:false,wbCharges:null,forPay:preliminaryPayout};
     });
     const qty=rows.reduce((a,x)=>a+Number(x.qty||0),0),profit=rows.reduce((a,x)=>a+Number(x.profit||0),0),allExact=rows.length>0&&rows.every(x=>x.exact);
-    const head=`<div class="item"><div class="row"><div class="grow"><div class="label">${allExact?'Чистая прибыль · факт WB':'Прибыль · предварительно'}</div><div class="num">${fmt(profit)}</div></div><div class="right"><div class="label">Реализовано</div><div class="num">${qty} шт.</div></div></div><div class="muted" style="margin-top:8px">${allExact?'Выкупы и финансовые удержания взяты из WB. Себестоимость — FIFO склада.':'Количество — фактические продажи/возвраты из оперативного отчёта WB. Финансовые удержания WB за свежий период ещё могут измениться; после появления детализации прибыль заменится на точную автоматически.'}</div></div>`;
+    const head=`<div class="item"><div class="row"><div class="grow"><div class="label">${allExact?'Чистая прибыль · факт WB':'Прибыль · предварительно'}</div><div class="num">${fmt(profit)}</div></div><div class="right"><div class="label">Реализовано</div><div class="num">${qty} шт.</div></div></div><div class="muted" style="margin-top:8px">${allExact?'Выкупы и финансовые удержания взяты из WB. Себестоимость — FIFO склада.':'Количество — показатель «Выкупы» из аналитики WB. Финансовые удержания WB за свежий период ещё могут измениться; после появления детализации прибыль заменится на точную автоматически.'}</div></div>`;
     let body='';
-    if(rows.length){body=rows.sort((a,b)=>b.profit-a.profit).map((x,i)=>{const p=x.productId?prod(String(x.productId)):null,name=p?.name||x.title||x.vendorCode||('WB '+x.nmId),unit=Number(x.qty)?Number(x.profit)/Math.abs(Number(x.qty)):0;return `<div class="item" style="margin-top:8px;${p?'cursor:pointer':''}" ${p?`onclick="openProduct('${p.id}','${market}',${periodDays})"`:''}><div class="name">${i+1}. ${esc(name)}</div><div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-top:10px"><div><div class="label">Реализовано</div><b>${Number(x.qty||0).toFixed(0)} шт.</b></div><div><div class="label">Прибыль / шт.</div><b>${fmt(unit)}</b></div><div class="right"><div class="label">${x.exact?'Чистая прибыль':'Предв. прибыль'}</div><b>${fmt(x.profit)}</b></div></div><div class="muted" style="margin-top:8px">${x.exact?`Факт WB · к перечислению ${fmt(x.forPay)} · расходы WB ${fmt(x.wbCharges)} · FIFO ${fmt(x.cost)}`:`Оперативный выкуп WB · к перечислению предварительно ${fmt(x.forPay)} · FIFO ${fmt(x.cost)}`}</div></div>`}).join('')}
-    else body=`<div class="empty">За ${esc(periodText)} WB не вернул выкупов/возвратов в оперативном отчёте.</div>`;
+    if(rows.length){body=rows.sort((a,b)=>b.profit-a.profit).map((x,i)=>{const p=x.productId?prod(String(x.productId)):null,name=p?.name||x.title||x.vendorCode||('WB '+x.nmId),unit=Number(x.qty)?Number(x.profit)/Math.abs(Number(x.qty)):0;return `<div class="item" style="margin-top:8px;${p?'cursor:pointer':''}" ${p?`onclick="openProduct('${p.id}','${market}',${periodDays})"`:''}><div class="name">${i+1}. ${esc(name)}</div><div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-top:10px"><div><div class="label">Реализовано</div><b>${Number(x.qty||0).toFixed(0)} шт.</b></div><div><div class="label">Прибыль / шт.</div><b>${fmt(unit)}</b></div><div class="right"><div class="label">${x.exact?'Чистая прибыль':'Предв. прибыль'}</div><b>${fmt(x.profit)}</b></div></div><div class="muted" style="margin-top:8px">${x.exact?`Факт WB · к перечислению ${fmt(x.forPay)} · расходы WB ${fmt(x.wbCharges)} · FIFO ${fmt(x.cost)}`:`Выкуп WB · сумма выкупов предварительно ${fmt(x.forPay)} · FIFO ${fmt(x.cost)}`}</div></div>`}).join('')}
+    else body=live.available===false?`<div class="empty">Выкупы WB за ${esc(periodText)} ещё синхронизируются. Ноль не подставляется — дождёмся данных WB.</div>`:`<div class="empty">За ${esc(periodText)} выкупов WB нет.</div>`;
     showSheet(`<h3>Продажи ${esc(market)} · ${esc(periodText)}</h3>${head}${body}`);
   }catch(e){showSheet(`<h3>Продажи ${esc(market)}</h3><div class="empty">Не удалось загрузить выкупы WB: ${esc(String(e.message||e))}</div>`)}
 }
