@@ -5,6 +5,9 @@ const KASPI_EXTERNAL_BUDGET = 45;
 const WB_MIN_SYNC_MS = 10 * 60 * 1000;
 const WB_MARKETPLACE_BASE = 'https://marketplace-api.wildberries.ru';
 const WB_CONTENT_BASE = 'https://content-api.wildberries.ru';
+const WB_FINANCE_BASE = 'https://finance-api.wildberries.ru';
+const WB_ADVERT_BASE = 'https://advert-api.wildberries.ru';
+const WB_FINANCE_SYNC_MS = 6 * 60 * 60 * 1000;
 const WB_STOCK_PREVIEW_MIN_MS = 10 * 60 * 1000;
 
 export default {
@@ -34,6 +37,28 @@ export default {
         const check=async(u)=>{try{const r=await fetch(u,{headers});return {ok:r.ok,status:r.status}}catch(e){return {ok:false,status:0,error:String(e?.message||e)}}};
         const [finance,promotion]=await Promise.all([check('https://finance-api.wildberries.ru/api/v1/account/balance'),check('https://advert-api.wildberries.ru/adv/v1/balance')]);
         return json({ok:true,market,configured:true,finance:finance.ok,promotion:promotion.ok,financeStatus:finance.status,promotionStatus:promotion.status},200,cors);
+      }
+
+      if (url.pathname === '/api/wb-finance-status' && request.method === 'GET') {
+        const market=normalizeMarket(url.searchParams.get('market'));
+        if(!['WB','WB2'].includes(market)) return json({ok:false,error:'market must be WB or WB2'},400,cors);
+        const latest=await env.DB.prepare('SELECT * FROM wb_finance_sync_runs WHERE market=? ORDER BY id DESC LIMIT 1').bind(market).first();
+        const f=await env.DB.prepare('SELECT COUNT(*) n,MAX(rr_date) lastDate FROM wb_finance_rows WHERE market=?').bind(market).first();
+        const a=await env.DB.prepare('SELECT COUNT(*) n,MAX(day) lastDay FROM wb_ad_costs WHERE market=?').bind(market).first();
+        return json({ok:true,market,latest:latest||null,financeRows:Number(f?.n||0),financeLastDate:Number(f?.lastDate||0)||null,adRows:Number(a?.n||0),adLastDay:a?.lastDay||null},200,cors);
+      }
+
+      if (url.pathname === '/api/wb-finance-summary' && request.method === 'GET') {
+        const market=normalizeMarket(url.searchParams.get('market'));
+        if(!['WB','WB2'].includes(market)) return json({ok:false,error:'market must be WB or WB2'},400,cors);
+        const days=Math.max(1,Math.min(3660,Number(url.searchParams.get('days')||30)));
+        const since=Date.now()-days*86400000;
+        const f=await env.DB.prepare(`SELECT SUM(retail_amount) retailAmount,SUM(for_pay) forPay,SUM(acquiring_fee) acquiring,SUM(delivery_service) delivery,SUM(paid_storage) storage,SUM(paid_acceptance) acceptance,SUM(deduction) deduction,SUM(penalty) penalty,SUM(additional_payment) additionalPayment,SUM(rebill_logistic_cost) rebill FROM wb_finance_rows WHERE market=? AND rr_date>=?`).bind(market,since).first();
+        const day=new Date(since).toISOString().slice(0,10);
+        const a=await env.DB.prepare('SELECT SUM(amount) amount FROM wb_ad_costs WHERE market=? AND day>=?').bind(market,day).first();
+        const n=x=>Number(x||0);
+        const expenses=n(f?.acquiring)+n(f?.delivery)+n(f?.storage)+n(f?.acceptance)+n(f?.deduction)+n(f?.penalty)+n(f?.rebill)+n(a?.amount);
+        return json({ok:true,market,days,retailAmount:n(f?.retailAmount),forPay:n(f?.forPay),acquiring:n(f?.acquiring),delivery:n(f?.delivery),storage:n(f?.storage),acceptance:n(f?.acceptance),deduction:n(f?.deduction),penalty:n(f?.penalty),additionalPayment:n(f?.additionalPayment),rebill:n(f?.rebill),advertising:n(a?.amount),expenses},200,cors);
       }
 
       if (url.pathname === '/api/orders' && request.method === 'GET') {
@@ -174,7 +199,12 @@ export default {
         try { stocks[market] = await syncWbStockMarket(env, market, { force: false }); }
         catch (e) { stocks[market] = { ok: false, error: String(e?.message || e) }; }
       }
-      return { orders, stocks };
+      const finance={};
+      for (const market of ['WB','WB2']) {
+        try { finance[market]=await syncWbFinance(env,market,{force:false}); }
+        catch(e){ finance[market]={ok:false,error:String(e?.message||e)}; }
+      }
+      return { orders, stocks, finance };
     })());
   }
 };
@@ -186,6 +216,9 @@ async function ensureSchema(db) {
     `CREATE TABLE IF NOT EXISTS product_links (id INTEGER PRIMARY KEY AUTOINCREMENT,product_id TEXT NOT NULL,market TEXT NOT NULL,sku TEXT NOT NULL,created_at INTEGER NOT NULL,updated_at INTEGER NOT NULL,FOREIGN KEY(product_id) REFERENCES products(id) ON DELETE CASCADE,UNIQUE(market,sku))`,
     `CREATE TABLE IF NOT EXISTS marketplace_order_lines (id INTEGER PRIMARY KEY AUTOINCREMENT,market TEXT NOT NULL,order_id TEXT NOT NULL,code TEXT NOT NULL DEFAULT '',entry_id TEXT NOT NULL,status TEXT NOT NULL DEFAULT '',state TEXT NOT NULL DEFAULT '',creation_date INTEGER NOT NULL DEFAULT 0,sku TEXT NOT NULL DEFAULT '',product_name TEXT NOT NULL DEFAULT '',qty REAL NOT NULL DEFAULT 0,unit_price REAL NOT NULL DEFAULT 0,total_price REAL NOT NULL DEFAULT 0,seller_delivery_cost REAL NOT NULL DEFAULT 0,marketplace_fee REAL NOT NULL DEFAULT 0,fee_source TEXT NOT NULL DEFAULT '',raw_json TEXT NOT NULL DEFAULT '',first_seen_at INTEGER NOT NULL,updated_at INTEGER NOT NULL,UNIQUE(market,order_id,entry_id))`,
     `CREATE TABLE IF NOT EXISTS sync_runs (id INTEGER PRIMARY KEY AUTOINCREMENT,market TEXT NOT NULL,started_at INTEGER NOT NULL,finished_at INTEGER,ok INTEGER NOT NULL DEFAULT 0,items INTEGER NOT NULL DEFAULT 0,error TEXT NOT NULL DEFAULT '')`,
+    `CREATE TABLE IF NOT EXISTS wb_finance_rows (market TEXT NOT NULL,rrd_id TEXT NOT NULL,report_id TEXT NOT NULL DEFAULT '',rr_date INTEGER NOT NULL DEFAULT 0,vendor_code TEXT NOT NULL DEFAULT '',nm_id TEXT NOT NULL DEFAULT '',title TEXT NOT NULL DEFAULT '',doc_type TEXT NOT NULL DEFAULT '',operation TEXT NOT NULL DEFAULT '',qty REAL NOT NULL DEFAULT 0,retail_amount REAL NOT NULL DEFAULT 0,for_pay REAL NOT NULL DEFAULT 0,acquiring_fee REAL NOT NULL DEFAULT 0,delivery_service REAL NOT NULL DEFAULT 0,paid_storage REAL NOT NULL DEFAULT 0,paid_acceptance REAL NOT NULL DEFAULT 0,deduction REAL NOT NULL DEFAULT 0,penalty REAL NOT NULL DEFAULT 0,additional_payment REAL NOT NULL DEFAULT 0,rebill_logistic_cost REAL NOT NULL DEFAULT 0,raw_json TEXT NOT NULL DEFAULT '',updated_at INTEGER NOT NULL DEFAULT 0,PRIMARY KEY(market,rrd_id))`,
+    `CREATE TABLE IF NOT EXISTS wb_ad_costs (market TEXT NOT NULL,day TEXT NOT NULL,advert_id TEXT NOT NULL,upd_num TEXT NOT NULL DEFAULT '',amount REAL NOT NULL DEFAULT 0,campaign TEXT NOT NULL DEFAULT '',payment_type TEXT NOT NULL DEFAULT '',raw_json TEXT NOT NULL DEFAULT '',updated_at INTEGER NOT NULL DEFAULT 0,PRIMARY KEY(market,day,advert_id,upd_num))`,
+    `CREATE TABLE IF NOT EXISTS wb_finance_sync_runs (id INTEGER PRIMARY KEY AUTOINCREMENT,market TEXT NOT NULL,started_at INTEGER NOT NULL,finished_at INTEGER,ok INTEGER NOT NULL DEFAULT 0,finance_ok INTEGER NOT NULL DEFAULT 0,promotion_ok INTEGER NOT NULL DEFAULT 0,finance_items INTEGER NOT NULL DEFAULT 0,ad_items INTEGER NOT NULL DEFAULT 0,error TEXT NOT NULL DEFAULT '')`,
     `CREATE TABLE IF NOT EXISTS warehouse_state (id INTEGER PRIMARY KEY CHECK(id=1),payload TEXT NOT NULL DEFAULT '{}',revision INTEGER NOT NULL DEFAULT 0,updated_at INTEGER NOT NULL DEFAULT 0)`,
     `CREATE TABLE IF NOT EXISTS stock_sync_runs (id INTEGER PRIMARY KEY AUTOINCREMENT,market TEXT NOT NULL,mode TEXT NOT NULL DEFAULT 'preview',started_at INTEGER NOT NULL,finished_at INTEGER,ok INTEGER NOT NULL DEFAULT 0,warehouse_id TEXT NOT NULL DEFAULT '',linked INTEGER NOT NULL DEFAULT 0,mapped INTEGER NOT NULL DEFAULT 0,missing INTEGER NOT NULL DEFAULT 0,items INTEGER NOT NULL DEFAULT 0,error TEXT NOT NULL DEFAULT '')`,
     `CREATE TABLE IF NOT EXISTS wb_stock_links (market TEXT NOT NULL,sku TEXT NOT NULL,chrt_id INTEGER NOT NULL,source TEXT NOT NULL DEFAULT '',updated_at INTEGER NOT NULL,PRIMARY KEY(market,sku))`,
@@ -197,7 +230,10 @@ async function ensureSchema(db) {
     `CREATE INDEX IF NOT EXISTS idx_product_links_product ON product_links(product_id)`,
     `CREATE INDEX IF NOT EXISTS idx_order_lines_market_date ON marketplace_order_lines(market,creation_date DESC)`,
     `CREATE INDEX IF NOT EXISTS idx_order_lines_market_sku ON marketplace_order_lines(market,sku)`,
-    `CREATE INDEX IF NOT EXISTS idx_sync_runs_market_started ON sync_runs(market,started_at DESC)`
+    `CREATE INDEX IF NOT EXISTS idx_sync_runs_market_started ON sync_runs(market,started_at DESC)`,
+    `CREATE INDEX IF NOT EXISTS idx_wb_finance_market_date ON wb_finance_rows(market,rr_date DESC)`,
+    `CREATE INDEX IF NOT EXISTS idx_wb_ads_market_day ON wb_ad_costs(market,day DESC)`,
+    `CREATE INDEX IF NOT EXISTS idx_wb_finance_runs_market ON wb_finance_sync_runs(market,started_at DESC)`
   ];
   for (const sql of statements) await db.prepare(sql).run();
   await ensureColumn(db,'marketplace_order_lines','seller_delivery_cost','REAL NOT NULL DEFAULT 0');
@@ -1320,6 +1356,12 @@ function computeSharedAvailableStocks(warehouse, orderRows) {
   }
   return available;
 }
+
+function wbToken(env,market){return String((market==='WB2'?env.WB_TOKEN_2:env.WB_TOKEN)||'').trim()}
+function wbMoney(v){const n=Number(v);return Number.isFinite(n)?n:0}
+function wbDateMs(v){const t=Date.parse(String(v||''));return Number.isFinite(t)?t:0}
+async function wbApiFetch(url,token,opts={}){const r=await fetch(url,{...opts,headers:{Accept:'application/json',Authorization:token,'Content-Type':'application/json',...(opts.headers||{})}});if(r.status===204)return [];let data=null;try{data=await r.json()}catch{}if(!r.ok){const e=new Error('WB API HTTP '+r.status+(data?.detail?' · '+data.detail:''));e.status=r.status;throw e}return data}
+async function syncWbFinance(env,market='WB',{force=false}={}){if(!['WB','WB2'].includes(market))throw new Error('Unsupported WB finance market');const token=wbToken(env,market);if(!token)throw new Error((market==='WB2'?'WB_TOKEN_2':'WB_TOKEN')+' is not configured');const last=await env.DB.prepare('SELECT * FROM wb_finance_sync_runs WHERE market=? ORDER BY id DESC LIMIT 1').bind(market).first();if(!force&&last&&Date.now()-Number(last.started_at||0)<WB_FINANCE_SYNC_MS)return {ok:Boolean(last.ok),skipped:true,nextSyncAt:Number(last.started_at)+WB_FINANCE_SYNC_MS,financeOk:Boolean(last.finance_ok),promotionOk:Boolean(last.promotion_ok)};const now=Date.now(),run=await env.DB.prepare('INSERT INTO wb_finance_sync_runs(market,started_at) VALUES(?,?) RETURNING id').bind(market,now).first();let financeOk=false,promotionOk=false,financeItems=0,adItems=0,errors=[];const to=new Date(),from=new Date(Date.now()-30*86400000),fromDay=from.toISOString().slice(0,10),toDay=to.toISOString().slice(0,10);try{const rows=await wbApiFetch(WB_FINANCE_BASE+'/api/finance/v1/sales-reports/detailed',token,{method:'POST',body:JSON.stringify({dateFrom:fromDay,dateTo:toDay,limit:100000,rrdId:0,period:'daily'})});for(const x of(Array.isArray(rows)?rows:[])){const rrd=String(x.rrdId??'');if(!rrd)continue;await env.DB.prepare(`INSERT INTO wb_finance_rows(market,rrd_id,report_id,rr_date,vendor_code,nm_id,title,doc_type,operation,qty,retail_amount,for_pay,acquiring_fee,delivery_service,paid_storage,paid_acceptance,deduction,penalty,additional_payment,rebill_logistic_cost,raw_json,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(market,rrd_id) DO UPDATE SET report_id=excluded.report_id,rr_date=excluded.rr_date,vendor_code=excluded.vendor_code,nm_id=excluded.nm_id,title=excluded.title,doc_type=excluded.doc_type,operation=excluded.operation,qty=excluded.qty,retail_amount=excluded.retail_amount,for_pay=excluded.for_pay,acquiring_fee=excluded.acquiring_fee,delivery_service=excluded.delivery_service,paid_storage=excluded.paid_storage,paid_acceptance=excluded.paid_acceptance,deduction=excluded.deduction,penalty=excluded.penalty,additional_payment=excluded.additional_payment,rebill_logistic_cost=excluded.rebill_logistic_cost,raw_json=excluded.raw_json,updated_at=excluded.updated_at`).bind(market,rrd,String(x.reportId??''),wbDateMs(x.rrDate||x.saleDt||x.createDate),String(x.vendorCode??''),String(x.nmId??''),String(x.title??''),String(x.docTypeName??''),String(x.sellerOperName??''),wbMoney(x.quantity),wbMoney(x.retailAmount),wbMoney(x.forPay),wbMoney(x.acquiringFee),wbMoney(x.deliveryService),wbMoney(x.paidStorage),wbMoney(x.paidAcceptance),wbMoney(x.deduction),wbMoney(x.penalty),wbMoney(x.additionalPayment),wbMoney(x.rebillLogisticCost),JSON.stringify(x),now).run();financeItems++}financeOk=true}catch(e){errors.push('finance: '+String(e?.message||e))}try{const rows=await wbApiFetch(WB_ADVERT_BASE+'/adv/v1/upd?from='+encodeURIComponent(fromDay)+'&to='+encodeURIComponent(toDay),token);for(const x of(Array.isArray(rows)?rows:[])){const ts=String(x.updTime||''),day=(ts?ts.slice(0,10):toDay),advert=String(x.advertId??''),num=String(x.updNum??'');await env.DB.prepare(`INSERT INTO wb_ad_costs(market,day,advert_id,upd_num,amount,campaign,payment_type,raw_json,updated_at) VALUES(?,?,?,?,?,?,?,?,?) ON CONFLICT(market,day,advert_id,upd_num) DO UPDATE SET amount=excluded.amount,campaign=excluded.campaign,payment_type=excluded.payment_type,raw_json=excluded.raw_json,updated_at=excluded.updated_at`).bind(market,day,advert,num,wbMoney(x.updSum),String(x.campName??''),String(x.paymentType??''),JSON.stringify(x),now).run();adItems++}promotionOk=true}catch(e){errors.push('promotion: '+String(e?.message||e))}const ok=financeOk||promotionOk;await env.DB.prepare('UPDATE wb_finance_sync_runs SET finished_at=?,ok=?,finance_ok=?,promotion_ok=?,finance_items=?,ad_items=?,error=? WHERE id=?').bind(Date.now(),ok?1:0,financeOk?1:0,promotionOk?1:0,financeItems,adItems,errors.join('; '),run.id).run();return {ok,market,financeOk,promotionOk,financeItems,adItems,error:errors.join('; ')}}
 
 async function fetchWb(env, market='WB') {
   const token = String((market === 'WB2' ? env.WB_TOKEN_2 : env.WB_TOKEN) || '').trim();
