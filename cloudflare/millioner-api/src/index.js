@@ -281,7 +281,6 @@ async function ensureSchema(db) {
     `CREATE INDEX IF NOT EXISTS idx_order_lines_market_sku ON marketplace_order_lines(market,sku)`,
     `CREATE INDEX IF NOT EXISTS idx_sync_runs_market_started ON sync_runs(market,started_at DESC)`,
     `CREATE INDEX IF NOT EXISTS idx_wb_finance_market_date ON wb_finance_rows(market,rr_date DESC)`,
-    `CREATE INDEX IF NOT EXISTS idx_wb_finance_market_sale_date ON wb_finance_rows(market,sale_date DESC)`,
     `CREATE INDEX IF NOT EXISTS idx_wb_ads_market_day ON wb_ad_costs(market,day DESC)`,
     `CREATE INDEX IF NOT EXISTS idx_wb_finance_runs_market ON wb_finance_sync_runs(market,started_at DESC)`
   ];
@@ -290,6 +289,7 @@ async function ensureSchema(db) {
   await ensureColumn(db,'marketplace_order_lines','marketplace_fee','REAL NOT NULL DEFAULT 0');
   await ensureColumn(db,'marketplace_order_lines','fee_source',"TEXT NOT NULL DEFAULT ''");
   await ensureColumn(db,'wb_finance_rows','sale_date','INTEGER NOT NULL DEFAULT 0');
+  await db.prepare(`CREATE INDEX IF NOT EXISTS idx_wb_finance_market_sale_date ON wb_finance_rows(market,sale_date DESC)`).run();
   await db.prepare(`UPDATE wb_finance_rows SET sale_date=COALESCE(CAST(strftime('%s',json_extract(raw_json,'$.saleDt')) AS INTEGER)*1000,CAST(strftime('%s',json_extract(raw_json,'$.sale_dt')) AS INTEGER)*1000,rr_date) WHERE sale_date=0`).run();
 }
 async function ensureColumn(db,table,column,definition){const info=await db.prepare(`PRAGMA table_info(${table})`).all();if((info.results||[]).some(x=>String(x.name)===column))return;await db.prepare(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`).run();}
