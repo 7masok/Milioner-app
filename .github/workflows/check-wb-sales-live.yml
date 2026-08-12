@@ -6,9 +6,15 @@ jobs:
   check:
     runs-on: ubuntu-latest
     steps:
-      - run: sleep 90
-      - name: WB1 refresh dashboard buyouts once
-        run: curl -sS 'https://millioner-api.7masok.workers.dev/api/wb-buyouts-live?market=WB&days=1&refresh=1' | jq '{ok,available,market,status,period,buyoutCount,buyoutSum,itemCount,updatedAt,lastError,products:(.products|length),sample:(.products[:5])}'
-      - run: sleep 25
-      - name: WB2 refresh dashboard buyouts once
-        run: curl -sS 'https://millioner-api.7masok.workers.dev/api/wb-buyouts-live?market=WB2&days=1&refresh=1' | jq '{ok,available,market,status,period,buyoutCount,buyoutSum,itemCount,updatedAt,lastError,products:(.products|length),sample:(.products[:5])}'
+      - name: WB1 cache today
+        run: |
+          curl -sS 'https://millioner-api.7masok.workers.dev/api/wb-buyouts-live?market=WB&days=1' | jq .
+      - name: WB1 cache yesterday
+        run: |
+          curl -sS 'https://millioner-api.7masok.workers.dev/api/wb-buyouts-live?market=WB&days=-1' | jq .
+      - name: WB2 cache today
+        run: |
+          curl -sS 'https://millioner-api.7masok.workers.dev/api/wb-buyouts-live?market=WB2&days=1' | jq .
+      - name: WB2 cache yesterday
+        run: |
+          curl -sS 'https://millioner-api.7masok.workers.dev/api/wb-buyouts-live?market=WB2&days=-1' | jq .
