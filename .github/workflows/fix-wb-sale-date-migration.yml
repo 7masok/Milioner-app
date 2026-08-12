@@ -1,0 +1,27 @@
+name: Fix WB sale date migration
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'tools/fix_wb_sale_date_migration.py'
+      - '.github/workflows/fix-wb-sale-date-migration.yml'
+permissions:
+  contents: write
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with: {fetch-depth: 0}
+      - run: python tools/fix_wb_sale_date_migration.py
+      - run: node --check cloudflare/millioner-api/src/index.js
+      - run: |
+          grep -q "ensureColumn(db,'wb_finance_rows','sale_date'" cloudflare/millioner-api/src/index.js
+          grep -q 'CREATE INDEX IF NOT EXISTS idx_wb_finance_market_sale_date' cloudflare/millioner-api/src/index.js
+      - run: |
+          if git diff --quiet -- cloudflare/millioner-api/src/index.js; then exit 0; fi
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add cloudflare/millioner-api/src/index.js
+          git commit -m 'Fix WB sale date migration order'
+          git push origin main
