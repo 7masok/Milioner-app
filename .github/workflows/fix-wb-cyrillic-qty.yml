@@ -1,0 +1,22 @@
+name: Fix WB Cyrillic quantity
+on:
+  push:
+    branches: [main]
+    paths: ['.github/workflows/fix-wb-cyrillic-qty.yml']
+permissions:
+  contents: write
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: python tools/fix_wb_cyrillic_qty.py
+      - run: node --check cloudflare/millioner-api/src/index.js
+      - run: grep -q "trim(f.doc_type)='Продажа'" cloudflare/millioner-api/src/index.js
+      - name: Commit
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add cloudflare/millioner-api/src/index.js
+          git diff --cached --quiet || git commit -m 'Fix WB realized quantity Cyrillic filter'
+          git push
