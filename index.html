@@ -160,12 +160,24 @@ function localDateInputValue(ts=Date.now()){const d=new Date(Number(ts)||Date.no
 function localDateStart(value){if(!value)return Date.now();const [y,m,d]=String(value).split('-').map(Number);return new Date(y,m-1,d,12,0,0,0).getTime()}
 function log(type,pid,qty,extra=''){state.movements.unshift({id:id(),date:Date.now(),type,productId:pid,qty,extra});state.movements=state.movements.slice(0,1000)}
 function render(){
-  document.querySelectorAll('.chip').forEach(b=>b.classList.toggle('active',Number(b.dataset.period)===selectedPeriodPreset));
-  document.querySelectorAll('.market-tab').forEach(b=>b.classList.toggle('active',b.dataset.market===selectedOrderMarket));
-  renderOrderPeriodControls();renderMarketplaceOrders();renderAttention();renderRecent();renderProducts();renderMovement();renderPurchases();renderReports();
-  document.getElementById('lastSync').textContent=state.settings.lastSync?new Date(state.settings.lastSync).toLocaleTimeString('ru-RU',{hour:'2-digit',minute:'2-digit'}):'—';
+  const activeView=document.querySelector('.view.active')?.id||state.settings.activeView||'home';
+  if(activeView==='home'){
+    document.querySelectorAll('.market-tab[data-market]').forEach(b=>b.classList.toggle('active',b.dataset.market===selectedOrderMarket));
+    renderOrderPeriodControls();renderMarketplaceOrders();renderAttention();renderRecent();
+  }else if(activeView==='products'){
+    renderProducts();
+  }else if(activeView==='movement'){
+    renderMovement();
+  }else if(activeView==='purchases'){
+    renderPurchases();
+  }else if(activeView==='reports'){
+    document.querySelectorAll('.chip').forEach(b=>b.classList.toggle('active',Number(b.dataset.period)===selectedPeriodPreset));
+    renderReports();
+  }
+  const lastSync=document.getElementById('lastSync');if(lastSync)lastSync.textContent=state.settings.lastSync?new Date(state.settings.lastSync).toLocaleTimeString('ru-RU',{hour:'2-digit',minute:'2-digit'}):'—';
   const ab=document.getElementById('autoBackup');if(ab)ab.checked=state.settings.autoBackup!==false;
-  renderIntegrationStatus();renderDriveStatus();
+  renderIntegrationStatus();
+  if(activeView==='settings')renderDriveStatus();
 }
 function marketServerStatus(market){return state.settings.serverMarketStatus?.[market]||null}
 function isWbRateLimit(error){return /\b429\b|too many requests|global limiter|rate limit/i.test(String(error||''))}
