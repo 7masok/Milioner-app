@@ -1,0 +1,41 @@
+name: WB realization only
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'tools/remove_wb_order_fallback.py'
+      - '.github/workflows/remove-wb-order-fallback.yml'
+permissions:
+  contents: write
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with: {fetch-depth: 0}
+      - run: python tools/remove_wb_order_fallback.py
+      - name: Check browser JS
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import re
+          html=Path('index.html').read_text(encoding='utf-8')
+          scripts=re.findall(r'<script>(.*?)</script>',html,flags=re.S|re.I)
+          if not scripts: raise SystemExit('No inline script')
+          Path('/tmp/app.js').write_text('\n'.join(scripts),encoding='utf-8')
+          PY
+          node --check /tmp/app.js
+      - run: |
+          grep -q 'Чистая прибыль · только реализация WB' index.html
+          if grep -q 'marketplaceProductStats(market,periodDays)' index.html; then
+            echo 'WB order fallback still exists' >&2
+            exit 1
+          fi
+      - name: Commit
+        run: |
+          if git diff --quiet -- index.html; then exit 0; fi
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add index.html
+          git commit -m 'Count only realized WB sales in profit reports'
+          git push origin main
