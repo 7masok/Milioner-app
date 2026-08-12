@@ -1,0 +1,14 @@
+name: Inspect Worker deploy
+on:
+  push:
+    paths: ['.github/workflows/inspect-worker-deploy.yml']
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: |
+          echo '--- deploy refs ---'
+          grep -RniE 'wrangler|CLOUDFLARE|cloudflare.*token|account.*id' .github/workflows cloudflare 2>/dev/null | head -200 || true
+          echo '--- wrangler config ---'
+          find cloudflare -maxdepth 3 -type f \( -name 'wrangler.toml' -o -name 'wrangler.jsonc' \) -print -exec cat {} \;
