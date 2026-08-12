@@ -1,0 +1,13 @@
+name: WB debug now
+on:
+  push:
+    paths: ['.github/workflows/wb-debug-now.yml']
+jobs:
+  debug:
+    runs-on: ubuntu-latest
+    steps:
+      - run: sleep 10
+      - name: WB1
+        run: curl -fsSL --retry 6 --retry-delay 5 'https://millioner-api.7masok.workers.dev/api/wb-finance-operation-debug?market=WB&days=30' | jq .
+      - name: WB2
+        run: curl -fsSL --retry 6 --retry-delay 5 'https://millioner-api.7masok.workers.dev/api/wb-finance-operation-debug?market=WB2&days=30' | jq .
