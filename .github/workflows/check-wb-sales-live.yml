@@ -6,8 +6,8 @@ jobs:
   check:
     runs-on: ubuntu-latest
     steps:
-      - run: sleep 90
+      - run: sleep 75
       - name: WB1 dashboard buyouts today
-        run: curl -sS --retry 6 --retry-delay 5 'https://millioner-api.7masok.workers.dev/api/wb-buyouts-live?market=WB&days=1' | jq '{ok,market,status,error,period,buyoutCount,buyoutSum,itemCount,products:(.products|length)}'
+        run: curl -sS --retry 6 --retry-delay 5 'https://millioner-api.7masok.workers.dev/api/wb-buyouts-live?market=WB&days=1' | jq '{ok,market,status,error,period,buyoutCount,buyoutSum,itemCount,products:(.products|length),sample:(.products[:5])}'
       - name: WB2 dashboard buyouts today
-        run: curl -sS --retry 6 --retry-delay 5 'https://millioner-api.7masok.workers.dev/api/wb-buyouts-live?market=WB2&days=1' | jq '{ok,market,status,error,period,buyoutCount,buyoutSum,itemCount,products:(.products|length)}'
+        run: curl -sS --retry 6 --retry-delay 5 'https://millioner-api.7masok.workers.dev/api/wb-buyouts-live?market=WB2&days=1' | jq '{ok,market,status,error,period,buyoutCount,buyoutSum,itemCount,products:(.products|length),sample:(.products[:5])}'
