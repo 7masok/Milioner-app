@@ -11,8 +11,8 @@ jobs:
           python - <<'PY'
           from pathlib import Path
           s=Path('index.html').read_text()
-          for term in ['function renderReports','По маркетплейсам','marketplaceProductStats']:
+          for term in ['function renderReports','async function openWbFinanceReport']:
               i=s.find(term)
               print('\n###',term,i)
-              print(s[i:i+12000] if i>=0 else 'NOT FOUND')
+              print(s[i:i+14000] if i>=0 else 'NOT FOUND')
           PY
