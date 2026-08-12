@@ -36,3 +36,4 @@ jobs:
           curl -fsSL --retry 5 --retry-delay 5 --max-time 30 'https://millioner-api.7masok.workers.dev/api/wb-finance-products?market=WB2&days=30' -o wb2-products.json
           jq '{ok,market,days,count:(.products|length),linked:([.products[]|select(.productId!=null)]|length),unlinked:([.products[]|select(.productId==null)]|length),advertising,accountAdvertising}' wb2-products.json
           jq -e '.ok==true and (.products|type)=="array"' wb2-products.json
+      # rerun after nmId fallback
