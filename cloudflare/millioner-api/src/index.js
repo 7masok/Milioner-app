@@ -58,8 +58,10 @@ export default {
         const isReturn=x=>String(x?.saleID||x?.saleId||'').trim().toUpperCase().startsWith('R');
         const sales=rows.filter(x=>!isReturn(x));
         const returns=rows.filter(isReturn);
+        const links=await env.DB.prepare('SELECT sku,product_id AS productId FROM product_links WHERE market=?').bind(market).all();
+        const linkMap=new Map((links.results||[]).map(x=>[String(x.sku||'').trim(),String(x.productId||'')]));
         const byProduct=new Map();
-        for(const x of rows){const sign=isReturn(x)?-1:1,key=String(x?.supplierArticle||x?.nmId||x?.barcode||'').trim(),nmId=String(x?.nmId??''),title=String(x?.subject||x?.category||key),revenue=Number(x?.finishedPrice||x?.priceWithDisc||x?.forPay||0)||0;let v=byProduct.get(key);if(!v){v={vendorCode:String(x?.supplierArticle||''),nmId,title,qty:0,revenue:0};byProduct.set(key,v)}v.qty+=sign;v.revenue+=sign*revenue;}
+        for(const x of rows){const sign=isReturn(x)?-1:1,vendorCode=String(x?.supplierArticle||'').trim(),nmId=String(x?.nmId??''),barcode=String(x?.barcode||'').trim(),key=vendorCode||nmId||barcode,title=String(x?.subject||x?.category||key),finishedPrice=Number(x?.finishedPrice||0)||0,priceWithDisc=Number(x?.priceWithDisc||0)||0,forPay=Number(x?.forPay||0)||0,productId=linkMap.get(vendorCode)||linkMap.get(nmId)||linkMap.get(barcode)||'';let v=byProduct.get(key);if(!v){v={vendorCode,nmId,barcode,title,productId,qty:0,finishedPrice:0,priceWithDisc:0,forPay:0};byProduct.set(key,v)}v.qty+=sign;v.finishedPrice+=sign*finishedPrice;v.priceWithDisc+=sign*priceWithDisc;v.forPay+=sign*forPay;}
         return json({ok:true,market,days,since,until,totalRows:rows.length,sales:sales.length,returns:returns.length,netQty:sales.length-returns.length,products:[...byProduct.values()].filter(x=>x.qty!==0),sample:rows.slice(0,5).map(x=>({date:x.date,lastChangeDate:x.lastChangeDate,supplierArticle:x.supplierArticle,nmId:x.nmId,saleID:x.saleID,finishedPrice:x.finishedPrice,priceWithDisc:x.priceWithDisc,forPay:x.forPay,isRealization:x.isRealization}))},200,cors);
       }
 
