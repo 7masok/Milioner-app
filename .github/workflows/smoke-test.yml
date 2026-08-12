@@ -56,6 +56,49 @@ jobs:
           PY
           node /tmp/kaspi-ads-regression.js
 
+      - name: Check overlapping Kaspi ads imports
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import re
+          html=Path('index.html').read_text(encoding='utf-8')
+          app='\n'.join(re.findall(r'<script>(.*?)</script>',html,flags=re.S|re.I))
+          key_start=app.index('function kaspiAdsLineKey(')
+          key_end=app.index('async function importKaspiAdsFile(',key_start)
+          breakdown_start=app.rindex('function kaspiAdsBreakdown(')
+          breakdown_end=app.index('function kaspiAdsForProduct(',breakdown_start)
+          helpers=r'''
+          const products=[{id:'a',name:'Товар A',kaspi:'SKU-A'}];
+          const state={kaspiAdExpenses:[
+            {importedAt:1,lines:[
+              {date:'2026-08-10',productId:'a',sku:'SKU-A',name:'Товар A',source:'Кампания 1',amount:100},
+              {date:'2026-08-10',productId:'a',sku:'SKU-A',name:'Товар A',source:'Кампания 2',amount:20}
+            ]},
+            {importedAt:2,lines:[
+              {date:'2026-08-10',productId:'a',sku:'SKU-A',name:'Товар A',amount:90},
+              {date:'2026-08-11',productId:'a',sku:'SKU-A',name:'Товар A',amount:50}
+            ]}
+          ]};
+          function prod(id){return products.find(p=>p.id===id)}
+          function kaspiAdsMatchProduct(line){return prod(line?.productId)||null}
+          function kaspiAdsNameKey(value){return String(value||'').trim().toLowerCase()}
+          function orderDayStart(value){const n=Date.parse(String(value)+'T00:00:00Z');return Number.isFinite(n)?n:null}
+          function reportPeriodStart(){return Date.parse('2026-08-01T00:00:00Z')}
+          function reportPeriodEnd(){return Date.parse('2026-09-01T00:00:00Z')}
+          const reportPeriod=30;
+          '''
+          test=helpers+app[key_start:key_end]+app[breakdown_start:breakdown_end]+r'''
+          const result=kaspiAdsBreakdown(30);
+          if(result.total!==140||result.byProduct.get('a')!==140)throw new Error('Overlapping report was counted twice: '+JSON.stringify({total:result.total,product:result.byProduct.get('a')}));
+          if(result.replacedRows!==1||result.replacedAmount!==120)throw new Error('Replacement statistics mismatch: '+JSON.stringify(result));
+          const allTime=kaspiAdsBreakdown('all');
+          if(allTime.total!==140||allTime.byProduct.get('a')!==140)throw new Error('All-time advertising overlap mismatch: '+JSON.stringify({total:allTime.total,product:allTime.byProduct.get('a')}));
+          console.log('Overlapping Kaspi advertising report regression OK');
+          '''
+          Path('/tmp/kaspi-ads-overlap-regression.js').write_text(test,encoding='utf-8')
+          PY
+          node /tmp/kaspi-ads-overlap-regression.js
+
       - name: Check 25-day purchase recommendations
         run: |
           python - <<'PY'
@@ -219,6 +262,7 @@ jobs:
             'function productKaspiDelivery(','function productLifetimeAverageCost(','function productAverageDailySales(',
             'seller_delivery_cost','marketplace_fee','fee_source',
             'id="rAds"','function importKaspiAdsFile()','function kaspiAdsBreakdown(',
+            'function kaspiAdsLineKey(','replacedRows','пересечения защищены:',
             'state.kaspiAdExpenses ||= []','kaspiAdExpenses:state.kaspiAdExpenses||[]',
             "kaspiAdExpenses:arr('kaspiAdExpenses').slice(0,5000)",
             'Реклама Kaspi без привязки','xlsx@0.18.5',
@@ -315,6 +359,8 @@ jobs:
               && grep -q 'id="rAds"' /tmp/site.html \
               && grep -q 'function importKaspiAdsFile()' /tmp/site.html \
               && grep -q 'function kaspiAdsBreakdown(' /tmp/site.html \
+              && grep -q 'function kaspiAdsLineKey(' /tmp/site.html \
+              && grep -q 'пересечения защищены:' /tmp/site.html \
               && grep -q 'function kaspiAdsIsoDate(' /tmp/site.html \
               && grep -q 'function kaspiAdsParseDelimitedText(' /tmp/site.html \
               && grep -q "new TextDecoder('utf-8').decode(buffer)" /tmp/site.html \
@@ -379,6 +425,8 @@ jobs:
           grep -q 'id="rAds"' /tmp/site.html
           grep -q 'function importKaspiAdsFile()' /tmp/site.html
           grep -q 'function kaspiAdsBreakdown(' /tmp/site.html
+          grep -q 'function kaspiAdsLineKey(' /tmp/site.html
+          grep -q 'пересечения защищены:' /tmp/site.html
           grep -q 'function kaspiAdsIsoDate(' /tmp/site.html
           grep -q 'function kaspiAdsParseDelimitedText(' /tmp/site.html
           grep -q "new TextDecoder('utf-8').decode(buffer)" /tmp/site.html
