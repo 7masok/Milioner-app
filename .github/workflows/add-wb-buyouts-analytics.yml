@@ -9,13 +9,22 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - run: python tools/fix_wb_buyouts_shape.py
+      - run: python tools/cache_wb_analytics_buyouts.py
       - run: node --check cloudflare/millioner-api/src/fixed.js
-      - run: grep -q 'data?.data?.products' cloudflare/millioner-api/src/fixed.js
+      - name: Check browser JS
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import re
+          s=Path('index.html').read_text()
+          Path('/tmp/app.js').write_text('\n'.join(re.findall(r'<script[^>]*>(.*?)</script>',s,re.S)))
+          PY
+          node --check /tmp/app.js
+      - run: grep -q 'WB_BUYOUT_CACHE_V2' cloudflare/millioner-api/src/fixed.js
       - run: |
-          if git diff --quiet -- cloudflare/millioner-api/src/fixed.js; then exit 0; fi
+          if git diff --quiet -- cloudflare/millioner-api/src/fixed.js index.html; then exit 0; fi
           git config user.name '7masok'
           git config user.email '7masok@gmail.com'
-          git add cloudflare/millioner-api/src/fixed.js
-          git commit -m 'Fix WB analytics buyouts parser'
+          git add cloudflare/millioner-api/src/fixed.js index.html
+          git commit -m 'Cache WB dashboard buyouts and avoid rate-limit zeros'
           git push
