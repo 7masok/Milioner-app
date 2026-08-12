@@ -76,7 +76,7 @@ export default {
                  SUM(f.deduction) AS deduction,SUM(f.penalty) AS penalty,
                  SUM(f.additional_payment) AS additionalPayment,SUM(f.rebill_logistic_cost) AS rebill
           FROM wb_finance_rows f
-          LEFT JOIN product_links l ON l.market=f.market AND l.sku=f.vendor_code
+          LEFT JOIN product_links l ON l.market=f.market AND (l.sku=f.vendor_code OR l.sku=f.nm_id)
           WHERE f.market=? AND f.rr_date>=?
           GROUP BY f.vendor_code,f.nm_id,l.product_id
           ORDER BY SUM(f.for_pay) DESC`).bind(market,since).all();
