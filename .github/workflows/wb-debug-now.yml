@@ -6,13 +6,14 @@ jobs:
   debug:
     runs-on: ubuntu-latest
     steps:
-      - run: sleep 30
-      - name: Check periods after sale-date migration
+      - uses: actions/checkout@v4
+      - name: Inspect fresh WB frontend logic
         run: |
-          for market in WB WB2; do
-            for days in 1 -1 7 30; do
-              echo "=== $market days=$days ==="
-              curl -fsSL --retry 6 --retry-delay 5 "https://millioner-api.7masok.workers.dev/api/wb-finance-summary?market=$market&days=$days" | jq '{market,days,rowCount,retailAmount,forPay,wbCharges,accountAdvertising,netBeforeCost}'
-              curl -fsSL --retry 6 --retry-delay 5 "https://millioner-api.7masok.workers.dev/api/wb-finance-products?market=$market&days=$days" | jq '{market,days,products:(.products|length),sumQty:([.products[].qty]|add // 0),sumNet:([.products[].netBeforeCost]|add // 0),sample:[.products[:3][]|{title,vendorCode,qty,forPay,wbCharges,netBeforeCost}]}'
-            done
-          done
+          python - <<'PY'
+          from pathlib import Path
+          s=Path('index.html').read_text()
+          for term in ['function marketplaceProductStats','function financialSales','async function openMarketReport']:
+              i=s.find(term)
+              print('\n###',term,'at',i)
+              print(s[i:i+8000] if i>=0 else 'NOT FOUND')
+          PY
