@@ -1,0 +1,36 @@
+name: Fix WB fresh profit
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'tools/fix_wb_fresh_profit.py'
+      - '.github/workflows/fix-wb-fresh-profit.yml'
+permissions:
+  contents: write
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with: {fetch-depth: 0}
+      - run: python tools/fix_wb_fresh_profit.py
+      - name: Check browser JS
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import re
+          s=Path('index.html').read_text()
+          scripts=re.findall(r'<script>(.*?)</script>',s,flags=re.S|re.I)
+          Path('/tmp/app.js').write_text('\n'.join(scripts))
+          PY
+          node --check /tmp/app.js
+      - run: |
+          grep -q 'Общая прибыль · расчёт WB' index.html
+          grep -q 'Прибыль / шт.' index.html
+      - run: |
+          if git diff --quiet -- index.html; then exit 0; fi
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add index.html
+          git commit -m 'Show fresh WB realized qty and estimated profit'
+          git push origin main
