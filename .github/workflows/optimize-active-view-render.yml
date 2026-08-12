@@ -1,0 +1,58 @@
+name: Optimize active view render
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'tools/optimize_active_view_render.py'
+      - '.github/workflows/optimize-active-view-render.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Apply guarded performance fix
+        run: python tools/optimize_active_view_render.py
+
+      - name: Check JavaScript syntax
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import re
+          html = Path('index.html').read_text(encoding='utf-8')
+          scripts = re.findall(r'<script>(.*?)</script>', html, flags=re.S|re.I)
+          if not scripts:
+              raise SystemExit('No inline script found')
+          Path('/tmp/app.js').write_text('\n'.join(scripts), encoding='utf-8')
+          PY
+          node --check /tmp/app.js
+
+      - name: Verify active-view rendering
+        run: |
+          grep -Fq "const activeView=document.querySelector('.view.active')?.id||state.settings.activeView||'home';" index.html
+          grep -Fq "if(activeView==='home')" index.html
+          grep -Fq "else if(activeView==='products')" index.html
+          grep -Fq "else if(activeView==='purchases')" index.html
+          grep -Fq "else if(activeView==='reports')" index.html
+          grep -Fq "if(activeView==='settings')renderDriveStatus();" index.html
+
+      - name: Commit optimized app
+        run: |
+          if git diff --quiet -- index.html; then
+            echo 'No app change needed'
+            exit 0
+          fi
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add index.html
+          git commit -m 'Render only the active warehouse view'
+          git push origin main
