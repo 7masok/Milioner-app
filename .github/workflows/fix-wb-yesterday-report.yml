@@ -1,0 +1,24 @@
+name: Fix WB yesterday report
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'tools/fix_wb_yesterday_report.py'
+permissions:
+  contents: write
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: python tools/fix_wb_yesterday_report.py
+      - run: node --check cloudflare/millioner-api/src/index.js
+      - run: grep -q "Предварительно по реализованным заказам" index.html
+      - run: grep -q "wbFinancePeriodBounds" cloudflare/millioner-api/src/index.js
+      - name: Commit
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add index.html cloudflare/millioner-api/src/index.js
+          git diff --cached --quiet || git commit -m "Fix WB yesterday report fallback and calendar bounds"
+          git push
