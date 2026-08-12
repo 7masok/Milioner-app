@@ -1,0 +1,21 @@
+name: Add WB analytics buyouts
+on:
+  push:
+    paths: ['.github/workflows/add-wb-buyouts-analytics.yml']
+permissions:
+  contents: write
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: python tools/add_wb_buyouts_analytics.py
+      - run: node --check cloudflare/millioner-api/src/fixed.js
+      - run: grep -q '/api/wb-buyouts-live' cloudflare/millioner-api/src/fixed.js
+      - run: |
+          if git diff --quiet -- cloudflare/millioner-api/src/fixed.js; then exit 0; fi
+          git config user.name '7masok'
+          git config user.email '7masok@gmail.com'
+          git add cloudflare/millioner-api/src/fixed.js
+          git commit -m 'Add WB analytics buyouts endpoint'
+          git push
