@@ -60,9 +60,10 @@ export default {
       if (url.pathname === '/api/wb-finance-summary' && request.method === 'GET') {
         const market=normalizeMarket(url.searchParams.get('market'));
         if(!['WB','WB2'].includes(market)) return json({ok:false,error:'market must be WB or WB2'},400,cors);
-        const days=Math.max(1,Math.min(3660,Number(url.searchParams.get('days')||30)));
-        const since=Date.now()-days*86400000;
-        const f=await env.DB.prepare(`SELECT SUM(retail_amount) retailAmount,SUM(for_pay) forPay,SUM(acquiring_fee) acquiring,SUM(delivery_service) delivery,SUM(paid_storage) storage,SUM(paid_acceptance) acceptance,SUM(deduction) deduction,SUM(penalty) penalty,SUM(additional_payment) additionalPayment,SUM(rebill_logistic_cost) rebill FROM wb_finance_rows WHERE market=? AND rr_date>=?`).bind(market,since).first();
+        const daysRaw=Number(url.searchParams.get('days')||30);
+        const days=daysRaw===-1?-1:Math.max(1,Math.min(3660,daysRaw));
+        const {since,until}=wbFinancePeriodBounds(days);
+        const f=await env.DB.prepare(`SELECT SUM(retail_amount) retailAmount,SUM(for_pay) forPay,SUM(acquiring_fee) acquiring,SUM(delivery_service) delivery,SUM(paid_storage) storage,SUM(paid_acceptance) acceptance,SUM(deduction) deduction,SUM(penalty) penalty,SUM(additional_payment) additionalPayment,SUM(rebill_logistic_cost) rebill FROM wb_finance_rows WHERE market=? AND rr_date>=? AND rr_date<?`).bind(market,since,until).first();
         const day=new Date(since).toISOString().slice(0,10);
         const a=await env.DB.prepare(`SELECT SUM(amount) allAds,SUM(CASE WHEN lower(payment_type) LIKE '%счет%' OR lower(payment_type) LIKE '%account%' THEN amount ELSE 0 END) accountAds FROM wb_ad_costs WHERE market=? AND day>=?`).bind(market,day).first();
         const n=x=>Number(x||0);
@@ -75,8 +76,9 @@ export default {
       if (url.pathname === '/api/wb-finance-products' && request.method === 'GET') {
         const market=normalizeMarket(url.searchParams.get('market'));
         if(!['WB','WB2'].includes(market)) return json({ok:false,error:'market must be WB or WB2'},400,cors);
-        const days=Math.max(1,Math.min(3660,Number(url.searchParams.get('days')||30)));
-        const since=Date.now()-days*86400000;
+        const daysRaw=Number(url.searchParams.get('days')||30);
+        const days=daysRaw===-1?-1:Math.max(1,Math.min(3660,daysRaw));
+        const {since,until}=wbFinancePeriodBounds(days);
         const rows=await env.DB.prepare(`
           SELECT f.vendor_code AS vendorCode,f.nm_id AS nmId,MAX(f.title) AS title,l.product_id AS productId,
                  SUM(CASE WHEN trim(f.doc_type)='Продажа' THEN f.qty WHEN trim(f.doc_type)='Возврат' THEN -f.qty ELSE 0 END) AS qty,SUM(f.retail_amount) AS retailAmount,SUM(f.for_pay) AS forPay,
@@ -86,9 +88,9 @@ export default {
                  SUM(f.additional_payment) AS additionalPayment,SUM(f.rebill_logistic_cost) AS rebill
           FROM wb_finance_rows f
           LEFT JOIN product_links l ON l.market=f.market AND (l.sku=f.vendor_code OR l.sku=f.nm_id)
-          WHERE f.market=? AND f.rr_date>=?
+          WHERE f.market=? AND f.rr_date>=? AND f.rr_date<?
           GROUP BY f.vendor_code,f.nm_id,l.product_id
-          ORDER BY SUM(f.for_pay) DESC`).bind(market,since).all();
+          ORDER BY SUM(f.for_pay) DESC`).bind(market,since,until).all();
         const n=x=>Number(x||0);
         const products=(rows.results||[]).map(x=>{const wbCharges=n(x.acquiring)+n(x.delivery)+n(x.storage)+n(x.acceptance)+n(x.deduction)+n(x.penalty)+n(x.rebill);return {...x,qty:n(x.qty),retailAmount:n(x.retailAmount),forPay:n(x.forPay),acquiring:n(x.acquiring),delivery:n(x.delivery),storage:n(x.storage),acceptance:n(x.acceptance),deduction:n(x.deduction),penalty:n(x.penalty),additionalPayment:n(x.additionalPayment),rebill:n(x.rebill),wbCharges,netBeforeCost:n(x.forPay)-wbCharges+n(x.additionalPayment)}});
         const day=new Date(since).toISOString().slice(0,10);
@@ -243,6 +245,17 @@ export default {
     })());
   }
 };
+
+
+function wbFinancePeriodBounds(days=30){
+  const offset=5*60*60*1000;
+  const nowLocal=Date.now()+offset;
+  const d=new Date(nowLocal);
+  const localMidnightUtc=Date.UTC(d.getUTCFullYear(),d.getUTCMonth(),d.getUTCDate())-offset;
+  if(Number(days)===-1)return {since:localMidnightUtc-86400000,until:localMidnightUtc};
+  const n=Math.max(1,Number(days)||1);
+  return {since:localMidnightUtc-(n-1)*86400000,until:localMidnightUtc+86400000};
+}
 
 async function ensureSchema(db) {
   if (!db) throw new Error('D1 binding DB is not configured');
