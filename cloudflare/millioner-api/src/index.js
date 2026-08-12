@@ -55,10 +55,36 @@ export default {
         const since=Date.now()-days*86400000;
         const f=await env.DB.prepare(`SELECT SUM(retail_amount) retailAmount,SUM(for_pay) forPay,SUM(acquiring_fee) acquiring,SUM(delivery_service) delivery,SUM(paid_storage) storage,SUM(paid_acceptance) acceptance,SUM(deduction) deduction,SUM(penalty) penalty,SUM(additional_payment) additionalPayment,SUM(rebill_logistic_cost) rebill FROM wb_finance_rows WHERE market=? AND rr_date>=?`).bind(market,since).first();
         const day=new Date(since).toISOString().slice(0,10);
-        const a=await env.DB.prepare('SELECT SUM(amount) amount FROM wb_ad_costs WHERE market=? AND day>=?').bind(market,day).first();
+        const a=await env.DB.prepare(`SELECT SUM(amount) allAds,SUM(CASE WHEN lower(payment_type) LIKE '%счет%' OR lower(payment_type) LIKE '%account%' THEN amount ELSE 0 END) accountAds FROM wb_ad_costs WHERE market=? AND day>=?`).bind(market,day).first();
         const n=x=>Number(x||0);
-        const expenses=n(f?.acquiring)+n(f?.delivery)+n(f?.storage)+n(f?.acceptance)+n(f?.deduction)+n(f?.penalty)+n(f?.rebill)+n(a?.amount);
-        return json({ok:true,market,days,retailAmount:n(f?.retailAmount),forPay:n(f?.forPay),acquiring:n(f?.acquiring),delivery:n(f?.delivery),storage:n(f?.storage),acceptance:n(f?.acceptance),deduction:n(f?.deduction),penalty:n(f?.penalty),additionalPayment:n(f?.additionalPayment),rebill:n(f?.rebill),advertising:n(a?.amount),expenses},200,cors);
+        const wbCharges=n(f?.acquiring)+n(f?.delivery)+n(f?.storage)+n(f?.acceptance)+n(f?.deduction)+n(f?.penalty)+n(f?.rebill);
+        const accountAdvertising=n(a?.accountAds);
+        const netBeforeCost=n(f?.forPay)-wbCharges+n(f?.additionalPayment)-accountAdvertising;
+        return json({ok:true,market,days,retailAmount:n(f?.retailAmount),forPay:n(f?.forPay),acquiring:n(f?.acquiring),delivery:n(f?.delivery),storage:n(f?.storage),acceptance:n(f?.acceptance),deduction:n(f?.deduction),penalty:n(f?.penalty),additionalPayment:n(f?.additionalPayment),rebill:n(f?.rebill),advertising:n(a?.allAds),accountAdvertising,wbCharges,netBeforeCost},200,cors);
+      }
+
+      if (url.pathname === '/api/wb-finance-products' && request.method === 'GET') {
+        const market=normalizeMarket(url.searchParams.get('market'));
+        if(!['WB','WB2'].includes(market)) return json({ok:false,error:'market must be WB or WB2'},400,cors);
+        const days=Math.max(1,Math.min(3660,Number(url.searchParams.get('days')||30)));
+        const since=Date.now()-days*86400000;
+        const rows=await env.DB.prepare(`
+          SELECT f.vendor_code AS vendorCode,f.nm_id AS nmId,MAX(f.title) AS title,l.product_id AS productId,
+                 SUM(f.qty) AS qty,SUM(f.retail_amount) AS retailAmount,SUM(f.for_pay) AS forPay,
+                 SUM(f.acquiring_fee) AS acquiring,SUM(f.delivery_service) AS delivery,
+                 SUM(f.paid_storage) AS storage,SUM(f.paid_acceptance) AS acceptance,
+                 SUM(f.deduction) AS deduction,SUM(f.penalty) AS penalty,
+                 SUM(f.additional_payment) AS additionalPayment,SUM(f.rebill_logistic_cost) AS rebill
+          FROM wb_finance_rows f
+          LEFT JOIN product_links l ON l.market=f.market AND l.sku=f.vendor_code
+          WHERE f.market=? AND f.rr_date>=?
+          GROUP BY f.vendor_code,f.nm_id,l.product_id
+          ORDER BY SUM(f.for_pay) DESC`).bind(market,since).all();
+        const n=x=>Number(x||0);
+        const products=(rows.results||[]).map(x=>{const wbCharges=n(x.acquiring)+n(x.delivery)+n(x.storage)+n(x.acceptance)+n(x.deduction)+n(x.penalty)+n(x.rebill);return {...x,qty:n(x.qty),retailAmount:n(x.retailAmount),forPay:n(x.forPay),acquiring:n(x.acquiring),delivery:n(x.delivery),storage:n(x.storage),acceptance:n(x.acceptance),deduction:n(x.deduction),penalty:n(x.penalty),additionalPayment:n(x.additionalPayment),rebill:n(x.rebill),wbCharges,netBeforeCost:n(x.forPay)-wbCharges+n(x.additionalPayment)}});
+        const day=new Date(since).toISOString().slice(0,10);
+        const ad=await env.DB.prepare(`SELECT SUM(amount) allAds,SUM(CASE WHEN lower(payment_type) LIKE '%счет%' OR lower(payment_type) LIKE '%account%' THEN amount ELSE 0 END) accountAds FROM wb_ad_costs WHERE market=? AND day>=?`).bind(market,day).first();
+        return json({ok:true,market,days,products,advertising:n(ad?.allAds),accountAdvertising:n(ad?.accountAds)},200,cors);
       }
 
       if (url.pathname === '/api/orders' && request.method === 'GET') {
