@@ -79,7 +79,7 @@ export default {
         const since=Date.now()-days*86400000;
         const rows=await env.DB.prepare(`
           SELECT f.vendor_code AS vendorCode,f.nm_id AS nmId,MAX(f.title) AS title,l.product_id AS productId,
-                 SUM(f.qty) AS qty,SUM(f.retail_amount) AS retailAmount,SUM(f.for_pay) AS forPay,
+                 SUM(CASE WHEN lower(trim(f.doc_type))='продажа' THEN f.qty WHEN lower(trim(f.doc_type))='возврат' THEN -f.qty ELSE 0 END) AS qty,SUM(f.retail_amount) AS retailAmount,SUM(f.for_pay) AS forPay,
                  SUM(f.acquiring_fee) AS acquiring,SUM(f.delivery_service) AS delivery,
                  SUM(f.paid_storage) AS storage,SUM(f.paid_acceptance) AS acceptance,
                  SUM(f.deduction) AS deduction,SUM(f.penalty) AS penalty,
