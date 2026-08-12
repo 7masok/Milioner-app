@@ -155,7 +155,7 @@ async function wbYesterdayProducts(request, env, url) {
 
 
 // WB_BUYOUT_CACHE_V2
-const WB_BUYOUT_REFRESH_MS=30*60*1000;
+const WB_BUYOUT_REFRESH_MS=60*60*1000;
 async function ensureWbBuyoutCache(db){
   await db.prepare(`CREATE TABLE IF NOT EXISTS wb_buyout_cache(
     market TEXT NOT NULL,period_key TEXT NOT NULL,payload TEXT NOT NULL DEFAULT '',updated_at INTEGER NOT NULL DEFAULT 0,
@@ -406,7 +406,13 @@ export default {
         const all=rows.results||[],blockedUntil=wbBuyoutMarketBlockedUntil(all);
         if(Date.now()<blockedUntil)continue;
         const map=new Map(all.map(x=>[String(x.period_key),x]));
-        for(const days of [1,-1,7,30]){
+        const periods=[1,-1,7,30];
+        // First fill periods that have never produced a successful payload. Only after
+        // every period has data do we refresh the stalest successful cache. This keeps
+        // today's cache from repeatedly taking the first available WB Analytics slot.
+        const missing=periods.filter(days=>!Number(map.get(String(days))?.updated_at||0));
+        const candidates=missing.length?missing:[...periods].sort((a,b)=>Number(map.get(String(a))?.updated_at||0)-Number(map.get(String(b))?.updated_at||0));
+        for(const days of candidates){
           const row=map.get(String(days));
           if(wbBuyoutCacheDue(row)){
             any=true;
