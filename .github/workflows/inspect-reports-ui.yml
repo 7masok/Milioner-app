@@ -1,0 +1,18 @@
+name: Inspect reports UI
+on:
+  push:
+    paths: ['.github/workflows/inspect-reports-ui.yml']
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: |
+          python - <<'PY'
+          from pathlib import Path
+          s=Path('index.html').read_text()
+          for term in ['function renderReports','По маркетплейсам','marketplaceProductStats']:
+              i=s.find(term)
+              print('\n###',term,i)
+              print(s[i:i+12000] if i>=0 else 'NOT FOUND')
+          PY
