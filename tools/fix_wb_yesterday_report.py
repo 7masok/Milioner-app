@@ -27,3 +27,4 @@ if old3 not in h: raise SystemExit('frontend report body block not found')
 h=h.replace(old3,new3,1)
 html.write_text(h)
 print('patched WB yesterday report')
+# trigger
