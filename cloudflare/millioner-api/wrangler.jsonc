@@ -1,7 +1,7 @@
 {
   "$schema": "../../node_modules/wrangler/config-schema.json",
   "name": "millioner-api",
-  "main": "src/index.js",
+  "main": "src/fixed.js",
   "compatibility_date": "2026-08-09",
   "compatibility_flags": ["global_fetch_strictly_public"],
   "vars": {
