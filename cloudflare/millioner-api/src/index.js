@@ -25,6 +25,17 @@ export default {
         return json({ ok: true, service: 'millioner-api', d1: db?.ok === 1 }, 200, cors);
       }
 
+      if (url.pathname === '/api/wb-access-check' && request.method === 'GET') {
+        const market = normalizeMarket(url.searchParams.get('market'));
+        if (!['WB','WB2'].includes(market)) return json({ok:false,error:'market must be WB or WB2'},400,cors);
+        const token=String((market==='WB2'?env.WB_TOKEN_2:env.WB_TOKEN)||'').trim();
+        if(!token) return json({ok:true,market,configured:false,finance:false,promotion:false},200,cors);
+        const headers={Authorization:token,Accept:'application/json'};
+        const check=async(u)=>{try{const r=await fetch(u,{headers});return {ok:r.ok,status:r.status}}catch(e){return {ok:false,status:0,error:String(e?.message||e)}}};
+        const [finance,promotion]=await Promise.all([check('https://finance-api.wildberries.ru/api/v1/account/balance'),check('https://advert-api.wildberries.ru/adv/v1/balance')]);
+        return json({ok:true,market,configured:true,finance:finance.ok,promotion:promotion.ok,financeStatus:finance.status,promotionStatus:promotion.status},200,cors);
+      }
+
       if (url.pathname === '/api/orders' && request.method === 'GET') {
         const market = normalizeMarket(url.searchParams.get('market'));
         const limit = clamp(Number(url.searchParams.get('limit') || 500), 1, 1000);
