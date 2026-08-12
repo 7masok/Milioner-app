@@ -182,9 +182,18 @@ async function readWbBuyoutCache(env,market,days){
   let data={};try{data=JSON.parse(row.payload)}catch{}
   return {...data,ok:true,available:true,cached:true,updatedAt:Number(row.updated_at||0)||null,lastError:String(row.last_error||''),stale:Date.now()-Number(row.updated_at||0)>WB_BUYOUT_REFRESH_MS*2};
 }
+function wbBuyoutRetryMs(row){
+  const err=String(row?.last_error||''),m=err.match(/retry\s+(\d+)/i);
+  if(m)return Math.max(60,Number(m[1])||60)*1000;
+  return WB_BUYOUT_REFRESH_MS;
+}
+function wbBuyoutCacheDue(row,now=Date.now()){
+  if(!row?.last_attempt_at)return true;
+  return now-Number(row.last_attempt_at)>=wbBuyoutRetryMs(row);
+}
 async function refreshWbBuyoutCache(env,market,days=1,{force=false}={}){
   await ensureWbBuyoutCache(env.DB);const key=String(days),now=Date.now(),row=await env.DB.prepare('SELECT * FROM wb_buyout_cache WHERE market=? AND period_key=?').bind(market,key).first();
-  if(!force&&row?.last_attempt_at&&now-Number(row.last_attempt_at)<WB_BUYOUT_REFRESH_MS)return readWbBuyoutCache(env,market,days);
+  if(!force&&!wbBuyoutCacheDue(row,now))return readWbBuyoutCache(env,market,days);
   await env.DB.prepare(`INSERT INTO wb_buyout_cache(market,period_key,payload,updated_at,last_attempt_at,last_error) VALUES(?,?,?,?,?,?) ON CONFLICT(market,period_key) DO UPDATE SET last_attempt_at=excluded.last_attempt_at`).bind(market,key,String(row?.payload||''),Number(row?.updated_at||0),now,String(row?.last_error||'')).run();
   try{const data=await fetchWbAnalyticsBuyoutsData(env,market,days);await env.DB.prepare('UPDATE wb_buyout_cache SET payload=?,updated_at=?,last_attempt_at=?,last_error=? WHERE market=? AND period_key=?').bind(JSON.stringify(data),Date.now(),now,'',market,key).run();return {...data,cached:true,updatedAt:Date.now(),lastError:''}}
   catch(e){const msg=String(e?.message||e)+(e?.retryAfter?' · retry '+e.retryAfter:'');await env.DB.prepare('UPDATE wb_buyout_cache SET last_error=? WHERE market=? AND period_key=?').bind(msg,market,key).run();const cached=await readWbBuyoutCache(env,market,days);return {...cached,refreshOk:false,lastError:msg,status:Number(e?.status||0)||null}}
@@ -381,11 +390,24 @@ export default {
   },
 
   async scheduled(controller, env, ctx) {
-    const when=Number(controller?.scheduledTime||Date.now()),minute=new Date(when).getUTCMinutes();
-    if(minute===15||minute===45){
-      if(ctx?.waitUntil)ctx.waitUntil(Promise.all(['WB','WB2'].map(m=>refreshWbBuyoutCache(env,m,1,{force:false}))));
-      return;
-    }
+    const refreshDue=async()=>{
+      await ensureWbBuyoutCache(env.DB);
+      let any=false;
+      for(const market of ['WB','WB2']){
+        const rows=await env.DB.prepare(`SELECT period_key,last_attempt_at,last_error,updated_at FROM wb_buyout_cache WHERE market=?`).bind(market).all();
+        const map=new Map((rows.results||[]).map(x=>[String(x.period_key),x]));
+        for(const days of [1,-1,7,30]){
+          const row=map.get(String(days));
+          if(wbBuyoutCacheDue(row)){
+            any=true;
+            await refreshWbBuyoutCache(env,market,days,{force:false});
+            break;
+          }
+        }
+      }
+      return any;
+    };
+    if(ctx?.waitUntil)ctx.waitUntil(refreshDue());
     if (typeof base.scheduled === 'function') return base.scheduled(controller, env, ctx);
   }
 };

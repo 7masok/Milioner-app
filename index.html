@@ -326,12 +326,18 @@ function renderReports(refreshWb=true){
     let a=ss.filter(s=>s.channel===n),qty=a.reduce((x,s)=>x+(Number(s.qty)||0),0),channelRev=a.reduce((x,s)=>x+(Number(s.qty)||0)*(Number(s.price)||0),0),channelProfit=a.reduce((x,s)=>x+(Number(s.qty)||0)*((Number(s.price)||0)-(Number(s.cost)||0)-(Number(s.fee)||0)),0)-(n==='Kaspi'?ads:0),finance=null,financeLabel='';
     if(n==='WB'||n==='WB2'){
       const live=wbLiveOverviewCache[n+':'+reportPeriod]?.data||null;
-      if(live){qty=Number(live.buyoutCount||0);const lr=Number(live.buyoutSum||0);if(lr)channelRev=lr;}
       finance=wbFinanceCached(n,reportPeriod);
-      if(finance){channelRev=Number(finance.retailAmount)||channelRev;channelProfit=(Number(finance.netBeforeCost)||0)-wbLocalCost(n,reportPeriod);financeLabel=' · факт WB'}
-      else{ensureWbFinanceSummary(n,reportPeriod);financeLabel=live?' · выкупы WB':' · выкупы загружаются'}
+      if(finance){
+        channelRev=Number(finance.retailAmount)||channelRev;channelProfit=(Number(finance.netBeforeCost)||0)-wbLocalCost(n,reportPeriod);financeLabel=' · факт WB';
+        if(live?.available===true)qty=Number(live.buyoutCount||0);
+      }else if(live?.available===true){
+        qty=Number(live.buyoutCount||0);channelRev=Number(live.buyoutSum||0);financeLabel=' · выкупы WB';ensureWbFinanceSummary(n,reportPeriod);
+      }else{
+        qty=null;channelRev=null;channelProfit=null;financeLabel=' · синхронизация WB';ensureWbFinanceSummary(n,reportPeriod);
+      }
     }
-    return `<div class="item row" role="button" tabindex="0" style="cursor:pointer" onclick="openMarketplaceReport('${n}',${reportPeriod})"><div class="grow"><b>${n}</b><div class="muted">${qty} шт. · прибыль ${fmt(channelProfit)}${financeLabel}</div></div><b>${fmt(channelRev)}</b></div>`
+    const qtyText=qty===null?'—':qty+' шт.',profitText=channelProfit===null?'—':fmt(channelProfit),revText=channelRev===null?'—':fmt(channelRev);
+    return `<div class="item row" role="button" tabindex="0" style="cursor:pointer" onclick="openMarketplaceReport('${n}',${reportPeriod})"><div class="grow"><b>${n}</b><div class="muted">${qtyText} · прибыль ${profitText}${financeLabel}</div></div><b>${revText}</b></div>`
   }).join('');
   if(refreshWb){const p=reportPeriod;Promise.all(['WB','WB2'].map(m=>ensureWbLiveOverview(m,p))).then(()=>{if(reportPeriod===p&&document.querySelector('#reports.view.active'))renderReports(false)})}
 }
@@ -348,6 +354,10 @@ async function openWbFinanceReport(market,days){
     for(const s of sales)costByProduct.set(String(s.productId),(costByProduct.get(String(s.productId))||0)+(Number(s.qty)||0)*(Number(s.cost)||0));
     const financeRows=Array.isArray(finance.products)?finance.products:[],financeByKey=new Map();
     for(const x of financeRows){for(const k of [x.vendorCode,String(x.nmId||'')].map(v=>String(v||'').trim()).filter(Boolean))financeByKey.set(k,x)}
+    if(live.available===false&&!financeRows.length){
+      const head=`<div class="item"><div class="row"><div class="grow"><div class="label">Прибыль</div><div class="num">—</div></div><div class="right"><div class="label">Реализовано</div><div class="num">—</div></div></div><div class="muted" style="margin-top:8px">WB временно ограничил API. Склад больше не подставляет нули: данные выкупов обновятся автоматически после снятия ограничения.</div></div>`;
+      showSheet(`<h3>Продажи ${esc(market)} · ${esc(periodText)}</h3>${head}<div class="empty">Синхронизация выкупов WB…</div>`);return;
+    }
     const rows=(live.products||[]).filter(x=>Number(x.qty)!==0).map(x=>{
       const f=financeByKey.get(String(x.vendorCode||'').trim())||financeByKey.get(String(x.nmId||'').trim())||null,pid=String(x.productId||f?.productId||''),cost=pid?(costByProduct.get(pid)||0):0;
       if(f){const net=Number(f.netBeforeCost)||0;return {...x,productId:pid,cost,profit:net-cost,exact:true,wbCharges:Number(f.wbCharges)||0,forPay:Number(f.forPay)||0}}
