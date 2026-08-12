@@ -7,7 +7,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - run: sleep 10
-      - name: WB1
-        run: curl -fsSL --retry 6 --retry-delay 5 'https://millioner-api.7masok.workers.dev/api/wb-finance-operation-debug?market=WB&days=30' | jq .
-      - name: WB2
-        run: curl -fsSL --retry 6 --retry-delay 5 'https://millioner-api.7masok.workers.dev/api/wb-finance-operation-debug?market=WB2&days=30' | jq .
+      - name: WB1 products
+        run: |
+          curl -fsSL --retry 6 --retry-delay 5 'https://millioner-api.7masok.workers.dev/api/wb-finance-products?market=WB&days=30' | jq '{sumQty:([.products[].qty]|add), sample:[.products[:5][]|{vendorCode,title,qty,forPay,wbCharges,netBeforeCost}]}'
+      - name: WB2 products
+        run: |
+          curl -fsSL --retry 6 --retry-delay 5 'https://millioner-api.7masok.workers.dev/api/wb-finance-products?market=WB2&days=30' | jq '{sumQty:([.products[].qty]|add), sample:[.products[:5][]|{vendorCode,title,qty,forPay,wbCharges,netBeforeCost}]}'
