@@ -9,13 +9,14 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - run: python tools/fix_wb_marketwide_gate.py
+      - run: python tools/fix_wb_buyout_scheduler_priority.py
       - run: node --check cloudflare/millioner-api/src/fixed.js
-      - run: grep -q 'wbBuyoutMarketBlockedUntil' cloudflare/millioner-api/src/fixed.js
+      - run: grep -q 'const WB_BUYOUT_REFRESH_MS=60\*60\*1000' cloudflare/millioner-api/src/fixed.js
+      - run: grep -q 'const missing=periods.filter' cloudflare/millioner-api/src/fixed.js
       - run: |
           if git diff --quiet -- cloudflare/millioner-api/src/fixed.js; then exit 0; fi
           git config user.name '7masok'
           git config user.email '7masok@gmail.com'
           git add cloudflare/millioner-api/src/fixed.js
-          git commit -m 'Honor WB seller-wide retry gate'
+          git commit -m 'Prioritize missing WB buyout periods'
           git push
