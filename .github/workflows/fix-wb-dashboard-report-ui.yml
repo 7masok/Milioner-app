@@ -1,0 +1,56 @@
+name: Prefer WB dashboard buyouts in reports
+on:
+  push:
+    branches: [main]
+    paths: ['.github/workflows/fix-wb-dashboard-report-ui.yml']
+permissions:
+  contents: write
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+        with: {fetch-depth: 0}
+      - run: git pull --rebase origin main
+      - name: Patch report source priority
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          p=Path('index.html')
+          s=p.read_text(encoding='utf-8')
+          old="""  if(old&&Date.now()-Number(old.at||0)<60000)return old.data;
+  if(Number(days)===1){"""
+          new="""  if(old&&Date.now()-Number(old.at||0)<60000)return old.data;
+  if([-1,1,7].includes(Number(days))){
+    try{
+      const dashboard=await apiJson(MILLIONER_API+'/api/wb-dashboard-buyouts?market='+encodeURIComponent(market)+'&days='+encodeURIComponent(days));
+      if(dashboard?.ok&&dashboard?.available){
+        const data={...dashboard,analyticsOnly:true,priceComplete:false,source:'WB Analytics · выкупы по дням'};
+        wbLiveOverviewCache[key]={at:Date.now(),data};return data;
+      }
+    }catch(_){}
+  }
+  if(Number(days)===1){"""
+          if s.count(old)!=1: raise SystemExit('ensureWbLiveOverview insertion point mismatch: '+str(s.count(old)))
+          s=s.replace(old,new,1)
+          p.write_text(s,encoding='utf-8')
+          PY
+          python - <<'PY'
+          from pathlib import Path
+          import re
+          h=Path('index.html').read_text(encoding='utf-8')
+          for marker in ['/api/wb-dashboard-buyouts?market=','WB Analytics · выкупы по дням','[-1,1,7].includes(Number(days))']:
+            if marker not in h: raise SystemExit('missing '+marker)
+          scripts=re.findall(r'<script>(.*?)</script>',h,flags=re.S|re.I)
+          Path('/tmp/app.js').write_text('\n'.join(scripts),encoding='utf-8')
+          PY
+          node --check /tmp/app.js
+          git diff --check
+      - name: Commit
+        run: |
+          git config user.name 'millioner-maintenance'
+          git config user.email 'actions@users.noreply.github.com'
+          git add index.html
+          git commit -m 'Prefer WB daily buyout analytics in reports'
+          git push origin HEAD:main
