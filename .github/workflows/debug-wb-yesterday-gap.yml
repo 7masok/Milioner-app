@@ -14,18 +14,19 @@ jobs:
         run: |
           set -euo pipefail
           curl -fsS 'https://millioner-api.7masok.workers.dev/api/wb-sales-live?market=WB&days=-1' -o /tmp/live.json
+          curl -fsS 'https://millioner-api.7masok.workers.dev/api/wb-finance-summary?market=WB&days=-1' -o /tmp/finance.json || true
           curl -fsS 'https://millioner-api.7masok.workers.dev/api/wb-sales-direct?market=WB&days=-1&refresh=1' -o /tmp/direct.json || true
           curl -fsS 'https://millioner-api.7masok.workers.dev/api/wb-realized-status?market=WB&days=-1' -o /tmp/tracked.json || true
           curl -fsS 'https://millioner-api.7masok.workers.dev/api/wb-buyouts-live?market=WB&days=-1&refresh=1' -o /tmp/analytics.json || true
           python - <<'PY'
           import json
-          for name in ('live','direct','tracked','analytics'):
+          for name in ('live','finance','direct','tracked','analytics'):
               try:
                   d=json.load(open('/tmp/'+name+'.json'))
               except Exception as e:
                   print(name, 'ERROR', e); continue
               print('\n===',name,'===')
-              for k in ['ok','available','market','days','sales','returns','netQty','buyoutCount','buyoutSum','forPay','pricedRows','sourceRows','priceComplete','rawFinishedPriceSum','rawPriceWithDiscSum','rawForPaySum','updatedAt','lastSuccessAt','lastError','source','refreshOk','status']:
+              for k in ['ok','available','market','days','sales','returns','netQty','buyoutCount','buyoutSum','forPay','retailAmount','rowCount','netBeforeCost','pricedRows','sourceRows','priceComplete','rawFinishedPriceSum','rawPriceWithDiscSum','rawForPaySum','updatedAt','lastSuccessAt','lastError','source','refreshOk','status']:
                   if k in d: print(k,':',d.get(k))
               if name=='live':
                   ps=d.get('products') or []
