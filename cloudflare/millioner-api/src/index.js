@@ -146,31 +146,17 @@ export default {
 
       if (url.pathname === '/api/kaspi-report-orders' && request.method === 'GET') {
         const rawDays = Number(url.searchParams.get('days') || 1);
-        const lookback = rawDays === -1 ? 2 : Math.max(1, Math.min(90, rawDays || 1));
-        const warnings = [];
-        let workerFeed = { orders: [], requests: 0 };
-        let directFeed = { orders: [], requests: 0 };
-        const base = cleanUrl(env.KASPI_WORKER_URL);
-        if (base) {
-          try { workerFeed = await fetchKaspiWorkerFeed(base, { days: String(Math.min(14, lookback)) }, env.KASPI_WORKER, 20); }
-          catch (e) { warnings.push('worker: ' + String(e?.message || e)); }
-        } else warnings.push('worker: KASPI_WORKER_URL is not configured');
+        const requestedDays = rawDays === -1 ? 1 : Math.max(1, Math.min(90, rawDays || 1));
+        const lookback = Math.min(90, Math.max(30, requestedDays + 30));
         const token = String(env.KASPI_TOKEN || '').trim();
-        if (token) {
-          try { directFeed = await fetchKaspiOrdersDirect(token, { days: lookback, state: '' }); }
-          catch (e) { warnings.push('direct: ' + String(e?.message || e)); }
-        } else warnings.push('direct: KASPI_TOKEN is not configured');
-        const byId = new Map();
-        for (const order of workerFeed.orders || []) { const key = String(order?.id || order?.code || ''); if (key) byId.set(key, order); }
-        for (const order of directFeed.orders || []) {
-          const key = String(order?.id || order?.code || ''); if (!key) continue;
-          const previous = byId.get(key) || {};
-          const lines = Array.isArray(previous?.lines) && previous.lines.length ? previous.lines : (Array.isArray(order?.lines) ? order.lines : []);
-          byId.set(key, { ...previous, ...order, lines });
+        if (!token) return json({ ok:false, error:'KASPI_TOKEN is not configured' }, 500, cors);
+        try {
+          const directFeed = await fetchKaspiOrdersDirect(token, { days: lookback, state: '', status: 'COMPLETED' });
+          const orders = (directFeed.orders || []).filter(o => String(o?.status || '').toUpperCase() === 'COMPLETED');
+          return json({ ok:true, days:rawDays, lookback, fetchedAt:Date.now(), source:'Kaspi API completionDate', requests:directFeed.requests || 0, orders }, 200, cors);
+        } catch (e) {
+          return json({ ok:false, error:String(e?.message || e) }, 502, cors);
         }
-        const orders = [...byId.values()].sort((a,b)=>(Number(b?.creationDate)||0)-(Number(a?.creationDate)||0));
-        if (!orders.length && warnings.length >= 2) return json({ ok:false, error:warnings.join('; ') }, 502, cors);
-        return json({ ok:true, days:rawDays, lookback, fetchedAt:Date.now(), source:token?'Kaspi API totalPrice + detailed Worker':'Kaspi detailed Worker', warnings, orders }, 200, cors);
       }
 
       if (url.pathname === '/api/products' && request.method === 'GET') {
@@ -755,7 +741,7 @@ function firstMoney(obj,keys){for(const key of keys){const value=Number(obj?.[ke
 function kaspiExplicitCommission(obj){return firstMoney(obj,['commissionAmount','commissionForSeller','sellerCommission','marketplaceFee','serviceFee','serviceCostForSeller','commission'])}
 function appendKaspiLines(result,order,lines){const prepared=(lines||[]).map(line=>{const qty=Math.max(0,Number(line?.quantity||1)),total=Number(line?.totalPrice||(Number(line?.basePrice||0)*qty)||0);return {line,qty,total}}),revenue=prepared.reduce((sum,x)=>sum+Math.max(0,x.total),0),orderDelivery=Math.max(0,Number(order?.deliveryCostForSeller)||0),orderCommission=kaspiExplicitCommission(order);for(const {line,qty,total} of prepared){const weight=revenue>0?Math.max(0,total)/revenue:(prepared.length?1/prepared.length:0),lineCommission=kaspiExplicitCommission(line),sellerDeliveryCost=orderDelivery*weight,marketplaceFee=lineCommission||orderCommission*weight,sources=[];if(sellerDeliveryCost>0)sources.push('Kaspi API доставка');if(marketplaceFee>0)sources.push('Kaspi API комиссия');result.push({orderId:String(order?.id||''),code:String(order?.code||''),entryId:String(line?.entryId||line?.id||''),status:String(order?.status||''),state:String(order?.state||''),creationDate:toTimestamp(order?.creationDate),sku:String(line?.merchantCode||line?.sku||'').trim(),productName:String(line?.productName||line?.name||''),qty,unitPrice:qty?total/qty:Number(line?.basePrice||0),totalPrice:total,sellerDeliveryCost,marketplaceFee,feeSource:sources.join(' + '),raw:{order,line}})}}
 
-async function fetchKaspiOrdersDirect(token, { days = 7, state = 'KASPI_DELIVERY' } = {}) {
+async function fetchKaspiOrdersDirect(token, { days = 7, state = 'KASPI_DELIVERY', status = '' } = {}) {
   const headers = {
     'Accept': 'application/vnd.api+json',
     'Content-Type': 'application/vnd.api+json',
@@ -770,6 +756,7 @@ async function fetchKaspiOrdersDirect(token, { days = 7, state = 'KASPI_DELIVERY
     q.set('page[number]', String(page));
     q.set('page[size]', '100');
     if (state) q.set('filter[orders][state]', state);
+    if (status) q.set('filter[orders][status]', status);
     q.set('filter[orders][creationDate][$ge]', String(start));
     q.set('filter[orders][creationDate][$le]', String(end));
     const response = await fetch(`https://kaspi.kz/shop/api/v2/orders?${q.toString()}`, { headers });
@@ -786,6 +773,8 @@ async function fetchKaspiOrdersDirect(token, { days = 7, state = 'KASPI_DELIVERY
         status: String(attrs?.status || ''),
         state: transmissionDate ? 'KASPI_DELIVERY_TRANSIT' : String(attrs?.state || state),
         creationDate: toTimestamp(attrs?.creationDate),
+        completionDate: toTimestamp(attrs?.completionDate),
+        approvedByBankDate: toTimestamp(attrs?.approvedByBankDate),
         totalPrice: Number(attrs?.totalPrice || 0),
         deliveryCostForSeller: Number(attrs?.deliveryCostForSeller || 0),
         courierTransmissionDate: transmissionDate || null,
