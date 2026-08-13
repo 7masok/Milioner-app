@@ -6,9 +6,13 @@ jobs:
   refresh:
     runs-on: ubuntu-latest
     steps:
-      - name: WB1 analytics buyouts
+      - name: Worker market status raw
         run: |
-          curl -sS 'https://millioner-api.7masok.workers.dev/api/wb-buyouts-live?market=WB&days=1&refresh=1' | jq '{ok,available,buyoutCount,buyoutSum,itemCount,updatedAt,lastError,source}'
-      - name: WB2 analytics buyouts
+          curl -sS -D /tmp/h 'https://millioner-api.7masok.workers.dev/api/market-status' -o /tmp/b || true
+          cat /tmp/h
+          head -c 2000 /tmp/b
+      - name: Worker WB sales raw
         run: |
-          curl -sS 'https://millioner-api.7masok.workers.dev/api/wb-buyouts-live?market=WB2&days=1&refresh=1' | jq '{ok,available,buyoutCount,buyoutSum,itemCount,updatedAt,lastError,source}'
+          curl -sS -D /tmp/h2 'https://millioner-api.7masok.workers.dev/api/wb-sales-live?market=WB&days=1' -o /tmp/b2 || true
+          cat /tmp/h2
+          head -c 2000 /tmp/b2
