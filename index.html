@@ -324,9 +324,9 @@ async function ensureWbLiveOverview(market,days){
     wbLiveOverviewCache[key]={at:Date.now(),data};return data;
   }catch(primary){
     try{
-      const fallback=await apiJson(MILLIONER_API+'/api/wb-buyouts-live?market='+encodeURIComponent(market)+'&days='+encodeURIComponent(days)+'&refresh=1');
+      const fallback=await apiJson(MILLIONER_API+'/api/wb-sales-direct?market='+encodeURIComponent(market)+'&days='+encodeURIComponent(days));
       if(!fallback?.ok)throw new Error(fallback?.error||'WB analytics unavailable');
-      const data={...fallback,available:true,analyticsOnly:true,source:'WB Seller Analytics · buyouts fallback'};
+      const data={...fallback,available:true,analyticsOnly:true,source:'WB Statistics supplier/sales · direct fallback'};
       wbLiveOverviewCache[key]={at:Date.now(),data};return data;
     }catch(e){
       wbLiveOverviewCache[key]={at:Date.now(),data:old?.data||null,error:String(e.message||primary.message||e)};
