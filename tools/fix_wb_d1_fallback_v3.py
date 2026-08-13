@@ -59,11 +59,16 @@ ensure = """async function ensureWbLiveOverview(market,days){
 }"""
 h = h[:a] + ensure + h[b:]
 
-# Main marketplace report: unknown profit is shown as dash, not fake zero.
-marker = "qty=Number(live.buyoutCount||0);channelRev=Number(live.buyoutSum||0);financeLabel=' · выкупы WB';"
+# Main marketplace row: if only Analytics is available, quantity/revenue are valid
+# but profit cannot be safely computed without D1/FIFO, so show a dash.
+marker = "      finance=wbFinanceCached(n,reportPeriod);\n      if(finance&&live?.available===true){"
+replacement = """      finance=wbFinanceCached(n,reportPeriod);
+      if(live?.analyticsOnly){
+        qty=Number(live.buyoutCount||0);channelRev=Number(live.buyoutSum||0);channelProfit=null;financeLabel=' · выкупы WB';ensureWbFinanceSummary(n,reportPeriod);
+      }else if(finance&&live?.available===true){"""
 if marker not in h:
-    raise SystemExit('renderReports buyout assignment not found')
-h = h.replace(marker, "qty=Number(live.buyoutCount||0);channelRev=Number(live.buyoutSum||0);if(live.analyticsOnly)channelProfit=null;financeLabel=' · выкупы WB';", 1)
+    raise SystemExit('renderReports finance branch anchor not found')
+h = h.replace(marker, replacement, 1)
 
 # Detail sheet uses resilient loader.
 a = h.index('async function openWbFinanceReport')
