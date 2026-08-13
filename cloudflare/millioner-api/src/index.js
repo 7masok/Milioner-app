@@ -146,14 +146,25 @@ export default {
 
       if (url.pathname === '/api/kaspi-report-orders' && request.method === 'GET') {
         const rawDays = Number(url.searchParams.get('days') || 1);
-        const requestedDays = rawDays === -1 ? 1 : Math.max(1, Math.min(90, rawDays || 1));
-        const lookback = Math.min(90, Math.max(30, requestedDays + 30));
-        const token = String(env.KASPI_TOKEN || '').trim();
-        if (!token) return json({ ok:false, error:'KASPI_TOKEN is not configured' }, 500, cors);
+        const requestedDays = rawDays === -1 ? 1 : Math.max(1, Number(rawDays) || 1);
+        const workerDays = Math.min(14, Math.max(2, requestedDays + 1));
+        const base = cleanUrl(env.KASPI_WORKER_URL) || 'https://kaspi-worker.internal';
+        const q = new URLSearchParams({ days: String(workerDays) });
+        const req = new Request(`${base}/kaspi/orders?${q.toString()}`, { headers: { 'Accept':'application/json' } });
         try {
-          const directFeed = await fetchKaspiOrdersDirect(token, { days: lookback, state: '', status: 'COMPLETED' });
-          const orders = (directFeed.orders || []).filter(o => String(o?.status || '').toUpperCase() === 'COMPLETED');
-          return json({ ok:true, days:rawDays, lookback, fetchedAt:Date.now(), source:'Kaspi API completionDate', requests:directFeed.requests || 0, orders }, 200, cors);
+          const response = env.KASPI_WORKER ? await env.KASPI_WORKER.fetch(req) : await fetch(req);
+          const data = await safeJson(response, 'Kaspi raw orders');
+          if (!response.ok) throw new Error(data?.error || data?.message || `Kaspi Worker HTTP ${response.status}`);
+          const items = Array.isArray(data?.data) ? data.data : [];
+          const orders = items.map(item => {
+            const a = item?.attributes || {};
+            return {
+              id:String(item?.id || ''), code:String(a?.code || ''), status:String(a?.status || ''), state:String(a?.state || ''),
+              creationDate:toTimestamp(a?.creationDate), completionDate:toTimestamp(a?.completionDate), approvedByBankDate:toTimestamp(a?.approvedByBankDate),
+              totalPrice:Number(a?.totalPrice || 0), deliveryCostForSeller:Number(a?.deliveryCostForSeller || 0), lines:[]
+            };
+          });
+          return json({ ok:true, days:rawDays, workerDays, fetchedAt:Date.now(), source:'Kaspi Worker raw completionDate', orders }, 200, cors);
         } catch (e) {
           return json({ ok:false, error:String(e?.message || e) }, 502, cors);
         }
