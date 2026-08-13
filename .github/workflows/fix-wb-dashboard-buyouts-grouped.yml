@@ -1,0 +1,51 @@
+name: Fix WB dashboard buyouts grouped
+on:
+  push:
+    branches: [main]
+    paths: ['.github/workflows/fix-wb-dashboard-buyouts-grouped.yml']
+permissions:
+  contents: write
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 6
+    steps:
+      - uses: actions/checkout@v4
+        with: {fetch-depth: 0}
+      - run: git pull --rebase origin main
+      - name: Switch dashboard endpoint to grouped history
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          p=Path('cloudflare/millioner-api/src/fixed.js')
+          s=p.read_text(encoding='utf-8')
+          old="const body={selectedPeriod:period,nmIds:[],skipDeletedNm:false,aggregationLevel:'day'};"
+          new="const body={selectedPeriod:period,brandNames:[],subjectIds:[],tagIds:[],nmIds:[],skipDeletedNm:false,aggregationLevel:'day'};"
+          if old not in s: raise SystemExit('body marker missing')
+          s=s.replace(old,new,1)
+          oldurl="WB_ANALYTICS_BASE+'/api/analytics/v3/sales-funnel/products/history'"
+          newurl="WB_ANALYTICS_BASE+'/api/analytics/v3/sales-funnel/grouped/history'"
+          if oldurl not in s: raise SystemExit('url marker missing')
+          s=s.replace(oldurl,newurl,1)
+          # grouped/history response can be nested under data/groups; normalize to a flat iterable.
+          olditems="const items=Array.isArray(data)?data:Array.isArray(data?.data)?data.data:Array.isArray(data?.data?.products)?data.data.products:Array.isArray(data?.products)?data.products:[];"
+          newitems="const items=Array.isArray(data)?data:Array.isArray(data?.data)?data.data:Array.isArray(data?.data?.groups)?data.data.groups:Array.isArray(data?.groups)?data.groups:[];"
+          if olditems not in s: raise SystemExit('items marker missing')
+          s=s.replace(olditems,newitems,1)
+          # grouped rows may not have product metadata; totals only need history.
+          oldprod="const product=item?.product||{},history=Array.isArray(item?.history)?item.history:[];let qty=0,sum=0;"
+          newprod="const product=item?.product||item?.group||{},history=Array.isArray(item?.history)?item.history:[];let qty=0,sum=0;"
+          if oldprod not in s: raise SystemExit('product marker missing')
+          s=s.replace(oldprod,newprod,1)
+          s=s.replace("source:'WB Analytics sales-funnel products/history'","source:'WB Analytics sales-funnel grouped/history'",1)
+          p.write_text(s,encoding='utf-8')
+          PY
+          node --check cloudflare/millioner-api/src/fixed.js
+          git diff --check
+      - name: Commit source
+        run: |
+          git config user.name 'millioner-maintenance'
+          git config user.email 'actions@users.noreply.github.com'
+          git add cloudflare/millioner-api/src/fixed.js
+          git commit -m 'Use grouped WB daily analytics for buyouts'
+          git push origin HEAD:main
