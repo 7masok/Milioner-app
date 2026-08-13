@@ -1,4 +1,4 @@
-name: Run Kaspi 3-day archive completion patch
+name: Optimize Kaspi completion report
 on:
   push:
     branches: [main]
@@ -13,9 +13,30 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-      - name: Patch
+      - name: Reduce report requests
         run: |
-          python .github/scripts/use_kaspi_multistate_report.py
+          python - <<'PY'
+          from pathlib import Path
+          p=Path('cloudflare/millioner-api/src/index.js')
+          s=p.read_text(encoding='utf-8')
+          old="""        const specs = [
+          { days: 2, state: '' },
+          { days: 14, state: 'KASPI_DELIVERY' },
+          { days: 14, state: 'PICKUP' },
+          { days: 14, state: 'DELIVERY' },
+          { days: 14, state: 'NEW' },
+          { days: 14, state: 'SIGN_REQUIRED' },
+          { days: 3, state: 'ARCHIVE' }
+        ];"""
+          new="""        const specs = [
+          { days: 2, state: '' },
+          { days: 3, state: 'ARCHIVE' }
+        ];"""
+          if old not in s:
+              raise SystemExit('Kaspi specs marker missing')
+          s=s.replace(old,new,1)
+          p.write_text(s,encoding='utf-8')
+          PY
           node --check cloudflare/millioner-api/src/index.js
       - name: Commit
         run: |
@@ -23,5 +44,5 @@ jobs:
           git config user.email actions@users.noreply.github.com
           git add cloudflare/millioner-api/src/index.js
           git diff --cached --quiet && exit 0
-          git commit -m 'Narrow Kaspi archive source to 3 days'
+          git commit -m 'Reduce Kaspi report requests'
           git push origin HEAD:main
