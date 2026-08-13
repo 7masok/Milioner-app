@@ -678,9 +678,38 @@ async function wbRealizedStatusEndpoint(request,env,url){
   }catch(e){return json({ok:false,available:false,market,days,error:String(e?.message||e)},500,request,env)}
 }
 
+
+// WB_PRICE_FIELD_DEBUG_V1
+async function wbPriceFieldDebug(request,env,url){
+  const market=normalizeMarket(url.searchParams.get('market'));
+  if(!['WB','WB2'].includes(market))return json({ok:false,error:'market must be WB or WB2'},400,request,env);
+  const raw=Number(url.searchParams.get('days')||-1),days=raw===-1?-1:Math.max(1,Math.min(90,raw||1));
+  const {since,until}=wbSalesPeriodBounds(days);
+  try{
+    await ensureWbSalesCache(env.DB);
+    const q=await env.DB.prepare(`SELECT r.sale_id AS saleId,r.srid,r.is_return AS isReturn,r.raw_json AS saleRaw,
+      o.unit_price AS storedUnitPrice,o.raw_json AS orderRaw
+      FROM wb_sales_live_rows r
+      LEFT JOIN marketplace_order_lines o ON o.market=r.market
+        AND trim(COALESCE(json_extract(o.raw_json,'$.order.rid'),''))=trim(r.srid)
+      WHERE r.market=? AND r.sale_date>=? AND r.sale_date<?`).bind(market,since,until).all();
+    const saleSums={},orderSums={},stored={unitPrice:0},seen=new Set();
+    let rows=0,matched=0;
+    const add=(dst,obj,sign=1)=>{if(!obj||typeof obj!=='object')return;for(const [k,v] of Object.entries(obj)){if(typeof v==='number'&&Number.isFinite(v))dst[k]=(dst[k]||0)+sign*v}};
+    for(const x of q.results||[]){
+      const dedupe=String(x.saleId||'')+'|'+String(x.srid||'');if(seen.has(dedupe))continue;seen.add(dedupe);rows++;
+      const sign=Number(x.isReturn)?-1:1;let sr={},or={};try{sr=JSON.parse(String(x.saleRaw||'{}'))}catch{}try{or=JSON.parse(String(x.orderRaw||'{}'))}catch{}
+      add(saleSums,sr,sign);const order=or?.order&&typeof or.order==='object'?or.order:or;add(orderSums,order,sign);
+      if(x.orderRaw)matched++;stored.unitPrice+=sign*(Number(x.storedUnitPrice)||0);
+    }
+    return json({ok:true,market,days,range:{since,until},rows,matched,stored,saleSums,orderSums},200,request,env);
+  }catch(e){return json({ok:false,market,days,error:String(e?.message||e)},500,request,env)}
+}
+
 export default {
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
+    if (request.method === 'GET' && url.pathname === '/api/wb-price-field-debug') return wbPriceFieldDebug(request,env,url);
     if (request.method === 'GET' && url.pathname === '/api/wb-realized-status') return wbRealizedStatusEndpoint(request,env,url);
     if (request.method === 'GET' && url.pathname === '/api/wb-sold-history-debug') return wbSoldHistoryDebug(request,env,url);
     if (request.method === 'GET' && url.pathname === '/api/wb-sales-direct') return wbSalesDirectEndpoint(request,env,url);
