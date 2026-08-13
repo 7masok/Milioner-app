@@ -2,12 +2,6 @@ name: Deploy Millioner Worker
 
 on:
   workflow_dispatch:
-  push:
-    branches: [main]
-    paths:
-      - 'cloudflare/millioner-api/src/**'
-      - 'cloudflare/millioner-api/wrangler.jsonc'
-      - '.github/workflows/one-shot-wb-daily-cache.yml'
 
 permissions:
   contents: read
