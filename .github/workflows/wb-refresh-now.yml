@@ -6,9 +6,6 @@ jobs:
   refresh:
     runs-on: ubuntu-latest
     steps:
-      - name: WB1 sold status history raw
+      - name: WB1 today's known realization candidates
         run: |
-          curl -sS -D /tmp/h 'https://millioner-api.7masok.workers.dev/api/wb-sold-history-debug?market=WB' -o /tmp/b || true
-          cat /tmp/h
-          echo BODY
-          cat /tmp/b
+          curl -sS 'https://millioner-api.7masok.workers.dev/api/wb-sold-history-debug?market=WB&nmIds=868277285,892404541,1294433488' | jq '{ok,market,candidates:[.candidates[]|{id,rid,article,nmId,createdAt,price,status}]}'
