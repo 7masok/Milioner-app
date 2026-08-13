@@ -6,9 +6,15 @@ jobs:
   refresh:
     runs-on: ubuntu-latest
     steps:
-      - name: WB1 direct KZT raw
+      - name: WB1 D1 realized cache
         run: |
-          curl -sS -D /tmp/h 'https://millioner-api.7masok.workers.dev/api/wb-sales-direct?market=WB&days=1' -o /tmp/b || true
+          curl -sS -D /tmp/h 'https://millioner-api.7masok.workers.dev/api/wb-sales-live?market=WB&days=1' -o /tmp/b || true
           cat /tmp/h
           echo BODY
           cat /tmp/b
+      - name: D1 market status
+        run: |
+          curl -sS -D /tmp/h2 'https://millioner-api.7masok.workers.dev/api/market-status' -o /tmp/b2 || true
+          cat /tmp/h2
+          echo BODY
+          head -c 3000 /tmp/b2
