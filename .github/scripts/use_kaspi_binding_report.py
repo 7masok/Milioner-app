@@ -5,8 +5,7 @@ start=s.index("      if (url.pathname === '/api/kaspi-report-orders' && request.
 end=s.index("      if (url.pathname === '/api/products' && request.method === 'GET') {",start)
 route="""      if (url.pathname === '/api/kaspi-report-orders' && request.method === 'GET') {
         const rawDays = Number(url.searchParams.get('days') || 1);
-        const requestedDays = rawDays === -1 ? 1 : Math.max(1, Number(rawDays) || 1);
-        const workerDays = Math.min(14, Math.max(2, requestedDays + 1));
+        const workerDays = 14;
         const base = cleanUrl(env.KASPI_WORKER_URL) || 'https://kaspi-worker.internal';
         const q = new URLSearchParams({ days: String(workerDays) });
         const req = new Request(`${base}/kaspi/orders?${q.toString()}`, { headers: { 'Accept':'application/json' } });
@@ -32,4 +31,4 @@ route="""      if (url.pathname === '/api/kaspi-report-orders' && request.method
 """
 s=s[:start]+route+s[end:]
 p.write_text(s,encoding='utf-8')
-print('switched report to Kaspi service binding')
+print('switched report to 14-day Kaspi completion source')
