@@ -6,15 +6,24 @@ jobs:
   check:
     runs-on: ubuntu-latest
     steps:
-      - name: WB1 cache today
+      - name: Millioner health
+        run: curl -sS 'https://millioner-api.7masok.workers.dev/health' | jq .
+      - name: WB1 access
+        run: curl -sS 'https://millioner-api.7masok.workers.dev/api/wb-access-check?market=WB' | jq .
+      - name: WB2 access
+        run: curl -sS 'https://millioner-api.7masok.workers.dev/api/wb-access-check?market=WB2' | jq .
+      - name: WB1 finance status
+        run: curl -sS 'https://millioner-api.7masok.workers.dev/api/wb-finance-status?market=WB' | jq .
+      - name: WB2 finance status
+        run: curl -sS 'https://millioner-api.7masok.workers.dev/api/wb-finance-status?market=WB2' | jq .
+      - name: WB1 buyout cache today
+        run: curl -sS 'https://millioner-api.7masok.workers.dev/api/wb-buyouts-live?market=WB&days=1' | jq .
+      - name: WB1 buyout cache yesterday
+        run: curl -sS 'https://millioner-api.7masok.workers.dev/api/wb-buyouts-live?market=WB&days=-1' | jq .
+      - name: WB2 buyout cache today
+        run: curl -sS 'https://millioner-api.7masok.workers.dev/api/wb-buyouts-live?market=WB2&days=1' | jq .
+      - name: WB sync worker root
         run: |
-          curl -sS 'https://millioner-api.7masok.workers.dev/api/wb-buyouts-live?market=WB&days=1' | jq .
-      - name: WB1 cache yesterday
-        run: |
-          curl -sS 'https://millioner-api.7masok.workers.dev/api/wb-buyouts-live?market=WB&days=-1' | jq .
-      - name: WB2 cache today
-        run: |
-          curl -sS 'https://millioner-api.7masok.workers.dev/api/wb-buyouts-live?market=WB2&days=1' | jq .
-      - name: WB2 cache yesterday
-        run: |
-          curl -sS 'https://millioner-api.7masok.workers.dev/api/wb-buyouts-live?market=WB2&days=-1' | jq .
+          curl -sS -D /tmp/h 'https://wb-sync.7masok.workers.dev/' -o /tmp/b || true
+          cat /tmp/h
+          cat /tmp/b
