@@ -1,0 +1,109 @@
+name: Debug WB realized price fields
+on:
+  push:
+    branches: [main]
+    paths: ['.github/workflows/debug-wb-price-fields.yml']
+permissions:
+  contents: write
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+        with: {fetch-depth: 0}
+      - run: git pull --rebase origin main
+      - name: Add aggregate price-field debug endpoint
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          p=Path('cloudflare/millioner-api/src/fixed.js')
+          s=p.read_text(encoding='utf-8')
+          marker='// WB_PRICE_FIELD_DEBUG_V1'
+          if marker not in s:
+            insert=r'''
+
+// WB_PRICE_FIELD_DEBUG_V1
+async function wbPriceFieldDebug(request,env,url){
+  const market=normalizeMarket(url.searchParams.get('market'));
+  if(!['WB','WB2'].includes(market))return json({ok:false,error:'market must be WB or WB2'},400,request,env);
+  const raw=Number(url.searchParams.get('days')||-1),days=raw===-1?-1:Math.max(1,Math.min(90,raw||1));
+  const {since,until}=wbSalesPeriodBounds(days);
+  try{
+    await ensureWbSalesCache(env.DB);
+    const q=await env.DB.prepare(`SELECT r.sale_id AS saleId,r.srid,r.is_return AS isReturn,r.raw_json AS saleRaw,
+      o.unit_price AS storedUnitPrice,o.raw_json AS orderRaw
+      FROM wb_sales_live_rows r
+      LEFT JOIN marketplace_order_lines o ON o.market=r.market
+        AND trim(COALESCE(json_extract(o.raw_json,'$.order.rid'),''))=trim(r.srid)
+      WHERE r.market=? AND r.sale_date>=? AND r.sale_date<?`).bind(market,since,until).all();
+    const saleSums={},orderSums={},stored={unitPrice:0},seen=new Set();
+    let rows=0,matched=0;
+    const add=(dst,obj,sign=1)=>{if(!obj||typeof obj!=='object')return;for(const [k,v] of Object.entries(obj)){if(typeof v==='number'&&Number.isFinite(v))dst[k]=(dst[k]||0)+sign*v}};
+    for(const x of q.results||[]){
+      const dedupe=String(x.saleId||'')+'|'+String(x.srid||'');if(seen.has(dedupe))continue;seen.add(dedupe);rows++;
+      const sign=Number(x.isReturn)?-1:1;let sr={},or={};try{sr=JSON.parse(String(x.saleRaw||'{}'))}catch{}try{or=JSON.parse(String(x.orderRaw||'{}'))}catch{}
+      add(saleSums,sr,sign);const order=or?.order&&typeof or.order==='object'?or.order:or;add(orderSums,order,sign);
+      if(x.orderRaw)matched++;stored.unitPrice+=sign*(Number(x.storedUnitPrice)||0);
+    }
+    return json({ok:true,market,days,range:{since,until},rows,matched,stored,saleSums,orderSums},200,request,env);
+  }catch(e){return json({ok:false,market,days,error:String(e?.message||e)},500,request,env)}
+}
+'''
+            needle='export default {'
+            if needle not in s: raise SystemExit('export default marker missing')
+            s=s.replace(needle,insert+'\n'+needle,1)
+            route="    if (request.method === 'GET' && url.pathname === '/api/wb-price-field-debug') return wbPriceFieldDebug(request,env,url);\n"
+            route_needle="    if (request.method === 'GET' && url.pathname === '/api/wb-realized-status')"
+            if route_needle not in s: raise SystemExit('route marker missing')
+            s=s.replace(route_needle,route+route_needle,1)
+            p.write_text(s,encoding='utf-8')
+          PY
+          node --check cloudflare/millioner-api/src/fixed.js
+      - name: Commit source
+        run: |
+          git config user.name 'millioner-maintenance'
+          git config user.email 'actions@users.noreply.github.com'
+          git add cloudflare/millioner-api/src/fixed.js
+          if ! git diff --cached --quiet; then
+            git commit -m 'Expose aggregate WB realized price fields for diagnosis'
+            git push origin HEAD:main
+          fi
+      - name: Deploy millioner-api when credentials exist
+        working-directory: cloudflare/millioner-api
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          if [ -z "$CLOUDFLARE_API_TOKEN" ] || [ -z "$CLOUDFLARE_ACCOUNT_ID" ]; then
+            echo 'No repo Cloudflare credentials; waiting for Worker Git deployment.'
+            exit 0
+          fi
+          npx --yes wrangler@4 deploy
+      - name: Wait and inspect yesterday aggregates
+        run: |
+          python - <<'PY'
+          import json,time,urllib.request
+          u='https://millioner-api.7masok.workers.dev/api/wb-price-field-debug?market=WB&days=-1'
+          data=None
+          for i in range(18):
+            try:
+              data=json.load(urllib.request.urlopen(u,timeout=15))
+              if data.get('ok'): break
+            except Exception as e: print('wait',i,str(e))
+            time.sleep(10)
+          if not data or not data.get('ok'): raise SystemExit('debug endpoint not live')
+          print('rows',data.get('rows'),'matched',data.get('matched'),'stored',data.get('stored'))
+          target=51013
+          candidates=[]
+          for group in ('saleSums','orderSums'):
+            for k,v in (data.get(group) or {}).items():
+              if not isinstance(v,(int,float)): continue
+              for div in (1,100):
+                vv=v/div
+                if 0<vv<1000000:
+                  candidates.append((abs(vv-target),group,k,div,vv,v))
+          for x in sorted(candidates)[:30]:print('CANDIDATE',x)
+          print('SALE SUMS',json.dumps(data.get('saleSums'),ensure_ascii=False,sort_keys=True))
+          print('ORDER SUMS',json.dumps(data.get('orderSums'),ensure_ascii=False,sort_keys=True))
+          PY
