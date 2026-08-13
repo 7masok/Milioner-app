@@ -209,9 +209,13 @@ async function refreshWbBuyoutCache(env,market,days=1,{force=false}={}){
 async function wbBuyoutsCachedEndpoint(request,env,url){
   const market=normalizeMarket(url.searchParams.get('market'));if(!['WB','WB2'].includes(market))return json({ok:false,error:'market must be WB or WB2'},400,request,env);
   const raw=Number(url.searchParams.get('days')||1),days=raw===-1?-1:Math.max(1,Math.min(365,raw||1));
-  const refresh=url.searchParams.get('refresh')==='1';
-  const data=refresh?await refreshWbBuyoutCache(env,market,days,{force:false}):await readWbBuyoutCache(env,market,days);
-  return json(data,200,request,env);
+  try {
+    const refresh=url.searchParams.get('refresh')==='1';
+    const data=refresh?await refreshWbBuyoutCache(env,market,days,{force:false}):await readWbBuyoutCache(env,market,days);
+    return json(data,200,request,env);
+  } catch(e) {
+    return json({ok:false,market,days,error:String(e?.message||e)},500,request,env);
+  }
 }
 
 // WB_BUYOUTS_ANALYTICS_V1
@@ -251,7 +255,7 @@ async function wbAnalyticsBuyouts(request,env,url){
 
 // WB_SALES_CACHE_V1
 const WB_STATS_BASE = 'https://statistics-api.wildberries.ru';
-const WB_SALES_REFRESH_MS = 31 * 60 * 1000;
+const WB_SALES_REFRESH_MS = 29 * 60 * 1000;
 const WB_SALES_RETRY_MS = 31 * 60 * 1000;
 function wbSalesRetryMs(state) {
   const m = String(state?.last_error || '').match(/retry\s+(\d+)/i);
@@ -424,8 +428,8 @@ async function wbSalesLiveCached(request, env, ctx, url) {
   if (!['WB','WB2'].includes(market)) return json({ok:false,error:'market must be WB or WB2'},400,request,env);
   const raw = Number(url.searchParams.get('days') || 1);
   const days = raw === -1 ? -1 : Math.max(1, Math.min(90, raw || 1));
-  await ensureWbSalesCache(env.DB);
   try {
+    await ensureWbSalesCache(env.DB);
     if (url.searchParams.get('refresh') === '1') await syncWbSalesCache(env, market, { force: false });
     return json(await readWbSalesCache(env, market, days),200,request,env);
   } catch (e) {
