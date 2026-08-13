@@ -6,10 +6,9 @@ jobs:
   check:
     runs-on: ubuntu-latest
     steps:
-      - name: Market status
-        run: curl -sS 'https://millioner-api.7masok.workers.dev/api/market-status' | jq '{markets:[.markets[]|select(.market=="WB" or .market=="WB2")|{market,latest,lastSuccessAt,orderLines}]}'
-      - name: WB1 yesterday final
+      - name: WB1 yesterday raw
         run: |
-          curl -sS 'https://millioner-api.7masok.workers.dev/api/wb-sales-live?market=WB&days=-1' | jq '{source,currency,sales,returns,netQty,buyoutCount,buyoutSum,forPay,pricedRows,products:(.products|length),sumProductQty:([.products[].qty]|add // 0),sample:(.products[:8]|map({vendorCode,productId,qty,buyoutSum,forPay,priceLinked}))}'
-      - name: WB1 today final
-        run: curl -sS 'https://millioner-api.7masok.workers.dev/api/wb-sales-live?market=WB&days=1' | jq '{source,currency,sales,returns,netQty,buyoutCount,buyoutSum,forPay,pricedRows,products:(.products|length),sumProductQty:([.products[].qty]|add // 0)}'
+          curl -sS -D /tmp/headers 'https://millioner-api.7masok.workers.dev/api/wb-sales-live?market=WB&days=-1' -o /tmp/body || true
+          cat /tmp/headers
+          echo BODY
+          cat /tmp/body
