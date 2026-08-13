@@ -357,9 +357,12 @@ async function readWbSalesCache(env, market, days) {
   const rows = await env.DB.prepare(`
     WITH priced AS (
       SELECT r.*,
-        COALESCE((SELECT l.product_id FROM product_links l
-          WHERE l.market=r.market AND (trim(l.sku)=trim(r.vendor_code) OR trim(l.sku)=trim(r.nm_id) OR trim(l.sku)=trim(r.barcode))
-          ORDER BY CASE WHEN trim(l.sku)=trim(r.vendor_code) THEN 0 WHEN trim(l.sku)=trim(r.nm_id) THEN 1 ELSE 2 END LIMIT 1),'') AS linked_product_id,
+        COALESCE(
+          (SELECT l.product_id FROM product_links l WHERE l.market=r.market AND trim(l.sku)=trim(r.vendor_code) LIMIT 1),
+          (SELECT l.product_id FROM product_links l WHERE l.market=r.market AND trim(l.sku)=trim(r.nm_id) LIMIT 1),
+          (SELECT l.product_id FROM product_links l WHERE l.market=r.market AND trim(l.sku)=trim(r.barcode) LIMIT 1),
+          ''
+        ) AS linked_product_id,
         COALESCE(
           (SELECT o.unit_price FROM marketplace_order_lines o
              WHERE o.market=r.market AND o.unit_price>0
@@ -422,8 +425,12 @@ async function wbSalesLiveCached(request, env, ctx, url) {
   const raw = Number(url.searchParams.get('days') || 1);
   const days = raw === -1 ? -1 : Math.max(1, Math.min(90, raw || 1));
   await ensureWbSalesCache(env.DB);
-  if (url.searchParams.get('refresh') === '1') await syncWbSalesCache(env, market, { force: false });
-  return json(await readWbSalesCache(env, market, days),200,request,env);
+  try {
+    if (url.searchParams.get('refresh') === '1') await syncWbSalesCache(env, market, { force: false });
+    return json(await readWbSalesCache(env, market, days),200,request,env);
+  } catch (e) {
+    return json({ok:false,market,days,error:String(e?.message||e)},500,request,env);
+  }
 }
 
 export default {
