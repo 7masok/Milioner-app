@@ -320,14 +320,23 @@ const wbLiveOverviewCache={};
 async function ensureWbLiveOverview(market,days){
   const key=market+':'+days,old=wbLiveOverviewCache[key];
   if(old&&Date.now()-Number(old.at||0)<60000)return old.data;
+  if(Number(days)===1){
+    try{
+      const tracked=await apiJson(MILLIONER_API+'/api/wb-realized-status?market='+encodeURIComponent(market)+'&days=1');
+      if(tracked?.ok&&tracked?.available){
+        const data={...tracked,analyticsOnly:true,source:'WB Marketplace sold transitions'};
+        wbLiveOverviewCache[key]={at:Date.now(),data};return data;
+      }
+    }catch(_){}
+  }
   try{
     const data=await apiJson(MILLIONER_API+'/api/wb-sales-live?market='+encodeURIComponent(market)+'&days='+encodeURIComponent(days));
-    if(!data?.ok)throw new Error(data?.error||'WB sales unavailable');
+    if(!data?.ok||data?.stale&&data?.lastError)throw new Error(data?.error||data?.lastError||'WB sales unavailable');
     wbLiveOverviewCache[key]={at:Date.now(),data};return data;
   }catch(primary){
     try{
       const fallback=await apiJson(MILLIONER_API+'/api/wb-sales-direct?market='+encodeURIComponent(market)+'&days='+encodeURIComponent(days));
-      if(!fallback?.ok)throw new Error(fallback?.error||'WB analytics unavailable');
+      if(!fallback?.ok)throw new Error(fallback?.error||'WB sales unavailable');
       const data={...fallback,available:true,analyticsOnly:true,source:'WB Statistics supplier/sales · direct fallback'};
       wbLiveOverviewCache[key]={at:Date.now(),data};return data;
     }catch(e){
