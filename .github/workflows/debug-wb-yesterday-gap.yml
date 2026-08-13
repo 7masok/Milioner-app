@@ -1,0 +1,30 @@
+name: Diagnose WB yesterday revenue gap
+on:
+  push:
+    branches: [main]
+    paths: ['.github/workflows/debug-wb-yesterday-gap.yml']
+permissions:
+  contents: read
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Fetch live WB yesterday endpoints
+        run: |
+          set -euo pipefail
+          curl -fsS 'https://millioner-api.7masok.workers.dev/api/wb-sales-live?market=WB&days=-1' -o /tmp/live.json
+          curl -fsS 'https://millioner-api.7masok.workers.dev/api/wb-realized-status?market=WB&days=-1' -o /tmp/tracked.json || true
+          python - <<'PY'
+          import json
+          for name in ('live','tracked'):
+              try:
+                  d=json.load(open('/tmp/'+name+'.json'))
+              except Exception as e:
+                  print(name, 'ERROR', e); continue
+              print('\n===',name,'===')
+              for k in ['ok','available','market','days','sales','returns','netQty','buyoutCount','buyoutSum','forPay','pricedRows','sourceRows','priceComplete','lastSuccessAt','lastError','source']:
+                  if k in d: print(k,':',d.get(k))
+              for x in d.get('products') or []:
+                  print('PRODUCT', {k:x.get(k) for k in ['vendorCode','nmId','barcode','qty','buyoutSum','forPay','pricedRows','sourceRows','priceLinked']})
+          PY
