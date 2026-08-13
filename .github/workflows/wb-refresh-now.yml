@@ -6,15 +6,6 @@ jobs:
   refresh:
     runs-on: ubuntu-latest
     steps:
-      - name: WB1 supplier sales direct
+      - name: WB1 direct KZT final
         run: |
-          curl -sS -D /tmp/h 'https://millioner-api.7masok.workers.dev/api/wb-sales-direct?market=WB&days=1&refresh=1' -o /tmp/b || true
-          cat /tmp/h
-          echo BODY
-          cat /tmp/b
-      - name: WB2 supplier sales direct
-        run: |
-          curl -sS -D /tmp/h2 'https://millioner-api.7masok.workers.dev/api/wb-sales-direct?market=WB2&days=1&refresh=1' -o /tmp/b2 || true
-          cat /tmp/h2
-          echo BODY
-          cat /tmp/b2
+          curl -sS 'https://millioner-api.7masok.workers.dev/api/wb-sales-direct?market=WB&days=1' | jq '{ok,available,source,currency,sales,returns,buyoutCount,buyoutSum,forPay,pricedRows,sourceRows,priceComplete,marketplacePages,marketplaceError,products:(.products|map({vendorCode,qty,buyoutSum,forPay,priceLinked}))}'
