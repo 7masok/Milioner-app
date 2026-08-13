@@ -1,0 +1,62 @@
+name: Trace WB dashboard buyout gap by order state
+on:
+  push:
+    branches: [main]
+    paths: ['.github/workflows/debug-wb-dashboard-gap-orders.yml']
+permissions:
+  contents: read
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Compare Aug 12 WB order states and prices
+        run: |
+          set -euo pipefail
+          curl -fsS 'https://millioner-api.7masok.workers.dev/api/orders?market=WB&limit=1000' -o /tmp/orders.json
+          python - <<'PY'
+          import json,datetime
+          d=json.load(open('/tmp/orders.json'))
+          rows=d.get('orders') or []
+          # Almaty 2026-08-12 local day -> UTC 2026-08-11 19:00 to 2026-08-12 19:00
+          tz=datetime.timezone(datetime.timedelta(hours=5))
+          start=int(datetime.datetime(2026,8,12,tzinfo=tz).timestamp()*1000)
+          end=int(datetime.datetime(2026,8,13,tzinfo=tz).timestamp()*1000)
+          day=[x for x in rows if start <= int(x.get('creationDate') or 0) < end]
+          def stage(x):
+              u=str(x.get('status') or '').upper(); st=str(x.get('state') or '').upper()
+              if st in {'CANCELED','CANCELLED','CANCELED_BY_CLIENT','DECLINED_BY_CLIENT','DEFECT'} or u in {'CANCEL','CANCELLED'}: return 'cancelled'
+              if st in {'SORTED','ACCEPTED_BY_CARRIER','SENT_TO_CARRIER','READY_FOR_PICKUP','SOLD'}: return 'delivery'
+              if u in {'CONFIRM','COMPLETE'} or (st=='WAITING' and u!='NEW'): return 'transfer'
+              return 'new'
+          from collections import defaultdict
+          g=defaultdict(lambda:{'qty':0,'sum':0.0,'n':0})
+          for x in day:
+              k=(stage(x),str(x.get('status') or ''),str(x.get('state') or ''))
+              q=float(x.get('qty') or 0); p=float(x.get('unitPrice') or 0)
+              g[k]['qty']+=q; g[k]['sum']+=q*p; g[k]['n']+=1
+          print('DAY_ROWS',len(day))
+          for k,v in sorted(g.items(), key=lambda z:(z[0][0],-z[1]['sum'])):
+              print('GROUP',k,v)
+          delivery=[x for x in day if stage(x)=='delivery']
+          print('DELIVERY_QTY',sum(float(x.get('qty') or 0) for x in delivery))
+          print('DELIVERY_SUM',sum(float(x.get('qty') or 0)*float(x.get('unitPrice') or 0) for x in delivery))
+          print('ALL_NON_CANCEL_QTY',sum(float(x.get('qty') or 0) for x in day if stage(x)!='cancelled'))
+          print('ALL_NON_CANCEL_SUM',sum(float(x.get('qty') or 0)*float(x.get('unitPrice') or 0) for x in day if stage(x)!='cancelled'))
+          target=51013
+          gap=target-sum(float(x.get('qty') or 0)*float(x.get('unitPrice') or 0) for x in delivery)
+          print('TARGET_GAP',gap)
+          print('NON_DELIVERY_NON_CANCEL_ROWS')
+          for x in day:
+              if stage(x) in {'new','transfer'}:
+                  print({k:x.get(k) for k in ['orderId','entryId','status','state','creationDate','sku','productName','qty','unitPrice','totalPrice']},'amount=',float(x.get('qty') or 0)*float(x.get('unitPrice') or 0))
+          # Look for any subset of non-delivery rows matching the exact gap in integer tenge.
+          cand=[]
+          for x in day:
+              if stage(x)!='delivery':
+                  amt=round(float(x.get('qty') or 0)*float(x.get('unitPrice') or 0))
+                  cand.append((amt,x))
+          exact=[x for amt,x in cand if amt==round(gap)]
+          print('EXACT_GAP_ROWS',len(exact))
+          for x in exact: print({k:x.get(k) for k in ['orderId','status','state','sku','productName','qty','unitPrice']})
+          PY
