@@ -2,7 +2,9 @@ from pathlib import Path
 p=Path('cloudflare/millioner-api/src/fixed.js')
 s=p.read_text()
 a=s.index('async function wbSoldHistoryDebug')
-b=s.index('\n// WB_SALES_DIRECT_V2',a)
+markers=[m for m in ['\n// WB_SALES_DIRECT_V2','\n// WB_SALES_DIRECT_V1','\nexport default {'] if m in s[a:]]
+if not markers: raise SystemExit('sold debug end marker not found')
+b=min(s.index(m,a) for m in markers)
 block=s[a:b]
 old="""  const sold=orders.filter(o=>String(statuses.get(Number(o.id))?.wbStatus||'').toLowerCase()==='sold');
   const sample=sold.slice(0,100),historyIds=sample.map(o=>Number(o.id));"""
