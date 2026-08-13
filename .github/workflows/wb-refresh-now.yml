@@ -6,6 +6,9 @@ jobs:
   refresh:
     runs-on: ubuntu-latest
     steps:
-      - name: WB1 direct KZT final
+      - name: WB1 direct KZT raw
         run: |
-          curl -sS 'https://millioner-api.7masok.workers.dev/api/wb-sales-direct?market=WB&days=1' | jq '{ok,available,source,currency,sales,returns,buyoutCount,buyoutSum,forPay,pricedRows,sourceRows,priceComplete,marketplacePages,marketplaceError,products:(.products|map({vendorCode,qty,buyoutSum,forPay,priceLinked}))}'
+          curl -sS -D /tmp/h 'https://millioner-api.7masok.workers.dev/api/wb-sales-direct?market=WB&days=1' -o /tmp/b || true
+          cat /tmp/h
+          echo BODY
+          cat /tmp/b
