@@ -443,7 +443,7 @@ async function wbSalesLiveCached(request, env, ctx, url) {
 }
 
 
-// WB_SALES_DIRECT_V1 — D1-independent operational realized sales.
+// WB_SALES_DIRECT_V2 — D1-independent operational realized sales with seller KZT prices.
 async function wbSalesDirectEndpoint(request,env,url){
   const market=normalizeMarket(url.searchParams.get('market'));
   if(!['WB','WB2'].includes(market))return json({ok:false,error:'market must be WB or WB2'},400,request,env);
@@ -451,7 +451,8 @@ async function wbSalesDirectEndpoint(request,env,url){
   if(!token)return json({ok:false,error:'WB token is not configured'},400,request,env);
   const raw=Number(url.searchParams.get('days')||1),days=raw===-1?-1:Math.max(1,Math.min(90,raw||1));
   const {since,until}=wbSalesPeriodBounds(days);
-  const cacheKey=new Request('https://wb-direct-cache.local/sales?market='+encodeURIComponent(market)+'&days='+encodeURIComponent(days));
+  // v2 key intentionally invalidates the earlier cache that contained raw WB price fields.
+  const cacheKey=new Request('https://wb-direct-cache.local/sales-v2?market='+encodeURIComponent(market)+'&days='+encodeURIComponent(days));
   const force=url.searchParams.get('refresh')==='1';
   try{
     if(!force){
@@ -459,8 +460,8 @@ async function wbSalesDirectEndpoint(request,env,url){
       if(cached){const data=await cached.json();return json({...data,cached:true},200,request,env)}
     }
   }catch(_){}
-  // WB Statistics timestamps are Moscow time. Query from the Moscow calendar date
-  // containing the beginning of the selected Almaty period, then filter precisely below.
+
+  // 1) Actual realization events: supplier/sales. One row is one sold/returned unit.
   const dateFrom=new Date(since+3*60*60*1000).toISOString().slice(0,10);
   const apiUrl=WB_STATS_BASE+'/api/v1/supplier/sales?dateFrom='+encodeURIComponent(dateFrom)+'&flag=0';
   const r=await fetch(apiUrl,{headers:{Accept:'application/json',Authorization:token}});
@@ -469,28 +470,58 @@ async function wbSalesDirectEndpoint(request,env,url){
     const retry=r.headers.get('X-RateLimit-Retry')||r.headers.get('Retry-After')||'';
     return json({ok:false,available:false,market,days,status:r.status,retryAfter:retry||null,error:data?.detail||data?.message||data?.error||('WB sales HTTP '+r.status)},r.status,request,env);
   }
-  const rows=Array.isArray(data)?data:[];
-  const map=new Map();let sales=0,returns=0,netQty=0,finishedPriceSum=0,priceWithDiscSum=0,forPaySum=0;
-  const currencies=new Set();
-  for(const x of rows){
-    const saleDate=wbMoscowMs(x?.date||x?.lastChangeDate);
-    if(!(saleDate>=since&&saleDate<until))continue;
+  const allSales=Array.isArray(data)?data:[];
+  const periodSales=allSales.filter(x=>{const t=wbMoscowMs(x?.date||x?.lastChangeDate);return t>=since&&t<until});
+
+  // 2) Seller-currency price: Marketplace order rid matches Statistics srid.
+  // convertedFinalPrice is in minor seller-currency units, so /100 gives KZT here.
+  const orderPriceByRid=new Map();
+  const orderDateFrom=Math.floor(Math.max(0,since-30*86400000)/1000);
+  let next=0,marketplacePages=0,marketplaceError='';
+  try{
+    for(let page=0;page<20;page++){
+      const mr=await fetch('https://marketplace-api.wildberries.ru/api/v3/orders?limit=1000&next='+encodeURIComponent(next)+'&dateFrom='+encodeURIComponent(orderDateFrom),{headers:{Accept:'application/json',Authorization:token}});
+      let md=null;try{md=await mr.json()}catch{}
+      if(!mr.ok){marketplaceError=String(md?.message||md?.detail||('WB Marketplace orders HTTP '+mr.status));break}
+      const batch=Array.isArray(md?.orders)?md.orders:[];
+      marketplacePages++;
+      for(const o of batch){
+        const rid=String(o?.rid||'').trim();
+        const minor=Number(o?.convertedFinalPrice??o?.finalPrice??o?.convertedPrice??o?.price??0)||0;
+        if(rid&&minor>0)orderPriceByRid.set(rid,minor/100);
+      }
+      const newNext=Number(md?.next||0);
+      if(!batch.length||!newNext||newNext===next)break;
+      next=newNext;
+    }
+  }catch(e){marketplaceError=String(e?.message||e)}
+
+  const map=new Map();
+  let sales=0,returns=0,netQty=0,rawFinishedPriceSum=0,rawPriceWithDiscSum=0,rawForPaySum=0;
+  let sellerGross=0,sellerForPay=0,pricedRows=0,sourceRows=0;
+  for(const x of periodSales){
     const saleId=String(x?.saleID||x?.saleId||'').trim();
-    const isReturn=saleId.toUpperCase().startsWith('R');
-    const sign=isReturn?-1:1;
+    const isReturn=saleId.toUpperCase().startsWith('R'),sign=isReturn?-1:1;
     if(isReturn)returns++;else sales++;
-    netQty+=sign;
-    const finished=Number(x?.finishedPrice||0)||0,disc=Number(x?.priceWithDisc||0)||0,pay=Number(x?.forPay||0)||0;
-    finishedPriceSum+=sign*finished;priceWithDiscSum+=sign*disc;forPaySum+=sign*pay;
-    if(x?.currencyCode)currencies.add(String(x.currencyCode));
+    netQty+=sign;sourceRows++;
+    const finished=Math.abs(Number(x?.finishedPrice||0)||0),disc=Math.abs(Number(x?.priceWithDisc||0)||0),pay=Math.abs(Number(x?.forPay||0)||0);
+    rawFinishedPriceSum+=sign*finished;rawPriceWithDiscSum+=sign*disc;rawForPaySum+=sign*pay;
+    const srid=String(x?.srid||'').trim(),sellerPrice=Math.abs(Number(orderPriceByRid.get(srid)||0));
+    const ratio=finished>0?pay/finished:0,sellerPayout=sellerPrice>0&&ratio>=0?sellerPrice*ratio:0;
+    if(sellerPrice>0){pricedRows++;sellerGross+=sign*sellerPrice;sellerForPay+=sign*sellerPayout}
     const vendorCode=String(x?.supplierArticle||'').trim(),nmId=String(x?.nmId??''),barcode=String(x?.barcode||'').trim();
-    const key=vendorCode||nmId||barcode||'unknown';
+    const key=vendorCode||nmId||barcode||srid||'unknown';
     let item=map.get(key);
-    if(!item){item={vendorCode,nmId,barcode,title:vendorCode||nmId||barcode,qty:0,buyoutSum:0,forPay:0};map.set(key,item)}
-    item.qty+=sign;item.buyoutSum+=sign*finished;item.forPay+=sign*pay;
+    if(!item){item={vendorCode,nmId,barcode,title:vendorCode||nmId||barcode,qty:0,buyoutSum:0,forPay:0,pricedRows:0,sourceRows:0};map.set(key,item)}
+    item.qty+=sign;item.sourceRows++;
+    if(sellerPrice>0){item.pricedRows++;item.buyoutSum+=sign*sellerPrice;item.forPay+=sign*sellerPayout}
   }
-  const products=[...map.values()].filter(x=>Number(x.qty)!==0).sort((a,b)=>Math.abs(Number(b.qty))-Math.abs(Number(a.qty)));
-  const result={ok:true,available:true,market,days,range:{since,until,timezone:'Asia/Almaty'},sales,returns,netQty,buyoutCount:netQty,buyoutSum:finishedPriceSum,finishedPriceSum,priceWithDiscSum,forPay:forPaySum,products,currencies:[...currencies],source:'WB Statistics supplier/sales · direct',updatedAt:Date.now()};
+  const products=[...map.values()].map(x=>({...x,priceLinked:x.sourceRows>0&&x.pricedRows===x.sourceRows})).filter(x=>Number(x.qty)!==0).sort((a,b)=>Number(b.buyoutSum||0)-Number(a.buyoutSum||0));
+  const priceComplete=sourceRows>0&&pricedRows===sourceRows;
+  const result={ok:true,available:true,market,days,range:{since,until,timezone:'Asia/Almaty'},sales,returns,netQty,buyoutCount:netQty,
+    buyoutSum:sellerGross,forPay:sellerForPay,products,currency:'KZT',pricedRows,sourceRows,priceComplete,
+    rawFinishedPriceSum,rawPriceWithDiscSum,rawForPaySum,marketplacePages,marketplaceError,
+    source:'WB Statistics supplier/sales + Marketplace converted price · direct',updatedAt:Date.now()};
   try{await caches.default.put(cacheKey,new Response(JSON.stringify(result),{headers:{'Content-Type':'application/json','Cache-Control':'public,max-age=300'}}))}catch(_){}
   return json(result,200,request,env);
 }
