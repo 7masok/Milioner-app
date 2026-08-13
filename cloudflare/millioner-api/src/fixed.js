@@ -715,22 +715,22 @@ async function wbDashboardBuyoutsEndpoint(request,env,url){
   const token=String((market==='WB2'?env.WB_TOKEN_2:env.WB_TOKEN)||'').trim();
   if(!token)return json({ok:false,available:false,error:'WB token is not configured'},400,request,env);
   const raw=Number(url.searchParams.get('days')||1),days=raw===-1?-1:Math.max(1,Math.min(7,raw||1)),period=almatyPeriodDates(days);
-  const body={selectedPeriod:period,nmIds:[],skipDeletedNm:false,aggregationLevel:'day'};
+  const body={selectedPeriod:period,brandNames:[],subjectIds:[],tagIds:[],nmIds:[],skipDeletedNm:false,aggregationLevel:'day'};
   try{
-    const r=await fetch(WB_ANALYTICS_BASE+'/api/analytics/v3/sales-funnel/products/history',{method:'POST',headers:{Authorization:token,Accept:'application/json','Content-Type':'application/json'},body:JSON.stringify(body)});
+    const r=await fetch(WB_ANALYTICS_BASE+'/api/analytics/v3/sales-funnel/grouped/history',{method:'POST',headers:{Authorization:token,Accept:'application/json','Content-Type':'application/json'},body:JSON.stringify(body)});
     let data=null;try{data=await r.json()}catch{}
     if(!r.ok)return json({ok:false,available:false,market,days,status:r.status,error:data?.detail||data?.title||data?.message||data?.data||('WB analytics history HTTP '+r.status),raw:data},r.status,request,env);
-    const items=Array.isArray(data)?data:Array.isArray(data?.data)?data.data:Array.isArray(data?.data?.products)?data.data.products:Array.isArray(data?.products)?data.products:[];
+    const items=Array.isArray(data)?data:Array.isArray(data?.data)?data.data:Array.isArray(data?.data?.groups)?data.data.groups:Array.isArray(data?.groups)?data.groups:[];
     const links=await env.DB.prepare('SELECT sku,product_id AS productId FROM product_links WHERE market=?').bind(market).all();
     const linkMap=new Map((links.results||[]).map(x=>[String(x.sku||'').trim(),String(x.productId||'')]));
     const products=[];let buyoutCount=0,buyoutSum=0,currency=null,historyRows=0;
     for(const item of items){
-      const product=item?.product||{},history=Array.isArray(item?.history)?item.history:[];let qty=0,sum=0;
+      const product=item?.product||item?.group||{},history=Array.isArray(item?.history)?item.history:[];let qty=0,sum=0;
       for(const h of history){const date=String(h?.date||'').slice(0,10);if(date<period.start||date>period.end)continue;qty+=Number(h?.buyoutCount||0)||0;sum+=Number(h?.buyoutSum||0)||0;historyRows++}
       buyoutCount+=qty;buyoutSum+=sum;currency=currency||item?.currency||data?.currency||null;
       if(qty||sum){const nmId=String(product?.nmId??product?.nmID??''),vendorCode=String(product?.vendorCode||'').trim();products.push({nmId,vendorCode,title:String(product?.title||product?.name||vendorCode||nmId),productId:linkMap.get(vendorCode)||linkMap.get(nmId)||'',qty,buyoutSum:sum})}
     }
-    return json({ok:true,available:true,market,days,period,buyoutCount,buyoutSum,products,currency,itemCount:items.length,historyRows,updatedAt:Date.now(),dashboardMetric:true,source:'WB Analytics sales-funnel products/history'},200,request,env);
+    return json({ok:true,available:true,market,days,period,buyoutCount,buyoutSum,products,currency,itemCount:items.length,historyRows,updatedAt:Date.now(),dashboardMetric:true,source:'WB Analytics sales-funnel grouped/history'},200,request,env);
   }catch(e){return json({ok:false,available:false,market,days,error:String(e?.message||e)},500,request,env)}
 }
 
