@@ -1,4 +1,5 @@
 import base from './index.js';
+import { wbDashboardBuyoutsEndpoint as wbDashboardBuyoutsCachedEndpoint, syncWbDashboardDailyCache } from './wb-daily-cache.js';
 
 const ALMATY_OFFSET_MS = 5 * 60 * 60 * 1000;
 
@@ -737,7 +738,7 @@ async function wbDashboardBuyoutsEndpoint(request,env,url){
 export default {
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
-    if (request.method === 'GET' && url.pathname === '/api/wb-dashboard-buyouts') return wbDashboardBuyoutsEndpoint(request,env,url);
+    if (request.method === 'GET' && url.pathname === '/api/wb-dashboard-buyouts') return wbDashboardBuyoutsCachedEndpoint(request,env,url);
     if (request.method === 'GET' && url.pathname === '/api/wb-price-field-debug') return wbPriceFieldDebug(request,env,url);
     if (request.method === 'GET' && url.pathname === '/api/wb-realized-status') return wbRealizedStatusEndpoint(request,env,url);
     if (request.method === 'GET' && url.pathname === '/api/wb-sold-history-debug') return wbSoldHistoryDebug(request,env,url);
