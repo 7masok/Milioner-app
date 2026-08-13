@@ -1,0 +1,97 @@
+name: Fix WB dashboard buyouts
+on:
+  push:
+    branches: [main]
+    paths: ['.github/workflows/fix-wb-dashboard-buyouts.yml']
+permissions:
+  contents: write
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with: {fetch-depth: 0}
+      - run: git pull --rebase origin main
+      - name: Add WB daily dashboard buyouts endpoint
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          p=Path('cloudflare/millioner-api/src/fixed.js')
+          s=p.read_text(encoding='utf-8')
+          marker='// WB_DASHBOARD_BUYOUTS_V1'
+          if marker not in s:
+            insert=r'''
+
+// WB_DASHBOARD_BUYOUTS_V1
+// Mirrors the Seller dashboard "Выкупы" daily metric: sales-funnel history
+// attributes buyouts/returns to the day the item was originally ordered.
+async function wbDashboardBuyoutsEndpoint(request,env,url){
+  const market=normalizeMarket(url.searchParams.get('market'));
+  if(!['WB','WB2'].includes(market))return json({ok:false,error:'market must be WB or WB2'},400,request,env);
+  const token=String((market==='WB2'?env.WB_TOKEN_2:env.WB_TOKEN)||'').trim();
+  if(!token)return json({ok:false,available:false,error:'WB token is not configured'},400,request,env);
+  const raw=Number(url.searchParams.get('days')||1),days=raw===-1?-1:Math.max(1,Math.min(7,raw||1)),period=almatyPeriodDates(days);
+  const body={selectedPeriod:period,nmIds:[],skipDeletedNm:false,aggregationLevel:'day'};
+  try{
+    const r=await fetch(WB_ANALYTICS_BASE+'/api/analytics/v3/sales-funnel/products/history',{method:'POST',headers:{Authorization:token,Accept:'application/json','Content-Type':'application/json'},body:JSON.stringify(body)});
+    let data=null;try{data=await r.json()}catch{}
+    if(!r.ok)return json({ok:false,available:false,market,days,status:r.status,error:data?.detail||data?.title||data?.message||data?.data||('WB analytics history HTTP '+r.status),raw:data},r.status,request,env);
+    const items=Array.isArray(data)?data:Array.isArray(data?.data)?data.data:Array.isArray(data?.data?.products)?data.data.products:Array.isArray(data?.products)?data.products:[];
+    const links=await env.DB.prepare('SELECT sku,product_id AS productId FROM product_links WHERE market=?').bind(market).all();
+    const linkMap=new Map((links.results||[]).map(x=>[String(x.sku||'').trim(),String(x.productId||'')]));
+    const products=[];let buyoutCount=0,buyoutSum=0,currency=null,historyRows=0;
+    for(const item of items){
+      const product=item?.product||{},history=Array.isArray(item?.history)?item.history:[];
+      let qty=0,sum=0;
+      for(const h of history){const date=String(h?.date||'').slice(0,10);if(date<period.start||date>period.end)continue;qty+=Number(h?.buyoutCount||0)||0;sum+=Number(h?.buyoutSum||0)||0;historyRows++}
+      buyoutCount+=qty;buyoutSum+=sum;currency=currency||item?.currency||data?.currency||null;
+      if(qty||sum){const nmId=String(product?.nmId??product?.nmID??''),vendorCode=String(product?.vendorCode||'').trim();products.push({nmId,vendorCode,title:String(product?.title||product?.name||vendorCode||nmId),productId:linkMap.get(vendorCode)||linkMap.get(nmId)||'',qty,buyoutSum:sum})}
+    }
+    return json({ok:true,available:true,market,days,period,buyoutCount,buyoutSum,products,currency,itemCount:items.length,historyRows,updatedAt:Date.now(),dashboardMetric:true,source:'WB Analytics sales-funnel products/history'},200,request,env);
+  }catch(e){return json({ok:false,available:false,market,days,error:String(e?.message||e)},500,request,env)}
+}
+'''
+            needle='export default {'
+            if needle not in s: raise SystemExit('export marker missing')
+            s=s.replace(needle,insert+'\n'+needle,1)
+            route="    if (request.method === 'GET' && url.pathname === '/api/wb-dashboard-buyouts') return wbDashboardBuyoutsEndpoint(request,env,url);\n"
+            route_needle="    if (request.method === 'GET' && url.pathname === '/api/wb-price-field-debug')"
+            if route_needle not in s: route_needle="    if (request.method === 'GET' && url.pathname === '/api/wb-realized-status')"
+            if route_needle not in s: raise SystemExit('route marker missing')
+            s=s.replace(route_needle,route+route_needle,1)
+            p.write_text(s,encoding='utf-8')
+          PY
+          node --check cloudflare/millioner-api/src/fixed.js
+          grep -q 'WB_DASHBOARD_BUYOUTS_V1' cloudflare/millioner-api/src/fixed.js
+      - name: Commit backend source
+        run: |
+          git config user.name 'millioner-maintenance'
+          git config user.email 'actions@users.noreply.github.com'
+          git add cloudflare/millioner-api/src/fixed.js
+          if ! git diff --cached --quiet; then
+            git commit -m 'Read WB dashboard buyouts from daily analytics history'
+            git push origin HEAD:main
+          fi
+      - name: Wait for Worker Git deployment and verify Aug 12
+        run: |
+          python - <<'PY'
+          import json,time,urllib.request,urllib.error
+          u='https://millioner-api.7masok.workers.dev/api/wb-dashboard-buyouts?market=WB&days=-1'
+          last=''
+          for i in range(90):
+            try:
+              with urllib.request.urlopen(u,timeout=15) as r:
+                data=json.load(r)
+              if data.get('ok'):
+                print(json.dumps(data,ensure_ascii=False))
+                print('BUYOUT_COUNT=',data.get('buyoutCount'))
+                print('BUYOUT_SUM=',data.get('buyoutSum'))
+                raise SystemExit(0)
+              last=str(data)
+            except SystemExit: raise
+            except Exception as e: last=str(e)
+            if i%6==0: print('waiting',i,last)
+            time.sleep(10)
+          raise SystemExit('endpoint not live: '+last)
+          PY
