@@ -12,6 +12,7 @@ jobs:
     steps:
       - name: Show response
         run: |
+          # grouped-history recheck 2026-08-13 16:51 ALMT
           curl -sS -D /tmp/h.txt 'https://millioner-api.7masok.workers.dev/api/wb-dashboard-buyouts?market=WB&days=-1' -o /tmp/b.txt || true
           cat /tmp/h.txt
           echo BODY
