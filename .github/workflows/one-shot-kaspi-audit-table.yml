@@ -1,0 +1,66 @@
+name: One-shot Kaspi reconciliation table
+on:
+  push:
+    branches: [main]
+    paths: ['.github/workflows/one-shot-kaspi-audit-table.yml']
+permissions:
+  contents: write
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - run: git pull --rebase origin main
+      - name: Patch Kaspi report breakdown
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import re
+
+          path=Path('index.html')
+          s=path.read_text(encoding='utf-8')
+
+          css_anchor="table{width:100%;border-collapse:collapse;background:#fff;border-radius:14px;overflow:hidden;font-size:11px}td,th{padding:9px;border-bottom:1px solid var(--line);text-align:left}th{color:var(--muted);font-weight:600}"
+          css_add=css_anchor+"\n.kaspi-audit-scroll{overflow-x:auto;margin-top:8px;border:1px solid var(--line);border-radius:14px;background:#fff}.kaspi-audit-table{min-width:850px;border-radius:0}.kaspi-audit-table th,.kaspi-audit-table td{white-space:nowrap}.kaspi-audit-table th:first-child,.kaspi-audit-table td:first-child{position:sticky;left:0;min-width:170px;max-width:210px;white-space:normal;background:#fff;z-index:1}.kaspi-audit-table thead th:first-child{z-index:2}.kaspi-audit-table tfoot td{font-weight:800;background:#f5f6f8}.kaspi-audit-table tfoot td:first-child{background:#f5f6f8}.kaspi-audit-table tbody tr[data-product]{cursor:pointer}"
+          if '.kaspi-audit-scroll{' not in s:
+              if css_anchor not in s: raise SystemExit('CSS anchor not found')
+              s=s.replace(css_anchor,css_add,1)
+
+          new_report_sales=r'''function reportMarketplaceSales(){const saved=new Map();for(const s of(state.sales||[])){if(!s.externalKey)continue;saved.set(String(s.externalKey),s);if(s.channel==='Kaspi'&&String(s.externalKey).startsWith('Kaspi:'))saved.set(String(s.externalKey).slice(6),s)}const out=[];const feeds=[[state.kaspiOrderFeed||[],'Kaspi'],[state.wbOrderFeed||[],'WB'],[state.ozonOrderFeed||[],'Ozon']];for(const [feed,fallbackMarket] of feeds){for(const o of feed){const market=String(o.market||fallbackMarket),creationDate=Number(o.creationDate)||0;if(!creationDate||!isMarketplaceSaleOrder(market,o.status,o.state))continue;const legacy=String(o.orderId)+':'+String(o.entryId),key=market+':'+legacy,old=saved.get(key)||(market==='Kaspi'?saved.get(legacy):null),qty=Math.max(0,Number(o.qty)||Number(old?.qty)||0);if(!qty)continue;const commissionTotal=Math.max(0,Number(o.marketplaceFee)||0),deliveryTotal=Math.max(0,Number(o.sellerDeliveryCost)||0),apiFeeTotal=commissionTotal+deliveryTotal,apiFee=qty?apiFeeTotal/qty:0,productId=o.productId||old?.productId||null,recordedCost=Math.max(0,Number(old?.cost)||0),unitCost=reportSaleUnitCost(productId,old),delivery=deliveryTotal>0&&qty?deliveryTotal/qty:Math.max(0,Number(old?.delivery)||0),fee=apiFee>0?apiFee:Math.max(0,Number(old?.fee)||0),commission=commissionTotal>0&&qty?commissionTotal/qty:Math.max(0,Number(old?.commission)||Math.max(0,fee-delivery));out.push({...old,id:old?.id||('report-'+key),productId,qty,price:Number(o.unitPrice)||Number(old?.price)||0,cost:unitCost,fee,commission,delivery,costSource:recordedCost>0?'FIFO продажи':'Текущая себестоимость',feeSource:String(o.feeSource||old?.feeSource||''),channel:market,date:creationDate,externalKey:key})}}return out}'''
+          pat=re.compile(r"function reportMarketplaceSales\(\)\{.*?\}\nfunction financialSales",re.S)
+          if len(pat.findall(s))!=1: raise SystemExit('reportMarketplaceSales match failed')
+          s=pat.sub(new_report_sales+'\nfunction financialSales',s,count=1)
+
+          new_stats=r'''function marketplaceProductStats(market,days=reportPeriod){const since=reportPeriodStart(days),until=reportPeriodEnd(days),rows=financialSales().filter(s=>Number(s.date)>=since&&Number(s.date)<until&&s.channel===market),map=new Map();for(const sale of rows){const key=String(sale.productId||'unknown'),qty=Math.max(0,Number(sale.qty)||0),revenue=qty*Math.max(0,Number(sale.price)||0),cost=qty*Math.max(0,Number(sale.cost)||0),feePerUnit=Math.max(0,Number(sale.fee)||0),deliveryPerUnit=market==='Kaspi'?Math.max(0,Number(sale.delivery)||0):0,commissionPerUnit=market==='Kaspi'?Math.max(0,Number(sale.commission)||Math.max(0,feePerUnit-deliveryPerUnit)):feePerUnit,delivery=qty*deliveryPerUnit,commission=qty*commissionPerUnit,fees=market==='Kaspi'?commission+delivery:qty*feePerUnit;let x=map.get(key);if(!x){x={productId:sale.productId,name:productNameById(sale.productId,'Неизвестный товар'),qty:0,revenue:0,cost:0,commission:0,delivery:0,fees:0,ads:0,profit:0,costEstimatedQty:0};map.set(key,x)}x.qty+=qty;x.revenue+=revenue;x.cost+=cost;x.commission+=commission;x.delivery+=delivery;x.fees+=fees;x.profit+=revenue-cost-fees;if(market==='Kaspi'&&sale.costSource==='Текущая себестоимость')x.costEstimatedQty+=qty}if(market==='Kaspi'){const ads=kaspiAdsBreakdown(days);for(const [productId,amount] of ads.byProduct){let x=map.get(String(productId));if(!x){x={productId:String(productId),name:productNameById(productId,'Реклама Kaspi'),qty:0,revenue:0,cost:0,commission:0,delivery:0,fees:0,ads:0,profit:0,costEstimatedQty:0};map.set(String(productId),x)}x.ads+=amount;x.profit-=amount}if(ads.unmatched>0){map.set('__kaspi_ads_unmatched__',{productId:null,name:'Реклама Kaspi без привязки',qty:0,revenue:0,cost:0,commission:0,delivery:0,fees:0,ads:ads.unmatched,profit:-ads.unmatched,costEstimatedQty:0})}}return [...map.values()].sort((a,b)=>b.profit-a.profit)}'''
+          pat=re.compile(r"function marketplaceProductStats\(market,days=reportPeriod\)\{.*?\}\nasync function openWbFinanceReport",re.S)
+          if len(pat.findall(s))!=1: raise SystemExit('marketplaceProductStats match failed')
+          s=pat.sub(new_stats+'\nasync function openWbFinanceReport',s,count=1)
+
+          new_sheet=r'''function renderMarketplaceReportSheet(){const market=marketplaceReportContext?.market,raw=Number(marketplaceReportContext?.days),days=raw===-1?-1:Math.max(1,raw||1);if(!market)return;const rows=marketplaceProductStats(market,days),qty=rows.reduce((a,x)=>a+Number(x.qty||0),0),profit=rows.reduce((a,x)=>a+Number(x.profit||0),0);const periodButtons=`<div class="period" style="margin-top:0"><button class="chip ${days===1?'active':''}" onclick="setMarketplaceReportPeriod(1)">Сегодня</button><button class="chip ${days===-1?'active':''}" onclick="setMarketplaceReportPeriod(-1)">Вчера</button><button class="chip ${days===7?'active':''}" onclick="setMarketplaceReportPeriod(7)">7 дней</button><button class="chip ${days===30?'active':''}" onclick="setMarketplaceReportPeriod(30)">30 дней</button><button class="chip ${![-1,1,7,30].includes(days)?'active':''}" onclick="setMarketplaceReportPeriod(0)">Свой период</button></div>`;const head=`<div class="item"><div class="row"><div class="grow"><div class="label">Продано</div><div class="num">${qty} шт.</div></div><div class="right"><div class="label">Общая прибыль</div><div class="num">${fmt(profit)}</div></div></div></div>`;if(market==='Kaspi'){const totals=rows.reduce((a,x)=>{a.revenue+=Number(x.revenue||0);a.cost+=Number(x.cost||0);a.commission+=Number(x.commission||0);a.delivery+=Number(x.delivery||0);a.ads+=Number(x.ads||0);a.estimated+=Number(x.costEstimatedQty||0);return a},{revenue:0,cost:0,commission:0,delivery:0,ads:0,estimated:0});const tr=rows.length?rows.map((x,i)=>`<tr ${x.productId?`data-product="1" onclick="openProduct('${x.productId}','Kaspi',${days})"`:''}><td><b>${i+1}. ${esc(x.name)}</b>${Number(x.costEstimatedQty||0)>0?`<div class="muted">⚠ себестоимость оценочная: ${Number(x.costEstimatedQty||0)} шт.</div>`:''}</td><td>${Number(x.qty||0)} шт.</td><td>${fmt(x.revenue)}</td><td>${fmt(x.cost)}${Number(x.costEstimatedQty||0)>0?' ⚠':''}</td><td>${fmt(x.commission)}</td><td>${fmt(x.delivery)}</td><td>${fmt(x.ads)}</td><td><b>${fmt(x.profit)}</b></td></tr>`).join(''):`<tr><td colspan="8">За выбранный период продаж и рекламы нет</td></tr>`;const table=`<div class="kaspi-audit-scroll"><table class="kaspi-audit-table"><thead><tr><th>Товар</th><th>Кол.</th><th>Продажи</th><th>Себестоимость</th><th>Комиссия</th><th>Доставка</th><th>Реклама</th><th>Прибыль</th></tr></thead><tbody>${tr}</tbody><tfoot><tr><td>Итого</td><td>${qty} шт.</td><td>${fmt(totals.revenue)}</td><td>${fmt(totals.cost)}</td><td>${fmt(totals.commission)}</td><td>${fmt(totals.delivery)}</td><td>${fmt(totals.ads)}</td><td>${fmt(profit)}</td></tr></tfoot></table></div>`;const note=`<div class="link-note" style="line-height:1.55"><b>Как считается:</b> прибыль = продажи − себестоимость − комиссия Kaspi − доставка Kaspi − реклама.<br><b>Продажи, комиссия и доставка</b> — из заказов Kaspi API, ровно те суммы, которые сейчас участвуют в расчёте. <b>Реклама</b> — из импортированного детального отчёта Kaspi Ads. <b>Себестоимость</b> — сохранённая при продаже; если для старой продажи FIFO не сохранился, используется текущая себестоимость и строка отмечается ⚠.${totals.estimated?` Сейчас оценочная себестоимость используется для ${totals.estimated} шт.`:''}<br>Если Kaspi API не прислал отдельную комиссию или доставку, здесь будет 0 — ставка не додумывается.</div>`;showSheet(`<h3>Продажи Kaspi</h3>${periodButtons}${head}${table}${note}`);return}const body=rows.length?rows.map((x,i)=>{const unit=x.qty?x.profit/x.qty:0;return `<div class="item" style="margin-top:8px;${x.productId?'cursor:pointer':''}" ${x.productId?`onclick="openProduct('${x.productId}','${market}',${days})"`:''}><div class="name">${i+1}. ${esc(x.name)}</div><div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-top:10px"><div><div class="label">Продано</div><b>${x.qty} шт.</b></div><div><div class="label">Прибыль / шт.</div><b>${fmt(unit)}</b></div><div class="right"><div class="label">Общая прибыль</div><b>${fmt(x.profit)}</b></div></div></div>`}).join(''):'<div class="empty">За выбранный период продаж нет</div>';showSheet(`<h3>Продажи ${esc(market)}</h3>${periodButtons}${head}${body}`)}'''
+          pat=re.compile(r"function renderMarketplaceReportSheet\(\)\{.*?\}\nfunction openProduct",re.S)
+          if len(pat.findall(s))!=1: raise SystemExit('renderMarketplaceReportSheet match failed')
+          s=pat.sub(new_sheet+'\nfunction openProduct',s,count=1)
+
+          path.write_text(s,encoding='utf-8')
+          PY
+          node --check <(python - <<'PY'
+          from pathlib import Path
+          import re
+          s=Path('index.html').read_text(encoding='utf-8')
+          print('\n'.join(re.findall(r'<script>(.*?)</script>',s,flags=re.S|re.I)))
+          PY
+          )
+          git diff --check
+          grep -q 'kaspi-audit-table' index.html
+          grep -q 'Комиссия Kaspi' index.html
+      - name: Commit result and remove one-shot workflow
+        run: |
+          git config user.name 'millioner-maintenance'
+          git config user.email 'actions@users.noreply.github.com'
+          git rm .github/workflows/one-shot-kaspi-audit-table.yml
+          git add index.html
+          git commit -m 'Show Kaspi profit reconciliation by product'
+          git push origin HEAD:main
