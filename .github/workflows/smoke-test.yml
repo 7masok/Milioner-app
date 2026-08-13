@@ -8,6 +8,7 @@ on:
     branches: [main]
     paths:
       - 'index.html'
+      - 'vendor/**'
       - 'cloudflare/**'
       - '.github/workflows/smoke-test.yml'
 
@@ -42,7 +43,7 @@ jobs:
           app='\n'.join(scripts)
           def cut(a,b):
               i=app.index(a); j=app.index(b,i); return app[i:j]
-          regression=cut('function adsMoney(','function adsColumn(')+"\n"+cut('function kaspiAdsParseDelimitedText(','async function kaspiAdsParseFile(')+r'''
+          regression=cut('function adsMoney(','function adsColumn(')+"\n"+cut('function adsColumn(','function adsSkuEqual(')+"\n"+cut('function kaspiAdsHeaderScore(','async function kaspiAdsParseFile(')+r'''
           const sample='\uFEFFРекламируемый товар;Товар;Расходы на рекламу\r\n166859382;Товар 1;164,69\r\n166859005;Товар 2;166,06\r\n';
           const rows=kaspiAdsParseDelimitedText(sample);
           if(rows.length!==2)throw new Error('CSV row count mismatch');
