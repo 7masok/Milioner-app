@@ -6,9 +6,9 @@ jobs:
   check:
     runs-on: ubuntu-latest
     steps:
-      - name: WB1 yesterday values
-        run: |
-          curl -sS 'https://millioner-api.7masok.workers.dev/api/wb-sales-live?market=WB&days=-1' | jq '{sales,returns,netQty,buyoutSum,forPay,products:(.products[:12] | map({vendorCode,nmId,productId,qty,finishedPrice,priceWithDisc,forPay,buyoutSum}))}'
-      - name: WB1 today values
-        run: |
-          curl -sS 'https://millioner-api.7masok.workers.dev/api/wb-sales-live?market=WB&days=1' | jq '{sales,returns,netQty,buyoutSum,forPay,products:(.products[:12] | map({vendorCode,nmId,productId,qty,finishedPrice,priceWithDisc,forPay,buyoutSum}))}'
+      - name: Market status
+        run: curl -sS 'https://millioner-api.7masok.workers.dev/api/market-status' | jq '{markets:[.markets[]|select(.market=="WB" or .market=="WB2")|{market,latest,lastSuccessAt,orderLines}]}'
+      - name: WB1 yesterday KZT
+        run: curl -sS 'https://millioner-api.7masok.workers.dev/api/wb-sales-live?market=WB&days=-1' | jq '{source,currency,sales,returns,netQty,buyoutCount,buyoutSum,forPay,pricedRows,products:(.products|length),sample:(.products[:5]|map({vendorCode,qty,buyoutSum,forPay,priceLinked}))}'
+      - name: WB1 today KZT
+        run: curl -sS 'https://millioner-api.7masok.workers.dev/api/wb-sales-live?market=WB&days=1' | jq '{source,currency,sales,returns,netQty,buyoutCount,buyoutSum,forPay,pricedRows,products:(.products|length)}'
