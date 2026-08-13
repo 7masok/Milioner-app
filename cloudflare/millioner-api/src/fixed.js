@@ -354,43 +354,63 @@ async function syncWbSalesCache(env, market, { force = false } = {}) {
 async function readWbSalesCache(env, market, days) {
   await ensureWbSalesCache(env.DB);
   const { since, until } = wbSalesPeriodBounds(days);
-  const rows = await env.DB.prepare(`SELECT r.vendor_code AS vendorCode,r.nm_id AS nmId,r.barcode AS barcode,
+  const rows = await env.DB.prepare(`
+    WITH priced AS (
+      SELECT r.*,
+        COALESCE(
+          (SELECT o.unit_price FROM marketplace_order_lines o
+             WHERE o.market=r.market AND o.unit_price>0
+               AND trim(COALESCE(json_extract(o.raw_json,'$.order.rid'),''))=trim(r.srid)
+             ORDER BY o.creation_date DESC LIMIT 1),
+          (SELECT o.unit_price FROM marketplace_order_lines o
+             WHERE o.market=r.market AND o.unit_price>0
+               AND (trim(o.sku)=trim(r.vendor_code) OR trim(o.sku)=trim(r.nm_id) OR trim(o.sku)=trim(r.barcode))
+             ORDER BY o.creation_date DESC LIMIT 1),
+          0
+        ) AS seller_unit_price
+      FROM wb_sales_live_rows r
+      WHERE r.market=? AND r.sale_date>=? AND r.sale_date<?
+    )
+    SELECT r.vendor_code AS vendorCode,r.nm_id AS nmId,r.barcode AS barcode,
       MAX(l.product_id) AS productId,
       SUM(CASE WHEN r.is_return=1 THEN -1 ELSE 1 END) AS qty,
-      SUM(CASE WHEN r.is_return=1 THEN -r.finished_price ELSE r.finished_price END) AS finishedPrice,
-      SUM(CASE WHEN r.is_return=1 THEN -r.price_with_disc ELSE r.price_with_disc END) AS priceWithDisc,
-      SUM(CASE WHEN r.is_return=1 THEN -r.for_pay ELSE r.for_pay END) AS forPay
-    FROM wb_sales_live_rows r
-    LEFT JOIN product_links l ON l.market=r.market AND (l.sku=r.vendor_code OR l.sku=r.nm_id OR l.sku=r.barcode)
-    WHERE r.market=? AND r.sale_date>=? AND r.sale_date<?
+      SUM(CASE WHEN r.is_return=1 THEN -ABS(r.finished_price) ELSE ABS(r.finished_price) END) AS finishedPriceRub,
+      SUM(CASE WHEN r.is_return=1 THEN -ABS(r.price_with_disc) ELSE ABS(r.price_with_disc) END) AS priceWithDiscRub,
+      SUM(CASE WHEN r.is_return=1 THEN -ABS(r.for_pay) ELSE ABS(r.for_pay) END) AS forPayRub,
+      SUM((CASE WHEN r.is_return=1 THEN -1 ELSE 1 END) * ABS(r.seller_unit_price)) AS sellerGross,
+      SUM((CASE WHEN r.is_return=1 THEN -1 ELSE 1 END) * ABS(r.seller_unit_price) *
+          CASE WHEN ABS(r.finished_price)>0 THEN ABS(r.for_pay)/ABS(r.finished_price) ELSE 0 END) AS sellerForPay,
+      SUM(CASE WHEN r.seller_unit_price>0 THEN 1 ELSE 0 END) AS pricedRows,
+      COUNT(*) AS sourceRows
+    FROM priced r
+    LEFT JOIN product_links l ON l.market=r.market AND (trim(l.sku)=trim(r.vendor_code) OR trim(l.sku)=trim(r.nm_id) OR trim(l.sku)=trim(r.barcode))
     GROUP BY r.vendor_code,r.nm_id,r.barcode
-    ORDER BY SUM(CASE WHEN r.is_return=1 THEN -r.for_pay ELSE r.for_pay END) DESC`)
+    ORDER BY SUM((CASE WHEN r.is_return=1 THEN -1 ELSE 1 END) * ABS(r.seller_unit_price)) DESC`)
     .bind(market, since, until).all();
   const totals = await env.DB.prepare(`SELECT COUNT(*) totalRows,
       SUM(CASE WHEN is_return=0 THEN 1 ELSE 0 END) sales,
-      SUM(CASE WHEN is_return=1 THEN 1 ELSE 0 END) returns,
-      SUM(CASE WHEN is_return=1 THEN -finished_price ELSE finished_price END) finishedPrice,
-      SUM(CASE WHEN is_return=1 THEN -price_with_disc ELSE price_with_disc END) priceWithDisc,
-      SUM(CASE WHEN is_return=1 THEN -for_pay ELSE for_pay END) forPay
+      SUM(CASE WHEN is_return=1 THEN 1 ELSE 0 END) returns
     FROM wb_sales_live_rows WHERE market=? AND sale_date>=? AND sale_date<?`).bind(market,since,until).first();
   const state = await env.DB.prepare('SELECT * FROM wb_sales_live_state WHERE market=?').bind(market).first();
   const sales = Number(totals?.sales || 0), returns = Number(totals?.returns || 0), netQty = sales - returns;
   const lastSuccessAt = Number(state?.last_success_at || 0) || null;
   const products = (rows.results || []).map(x => {
-    const finishedPrice = Number(x.finishedPrice || 0), priceWithDisc = Number(x.priceWithDisc || 0), forPay = Number(x.forPay || 0);
-    return {...x, qty:Number(x.qty||0), finishedPrice, priceWithDisc, forPay, buyoutSum:finishedPrice};
+    const qty=Number(x.qty||0), finishedPriceRub=Number(x.finishedPriceRub||0), priceWithDiscRub=Number(x.priceWithDiscRub||0), forPayRub=Number(x.forPayRub||0);
+    const sellerGross=Number(x.sellerGross||0), sellerForPay=Number(x.sellerForPay||0), pricedRows=Number(x.pricedRows||0), sourceRows=Number(x.sourceRows||0);
+    return {...x,qty,finishedPriceRub,priceWithDiscRub,forPayRub,sellerGross,sellerForPay,pricedRows,sourceRows,
+      finishedPrice:sellerGross,priceWithDisc:sellerGross,forPay:sellerForPay,buyoutSum:sellerGross,
+      priceLinked:sourceRows>0&&pricedRows===sourceRows};
   }).filter(x=>x.qty!==0);
+  const sellerGross=products.reduce((a,x)=>a+Number(x.sellerGross||0),0);
+  const sellerForPay=products.reduce((a,x)=>a+Number(x.sellerForPay||0),0);
+  const pricedRows=products.reduce((a,x)=>a+Number(x.pricedRows||0),0);
   return {
-    ok: true, available: !!lastSuccessAt, market, days, since, until,
-    totalRows: Number(totals?.totalRows || 0), sales, returns, netQty,
-    buyoutCount: netQty,
-    buyoutSum: Number(totals?.finishedPrice || 0),
-    forPay: Number(totals?.forPay || 0),
-    products,
-    cached: true,lastSuccessAt,lastError:String(state?.last_error||''),
-    nextSyncAt: Number(state?.last_attempt_at || 0) + (state?.last_error ? wbSalesRetryMs(state) : WB_SALES_REFRESH_MS),
-    stale: !lastSuccessAt || Date.now()-lastSuccessAt>WB_SALES_REFRESH_MS*2,
-    source: 'WB Statistics · supplier/sales'
+    ok:true,available:!!lastSuccessAt,market,days,since,until,totalRows:Number(totals?.totalRows||0),sales,returns,netQty,
+    buyoutCount:netQty,buyoutSum:sellerGross,forPay:sellerForPay,products,currency:'KZT',pricedRows,
+    cached:true,lastSuccessAt,lastError:String(state?.last_error||''),
+    nextSyncAt:Number(state?.last_attempt_at||0)+(state?.last_error?wbSalesRetryMs(state):WB_SALES_REFRESH_MS),
+    stale:!lastSuccessAt||Date.now()-lastSuccessAt>WB_SALES_REFRESH_MS*2,
+    source:'WB Statistics supplier/sales + Marketplace converted price'
   };
 }
 
