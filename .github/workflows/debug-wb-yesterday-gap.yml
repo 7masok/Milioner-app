@@ -10,26 +10,15 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - name: Fetch live WB yesterday endpoints
+      - name: Inspect analytics cache
         run: |
           set -euo pipefail
-          curl -fsS 'https://millioner-api.7masok.workers.dev/api/wb-sales-live?market=WB&days=-1' -o /tmp/live.json
-          curl -fsS 'https://millioner-api.7masok.workers.dev/api/wb-finance-summary?market=WB&days=-1' -o /tmp/finance.json || true
-          curl -fsS 'https://millioner-api.7masok.workers.dev/api/wb-sales-direct?market=WB&days=-1&refresh=1' -o /tmp/direct.json || true
-          curl -fsS 'https://millioner-api.7masok.workers.dev/api/wb-realized-status?market=WB&days=-1' -o /tmp/tracked.json || true
-          curl -fsS 'https://millioner-api.7masok.workers.dev/api/wb-buyouts-live?market=WB&days=-1&refresh=1' -o /tmp/analytics.json || true
+          curl -fsS 'https://millioner-api.7masok.workers.dev/api/wb-buyouts-live?market=WB&days=-1' -o /tmp/a.json
           python - <<'PY'
           import json
-          for name in ('live','finance','direct','tracked','analytics'):
-              try:
-                  d=json.load(open('/tmp/'+name+'.json'))
-              except Exception as e:
-                  print(name, 'ERROR', e); continue
-              print('\n===',name,'===')
-              for k in ['ok','available','market','days','sales','returns','netQty','buyoutCount','buyoutSum','forPay','retailAmount','rowCount','netBeforeCost','pricedRows','sourceRows','priceComplete','rawFinishedPriceSum','rawPriceWithDiscSum','rawForPaySum','updatedAt','lastSuccessAt','lastError','source','refreshOk','status']:
-                  if k in d: print(k,':',d.get(k))
-              if name=='live':
-                  ps=d.get('products') or []
-                  for f in ['finishedPriceRub','priceWithDiscRub','forPayRub','sellerGross','sellerForPay']:
-                      print('sum '+f,':',sum(float(x.get(f) or 0) for x in ps))
+          d=json.load(open('/tmp/a.json'))
+          for k in ['ok','available','market','days','period','buyoutCount','buyoutSum','itemCount','currency','source','updatedAt','lastError','refreshOk','status']:
+              print(k,':',d.get(k))
+          print('products_count:',len(d.get('products') or []))
+          print('products:',json.dumps((d.get('products') or [])[:20],ensure_ascii=False))
           PY
