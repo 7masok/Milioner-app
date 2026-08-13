@@ -6,6 +6,9 @@ jobs:
   refresh:
     runs-on: ubuntu-latest
     steps:
-      - name: WB1 today's known realization candidates
+      - name: WB1 realized status today
         run: |
-          curl -sS 'https://millioner-api.7masok.workers.dev/api/wb-sold-history-debug?market=WB&nmIds=868277285,892404541,1294433488' | jq '{ok,market,candidates:[.candidates[]|{id,rid,article,nmId,createdAt,price,status}]}'
+          curl -fsS 'https://millioner-api.7masok.workers.dev/api/wb-realized-status?market=WB&days=1' | jq '{ok,available,market,sales,returns,buyoutCount,buyoutSum,forPay,priceComplete,payoutEstimated,statusTracked,coverageComplete,recoveryTag,products:[.products[]|{vendorCode,nmId,qty,buyoutSum,forPay,priceLinked}]}'
+      - name: WB2 realized status today
+        run: |
+          curl -fsS 'https://millioner-api.7masok.workers.dev/api/wb-realized-status?market=WB2&days=1' | jq '{ok,available,market,sales,returns,buyoutCount,buyoutSum,forPay,coverageComplete,recoveryTag}'
