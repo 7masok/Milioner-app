@@ -760,6 +760,8 @@ export default {
         for (const market of ['WB','WB2']) {
           try { await syncWbRealizedTracker(env, market); }
           catch (e) { console.warn('WB realized status tracker', market, String(e?.message || e)); }
+          try { await syncWbDashboardDailyCache(env, market, { force: false }); }
+          catch (e) { console.warn('WB dashboard daily cache', market, String(e?.message || e)); }
         }
       })());
     }
