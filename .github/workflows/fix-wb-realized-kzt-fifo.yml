@@ -1,0 +1,31 @@
+name: Fix WB realized KZT FIFO
+on:
+  push:
+    paths: ['.github/workflows/fix-wb-realized-kzt-fifo.yml']
+permissions:
+  contents: write
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: python tools/fix_wb_realized_kzt_fifo.py
+      - run: node --check cloudflare/millioner-api/src/fixed.js
+      - name: Check browser JS
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import re
+          s=Path('index.html').read_text()
+          Path('/tmp/app.js').write_text('\n'.join(re.findall(r'<script[^>]*>(.*?)</script>',s,re.S)))
+          PY
+          node --check /tmp/app.js
+      - run: grep -q "Marketplace converted price" cloudflare/millioner-api/src/fixed.js
+      - run: grep -q "wbRealizedFifoCost" index.html
+      - run: |
+          if git diff --quiet -- cloudflare/millioner-api/src/fixed.js index.html; then exit 0; fi
+          git config user.name '7masok'
+          git config user.email '7masok@gmail.com'
+          git add cloudflare/millioner-api/src/fixed.js index.html
+          git commit -m 'Calculate WB realized profit in KZT with FIFO'
+          git push
