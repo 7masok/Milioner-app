@@ -6,13 +6,11 @@ jobs:
   check:
     runs-on: ubuntu-latest
     steps:
-      - name: Market status
-        run: curl -sS 'https://millioner-api.7masok.workers.dev/api/market-status' | jq .
-      - name: WB1 realized-sales cache today
-        run: curl -sS 'https://millioner-api.7masok.workers.dev/api/wb-sales-live?market=WB&days=1' | jq .
-      - name: WB1 realized-sales cache yesterday
-        run: curl -sS 'https://millioner-api.7masok.workers.dev/api/wb-sales-live?market=WB&days=-1' | jq .
-      - name: WB2 realized-sales cache today
-        run: curl -sS 'https://millioner-api.7masok.workers.dev/api/wb-sales-live?market=WB2&days=1' | jq .
-      - name: WB2 realized-sales cache yesterday
-        run: curl -sS 'https://millioner-api.7masok.workers.dev/api/wb-sales-live?market=WB2&days=-1' | jq .
+      - name: WB1 seed once
+        run: curl -sS 'https://millioner-api.7masok.workers.dev/api/wb-sales-live?market=WB&days=1&refresh=1' | jq '{ok,available,market,source,lastSuccessAt,lastError,nextSyncAt,sales,returns,netQty,buyoutCount,buyoutSum,products:(.products|length)}'
+      - name: WB1 yesterday after seed
+        run: curl -sS 'https://millioner-api.7masok.workers.dev/api/wb-sales-live?market=WB&days=-1' | jq '{ok,available,market,source,lastSuccessAt,lastError,sales,returns,netQty,buyoutCount,buyoutSum,products:(.products|length)}'
+      - name: WB2 seed once
+        run: curl -sS 'https://millioner-api.7masok.workers.dev/api/wb-sales-live?market=WB2&days=1&refresh=1' | jq '{ok,available,market,source,lastSuccessAt,lastError,nextSyncAt,sales,returns,netQty,buyoutCount,buyoutSum,products:(.products|length)}'
+      - name: WB2 yesterday after seed
+        run: curl -sS 'https://millioner-api.7masok.workers.dev/api/wb-sales-live?market=WB2&days=-1' | jq '{ok,available,market,source,lastSuccessAt,lastError,sales,returns,netQty,buyoutCount,buyoutSum,products:(.products|length)}'
