@@ -21,15 +21,23 @@ function kaspiTotals(days){
  const rows=marketplaceProductStats('Kaspi',days);
  return rows.reduce((a,x)=>{for(const k of['qty','revenue','cost','commission','kaspiPay','delivery','otherFees','fees','ads','profit'])a[k]+=Number(x[k]||0);return a},{rows,qty:0,revenue:0,cost:0,commission:0,kaspiPay:0,delivery:0,otherFees:0,fees:0,ads:0,profit:0});
 }
-renderReports=function(refreshWb=true){
- baseRenderReports(refreshWb);
- const t=kaspiTotals(reportPeriod),since=reportPeriodStart(reportPeriod),until=reportPeriodEnd(reportPeriod),sales=financialSales().filter(s=>Number(s.date)>=since&&Number(s.date)<until);
- const nativeFees=sales.reduce((a,s)=>a+Math.max(0,Number(s.qty)||0)*Math.max(0,Number(s.fee)||0),0);
- const nativeKaspiFees=sales.filter(s=>s.channel==='Kaspi').reduce((a,s)=>a+Math.max(0,Number(s.qty)||0)*Math.max(0,Number(s.fee)||0),0);
- const totalFees=Math.max(0,nativeFees-nativeKaspiFees+t.fees),rev=sales.reduce((a,s)=>a+Math.max(0,Number(s.qty)||0)*Math.max(0,Number(s.price)||0),0),cost=sales.reduce((a,s)=>a+Math.max(0,Number(s.qty)||0)*Math.max(0,Number(s.cost)||0),0),ads=kaspiAdsBreakdown(reportPeriod).total;
- const feesEl=document.getElementById('rFees'),profitEl=document.getElementById('rProfit');if(feesEl)feesEl.textContent=fmt(totalFees);if(profitEl)profitEl.textContent=fmt(rev-cost-totalFees-ads);
- const card=[...document.querySelectorAll('#mpReport>.item')].find(x=>x.querySelector('.grow>b')?.textContent==='Kaspi');
- if(card){const sub=card.querySelector('.muted'),value=card.querySelector(':scope>b');if(sub)sub.textContent=t.qty+' шт. · прибыль '+fmt(t.profit)+' · комиссии рассчитаны';if(value)value.textContent=fmt(t.revenue)}
+renderReports=function(){
+ document.querySelectorAll('[data-report-period]').forEach(b=>b.classList.toggle('active',Number(b.dataset.reportPeriod)===reportPeriodPreset));
+ const t=kaspiTotals(reportPeriod);
+ const set=(id,value)=>{const el=document.getElementById(id);if(el)el.textContent=value};
+ set('rRevenue',fmt(t.revenue));set('rCost',fmt(t.cost));set('rFees',fmt(t.fees));set('rAds',fmt(t.ads));set('rProfit',fmt(t.profit));
+ renderKaspiAdsStatus(reportPeriod);
+ const reports=document.getElementById('reports');
+ if(reports){
+  const headings=[...reports.querySelectorAll('h2')];
+  if(headings[0])headings[0].textContent='Отчёты · Kaspi';
+  const marketHeading=headings.find(x=>x.textContent.trim()==='По маркетплейсам');
+  if(marketHeading)marketHeading.textContent='Kaspi';
+  const feeLabel=[...reports.querySelectorAll('.label')].find(x=>x.textContent.trim()==='Расходы МП');
+  if(feeLabel)feeLabel.textContent='Расходы Kaspi';
+ }
+ const box=document.getElementById('mpReport');
+ if(box)box.innerHTML=`<div class="item row" role="button" tabindex="0" style="cursor:pointer" onclick="openMarketplaceReport('Kaspi',${reportPeriod})"><div class="grow"><b>Kaspi</b><div class="muted">${t.qty} шт. · прибыль ${fmt(t.profit)} · комиссии рассчитаны</div></div><b>${fmt(t.revenue)}</b></div>`;
 };
 renderMarketplaceReportSheet=function(){
  const market=marketplaceReportContext?.market,raw=Number(marketplaceReportContext?.days),days=raw===-1?-1:Math.max(1,raw||1);
