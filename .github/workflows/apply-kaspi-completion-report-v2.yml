@@ -1,4 +1,4 @@
-name: Run Kaspi multi-state completion report patch
+name: Run Kaspi 3-day archive completion patch
 on:
   push:
     branches: [main]
@@ -23,5 +23,5 @@ jobs:
           git config user.email actions@users.noreply.github.com
           git add cloudflare/millioner-api/src/index.js
           git diff --cached --quiet && exit 0
-          git commit -m 'Use multi-state Kaspi source for completion report'
+          git commit -m 'Narrow Kaspi archive source to 3 days'
           git push origin HEAD:main
