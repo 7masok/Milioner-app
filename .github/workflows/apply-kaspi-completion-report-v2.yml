@@ -1,4 +1,4 @@
-name: Run Kaspi 14-day completion report patch
+name: Run Kaspi archived completion report patch
 on:
   push:
     branches: [main]
@@ -15,7 +15,7 @@ jobs:
           fetch-depth: 0
       - name: Patch
         run: |
-          python .github/scripts/use_kaspi_binding_report.py
+          python .github/scripts/use_kaspi_archive_report.py
           node --check cloudflare/millioner-api/src/index.js
       - name: Commit
         run: |
@@ -23,5 +23,5 @@ jobs:
           git config user.email actions@users.noreply.github.com
           git add cloudflare/millioner-api/src/index.js
           git diff --cached --quiet && exit 0
-          git commit -m 'Use 14-day source for Kaspi completion report'
+          git commit -m 'Use archived Kaspi orders for completion report'
           git push origin HEAD:main
