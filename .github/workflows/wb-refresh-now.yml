@@ -6,15 +6,6 @@ jobs:
   refresh:
     runs-on: ubuntu-latest
     steps:
-      - name: WB1 D1 realized cache
+      - name: WB1 sold status history
         run: |
-          curl -sS -D /tmp/h 'https://millioner-api.7masok.workers.dev/api/wb-sales-live?market=WB&days=1' -o /tmp/b || true
-          cat /tmp/h
-          echo BODY
-          cat /tmp/b
-      - name: D1 market status
-        run: |
-          curl -sS -D /tmp/h2 'https://millioner-api.7masok.workers.dev/api/market-status' -o /tmp/b2 || true
-          cat /tmp/h2
-          echo BODY
-          head -c 3000 /tmp/b2
+          curl -sS 'https://millioner-api.7masok.workers.dev/api/wb-sold-history-debug?market=WB' | jq '{ok,market,orders,sold,historyStatus,historyCount,sample:[.sample[]|{id,rid,article,nmId,createdAt,price,status,history}]}'
