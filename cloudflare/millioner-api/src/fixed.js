@@ -214,7 +214,7 @@ async function wbBuyoutsCachedEndpoint(request,env,url){
     const data=refresh?await refreshWbBuyoutCache(env,market,days,{force:false}):await readWbBuyoutCache(env,market,days);
     return json(data,200,request,env);
   } catch(e) {
-    return json({ok:false,market,days,error:String(e?.message||e)},500,request,env);
+    return wbAnalyticsBuyouts(request,env,url);
   }
 }
 
@@ -240,8 +240,13 @@ async function wbAnalyticsBuyouts(request,env,url){
   let data=null;try{data=await r.json()}catch{}
   if(!r.ok)return json({ok:false,market,status:r.status,error:data?.detail||data?.title||data?.message||data?.data||('WB analytics HTTP '+r.status),raw:data},r.status,request,env);
   const items=Array.isArray(data?.data?.products)?data.data.products:Array.isArray(data?.data?.items)?data.data.items:Array.isArray(data?.products)?data.products:Array.isArray(data?.items)?data.items:Array.isArray(data)?data:[];
-  const links=await env.DB.prepare('SELECT sku,product_id AS productId FROM product_links WHERE market=?').bind(market).all();
-  const linkMap=new Map((links.results||[]).map(x=>[String(x.sku||'').trim(),String(x.productId||'')]));
+  let linkMap=new Map();
+  try {
+    const links=await env.DB.prepare('SELECT sku,product_id AS productId FROM product_links WHERE market=?').bind(market).all();
+    linkMap=new Map((links.results||[]).map(x=>[String(x.sku||'').trim(),String(x.productId||'')]));
+  } catch (_) {
+    // D1 fallback: browser can match vendorCode/nmId against local warehouse state.
+  }
   const products=[];let buyoutCount=0,buyoutSum=0;
   for(const item of items){
     const product=item?.product||item,stat=item?.statistic?.selected||item?.selected||item?.statistic||{},nmId=String(product?.nmId??product?.nmID??''),vendorCode=String(product?.vendorCode||'').trim();
