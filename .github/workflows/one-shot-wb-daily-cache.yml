@@ -1,0 +1,198 @@
+name: Build WB daily D1 cache
+on:
+  push:
+    branches: [main]
+    paths: ['.github/workflows/one-shot-wb-daily-cache.yml']
+permissions:
+  contents: write
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with: {fetch-depth: 0}
+      - run: git pull --rebase origin main
+      - name: Patch Worker and reports
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import re
+
+          p=Path('cloudflare/millioner-api/src/fixed.js')
+          s=p.read_text(encoding='utf-8')
+          block=r'''
+// WB_DASHBOARD_DAILY_CACHE_V2
+// Read path is D1-only. WB Analytics is contacted only by the scheduled/background refresh.
+const WB_DASHBOARD_DAILY_REFRESH_MS = 60 * 60 * 1000;
+
+async function ensureWbDashboardDailyCache(db) {
+  await db.prepare(`CREATE TABLE IF NOT EXISTS wb_dashboard_daily (
+    market TEXT NOT NULL, day TEXT NOT NULL, buyout_count INTEGER NOT NULL DEFAULT 0,
+    buyout_sum REAL NOT NULL DEFAULT 0, currency TEXT NOT NULL DEFAULT '', updated_at INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY(market,day))`).run();
+  await db.prepare(`CREATE INDEX IF NOT EXISTS idx_wb_dashboard_daily_market_day ON wb_dashboard_daily(market,day DESC)`).run();
+  await db.prepare(`CREATE TABLE IF NOT EXISTS wb_dashboard_daily_state (
+    market TEXT PRIMARY KEY,last_attempt_at INTEGER NOT NULL DEFAULT 0,last_success_at INTEGER NOT NULL DEFAULT 0,
+    next_allowed_at INTEGER NOT NULL DEFAULT 0,last_error TEXT NOT NULL DEFAULT '',updated_at INTEGER NOT NULL DEFAULT 0)`).run();
+}
+
+async function wbDashboardNmIds(env, market) {
+  const ids = new Set();
+  try {
+    await ensureWbSalesCache(env.DB);
+    const a = await env.DB.prepare(`SELECT DISTINCT nm_id AS nm FROM wb_sales_live_rows WHERE market=? AND nm_id<>'' ORDER BY sale_date DESC LIMIT 1200`).bind(market).all();
+    for (const x of a.results || []) { const v=String(x.nm||'').trim(); if (/^\d+$/.test(v) && Number(v)>0) ids.add(Number(v)); }
+  } catch (_) {}
+  try {
+    const b = await env.DB.prepare(`SELECT DISTINCT COALESCE(json_extract(raw_json,'$.order.nmId'),json_extract(raw_json,'$.order.nmID'),json_extract(raw_json,'$.nmId'),json_extract(raw_json,'$.nmID'),'') AS nm FROM marketplace_order_lines WHERE market=? ORDER BY creation_date DESC LIMIT 5000`).bind(market).all();
+    for (const x of b.results || []) { const v=String(x.nm||'').trim(); if (/^\d+$/.test(v) && Number(v)>0) ids.add(Number(v)); }
+  } catch (_) {}
+  return [...ids].slice(0,1000);
+}
+
+function wbDashboardRetryMs(response) {
+  const raw = response?.headers?.get('X-RateLimit-Retry') || response?.headers?.get('Retry-After') || '';
+  const n = Number.parseFloat(String(raw).replace(',','.'));
+  return Number.isFinite(n) && n > 0 ? Math.max(60,n) * 1000 : WB_DASHBOARD_DAILY_REFRESH_MS;
+}
+
+async function syncWbDashboardDailyCache(env, market, {force=false}={}) {
+  await ensureWbDashboardDailyCache(env.DB);
+  const token=String((market==='WB2'?env.WB_TOKEN_2:env.WB_TOKEN)||'').trim();
+  if(!token) return {ok:false,skipped:true,market,error:'WB token is not configured'};
+  const now=Date.now();
+  const state=await env.DB.prepare('SELECT * FROM wb_dashboard_daily_state WHERE market=?').bind(market).first();
+  const gate=Math.max(Number(state?.next_allowed_at||0),Number(state?.last_attempt_at||0)+WB_DASHBOARD_DAILY_REFRESH_MS);
+  if(!force && Number(state?.last_attempt_at||0) && now<gate) return {ok:!state?.last_error,skipped:true,market,lastSuccessAt:Number(state?.last_success_at||0)||null,nextSyncAt:gate,lastError:String(state?.last_error||'')};
+  await env.DB.prepare(`INSERT INTO wb_dashboard_daily_state(market,last_attempt_at,last_success_at,next_allowed_at,last_error,updated_at)
+    VALUES(?,?,?,?,?,?) ON CONFLICT(market) DO UPDATE SET last_attempt_at=excluded.last_attempt_at,updated_at=excluded.updated_at`)
+    .bind(market,now,Number(state?.last_success_at||0),Number(state?.next_allowed_at||0),String(state?.last_error||''),now).run();
+
+  try {
+    const nmIds=await wbDashboardNmIds(env,market);
+    if(!nmIds.length) throw new Error('No WB nmId values are cached yet');
+    const period=almatyPeriodDates(7);
+    const body={selectedPeriod:period,nmIds,skipDeletedNm:false,aggregationLevel:'day'};
+    const r=await fetch(WB_ANALYTICS_BASE+'/api/analytics/v3/sales-funnel/products/history',{
+      method:'POST',headers:{Authorization:token,Accept:'application/json','Content-Type':'application/json'},body:JSON.stringify(body)
+    });
+    let data=null;try{data=await r.json()}catch{}
+    if(!r.ok){
+      const e=new Error(String(data?.detail||data?.title||data?.message||('WB analytics HTTP '+r.status)));
+      e.status=r.status;e.retryMs=wbDashboardRetryMs(r);throw e;
+    }
+    const items=Array.isArray(data)?data:Array.isArray(data?.data)?data.data:[];
+    const totals=new Map();
+    for(let t=Date.parse(period.start+'T00:00:00Z');t<=Date.parse(period.end+'T00:00:00Z');t+=86400000){
+      totals.set(new Date(t).toISOString().slice(0,10),{qty:0,sum:0,currency:''});
+    }
+    for(const item of items){
+      const currency=String(item?.currency||data?.currency||'');
+      for(const h of (Array.isArray(item?.history)?item.history:[])){
+        const day=String(h?.date||'').slice(0,10);const v=totals.get(day);if(!v)continue;
+        v.qty+=Number(h?.buyoutCount||0)||0;v.sum+=Number(h?.buyoutSum||0)||0;if(!v.currency)v.currency=currency;
+      }
+    }
+    const stamp=Date.now();
+    const q=[];
+    for(const [day,v] of totals){
+      q.push(env.DB.prepare(`INSERT INTO wb_dashboard_daily(market,day,buyout_count,buyout_sum,currency,updated_at) VALUES(?,?,?,?,?,?)
+        ON CONFLICT(market,day) DO UPDATE SET buyout_count=excluded.buyout_count,buyout_sum=excluded.buyout_sum,currency=excluded.currency,updated_at=excluded.updated_at`)
+        .bind(market,day,Math.trunc(v.qty),v.sum,v.currency,stamp));
+    }
+    if(q.length) await env.DB.batch(q);
+    await env.DB.prepare(`INSERT INTO wb_dashboard_daily_state(market,last_attempt_at,last_success_at,next_allowed_at,last_error,updated_at)
+      VALUES(?,?,?,?,?,?) ON CONFLICT(market) DO UPDATE SET last_attempt_at=excluded.last_attempt_at,last_success_at=excluded.last_success_at,
+      next_allowed_at=excluded.next_allowed_at,last_error='',updated_at=excluded.updated_at`)
+      .bind(market,now,stamp,stamp+WB_DASHBOARD_DAILY_REFRESH_MS,'',stamp).run();
+    return {ok:true,market,nmIds:nmIds.length,days:totals.size,lastSuccessAt:stamp,nextSyncAt:stamp+WB_DASHBOARD_DAILY_REFRESH_MS};
+  } catch(e) {
+    const retryMs=Number(e?.retryMs||WB_DASHBOARD_DAILY_REFRESH_MS),msg=String(e?.message||e).slice(0,1200),next=Date.now()+retryMs;
+    await env.DB.prepare('UPDATE wb_dashboard_daily_state SET next_allowed_at=?,last_error=?,updated_at=? WHERE market=?').bind(next,msg,Date.now(),market).run();
+    return {ok:false,market,status:Number(e?.status||0)||null,error:msg,nextSyncAt:next};
+  }
+}
+
+async function readWbDashboardDailyCache(env,market,days){
+  await ensureWbDashboardDailyCache(env.DB);
+  const period=almatyPeriodDates(days);
+  const row=await env.DB.prepare(`SELECT COUNT(*) AS days,SUM(buyout_count) AS buyoutCount,SUM(buyout_sum) AS buyoutSum,MAX(currency) AS currency,MAX(updated_at) AS updatedAt
+    FROM wb_dashboard_daily WHERE market=? AND day>=? AND day<=?`).bind(market,period.start,period.end).first();
+  const state=await env.DB.prepare('SELECT * FROM wb_dashboard_daily_state WHERE market=?').bind(market).first();
+  const expected=Number(days)===-1?1:Math.max(1,Number(days)||1),have=Number(row?.days||0),lastSuccessAt=Number(state?.last_success_at||0)||null;
+  return {ok:true,available:have>0,market,days,period,buyoutCount:Number(row?.buyoutCount||0),buyoutSum:Number(row?.buyoutSum||0),products:[],currency:String(row?.currency||'KZT'),
+    cached:true,dailyCache:true,networkOnRead:false,daysCached:have,expectedDays:expected,missingDays:Math.max(0,expected-have),updatedAt:lastSuccessAt,
+    stale:!lastSuccessAt||Date.now()-lastSuccessAt>2*WB_DASHBOARD_DAILY_REFRESH_MS,lastError:String(state?.last_error||''),nextSyncAt:Number(state?.next_allowed_at||0)||null,
+    dashboardMetric:true,priceComplete:false,source:'WB Analytics daily cache · D1'};
+}
+
+async function wbDashboardBuyoutsEndpoint(request,env,url){
+  const market=normalizeMarket(url.searchParams.get('market'));
+  if(!['WB','WB2'].includes(market))return json({ok:false,error:'market must be WB or WB2'},400,request,env);
+  const raw=Number(url.searchParams.get('days')||1),days=raw===-1?-1:Math.max(1,Math.min(365,raw||1));
+  if(url.searchParams.get('refresh')==='1') await syncWbDashboardDailyCache(env,market,{force:true});
+  return json(await readWbDashboardDailyCache(env,market,days),200,request,env);
+}
+'''
+          pat=re.compile(r'// WB_DASHBOARD_BUYOUTS_V1[\s\S]*?(?=\nexport default \{)')
+          if len(pat.findall(s))!=1: raise SystemExit('WB dashboard block match failed')
+          s=pat.sub(block.rstrip()+"\n",s,count=1)
+          old="""        for (const market of ['WB','WB2']) {
+          try { await syncWbRealizedTracker(env, market); }
+          catch (e) { console.warn('WB realized status tracker', market, String(e?.message || e)); }
+        }"""
+          new="""        for (const market of ['WB','WB2']) {
+          try { await syncWbRealizedTracker(env, market); }
+          catch (e) { console.warn('WB realized status tracker', market, String(e?.message || e)); }
+          try { await syncWbDashboardDailyCache(env, market); }
+          catch (e) { console.warn('WB dashboard daily cache', market, String(e?.message || e)); }
+        }"""
+          if old not in s: raise SystemExit('scheduled loop marker missing')
+          s=s.replace(old,new,1)
+          p.write_text(s,encoding='utf-8')
+
+          h=Path('index.html')
+          t=h.read_text(encoding='utf-8')
+          old2="if(dashboard?.ok&&dashboard?.available){"
+          if old2 not in t: raise SystemExit('frontend dashboard availability marker missing')
+          t=t.replace(old2,"if(dashboard?.ok){",1)
+          t=t.replace("source:'WB Analytics · выкупы по дням'","source:'WB Analytics · дневной кэш D1'",1)
+          h.write_text(t,encoding='utf-8')
+
+          schema=Path('cloudflare/millioner-api/schema.sql')
+          z=schema.read_text(encoding='utf-8')
+          if 'CREATE TABLE IF NOT EXISTS wb_dashboard_daily (' not in z:
+            z += '''\n\nCREATE TABLE IF NOT EXISTS wb_dashboard_daily (\n  market TEXT NOT NULL,\n  day TEXT NOT NULL,\n  buyout_count INTEGER NOT NULL DEFAULT 0,\n  buyout_sum REAL NOT NULL DEFAULT 0,\n  currency TEXT NOT NULL DEFAULT '',\n  updated_at INTEGER NOT NULL DEFAULT 0,\n  PRIMARY KEY(market,day)\n);\nCREATE INDEX IF NOT EXISTS idx_wb_dashboard_daily_market_day ON wb_dashboard_daily(market,day DESC);\nCREATE TABLE IF NOT EXISTS wb_dashboard_daily_state (\n  market TEXT PRIMARY KEY,\n  last_attempt_at INTEGER NOT NULL DEFAULT 0,\n  last_success_at INTEGER NOT NULL DEFAULT 0,\n  next_allowed_at INTEGER NOT NULL DEFAULT 0,\n  last_error TEXT NOT NULL DEFAULT '',\n  updated_at INTEGER NOT NULL DEFAULT 0\n);\n'''
+            schema.write_text(z,encoding='utf-8')
+          PY
+          node --check cloudflare/millioner-api/src/fixed.js
+          python - <<'PY'
+          from pathlib import Path
+          import re
+          h=Path('index.html').read_text(encoding='utf-8')
+          scripts=re.findall(r'<script>(.*?)</script>',h,flags=re.S|re.I)
+          Path('/tmp/app.js').write_text('\n'.join(scripts),encoding='utf-8')
+          PY
+          node --check /tmp/app.js
+          git diff --check
+          grep -q 'WB_DASHBOARD_DAILY_CACHE_V2' cloudflare/millioner-api/src/fixed.js
+          grep -q 'networkOnRead:false' cloudflare/millioner-api/src/fixed.js
+      - name: Commit changes
+        run: |
+          git config user.name 'millioner-maintenance'
+          git config user.email 'actions@users.noreply.github.com'
+          git add cloudflare/millioner-api/src/fixed.js cloudflare/millioner-api/schema.sql index.html
+          git commit -m 'Cache WB dashboard buyouts by day in D1'
+          git push origin HEAD:main
+      - name: Deploy Worker when credentials exist
+        working-directory: cloudflare/millioner-api
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          if [ -n "$CLOUDFLARE_API_TOKEN" ] && [ -n "$CLOUDFLARE_ACCOUNT_ID" ]; then
+            npx --yes wrangler@4 deploy
+          else
+            echo 'Cloudflare secrets unavailable; Worker Git deployment will publish the commit.'
+          fi
