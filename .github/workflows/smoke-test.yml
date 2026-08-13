@@ -272,7 +272,7 @@ jobs:
             "new TextDecoder('utf-8').decode(buffer)",
             "n==='рекламируемый товар'",
             "parserVersion:'kaspi-product-csv-v2'",
-  'Расходы на рекламу','Название кампании',
+            'Расходы на рекламу','Название кампании',
             'detailHash','Array.isArray(batch.lines)'
           ]
           missing=[x for x in required if x not in html and x not in api]
