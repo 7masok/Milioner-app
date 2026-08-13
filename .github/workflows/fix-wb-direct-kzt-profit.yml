@@ -1,0 +1,31 @@
+name: Fix WB direct KZT profit
+on:
+  push:
+    paths: ['.github/workflows/fix-wb-direct-kzt-profit.yml']
+permissions:
+  contents: write
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: python tools/fix_wb_direct_kzt_profit.py
+      - run: node --check cloudflare/millioner-api/src/fixed.js
+      - name: Check browser JS
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import re
+          s=Path('index.html').read_text(); m=re.search(r'<script>([\s\S]*?)</script>',s)
+          if not m: raise SystemExit('script not found')
+          Path('/tmp/app.js').write_text(m.group(1))
+          PY
+          node --check /tmp/app.js
+      - name: Commit
+        run: |
+          git config user.name 7masok
+          git config user.email 7masok@gmail.com
+          git add cloudflare/millioner-api/src/fixed.js index.html
+          git diff --cached --quiet && exit 0
+          git commit -m 'Calculate direct WB realized profit in KZT with FIFO'
+          git push
