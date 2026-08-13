@@ -1,0 +1,35 @@
+name: Kaspi only header final
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/kaspi-only-header-final.yml'
+permissions:
+  contents: write
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Keep only Kaspi status
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          p=Path('index.html')
+          s=p.read_text(encoding='utf-8')
+          old='<div class="sync"><span id="dotKaspi" class="dot warn"></span>Kaspi &nbsp; <span id="dotWb" class="dot warn"></span>WB1 &nbsp; <span id="dotWb2" class="dot warn"></span>WB2 &nbsp; <span id="dotOzon" class="dot off"></span>Ozon · последняя синхронизация: <span id="lastSync">—</span></div>'
+          new='<div class="sync"><span id="dotKaspi" class="dot warn"></span>Kaspi · последняя синхронизация: <span id="lastSync">—</span></div>'
+          if old not in s:
+              raise SystemExit('header marker missing')
+          p.write_text(s.replace(old,new,1),encoding='utf-8')
+          PY
+      - name: Commit
+        run: |
+          git config user.name millioner-maintenance
+          git config user.email actions@users.noreply.github.com
+          git add index.html
+          git diff --cached --quiet && exit 0
+          git commit -m 'Show only Kaspi status in header'
+          git push origin HEAD:main
