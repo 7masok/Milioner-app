@@ -15,15 +15,16 @@ jobs:
           set -euo pipefail
           curl -fsS 'https://millioner-api.7masok.workers.dev/api/wb-sales-live?market=WB&days=-1' -o /tmp/live.json
           curl -fsS 'https://millioner-api.7masok.workers.dev/api/wb-realized-status?market=WB&days=-1' -o /tmp/tracked.json || true
+          curl -fsS 'https://millioner-api.7masok.workers.dev/api/wb-buyouts-live?market=WB&days=-1&refresh=1' -o /tmp/analytics.json || true
           python - <<'PY'
           import json
-          for name in ('live','tracked'):
+          for name in ('live','tracked','analytics'):
               try:
                   d=json.load(open('/tmp/'+name+'.json'))
               except Exception as e:
                   print(name, 'ERROR', e); continue
               print('\n===',name,'===')
-              for k in ['ok','available','market','days','sales','returns','netQty','buyoutCount','buyoutSum','forPay','pricedRows','sourceRows','priceComplete','lastSuccessAt','lastError','source']:
+              for k in ['ok','available','market','days','sales','returns','netQty','buyoutCount','buyoutSum','forPay','pricedRows','sourceRows','priceComplete','updatedAt','lastSuccessAt','lastError','source','refreshOk','status']:
                   if k in d: print(k,':',d.get(k))
               for x in d.get('products') or []:
                   print('PRODUCT', {k:x.get(k) for k in ['vendorCode','nmId','barcode','qty','buyoutSum','forPay','pricedRows','sourceRows','priceLinked']})
