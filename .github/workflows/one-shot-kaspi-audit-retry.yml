@@ -1,0 +1,42 @@
+name: Retry Kaspi reconciliation table
+on:
+  push:
+    branches: [main]
+    paths: ['.github/workflows/one-shot-kaspi-audit-retry.yml']
+permissions:
+  contents: write
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - run: git pull --rebase origin main
+      - name: Reuse patch and validate
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import re, textwrap
+          wf=Path('.github/workflows/one-shot-kaspi-audit-table.yml').read_text(encoding='utf-8')
+          m=re.search(r"python - <<'PY'\n(.*?)\n\s+PY\n",wf,re.S)
+          if not m: raise SystemExit('Embedded patch not found')
+          code=textwrap.dedent(m.group(1))
+          exec(compile(code,'kaspi-audit-patch','exec'),{})
+          html=Path('index.html').read_text(encoding='utf-8')
+          scripts=re.findall(r'<script>(.*?)</script>',html,flags=re.S|re.I)
+          Path('/tmp/app.js').write_text('\n'.join(scripts),encoding='utf-8')
+          PY
+          node --check /tmp/app.js
+          git diff --check
+          grep -q 'kaspi-audit-table' index.html
+          grep -q 'Комиссия Kaspi' index.html
+      - name: Commit result and clean one-shot workflows
+        run: |
+          git config user.name 'millioner-maintenance'
+          git config user.email 'actions@users.noreply.github.com'
+          git rm .github/workflows/one-shot-kaspi-audit-table.yml .github/workflows/one-shot-kaspi-audit-retry.yml
+          git add index.html
+          git commit -m 'Show Kaspi profit reconciliation by product'
+          git push origin HEAD:main
