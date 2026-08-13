@@ -6,7 +6,9 @@ jobs:
   refresh:
     runs-on: ubuntu-latest
     steps:
-      - name: WB1 cached state
-        run: curl -sS 'https://millioner-api.7masok.workers.dev/api/wb-sales-live?market=WB&days=1' | jq '{ok,available,sales,returns,buyoutCount,buyoutSum,lastSuccessAt,lastError,nextSyncAt,stale}'
-      - name: WB2 cached state
-        run: curl -sS 'https://millioner-api.7masok.workers.dev/api/wb-sales-live?market=WB2&days=1' | jq '{ok,available,sales,returns,buyoutCount,buyoutSum,lastSuccessAt,lastError,nextSyncAt,stale}'
+      - name: WB1 analytics buyouts
+        run: |
+          curl -sS 'https://millioner-api.7masok.workers.dev/api/wb-buyouts-live?market=WB&days=1&refresh=1' | jq '{ok,available,buyoutCount,buyoutSum,itemCount,updatedAt,lastError,source}'
+      - name: WB2 analytics buyouts
+        run: |
+          curl -sS 'https://millioner-api.7masok.workers.dev/api/wb-buyouts-live?market=WB2&days=1&refresh=1' | jq '{ok,available,buyoutCount,buyoutSum,itemCount,updatedAt,lastError,source}'
