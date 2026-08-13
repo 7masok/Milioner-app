@@ -19,3 +19,4 @@ jobs:
           git diff --cached --quiet && exit 0
           git commit -m 'Extend WB sold diagnostic with current candidates'
           git push
+      - run: echo rerun-current-main
