@@ -6,7 +6,13 @@ jobs:
   refresh:
     runs-on: ubuntu-latest
     steps:
-      - name: Refresh WB1
-        run: curl -fsS 'https://millioner-api.7masok.workers.dev/api/wb-sales-live?market=WB&days=1&refresh=1' | jq '{ok,market,sales,returns,buyoutCount,buyoutSum,forPay,lastSuccessAt,lastError}'
-      - name: Refresh WB2
-        run: curl -fsS 'https://millioner-api.7masok.workers.dev/api/wb-sales-live?market=WB2&days=1&refresh=1' | jq '{ok,market,sales,returns,buyoutCount,buyoutSum,forPay,lastSuccessAt,lastError}'
+      - name: Refresh WB1 raw
+        run: |
+          curl -sS -D /tmp/wb1.headers 'https://millioner-api.7masok.workers.dev/api/wb-sales-live?market=WB&days=1&refresh=1' -o /tmp/wb1.body || true
+          cat /tmp/wb1.headers
+          cat /tmp/wb1.body
+      - name: Refresh WB2 raw
+        run: |
+          curl -sS -D /tmp/wb2.headers 'https://millioner-api.7masok.workers.dev/api/wb-sales-live?market=WB2&days=1&refresh=1' -o /tmp/wb2.body || true
+          cat /tmp/wb2.headers
+          cat /tmp/wb2.body
