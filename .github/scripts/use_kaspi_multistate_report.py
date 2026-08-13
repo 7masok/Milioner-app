@@ -13,7 +13,7 @@ route="""      if (url.pathname === '/api/kaspi-report-orders' && request.method
           { days: 14, state: 'DELIVERY' },
           { days: 14, state: 'NEW' },
           { days: 14, state: 'SIGN_REQUIRED' },
-          { days: 14, state: 'ARCHIVE' }
+          { days: 3, state: 'ARCHIVE' }
         ];
         try {
           const chunks = await Promise.all(specs.map(async spec => {
@@ -29,7 +29,7 @@ route="""      if (url.pathname === '/api/kaspi-report-orders' && request.method
           const byId = new Map();
           const counts = {};
           for (const chunk of chunks) {
-            counts[chunk.spec.state || 'ALL2'] = chunk.items.length;
+            counts[(chunk.spec.state || 'ALL')+chunk.spec.days] = chunk.items.length;
             for (const item of chunk.items) {
               const a = item?.attributes || {};
               const id = String(item?.id || a?.code || '');
@@ -51,4 +51,4 @@ route="""      if (url.pathname === '/api/kaspi-report-orders' && request.method
 """
 s=s[:start]+route+s[end:]
 p.write_text(s,encoding='utf-8')
-print('switched report to multi-state Kaspi source')
+print('switched report to 3-day archived Kaspi window')
