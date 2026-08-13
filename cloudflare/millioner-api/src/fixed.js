@@ -552,6 +552,8 @@ async function wbSoldHistoryDebug(request,env,url){
     for(const x of (d?.orders||[]))statuses.set(Number(x.id),x);
   }
   const sold=orders.filter(o=>String(statuses.get(Number(o.id))?.wbStatus||'').toLowerCase()==='sold');
+  const wanted=new Set(String(url.searchParams.get('nmIds')||'').split(',').map(x=>Number(x.trim())).filter(Number.isFinite));
+  const candidates=(wanted.size?sold.filter(o=>wanted.has(Number(o?.nmId))):sold).slice().sort((a,b)=>Date.parse(String(b?.createdAt||''))-Date.parse(String(a?.createdAt||''))).slice(0,100);
   const sample=sold.slice(0,100),historyIds=sample.map(o=>Number(o.id));
   let historyStatus=0,historyData=null;
   if(historyIds.length){
@@ -559,9 +561,9 @@ async function wbSoldHistoryDebug(request,env,url){
     historyStatus=hr.status;try{historyData=await hr.json()}catch{historyData=null}
   }
   const byId=new Map((Array.isArray(historyData?.orders)?historyData.orders:[]).map(x=>[Number(x.orderID??x.orderId),x]));
+  const shape=o=>({id:o.id,rid:o.rid,article:o.article,nmId:o.nmId,createdAt:o.createdAt,price:(Number(o.convertedFinalPrice??o.finalPrice??o.convertedPrice??o.price??0)||0)/100,status:statuses.get(Number(o.id)),history:byId.get(Number(o.id))||null});
   return json({ok:true,market,orders:orders.length,sold:sold.length,historyStatus,historyCount:Array.isArray(historyData?.orders)?historyData.orders.length:0,
-    sample:sample.slice(0,20).map(o=>({id:o.id,rid:o.rid,article:o.article,nmId:o.nmId,createdAt:o.createdAt,price:(Number(o.convertedFinalPrice??o.finalPrice??0)||0)/100,status:statuses.get(Number(o.id)),history:byId.get(Number(o.id))||null})),
-    historyRaw:historyStatus===200?undefined:historyData},200,request,env);
+    candidates:candidates.map(shape),sample:sample.slice(0,20).map(shape),historyRaw:historyStatus===200?undefined:historyData},200,request,env);
 }
 
 export default {
