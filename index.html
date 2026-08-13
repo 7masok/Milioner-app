@@ -322,6 +322,15 @@ const wbLiveOverviewCache={};
 async function ensureWbLiveOverview(market,days){
   const key=market+':'+days,old=wbLiveOverviewCache[key];
   if(old&&Date.now()-Number(old.at||0)<60000)return old.data;
+  if([-1,1,7].includes(Number(days))){
+    try{
+      const dashboard=await apiJson(MILLIONER_API+'/api/wb-dashboard-buyouts?market='+encodeURIComponent(market)+'&days='+encodeURIComponent(days));
+      if(dashboard?.ok&&dashboard?.available){
+        const data={...dashboard,analyticsOnly:true,priceComplete:false,source:'WB Analytics · выкупы по дням'};
+        wbLiveOverviewCache[key]={at:Date.now(),data};return data;
+      }
+    }catch(_){}
+  }
   if(Number(days)===1){
     try{
       const tracked=await apiJson(MILLIONER_API+'/api/wb-realized-status?market='+encodeURIComponent(market)+'&days=1');
