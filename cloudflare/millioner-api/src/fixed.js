@@ -252,7 +252,11 @@ async function wbAnalyticsBuyouts(request,env,url){
 // WB_SALES_CACHE_V1
 const WB_STATS_BASE = 'https://statistics-api.wildberries.ru';
 const WB_SALES_REFRESH_MS = 31 * 60 * 1000;
-const WB_SALES_RETRY_MS = 70 * 1000;
+const WB_SALES_RETRY_MS = 31 * 60 * 1000;
+function wbSalesRetryMs(state) {
+  const m = String(state?.last_error || '').match(/retry\s+(\d+)/i);
+  return m ? Math.max(60, Number(m[1]) || 60) * 1000 : WB_SALES_RETRY_MS;
+}
 
 async function ensureWbSalesCache(db) {
   await db.prepare(`CREATE TABLE IF NOT EXISTS wb_sales_live_rows (
@@ -291,7 +295,7 @@ async function syncWbSalesCache(env, market, { force = false } = {}) {
   const state = await env.DB.prepare('SELECT * FROM wb_sales_live_state WHERE market=?').bind(market).first();
   const lastAttempt = Number(state?.last_attempt_at || 0);
   const lastSuccess = Number(state?.last_success_at || 0);
-  const minGap = state?.last_error ? WB_SALES_RETRY_MS : WB_SALES_REFRESH_MS;
+  const minGap = state?.last_error ? wbSalesRetryMs(state) : WB_SALES_REFRESH_MS;
   if (!force && lastAttempt && now - lastAttempt < minGap) {
     return { ok: !state?.last_error, skipped: true, lastSuccessAt: lastSuccess, error: state?.last_error || '' };
   }
@@ -308,9 +312,12 @@ async function syncWbSalesCache(env, market, { force = false } = {}) {
     let data = null;
     try { data = await r.json(); } catch {}
     if (!r.ok) {
-      const err = String(data?.detail || data?.message || ('WB statistics HTTP ' + r.status));
+      const baseErr = String(data?.detail || data?.message || ('WB statistics HTTP ' + r.status));
+      const retryRaw = r.headers.get('X-RateLimit-Retry') || r.headers.get('Retry-After') || '';
+      const retrySec = Math.max(0, Number(String(retryRaw).match(/\d+/)?.[0] || 0));
+      const err = baseErr + (retrySec ? ' · retry ' + retrySec : '');
       await env.DB.prepare('UPDATE wb_sales_live_state SET last_error=?,updated_at=? WHERE market=?').bind(err, Date.now(), market).run();
-      return { ok: false, status: r.status, error: err };
+      return { ok: false, status: r.status, error: err, retryAfter: retrySec || null };
     }
     const rows = Array.isArray(data) ? data : [];
     let maxChange = lastChange;
@@ -361,16 +368,29 @@ async function readWbSalesCache(env, market, days) {
     .bind(market, since, until).all();
   const totals = await env.DB.prepare(`SELECT COUNT(*) totalRows,
       SUM(CASE WHEN is_return=0 THEN 1 ELSE 0 END) sales,
-      SUM(CASE WHEN is_return=1 THEN 1 ELSE 0 END) returns
+      SUM(CASE WHEN is_return=1 THEN 1 ELSE 0 END) returns,
+      SUM(CASE WHEN is_return=1 THEN -finished_price ELSE finished_price END) finishedPrice,
+      SUM(CASE WHEN is_return=1 THEN -price_with_disc ELSE price_with_disc END) priceWithDisc,
+      SUM(CASE WHEN is_return=1 THEN -for_pay ELSE for_pay END) forPay
     FROM wb_sales_live_rows WHERE market=? AND sale_date>=? AND sale_date<?`).bind(market,since,until).first();
   const state = await env.DB.prepare('SELECT * FROM wb_sales_live_state WHERE market=?').bind(market).first();
-  const sales = Number(totals?.sales || 0), returns = Number(totals?.returns || 0);
+  const sales = Number(totals?.sales || 0), returns = Number(totals?.returns || 0), netQty = sales - returns;
+  const lastSuccessAt = Number(state?.last_success_at || 0) || null;
+  const products = (rows.results || []).map(x => {
+    const finishedPrice = Number(x.finishedPrice || 0), priceWithDisc = Number(x.priceWithDisc || 0), forPay = Number(x.forPay || 0);
+    return {...x, qty:Number(x.qty||0), finishedPrice, priceWithDisc, forPay, buyoutSum:finishedPrice};
+  }).filter(x=>x.qty!==0);
   return {
-    ok: true, market, days, since, until, totalRows: Number(totals?.totalRows || 0), sales, returns,
-    netQty: sales - returns,
-    products: (rows.results || []).map(x => ({...x, qty:Number(x.qty||0),finishedPrice:Number(x.finishedPrice||0),priceWithDisc:Number(x.priceWithDisc||0),forPay:Number(x.forPay||0)})).filter(x=>x.qty!==0),
-    cached: true,lastSuccessAt:Number(state?.last_success_at||0)||null,lastError:String(state?.last_error||''),
-    stale: !state?.last_success_at || Date.now()-Number(state.last_success_at)>WB_SALES_REFRESH_MS*2
+    ok: true, available: !!lastSuccessAt, market, days, since, until,
+    totalRows: Number(totals?.totalRows || 0), sales, returns, netQty,
+    buyoutCount: netQty,
+    buyoutSum: Number(totals?.finishedPrice || 0),
+    forPay: Number(totals?.forPay || 0),
+    products,
+    cached: true,lastSuccessAt,lastError:String(state?.last_error||''),
+    nextSyncAt: Number(state?.last_attempt_at || 0) + (state?.last_error ? wbSalesRetryMs(state) : WB_SALES_REFRESH_MS),
+    stale: !lastSuccessAt || Date.now()-lastSuccessAt>WB_SALES_REFRESH_MS*2,
+    source: 'WB Statistics · supplier/sales'
   };
 }
 
@@ -380,8 +400,7 @@ async function wbSalesLiveCached(request, env, ctx, url) {
   const raw = Number(url.searchParams.get('days') || 1);
   const days = raw === -1 ? -1 : Math.max(1, Math.min(90, raw || 1));
   await ensureWbSalesCache(env.DB);
-  const count = await env.DB.prepare('SELECT COUNT(*) n FROM wb_sales_live_rows WHERE market=?').bind(market).first();
-  const state = await env.DB.prepare('SELECT * FROM wb_sales_live_state WHERE market=?').bind(market).first();
+  if (url.searchParams.get('refresh') === '1') await syncWbSalesCache(env, market, { force: false });
   return json(await readWbSalesCache(env, market, days),200,request,env);
 }
 
@@ -398,32 +417,18 @@ export default {
   },
 
   async scheduled(controller, env, ctx) {
-    const refreshDue=async()=>{
-      await ensureWbBuyoutCache(env.DB);
-      let any=false;
-      for(const market of ['WB','WB2']){
-        const rows=await env.DB.prepare(`SELECT period_key,last_attempt_at,last_error,updated_at FROM wb_buyout_cache WHERE market=?`).bind(market).all();
-        const all=rows.results||[],blockedUntil=wbBuyoutMarketBlockedUntil(all);
-        if(Date.now()<blockedUntil)continue;
-        const map=new Map(all.map(x=>[String(x.period_key),x]));
-        const periods=[1,-1,7,30];
-        // First fill periods that have never produced a successful payload. Only after
-        // every period has data do we refresh the stalest successful cache. This keeps
-        // today's cache from repeatedly taking the first available WB Analytics slot.
-        const missing=periods.filter(days=>!Number(map.get(String(days))?.updated_at||0));
-        const candidates=missing.length?missing:[...periods].sort((a,b)=>Number(map.get(String(a))?.updated_at||0)-Number(map.get(String(b))?.updated_at||0));
-        for(const days of candidates){
-          const row=map.get(String(days));
-          if(wbBuyoutCacheDue(row)){
-            any=true;
-            await refreshWbBuyoutCache(env,market,days,{force:false});
-            break;
-          }
+    const minute = new Date(Number(controller?.scheduledTime || Date.now())).getUTCMinutes();
+    // supplier/sales is our operational source of realized WB sales. It is updated
+    // every ~30 minutes and WB allows only one request per seller per minute.
+    // Run it only at :05 and :35, store everything in D1, and never call it from UI.
+    if ((minute === 5 || minute === 35) && ctx?.waitUntil) {
+      ctx.waitUntil((async () => {
+        for (const market of ['WB','WB2']) {
+          try { await syncWbSalesCache(env, market, { force: false }); }
+          catch (e) { console.warn('WB realized sales sync', market, String(e?.message || e)); }
         }
-      }
-      return any;
-    };
-    if(ctx?.waitUntil)ctx.waitUntil(refreshDue());
+      })());
+    }
     if (typeof base.scheduled === 'function') return base.scheduled(controller, env, ctx);
   }
 };
