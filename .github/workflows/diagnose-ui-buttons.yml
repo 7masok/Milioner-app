@@ -12,6 +12,7 @@ jobs:
     steps:
       - name: Browser diagnostics
         run: |
+          echo "rerun after saveLocalOnly fix"
           npm init -y >/dev/null 2>&1
           npm install playwright-core@latest >/dev/null 2>&1
           cat > diag.mjs <<'JS'
@@ -45,10 +46,11 @@ jobs:
               console.log(name+'_RESULT',await page.evaluate(expect));
             }catch(e){console.log(name+'_CLICK_ERROR',e.message)}
           }
-          await clickCheck('YESTERDAY','[data-order-period="yesterday"]',()=>({mode:window.orderPeriodMode,active:document.querySelector('[data-order-period="yesterday"]')?.classList.contains('active')}));
+          await clickCheck('YESTERDAY','[data-order-period="yesterday"]',()=>({active:document.querySelector('[data-order-period="yesterday"]')?.classList.contains('active')}));
           await clickCheck('PRODUCTS','nav button[data-view="products"]',()=>({active:document.querySelector('.view.active')?.id,nav:document.querySelector('nav button.active')?.dataset.view}));
           await clickCheck('REPORTS','nav button[data-view="reports"]',()=>({active:document.querySelector('.view.active')?.id,nav:document.querySelector('nav button.active')?.dataset.view}));
           console.log('ERRORS_AFTER',JSON.stringify(errors.slice(-30)));
+          if(errors.some(x=>x.includes('saveLocalOnly is not defined'))) throw new Error('saveLocalOnly still broken');
           await browser.close();
           JS
           node diag.mjs
