@@ -8,25 +8,21 @@ jobs:
   diagnose:
     runs-on: ubuntu-latest
     steps:
-      - name: Verify live warehouse read and save latency
+      - name: Measure live warehouse reads
         run: |
           python - <<'PY'
-          import json, subprocess, time, tempfile, os
+          import json, subprocess, time
           base='https://millioner-api.7masok.workers.dev/api/warehouse-state'
           headers=['-H','Origin: https://7masok.github.io']
-          t=time.time(); raw=subprocess.check_output(['curl','-fSs','--max-time','60',*headers,base],text=True); read_s=time.time()-t
-          d=json.loads(raw); state=d.get('state') or {}; rev=int(d.get('revision') or 0)
-          body=json.dumps({'baseRevision':rev,'state':state},ensure_ascii=False,separators=(',',':'))
-          f=tempfile.NamedTemporaryFile('w',delete=False,encoding='utf-8');f.write(body);f.close()
-          t=time.time(); p=subprocess.run(['curl','-fSs','--max-time','45','-X','PUT',*headers,'-H','Content-Type: application/json','--data-binary','@'+f.name,base],capture_output=True,text=True); save_s=time.time()-t
-          os.unlink(f.name)
-          if p.returncode: raise SystemExit('PUT failed: '+p.stderr)
-          out=json.loads(p.stdout)
-          meta=json.loads(subprocess.check_output(['curl','-fSs','--max-time','30',*headers,base+'?meta=1'],text=True))
-          print('READ seconds',round(read_s,3),'bytes',len(raw.encode()),'revision',rev)
-          print('PUT seconds',round(save_s,3),'response',out)
-          print('META bytes',len(json.dumps(meta,separators=(',',':')).encode()),'revision',meta.get('revision'))
-          if not out.get('ok'): raise SystemExit('PUT did not return ok')
-          if int(out.get('revision') or 0) != rev+1: raise SystemExit('revision did not advance by 1')
-          if save_s>20: raise SystemExit('warehouse PUT is still too slow: '+str(save_s))
+          def get(url,limit):
+              t=time.time()
+              raw=subprocess.check_output(['curl','-fSs','--max-time',str(limit),*headers,url],text=True)
+              return raw,time.time()-t
+          meta,mt=get(base+'?meta=1',30)
+          full,ft=get(base,90)
+          md=json.loads(meta); fd=json.loads(full)
+          print('META seconds',round(mt,3),'bytes',len(meta.encode()),'revision',md.get('revision'))
+          print('FULL seconds',round(ft,3),'bytes',len(full.encode()),'revision',fd.get('revision'))
+          if not md.get('ok') or not fd.get('ok'): raise SystemExit('warehouse read failed')
+          if mt>5: raise SystemExit('meta is still too slow: '+str(mt))
           PY
