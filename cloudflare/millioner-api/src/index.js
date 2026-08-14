@@ -198,8 +198,10 @@ export default {
 
       if (url.pathname === '/api/warehouse-state' && request.method === 'GET') {
         if (!isTrustedBrowserOrigin(origin, env)) return json({ ok: false, error: 'Forbidden origin' }, 403, cors);
-        const row = await env.DB.prepare('SELECT payload,revision,updated_at FROM warehouse_state WHERE id=1').first();
-        if (!row) return json({ ok: true, exists: false, revision: 0, updatedAt: null, state: null }, 200, cors);
+        const metaOnly = url.searchParams.get('meta') === '1';
+        const row = await env.DB.prepare(metaOnly ? 'SELECT revision,updated_at FROM warehouse_state WHERE id=1' : 'SELECT payload,revision,updated_at FROM warehouse_state WHERE id=1').first();
+        if (!row) return json({ ok: true, exists: false, revision: 0, updatedAt: null, state: metaOnly ? undefined : null }, 200, cors);
+        if (metaOnly) return json({ ok: true, exists: true, revision: Number(row.revision || 0), updatedAt: Number(row.updated_at || 0) }, 200, cors);
         let warehouse = null;
         try { warehouse = JSON.parse(row.payload || '{}'); } catch { warehouse = {}; }
         return json({ ok: true, exists: true, revision: Number(row.revision || 0), updatedAt: Number(row.updated_at || 0), state: warehouse }, 200, cors);
