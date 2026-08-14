@@ -3,6 +3,7 @@
 const CLOUD_V3_KEY=KEY+'_cloud_sync_v3_migrated';
 const CLOUD_FIELDS=['products','movements','sales','purchases','kaspiAdExpenses'];
 const sleep=ms=>new Promise(r=>setTimeout(r,ms));
+let warehouseCloudNeedsFull=false;
 
 function coreSnapshot(src){
   src=src&&typeof src==='object'?src:{};
@@ -51,7 +52,7 @@ applyWarehouseSnapshot=function(remote){
 async function fetchCloudJson(meta=false,retries=3){
   let last=null;
   for(let i=0;i<retries;i++){
-    const ctrl=new AbortController(),timer=setTimeout(()=>ctrl.abort(),meta?12000:35000);
+    const ctrl=new AbortController(),timer=setTimeout(()=>ctrl.abort(),meta?30000:90000);
     try{
       const r=await fetch(MILLIONER_API+'/api/warehouse-state'+(meta?'?meta=1':''),{cache:'no-store',signal:ctrl.signal});
       let data={};try{data=await r.json()}catch{}
@@ -75,7 +76,7 @@ save=function(){
 };
 
 pushWarehouseToD1=async function(){
-  if(!warehouseRemoteReady||warehouseSaveInFlight||!warehouseLocalDirty)return false;
+  if(!warehouseRemoteReady||warehouseCloudNeedsFull||warehouseSaveInFlight||!warehouseLocalDirty)return false;
   warehouseSaveInFlight=true;cloudStatus('сохраняю…','warn');
   try{
     for(let attempt=0;attempt<4;attempt++){
@@ -107,9 +108,9 @@ pullWarehouseFromD1=async function({force=false}={}){
   try{
     const meta=await fetchCloudJson(true,2);
     if(!meta.exists){warehouseRemoteRevision=0;warehouseRemoteUpdatedAt=0;warehouseRemoteReady=true;warehouseLastCloudSnapshot=coreSnapshot({});warehouseLastSyncedText=coreText({});markWarehouseDirty();scheduleWarehouseSave(0);return true;}
-    const remoteRevision=Number(meta.revision||0),remoteUpdated=Number(meta.updatedAt||0),needFull=!warehouseRemoteReady||remoteRevision>warehouseRemoteRevision;
+    const remoteRevision=Number(meta.revision||0),remoteUpdated=Number(meta.updatedAt||0),needFull=warehouseCloudNeedsFull||!warehouseRemoteReady||remoteRevision>warehouseRemoteRevision;
     if(needFull){
-      const data=await fetchCloudJson(false,3),remoteSnap=coreSnapshot(data.state),rev=Number(data.revision||remoteRevision),upd=Number(data.updatedAt||remoteUpdated);
+      const data=await fetchCloudJson(false,3),remoteSnap=coreSnapshot(data.state),rev=Number(data.revision||remoteRevision),upd=Number(data.updatedAt||remoteUpdated);warehouseCloudNeedsFull=false;
       if(warehouseLocalDirty){const merged=mergeCore(warehouseLastCloudSnapshot,remoteSnap,coreSnapshot(state),upd,Number(state.settings.localWarehouseUpdatedAt||0));warehouseRemoteRevision=rev;warehouseRemoteUpdatedAt=upd;warehouseRemoteReady=true;warehouseLastCloudSnapshot=remoteSnap;warehouseLastSyncedText=coreText(remoteSnap);applyWarehouseSnapshot(merged);saveLocalOnly();markWarehouseDirty();scheduleWarehouseSave(0);render();}
       else{warehouseRemoteRevision=rev;warehouseRemoteUpdatedAt=upd;warehouseRemoteReady=true;warehouseLastCloudSnapshot=remoteSnap;warehouseLastSyncedText=coreText(remoteSnap);applyWarehouseSnapshot(remoteSnap);clearWarehouseDirty();state.settings.d1WarehouseRevision=rev;state.settings.d1WarehouseUpdatedAt=upd;saveLocalOnly();render();cloudStatus('синхронизировано','ok');}
     }else if(warehouseLocalDirty){scheduleWarehouseSave(0);cloudStatus('подключено · сохраняю изменения','warn');}
@@ -121,19 +122,26 @@ pullWarehouseFromD1=async function({force=false}={}){
 
 bootstrapWarehouseD1=async function(){
   const rawLocal=localStorage.getItem(KEY);if(rawLocal&&!localStorage.getItem(KEY+'_pre_d1'))localStorage.setItem(KEY+'_pre_d1',rawLocal);if(rawLocal&&!localStorage.getItem(KEY+'_pre_cloud_v3'))localStorage.setItem(KEY+'_pre_cloud_v3',rawLocal);
-  const localSnap=coreSnapshot(state),localUpdated=Number(state.settings.localWarehouseUpdatedAt||0);cloudStatus('подключение…','warn');
+  const localSnap=coreSnapshot(state);cloudStatus('подключение…','warn');
   try{
-    const data=await fetchCloudJson(false,3);warehouseRemoteRevision=Number(data.revision||0);warehouseRemoteUpdatedAt=Number(data.updatedAt||0);warehouseRemoteReady=true;
-    if(!data.exists){warehouseLastCloudSnapshot=coreSnapshot({});warehouseLastSyncedText=coreText({});markWarehouseDirty();localStorage.setItem(CLOUD_V3_KEY,'1');cloudStatus('подключено · сохраняю данные','warn');scheduleWarehouseSave(0);return {mode:'uploaded-local'};}
-    const remoteSnap=coreSnapshot(data.state),remoteText=coreText(remoteSnap);warehouseLastCloudSnapshot=remoteSnap;warehouseLastSyncedText=remoteText;
-    const firstV3=localStorage.getItem(CLOUD_V3_KEY)!=='1';let chosen=remoteSnap;
-    if(warehouseLocalDirty)chosen=mergeDirtyPreferLocal(remoteSnap,localSnap);
-    else if(firstV3&&coreHasData(localSnap))chosen=mergeUniquePreferRemote(remoteSnap,localSnap);
+    const meta=await fetchCloudJson(true,3);
+    warehouseRemoteRevision=Number(meta.revision||0);warehouseRemoteUpdatedAt=Number(meta.updatedAt||0);warehouseRemoteReady=true;
+    if(!meta.exists){warehouseCloudNeedsFull=false;warehouseLastCloudSnapshot=coreSnapshot({});warehouseLastSyncedText=coreText({});markWarehouseDirty();localStorage.setItem(CLOUD_V3_KEY,'1');cloudStatus('подключено · сохраняю данные','warn');scheduleWarehouseSave(0);return {mode:'uploaded-local'};}
+    const knownRevision=Number(state.settings.d1WarehouseRevision||0),firstV3=localStorage.getItem(CLOUD_V3_KEY)!=='1';
+    if(!warehouseLocalDirty&&knownRevision===warehouseRemoteRevision&&coreHasData(localSnap)){
+      warehouseCloudNeedsFull=false;warehouseLastCloudSnapshot=localSnap;warehouseLastSyncedText=coreText(localSnap);localStorage.setItem(CLOUD_V3_KEY,'1');clearWarehouseDirty();state.settings.d1WarehouseRevision=warehouseRemoteRevision;state.settings.d1WarehouseUpdatedAt=warehouseRemoteUpdatedAt;state.settings.d1MigratedAt=state.settings.d1MigratedAt||Date.now();saveLocalOnly();cloudStatus('синхронизировано','ok');render();return {mode:'meta-current'};
+    }
+    cloudStatus('подключено · загружаю данные…','warn');
+    let data;
+    try{data=await fetchCloudJson(false,3)}catch(e){warehouseCloudNeedsFull=true;console.warn('D1 meta online, full snapshot pending',e);cloudStatus('облако доступно · повтор загрузки','warn');return {mode:'meta-only',error:String(e?.message||e)}}
+    warehouseCloudNeedsFull=false;
+    const remoteSnap=coreSnapshot(data.state),remoteText=coreText(remoteSnap);warehouseRemoteRevision=Number(data.revision||warehouseRemoteRevision);warehouseRemoteUpdatedAt=Number(data.updatedAt||warehouseRemoteUpdatedAt);warehouseLastCloudSnapshot=remoteSnap;warehouseLastSyncedText=remoteText;
+    let chosen=remoteSnap;if(warehouseLocalDirty)chosen=mergeDirtyPreferLocal(remoteSnap,localSnap);else if(firstV3&&coreHasData(localSnap))chosen=mergeUniquePreferRemote(remoteSnap,localSnap);
     applyWarehouseSnapshot(chosen);saveLocalOnly();localStorage.setItem(CLOUD_V3_KEY,'1');
     if(coreText(chosen)!==remoteText){markWarehouseDirty();cloudStatus('подключено · сохраняю изменения','warn');scheduleWarehouseSave(0)}else{clearWarehouseDirty();cloudStatus('синхронизировано','ok')}
-    state.settings.d1WarehouseRevision=warehouseRemoteRevision;state.settings.d1WarehouseUpdatedAt=warehouseRemoteUpdatedAt;state.settings.d1MigratedAt=state.settings.d1MigratedAt||Date.now();saveLocalOnly();render();return {mode:'loaded-d1-v3'};
-  }catch(e){warehouseRemoteReady=false;console.warn('D1 warehouse bootstrap failed; keeping local data',e);cloudStatus('нет связи с облаком · локальная копия','warn');return {mode:'local-fallback',error:String(e.message||e)}}
-};
+    state.settings.d1WarehouseRevision=warehouseRemoteRevision;state.settings.d1WarehouseUpdatedAt=warehouseRemoteUpdatedAt;state.settings.d1MigratedAt=state.settings.d1MigratedAt||Date.now();saveLocalOnly();render();return {mode:'loaded-d1-v4'};
+  }catch(e){warehouseRemoteReady=false;warehouseCloudNeedsFull=true;const msg=e?.name==='AbortError'?'таймаут Cloudflare':String(e?.message||e);console.warn('D1 warehouse bootstrap failed',e);cloudStatus('ошибка облака · '+msg.slice(0,70),'warn');return {mode:'local-fallback',error:msg}}
+}
 
 startWarehouseCloudWatcher=function(){
   if(warehouseWatchStarted)return;warehouseWatchStarted=true;
