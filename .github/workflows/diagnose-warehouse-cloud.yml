@@ -8,16 +8,16 @@ jobs:
   diagnose:
     runs-on: ubuntu-latest
     steps:
-      - name: Check browser CORS and endpoint
+      - name: Measure warehouse payload
         run: |
-          set -x
-          URL='https://millioner-api.7masok.workers.dev/api/warehouse-state'
-          echo '=== OPTIONS ==='
-          curl -i -sS --max-time 30 -X OPTIONS \
-            -H 'Origin: https://7masok.github.io' \
-            -H 'Access-Control-Request-Method: GET' \
-            -H 'Access-Control-Request-Headers: content-type' "$URL"
-          echo '=== GET ==='
-          curl -i -sS --max-time 45 \
-            -H 'Origin: https://7masok.github.io' \
-            -H 'Accept: application/json' "$URL" | head -c 3000
+          python - <<'PY'
+          import json, subprocess
+          url='https://millioner-api.7masok.workers.dev/api/warehouse-state'
+          raw=subprocess.check_output(['curl','-fSs','--max-time','60','-H','Origin: https://7masok.github.io',url],text=True)
+          d=json.loads(raw); state=d.get('state') or {}
+          print('total bytes',len(raw.encode()))
+          for k,v in state.items():
+              b=len(json.dumps(v,ensure_ascii=False,separators=(',',':')).encode())
+              n=len(v) if isinstance(v,(list,dict)) else 1
+              print(k,'bytes',b,'items',n)
+          PY
