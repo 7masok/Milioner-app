@@ -22,6 +22,14 @@ function coreSnapshot(src){
 function coreText(x){return JSON.stringify(coreSnapshot(x));}
 function coreHasData(x){x=coreSnapshot(x);return !!(x.products.length+x.movements.length+x.sales.length+x.purchases.length+x.kaspiAdExpenses.length)}
 function mergeCore(base,remote,local,remoteUpdated=0,localUpdated=0){return coreSnapshot(mergeWarehouseSnapshots(coreSnapshot(base),coreSnapshot(remote),coreSnapshot(local),remoteUpdated,localUpdated))}
+function mergeDirtyPreferLocal(remote,local){
+  remote=coreSnapshot(remote);local=coreSnapshot(local);const out=coreSnapshot(remote);
+  for(const field of CLOUD_FIELDS){const map=new Map((out[field]||[]).map(x=>[warehouseKey(field,x),x]).filter(x=>x[0]));for(const x of(local[field]||[])){const k=warehouseKey(field,x);if(k)map.set(k,x)}out[field]=[...map.values()]}
+  out.settings={...(remote.settings||{}),...(local.settings||{})};
+  out.marketplaceLiveSince={...(remote.marketplaceLiveSince||{}),...(local.marketplaceLiveSince||{})};
+  const times=[Number(remote.kaspiBaselineAt||0),Number(local.kaspiBaselineAt||0)].filter(Boolean);out.kaspiBaselineAt=times.length?Math.min(...times):null;
+  return out;
+}
 function mergeUniquePreferRemote(remote,local){
   remote=coreSnapshot(remote);local=coreSnapshot(local);const out=coreSnapshot(remote);
   for(const field of CLOUD_FIELDS){const seen=new Set((out[field]||[]).map(x=>warehouseKey(field,x)).filter(Boolean));for(const x of(local[field]||[])){const k=warehouseKey(field,x);if(k&&!seen.has(k)){out[field].push(x);seen.add(k)}}}
@@ -119,7 +127,7 @@ bootstrapWarehouseD1=async function(){
     if(!data.exists){warehouseLastCloudSnapshot=coreSnapshot({});warehouseLastSyncedText=coreText({});markWarehouseDirty();localStorage.setItem(CLOUD_V3_KEY,'1');cloudStatus('подключено · сохраняю данные','warn');scheduleWarehouseSave(0);return {mode:'uploaded-local'};}
     const remoteSnap=coreSnapshot(data.state),remoteText=coreText(remoteSnap);warehouseLastCloudSnapshot=remoteSnap;warehouseLastSyncedText=remoteText;
     const firstV3=localStorage.getItem(CLOUD_V3_KEY)!=='1';let chosen=remoteSnap;
-    if(warehouseLocalDirty)chosen=mergeCore(null,remoteSnap,localSnap,warehouseRemoteUpdatedAt,localUpdated);
+    if(warehouseLocalDirty)chosen=mergeDirtyPreferLocal(remoteSnap,localSnap);
     else if(firstV3&&coreHasData(localSnap))chosen=mergeUniquePreferRemote(remoteSnap,localSnap);
     applyWarehouseSnapshot(chosen);saveLocalOnly();localStorage.setItem(CLOUD_V3_KEY,'1');
     if(coreText(chosen)!==remoteText){markWarehouseDirty();cloudStatus('подключено · сохраняю изменения','warn');scheduleWarehouseSave(0)}else{clearWarehouseDirty();cloudStatus('синхронизировано','ok')}
