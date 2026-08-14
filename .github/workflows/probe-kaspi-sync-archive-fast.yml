@@ -1,0 +1,28 @@
+name: Probe Kaspi archive sync batches fast
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/probe-kaspi-sync-archive-fast.yml'
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Probe first archive batches
+        run: |
+          python - <<'PY'
+          import subprocess,json,urllib.parse,time
+          base='https://fragrant-shadow-72ed.7masok.workers.dev/kaspi/sync'
+          for params in [
+            {'days':'7','state':'ARCHIVE','status':'COMPLETED','batch':'0','size':'3'},
+            {'days':'7','state':'ARCHIVE','status':'COMPLETED','batch':'1','size':'3'},
+            {'days':'7','state':'ARCHIVE','batch':'0','size':'6'},
+          ]:
+            url=base+'?'+urllib.parse.urlencode(params)
+            t=time.time(); p=subprocess.run(['curl','-fSs','--max-time','35',url],capture_output=True,text=True)
+            print('\nPARAMS',params,'rc',p.returncode,'sec',round(time.time()-t,2))
+            if p.returncode: print(p.stderr[-500:]); continue
+            d=json.loads(p.stdout); rows=d.get('orders') or []
+            print('ok',d.get('ok'),'orders',len(rows),'hasMore',d.get('hasMore'),'nextBatch',d.get('nextBatch'),'keys',list(d.keys()))
+            print('rows',[(x.get('code'),x.get('status'),x.get('creationDate'),x.get('completionDate'),x.get('totalPrice'),len(x.get('lines') or [])) for x in rows[:10]])
+          PY
