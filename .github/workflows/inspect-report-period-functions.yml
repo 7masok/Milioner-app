@@ -1,0 +1,20 @@
+name: Inspect report period functions
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/inspect-report-period-functions.yml'
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Show functions
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          s=Path('index.html').read_text(encoding='utf-8')
+          for needle in ['function setReportPeriod','setReportPeriod=','function setMarketplaceReportPeriod','setMarketplaceReportPeriod=']:
+            p=s.find(needle)
+            if p>=0: print('\n---',needle,'---\n',s[max(0,p-500):p+2200])
+          PY
