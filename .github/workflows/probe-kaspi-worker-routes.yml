@@ -1,0 +1,21 @@
+name: Probe Kaspi worker detail routes
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/probe-kaspi-worker-routes.yml'
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Probe routes
+        run: |
+          python - <<'PY'
+          import subprocess
+          base='https://fragrant-shadow-72ed.7masok.workers.dev'
+          oid='MTAxNzg4OTk3Nw'; code='1017889977'
+          paths=['/','/health','/routes','/kaspi/order?id='+oid,'/kaspi/order?id='+code,'/kaspi/orders/'+oid,'/kaspi/orders/'+code,'/kaspi/order/'+oid,'/kaspi/order/'+code,'/kaspi/details?id='+oid,'/kaspi/orders?id='+oid]
+          for path in paths:
+            p=subprocess.run(['curl','-sS','--max-time','20','-w','\nHTTP:%{http_code}',base+path],capture_output=True,text=True)
+            print('\nPATH',path,'rc',p.returncode,'BODY',p.stdout[:1800].replace('\n',' '))
+          PY
