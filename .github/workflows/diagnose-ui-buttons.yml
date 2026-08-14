@@ -14,7 +14,7 @@ jobs:
         run: |
           npm init -y >/dev/null 2>&1
           npm install playwright-core@latest >/dev/null 2>&1
-          cat > /tmp/diag.mjs <<'JS'
+          cat > diag.mjs <<'JS'
           import { chromium } from 'playwright-core';
           import { execSync } from 'node:child_process';
           let exe='';
@@ -51,4 +51,4 @@ jobs:
           console.log('ERRORS_AFTER',JSON.stringify(errors.slice(-30)));
           await browser.close();
           JS
-          node /tmp/diag.mjs
+          node diag.mjs
