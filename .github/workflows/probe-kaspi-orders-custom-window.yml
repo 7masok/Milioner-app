@@ -1,0 +1,35 @@
+name: Probe Kaspi custom order window params
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/probe-kaspi-orders-custom-window.yml'
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Probe window params
+        run: |
+          python - <<'PY'
+          import subprocess,json,urllib.parse,datetime
+          base='https://fragrant-shadow-72ed.7masok.workers.dev/kaspi/orders'
+          tz=datetime.timezone(datetime.timedelta(hours=5))
+          ge=int(datetime.datetime(2026,7,15,tzinfo=tz).timestamp()*1000); le=int(datetime.datetime(2026,7,31,23,59,59,tzinfo=tz).timestamp()*1000)
+          variants=[
+            ('official',{'days':'14','state':'ARCHIVE','batch':'0','size':'10','filter[orders][creationDate][$ge]':str(ge),'filter[orders][creationDate][$le]':str(le)}),
+            ('fromto',{'days':'14','state':'ARCHIVE','batch':'0','size':'10','from':str(ge),'to':str(le)}),
+            ('startend',{'days':'14','state':'ARCHIVE','batch':'0','size':'10','start':str(ge),'end':str(le)}),
+            ('dateFromTo',{'days':'14','state':'ARCHIVE','batch':'0','size':'10','dateFrom':str(ge),'dateTo':str(le)}),
+            ('creationFromTo',{'days':'14','state':'ARCHIVE','batch':'0','size':'10','creationDateFrom':str(ge),'creationDateTo':str(le)}),
+            ('offset14',{'days':'14','state':'ARCHIVE','batch':'0','size':'10','offsetDays':'14'}),
+            ('before',{'days':'14','state':'ARCHIVE','batch':'0','size':'10','before':str(le)}),
+            ('until',{'days':'14','state':'ARCHIVE','batch':'0','size':'10','until':str(le)}),
+          ]
+          for name,pms in variants:
+            u=base+'?'+urllib.parse.urlencode(pms)
+            p=subprocess.run(['curl','-fSs','--max-time','30',u],capture_output=True,text=True)
+            if p.returncode: print(name,'ERR',p.stderr[-200:]); continue
+            d=json.loads(p.stdout); rows=d.get('data') or []; meta=d.get('meta') or {}
+            sample=[((x.get('attributes') or {}).get('code'),(x.get('attributes') or {}).get('creationDate'),(x.get('attributes') or {}).get('completionDate')) for x in rows[:3]]
+            print(name,'meta',meta,'sample',sample)
+          PY
