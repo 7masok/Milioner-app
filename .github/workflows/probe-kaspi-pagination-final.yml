@@ -1,0 +1,40 @@
+name: Probe Kaspi archive pagination final
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/probe-kaspi-pagination-final.yml'
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Probe pagination variants
+        shell: bash
+        run: |
+          set +e
+          python - <<'PY'
+          import subprocess,json,urllib.parse
+          base='https://fragrant-shadow-72ed.7masok.workers.dev/kaspi/orders'
+          variants=[
+            ('base',{'days':'7','state':'ARCHIVE'}),
+            ('page0',{'days':'7','state':'ARCHIVE','page':'0'}),
+            ('page1',{'days':'7','state':'ARCHIVE','page':'1'}),
+            ('pageNumber0',{'days':'7','state':'ARCHIVE','pageNumber':'0'}),
+            ('pageNumber1',{'days':'7','state':'ARCHIVE','pageNumber':'1'}),
+            ('bracket0',{'days':'7','state':'ARCHIVE','page[number]':'0'}),
+            ('bracket1',{'days':'7','state':'ARCHIVE','page[number]':'1'}),
+            ('bracket2',{'days':'7','state':'ARCHIVE','page[number]':'2'}),
+          ]
+          for name,params in variants:
+            url=base+'?'+urllib.parse.urlencode(params)
+            try:
+              p=subprocess.run(['curl','-fSs','--max-time','25',url],capture_output=True,text=True,timeout=30)
+              if p.returncode:
+                print(name,'ERR',p.returncode,p.stderr[-300:]); continue
+              d=json.loads(p.stdout)
+              rows=d.get('data') or []
+              ids=[str(x.get('id') or x.get('attributes',{}).get('code') or '') for x in rows]
+              print(name,'count',len(rows),'first',ids[:3],'last',ids[-3:],'meta',d.get('meta'))
+            except Exception as e:
+              print(name,'EXC',repr(e))
+          PY
