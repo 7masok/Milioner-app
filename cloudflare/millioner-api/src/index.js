@@ -159,6 +159,7 @@ export default {
             ctx.waitUntil(refreshKaspiReportHistory(env, { days: 14 }).catch(()=>null));
           }
           const orders = await kaspiReportOrdersFromDb(env.DB, bounds.start, bounds.end);
+          const returns = await kaspiReportReturnsFromDb(env.DB, bounds.start, bounds.end);
           const coverage = await kaspiReportCacheState(env.DB);
           const historyComplete = Boolean(coverage.coverageFrom && coverage.coverageFrom <= bounds.start);
           const warnings = [];
@@ -175,7 +176,8 @@ export default {
             coverageTo:coverage.coverageTo||null,
             lastRefreshAt:coverage.lastRefreshAt||null,
             warnings,
-            orders
+            orders,
+            returns
           }, 200, cors);
         } catch (e) {
           return json({ ok:false, error:String(e?.message || e) }, 502, cors);
@@ -344,6 +346,8 @@ async function ensureSchema(db) {
     `CREATE TABLE IF NOT EXISTS kaspi_price_feed_access (id INTEGER PRIMARY KEY CHECK(id=1),last_fetched_at INTEGER NOT NULL DEFAULT 0,fetch_count INTEGER NOT NULL DEFAULT 0,last_user_agent TEXT NOT NULL DEFAULT '')`,
     `CREATE TABLE IF NOT EXISTS kaspi_report_orders (order_id TEXT PRIMARY KEY,code TEXT NOT NULL DEFAULT '',status TEXT NOT NULL DEFAULT '',state TEXT NOT NULL DEFAULT '',creation_date INTEGER NOT NULL DEFAULT 0,completion_date INTEGER NOT NULL DEFAULT 0,approved_by_bank_date INTEGER NOT NULL DEFAULT 0,total_price REAL NOT NULL DEFAULT 0,delivery_cost_for_seller REAL NOT NULL DEFAULT 0,raw_json TEXT NOT NULL DEFAULT '',updated_at INTEGER NOT NULL DEFAULT 0)`,
     `CREATE TABLE IF NOT EXISTS kaspi_report_cache_state (id INTEGER PRIMARY KEY CHECK(id=1),last_refresh_at INTEGER NOT NULL DEFAULT 0,last_items INTEGER NOT NULL DEFAULT 0,last_error TEXT NOT NULL DEFAULT '')`,
+    `CREATE TABLE IF NOT EXISTS kaspi_report_returns (order_id TEXT PRIMARY KEY,code TEXT NOT NULL DEFAULT '',amount REAL NOT NULL DEFAULT 0,return_date INTEGER NOT NULL DEFAULT 0,original_completion_date INTEGER NOT NULL DEFAULT 0,detected_at INTEGER NOT NULL DEFAULT 0,date_source TEXT NOT NULL DEFAULT '')`,
+    `CREATE INDEX IF NOT EXISTS idx_kaspi_report_return_date ON kaspi_report_returns(return_date DESC)`,
     `CREATE INDEX IF NOT EXISTS idx_kaspi_report_completion ON kaspi_report_orders(completion_date DESC)`,
     `CREATE INDEX IF NOT EXISTS idx_stock_sync_runs_market_started ON stock_sync_runs(market,started_at DESC)`,
     `CREATE INDEX IF NOT EXISTS idx_product_links_product ON product_links(product_id)`,
@@ -417,6 +421,20 @@ async function refreshKaspiReportHistory(env,{days=14}={}){
     const now=Date.now();
     const statements=rows.map(o=>env.DB.prepare(`INSERT INTO kaspi_report_orders(order_id,code,status,state,creation_date,completion_date,approved_by_bank_date,total_price,delivery_cost_for_seller,raw_json,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(order_id) DO UPDATE SET code=excluded.code,status=excluded.status,state=excluded.state,creation_date=excluded.creation_date,completion_date=excluded.completion_date,approved_by_bank_date=excluded.approved_by_bank_date,total_price=excluded.total_price,delivery_cost_for_seller=excluded.delivery_cost_for_seller,raw_json=excluded.raw_json,updated_at=excluded.updated_at`).bind(o.id,o.code,o.status,o.state,o.creationDate,o.completionDate,o.approvedByBankDate,o.totalPrice,o.deliveryCostForSeller,JSON.stringify(o),now));
     for(let i=0;i<statements.length;i+=75)await env.DB.batch(statements.slice(i,i+75));
+
+    // Kaspi keeps the original completionDate when an old completed order is later returned.
+    // Store the first moment we observe RETURNED as a separate financial event so rolling
+    // reports can subtract it from the period in which the return happened.
+    for(const o of rows){
+      if(String(o.status||'').toUpperCase()!=='RETURNED')continue;
+      // This return predates return-event tracking. The supplied Kaspi reports prove it was
+      // absent on 13 Aug and present in the report through 14 Aug, so backfill it to 14 Aug.
+      const historical=o.code==='1008824537';
+      const returnDate=historical?1786647600000:now; // 2026-08-14 00:00 Asia/Almaty for the known legacy return
+      const source=historical?'kaspi_pdf_backfill_2026-08-14':'status_transition_observed';
+      await env.DB.prepare(`INSERT INTO kaspi_report_returns(order_id,code,amount,return_date,original_completion_date,detected_at,date_source) VALUES(?,?,?,?,?,?,?) ON CONFLICT(order_id) DO UPDATE SET code=excluded.code,amount=excluded.amount,original_completion_date=excluded.original_completion_date,detected_at=excluded.detected_at`).bind(o.id,o.code,Math.abs(Number(o.totalPrice)||0),returnDate,o.completionDate,now,source).run();
+    }
+
     await env.DB.prepare(`INSERT INTO kaspi_report_cache_state(id,last_refresh_at,last_items,last_error) VALUES(1,?,?, '') ON CONFLICT(id) DO UPDATE SET last_refresh_at=excluded.last_refresh_at,last_items=excluded.last_items,last_error=''`).bind(now,rows.length).run();
     return {ok:true,items:rows.length,pages:pageCount,startedAt:started,finishedAt:Date.now()};
   }catch(e){
@@ -434,6 +452,11 @@ async function kaspiReportCacheState(db){
 async function kaspiReportOrdersFromDb(db,start,end){
   const rows=await db.prepare(`SELECT order_id AS id,code,status,state,creation_date AS creationDate,completion_date AS completionDate,approved_by_bank_date AS approvedByBankDate,total_price AS totalPrice,delivery_cost_for_seller AS deliveryCostForSeller FROM kaspi_report_orders WHERE completion_date>=? AND completion_date<? ORDER BY completion_date ASC`).bind(Number(start)||0,Number(end)||Date.now()+86400000).all();
   return (rows.results||[]).map(x=>({...x,lines:[]}));
+}
+
+async function kaspiReportReturnsFromDb(db,start,end){
+  const rows=await db.prepare(`SELECT order_id AS id,code,amount,return_date AS returnDate,original_completion_date AS originalCompletionDate,detected_at AS detectedAt,date_source AS dateSource FROM kaspi_report_returns WHERE return_date>=? AND return_date<? ORDER BY return_date ASC`).bind(Number(start)||0,Number(end)||Date.now()+86400000).all();
+  return rows.results||[];
 }
 
 async function syncAll(env, { scheduled = false } = {}) {
