@@ -1,0 +1,23 @@
+name: Diagnose warehouse cloud browser access
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/diagnose-warehouse-cloud.yml'
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check browser CORS and endpoint
+        run: |
+          set -x
+          URL='https://millioner-api.7masok.workers.dev/api/warehouse-state'
+          echo '=== OPTIONS ==='
+          curl -i -sS --max-time 30 -X OPTIONS \
+            -H 'Origin: https://7masok.github.io' \
+            -H 'Access-Control-Request-Method: GET' \
+            -H 'Access-Control-Request-Headers: content-type' "$URL"
+          echo '=== GET ==='
+          curl -i -sS --max-time 45 \
+            -H 'Origin: https://7masok.github.io' \
+            -H 'Accept: application/json' "$URL" | head -c 3000
