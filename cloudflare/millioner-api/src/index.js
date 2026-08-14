@@ -223,7 +223,7 @@ export default {
         await env.DB.prepare(`INSERT INTO warehouse_state(id,payload,revision,updated_at) VALUES(1,?,?,?)
           ON CONFLICT(id) DO UPDATE SET payload=excluded.payload,revision=excluded.revision,updated_at=excluded.updated_at`)
           .bind(raw,nextRevision,now).run();
-        await importProducts(env.DB, warehouse.products || []);
+        ctx.waitUntil(importProducts(env.DB, warehouse.products || []).catch(e=>console.error('warehouse product mirror',e)));
         return json({ ok: true, revision: nextRevision, updatedAt: now, products: (warehouse.products || []).length }, 200, cors);
       }
 
