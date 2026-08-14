@@ -8,43 +8,27 @@ jobs:
   diagnose:
     runs-on: ubuntu-latest
     steps:
-      - name: Probe Kaspi order states
+      - name: Inspect returned order
         run: |
           python - <<'PY'
-          import json, subprocess, urllib.parse
+          import json, subprocess, urllib.parse, datetime
           base='https://fragrant-shadow-72ed.7masok.workers.dev/kaspi/orders'
-          states=['','ARCHIVE','RETURNED','KASPI_DELIVERY_RETURN_REQUESTED','CANCELLED','CANCELLING']
-          for state in states:
-              seen={}
-              for batch in range(0,6):
-                  q={'days':'14','batch':str(batch),'size':'100'}
-                  if state:q['state']=state
-                  url=base+'?'+urllib.parse.urlencode(q)
-                  p=subprocess.run(['curl','-sS','--max-time','45',url],capture_output=True,text=True)
-                  try:d=json.loads(p.stdout)
-                  except Exception:
-                      print('STATE',state or 'ALL','BAD',p.returncode,p.stdout[:300]);break
-                  items=d.get('data') or []
-                  if batch==0: print('STATE',state or 'ALL','HTTP?',d.get('ok'),'META',d.get('meta'),'ERR',d.get('error'))
-                  for x in items:
-                      a=x.get('attributes') or {}; oid=str(x.get('id') or a.get('code') or '')
-                      seen[oid]={'id':oid,'code':a.get('code'),'status':a.get('status'),'state':a.get('state'),'totalPrice':a.get('totalPrice'),'creationDate':a.get('creationDate'),'completionDate':a.get('completionDate')}
-                  pc=int((d.get('meta') or {}).get('pageCount') or 1)
-                  if batch+1>=pc:break
-              vals=list(seen.values())
-              by={}
-              for x in vals: by[(str(x['status']),str(x['state']))]=by.get((str(x['status']),str(x['state'])),0)+1
-              print('SUMMARY',state or 'ALL','COUNT',len(vals),'STATUSES',by)
-              hits=[x for x in vals if abs(float(x.get('totalPrice') or 0)-790)<0.001]
-              print('PRICE790',state or 'ALL',json.dumps(hits[:20],ensure_ascii=False))
-          # current exact report window 2026-08-07 00:00 to 2026-08-14 10:00 Almaty
-          from datetime import datetime, timezone, timedelta
-          tz=timezone(timedelta(hours=5))
-          start=int(datetime(2026,8,7,0,0,tzinfo=tz).timestamp()*1000)
-          end=int(datetime(2026,8,14,10,0,tzinfo=tz).timestamp()*1000)
-          u='https://millioner-api.7masok.workers.dev/api/kaspi-report-orders?'+urllib.parse.urlencode({'days':'8','from':start,'to':end})
-          p=subprocess.run(['curl','-sS','--max-time','90',u],capture_output=True,text=True)
-          d=json.loads(p.stdout); rows=d.get('orders') or []
-          print('CURRENT',d.get('source'),'COUNT',len(rows),'SUM',sum(float(x.get('totalPrice') or 0) for x in rows),'STATUSES',sorted(set((str(x.get('status')),str(x.get('state'))) for x in rows)))
-          print('CURRENT790',json.dumps([x for x in rows if abs(float(x.get('totalPrice') or 0)-790)<0.001][:30],ensure_ascii=False))
+          returned=[]
+          for batch in range(0,6):
+              u=base+'?'+urllib.parse.urlencode({'days':'14','batch':str(batch),'size':'100'})
+              p=subprocess.run(['curl','-sS','--max-time','45',u],capture_output=True,text=True)
+              d=json.loads(p.stdout); items=d.get('data') or []
+              for x in items:
+                  a=x.get('attributes') or {}
+                  if str(a.get('status') or '').upper()=='RETURNED': returned.append(x)
+              pc=int((d.get('meta') or {}).get('pageCount') or 1)
+              if batch+1>=pc: break
+          print('RETURNED_COUNT',len(returned))
+          print('RETURNED_RAW',json.dumps(returned,ensure_ascii=False))
+          for x in returned:
+              a=x.get('attributes') or {}
+              for k,v in sorted(a.items()):
+                  if isinstance(v,(int,float)) and v>10**12:
+                      try: print('DATEFIELD',k,v,datetime.datetime.fromtimestamp(v/1000,datetime.timezone(datetime.timedelta(hours=5))).isoformat())
+                      except: pass
           PY
