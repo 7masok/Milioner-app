@@ -1,0 +1,34 @@
+name: Verify unified Kaspi report periods
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/verify-kaspi-unified-periods.yml'
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Verify exact PDF window and yesterday
+        run: |
+          python - <<'PY'
+          import subprocess,json,datetime,urllib.parse
+          tz=datetime.timezone(datetime.timedelta(hours=5))
+          def ms(dt): return int(dt.timestamp()*1000)
+          tests=[
+            ('PDF_WEEK', ms(datetime.datetime(2026,8,8,0,0,tzinfo=tz)), ms(datetime.datetime(2026,8,14,9,13,0,tzinfo=tz)), 194470.0),
+            ('YESTERDAY', ms(datetime.datetime(2026,8,13,0,0,tzinfo=tz)), ms(datetime.datetime(2026,8,14,0,0,tzinfo=tz)), 59520.0),
+          ]
+          for name,start,end,expected in tests:
+            u='https://millioner-api.7masok.workers.dev/api/kaspi-report-orders?'+urllib.parse.urlencode({'days':'7','from':start,'to':end})
+            p=subprocess.run(['curl','-fSs','--max-time','90',u],capture_output=True,text=True)
+            if p.returncode: raise SystemExit(name+' curl: '+p.stderr)
+            d=json.loads(p.stdout)
+            rows=[x for x in (d.get('orders') or []) if str(x.get('status') or '').upper()=='COMPLETED']
+            total=sum(float(x.get('totalPrice') or 0) for x in rows)
+            print(name,'orders',len(rows),'total',total,'expected',expected,'source',d.get('source'),'coverage',d.get('coverageFrom'),d.get('coverageTo'),'complete',d.get('historyComplete'),'warnings',d.get('warnings'))
+            if round(total,2)!=round(expected,2): raise SystemExit(f'{name}: EXPECTED {expected:.2f}, GOT {total:.2f}')
+          u='https://millioner-api.7masok.workers.dev/api/kaspi-report-orders?days=7'
+          p=subprocess.run(['curl','-fSs','--max-time','90',u],capture_output=True,text=True)
+          d=json.loads(p.stdout); total=sum(float(x.get('totalPrice') or 0) for x in (d.get('orders') or []) if str(x.get('status') or '').upper()=='COMPLETED')
+          print('LIVE_7_DAYS',len(d.get('orders') or []),total,'coverage',d.get('coverageFrom'),d.get('coverageTo'))
+          PY
