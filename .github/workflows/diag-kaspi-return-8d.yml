@@ -8,27 +8,19 @@ jobs:
   diagnose:
     runs-on: ubuntu-latest
     steps:
-      - name: Inspect returned order
+      - name: Inspect returned sync lines
         run: |
           python - <<'PY'
-          import json, subprocess, urllib.parse, datetime
-          base='https://fragrant-shadow-72ed.7masok.workers.dev/kaspi/orders'
-          returned=[]
-          for batch in range(0,6):
-              u=base+'?'+urllib.parse.urlencode({'days':'14','batch':str(batch),'size':'100'})
-              p=subprocess.run(['curl','-sS','--max-time','45',u],capture_output=True,text=True)
-              d=json.loads(p.stdout); items=d.get('data') or []
-              for x in items:
-                  a=x.get('attributes') or {}
-                  if str(a.get('status') or '').upper()=='RETURNED': returned.append(x)
-              pc=int((d.get('meta') or {}).get('pageCount') or 1)
-              if batch+1>=pc: break
-          print('RETURNED_COUNT',len(returned))
-          print('RETURNED_RAW',json.dumps(returned,ensure_ascii=False))
-          for x in returned:
-              a=x.get('attributes') or {}
-              for k,v in sorted(a.items()):
-                  if isinstance(v,(int,float)) and v>10**12:
-                      try: print('DATEFIELD',k,v,datetime.datetime.fromtimestamp(v/1000,datetime.timezone(datetime.timedelta(hours=5))).isoformat())
-                      except: pass
+          import json, subprocess, urllib.parse
+          base='https://fragrant-shadow-72ed.7masok.workers.dev'
+          for batch in range(0,8):
+              u=base+'/kaspi/sync?'+urllib.parse.urlencode({'days':'14','batch':str(batch),'size':'100'})
+              p=subprocess.run(['curl','-sS','--max-time','60',u],capture_output=True,text=True)
+              try:d=json.loads(p.stdout)
+              except: print('BAD',batch,p.stdout[:1000]); continue
+              print('BATCH',batch,'hasMore',d.get('hasMore'),'next',d.get('nextBatch'),'orders',len(d.get('orders') or []))
+              for o in d.get('orders') or []:
+                  if str(o.get('code') or '')=='1008824537' or str(o.get('status') or '').upper()=='RETURNED':
+                      print('RETURN_SYNC',json.dumps(o,ensure_ascii=False))
+              if not d.get('hasMore'): break
           PY
