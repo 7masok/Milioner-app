@@ -1,0 +1,54 @@
+name: Verify Kaspi return events
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/verify-kaspi-return-events.yml'
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Wait for worker and verify net revenue
+        run: |
+          python - <<'PY'
+          import json, subprocess, time, urllib.parse, datetime
+          base='https://millioner-api.7masok.workers.dev/api/kaspi-report-orders'
+          # Wait until the deployed endpoint exposes the new returns field.
+          ready=False
+          for i in range(24):
+              p=subprocess.run(['curl','-sS','--max-time','45',base+'?days=1'],capture_output=True,text=True)
+              try:d=json.loads(p.stdout)
+              except Exception:d={}
+              if 'returns' in d:
+                  ready=True; print('new endpoint ready on try',i+1); break
+              print('waiting for deployment',i+1, str(d)[:200]); time.sleep(10)
+          if not ready: raise SystemExit('new returns endpoint did not deploy in time')
+
+          # Force a synchronous history refresh by asking for an empty historical window.
+          prime=base+'?'+urllib.parse.urlencode({'days':'8','from':'1','to':'2'})
+          p=subprocess.run(['curl','-fSs','--max-time','120',prime],capture_output=True,text=True)
+          if p.returncode: raise SystemExit('prime failed: '+p.stderr)
+
+          tz=datetime.timezone(datetime.timedelta(hours=5))
+          ms=lambda dt:int(dt.timestamp()*1000)
+          start=ms(datetime.datetime(2026,8,7,0,0,tzinfo=tz))
+          end=ms(datetime.datetime(2026,8,14,9,56,0,tzinfo=tz))
+          u=base+'?'+urllib.parse.urlencode({'days':'8','from':start,'to':end})
+          p=subprocess.run(['curl','-fSs','--max-time','90',u],capture_output=True,text=True)
+          d=json.loads(p.stdout)
+          completed=[x for x in d.get('orders',[]) if str(x.get('status','')).upper()=='COMPLETED']
+          gross=sum(float(x.get('totalPrice') or 0) for x in completed)
+          returns=sum(float(x.get('amount') or 0) for x in d.get('returns',[]))
+          net=gross-returns
+          print('8D gross',gross,'returns',returns,'net',net,'return rows',json.dumps(d.get('returns',[]),ensure_ascii=False))
+          if round(gross,2)!=220870.00: raise SystemExit(f'gross expected 220870 got {gross}')
+          if round(returns,2)!=790.00: raise SystemExit(f'returns expected 790 got {returns}')
+          if round(net,2)!=220080.00: raise SystemExit(f'net expected 220080 got {net}')
+
+          y0=ms(datetime.datetime(2026,8,13,0,0,tzinfo=tz)); y1=ms(datetime.datetime(2026,8,14,0,0,tzinfo=tz))
+          yu=base+'?'+urllib.parse.urlencode({'days':'-1','from':y0,'to':y1})
+          yd=json.loads(subprocess.check_output(['curl','-fSs','--max-time','90',yu],text=True))
+          yr=sum(float(x.get('amount') or 0) for x in yd.get('returns',[]))
+          print('YESTERDAY returns',yr)
+          if round(yr,2)!=0: raise SystemExit(f'yesterday must have 0 returns, got {yr}')
+          PY
