@@ -1,0 +1,35 @@
+name: Force mobile cloud sync cache refresh
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/bump-cloud-sync-v3-cache.yml'
+permissions:
+  contents: write
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Bump cloud sync asset version
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          p=Path('index.html')
+          s=p.read_text(encoding='utf-8')
+          old='./cloud-sync-v3.js?v=20260814a'
+          new='./cloud-sync-v3.js?v=20260814b'
+          if old in s:s=s.replace(old,new,1)
+          elif new not in s:raise SystemExit('cloud sync script marker missing')
+          p.write_text(s,encoding='utf-8')
+          PY
+      - name: Commit
+        run: |
+          git config user.name 'millioner-maintenance'
+          git config user.email actions@users.noreply.github.com
+          git add index.html
+          git diff --cached --quiet && exit 0
+          git commit -m 'Force refresh of mobile cloud sync client'
+          git push origin HEAD:main
