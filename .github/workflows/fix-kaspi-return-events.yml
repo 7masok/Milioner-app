@@ -1,0 +1,41 @@
+name: Fix Kaspi return events
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/fix-kaspi-return-events.yml'
+permissions:
+  contents: write
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Patch return accounting
+        run: |
+          python .github/scripts/fix_kaspi_return_events.py
+          node --check cloudflare/millioner-api/src/index.js
+          node --check kaspi-report-v2.js
+          python - <<'PY'
+          from pathlib import Path
+          w=Path('cloudflare/millioner-api/src/index.js').read_text()
+          f=Path('kaspi-report-v2.js').read_text()
+          i=Path('index.html').read_text()
+          assert 'kaspi_report_returns' in w
+          assert 'kaspiReportReturnsFromDb' in w
+          assert 'orders,\n            returns' in w
+          assert 'snapshot.returns' in f
+          assert 'isReturn' in f
+          assert '20260814h' in i
+          print('static return accounting checks passed')
+          PY
+      - name: Commit
+        run: |
+          git config user.name millioner-maintenance
+          git config user.email actions@users.noreply.github.com
+          git add cloudflare/millioner-api/src/index.js kaspi-report-v2.js index.html
+          git diff --cached --quiet && exit 0
+          git commit -m 'Account for Kaspi returns in every report period'
+          git push origin HEAD:main
