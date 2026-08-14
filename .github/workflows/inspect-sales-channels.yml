@@ -1,0 +1,27 @@
+name: Inspect sales channel labels
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/inspect-sales-channels.yml'
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Inspect
+        run: |
+          curl -fSs --max-time 30 -H 'Origin: https://7masok.github.io' 'https://millioner-api.7masok.workers.dev/api/warehouse-state' -o /tmp/state.json
+          python - <<'PY'
+          import json,collections,datetime
+          d=json.load(open('/tmp/state.json')); s=(d.get('state') or {}).get('sales') or []
+          print('channels',collections.Counter(str(x.get('channel')) for x in s))
+          ks=[x for x in s if 'kaspi' in str(x.get('channel') or '').lower()]
+          print('kaspi channel rows',len(ks))
+          if ks:
+            print('range',min(float(x.get('date') or 0) for x in ks),max(float(x.get('date') or 0) for x in ks))
+            print('keys',sorted(set().union(*(x.keys() for x in ks[:20]))))
+            print('recent',json.dumps(sorted(ks,key=lambda x:float(x.get('date') or 0),reverse=True)[:10],ensure_ascii=False)[:8000])
+            tz=datetime.timezone(datetime.timedelta(hours=5)); start=datetime.datetime(2026,8,8,tzinfo=tz).timestamp()*1000; end=datetime.datetime(2026,8,15,tzinfo=tz).timestamp()*1000
+            rows=[x for x in ks if start<=float(x.get('date') or 0)<end]
+            print('week rows',len(rows),'rev',sum(float(x.get('qty') or 0)*float(x.get('price') or 0) for x in rows))
+          PY
