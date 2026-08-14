@@ -8,16 +8,18 @@ jobs:
   diagnose:
     runs-on: ubuntu-latest
     steps:
-      - name: Measure warehouse payload
+      - name: Verify live meta and full warehouse responses
         run: |
           python - <<'PY'
-          import json, subprocess
-          url='https://millioner-api.7masok.workers.dev/api/warehouse-state'
-          raw=subprocess.check_output(['curl','-fSs','--max-time','60','-H','Origin: https://7masok.github.io',url],text=True)
-          d=json.loads(raw); state=d.get('state') or {}
-          print('total bytes',len(raw.encode()))
-          for k,v in state.items():
-              b=len(json.dumps(v,ensure_ascii=False,separators=(',',':')).encode())
-              n=len(v) if isinstance(v,(list,dict)) else 1
-              print(k,'bytes',b,'items',n)
+          import json, subprocess, time
+          base='https://millioner-api.7masok.workers.dev/api/warehouse-state'
+          def get(url):
+              t=time.time(); raw=subprocess.check_output(['curl','-fSs','--max-time','60','-H','Origin: https://7masok.github.io',url],text=True); return raw,time.time()-t
+          meta,mt=get(base+'?meta=1'); md=json.loads(meta)
+          full,ft=get(base); fd=json.loads(full)
+          print('META bytes',len(meta.encode()),'seconds',round(mt,3),'keys',list(md.keys()),'revision',md.get('revision'))
+          print('FULL bytes',len(full.encode()),'seconds',round(ft,3),'revision',fd.get('revision'))
+          if 'state' in md: raise SystemExit('meta endpoint still returns full state')
+          if len(meta.encode())>1000: raise SystemExit('meta response too large')
+          if not md.get('ok') or not fd.get('ok'): raise SystemExit('warehouse endpoint not ok')
           PY
