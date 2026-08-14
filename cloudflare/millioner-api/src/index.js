@@ -37,6 +37,39 @@ export default {
       }
     }
 
+    // FAST_MARKET_READS_V5: these read-only endpoints use tables that already exist in production.
+    // Do not hold the home screen behind the full schema migration chain.
+    if (url.pathname === '/api/orders' && request.method === 'GET') {
+      try {
+        const market = normalizeMarket(url.searchParams.get('market'));
+        const limit = Math.max(1, Math.min(1000, Number(url.searchParams.get('limit') || 500) || 500));
+        const where = market ? 'WHERE o.market = ?' : '';
+        const args = market ? [market, limit] : [limit];
+        const sql = `
+          SELECT o.market,o.order_id AS orderId,o.code,o.entry_id AS entryId,o.status,o.state,
+                 o.creation_date AS creationDate,o.sku,o.product_name AS productName,o.qty,
+                 o.unit_price AS unitPrice,o.total_price AS totalPrice,o.seller_delivery_cost AS sellerDeliveryCost,
+                 o.marketplace_fee AS marketplaceFee,o.fee_source AS feeSource,l.product_id AS productId
+          FROM marketplace_order_lines o
+          LEFT JOIN product_links l ON l.market=o.market AND l.sku=o.sku
+          ${where}
+          ORDER BY o.creation_date DESC
+          LIMIT ?`;
+        const rows = await env.DB.prepare(sql).bind(...args).all();
+        return json({ ok: true, orders: rows.results || [] }, 200, cors);
+      } catch (e) {
+        return json({ ok: false, error: 'orders-read: ' + String(e?.message || e) }, 500, cors);
+      }
+    }
+    if (url.pathname === '/api/market-status' && request.method === 'GET') {
+      try {
+        const markets = await getMarketStatuses(env);
+        return json({ ok: true, serverTime: Date.now(), markets }, 200, cors);
+      } catch (e) {
+        return json({ ok: false, error: 'market-status-read: ' + String(e?.message || e) }, 500, cors);
+      }
+    }
+
     try {
       await ensureSchema(env.DB);
 

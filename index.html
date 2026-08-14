@@ -93,6 +93,7 @@ table{width:100%;border-collapse:collapse;background:#fff;border-radius:14px;ove
 <button class="fab" onclick="openModal('menu')">+</button><nav><button class="active" data-view="home"><span>⌂</span>Главная</button><button data-view="products"><span>▦</span>Товары</button><button data-view="movement"><span>↕</span>Движение</button><button data-view="purchases"><span>□</span>Закупки</button><button data-view="reports"><span>◒</span>Отчёты</button><button data-view="settings"><span>⚙</span>Настройки</button></nav><div id="modal" class="modal" onclick="if(event.target===this)closeModal()"><div class="sheet" id="sheet"></div></div></div>
 <script>
 const KEY='sklad_mvp_v2';
+const ACTIVE_VIEW_KEY=KEY+'_active_view_device';
 const KASPI_WORKER='https://fragrant-shadow-72ed.7masok.workers.dev';
 const WB_WORKER='https://wb-sync.7masok.workers.dev';
 const MILLIONER_API='https://millioner-api.7masok.workers.dev';
@@ -544,7 +545,50 @@ function normalizeServerFeed(rows,market){const field=marketplaceField(market);r
 function mergeOrderFeeds(local,remote){const map=new Map();for(const o of(local||[]))map.set(String(o.market||'')+'|'+String(o.orderId)+':'+String(o.entryId),o);for(const o of(remote||[])){const key=String(o.market||'')+'|'+String(o.orderId)+':'+String(o.entryId),prev=map.get(key)||{};map.set(key,{...prev,...o,productId:o.productId||prev.productId||null})}const rows=[...map.values()];const realOrders=new Set(rows.filter(o=>!isPendingMarketplaceLine(o)).map(marketplaceOrderKey));return rows.filter(o=>!isPendingMarketplaceLine(o)||!realOrders.has(marketplaceOrderKey(o))).sort((a,b)=>(Number(b.creationDate)||0)-(Number(a.creationDate)||0)).slice(0,500)}
 function applyMarketplaceTransitions(market,feed){state.marketOrderState||={};state.marketplaceLiveSince||={};state.reservations||=[];const bucket=state.marketOrderState[market]||(market==='Kaspi'?{...(state.kaspiOrders||{})}:{});state.marketOrderState[market]=bucket;if(!state.marketplaceLiveSince[market])state.marketplaceLiveSince[market]=Date.now();const liveSince=Number(state.marketplaceLiveSince[market])||Date.now();let reservedCount=0,soldCount=0,cancelledCount=0;for(const o of(feed||[])){if(!o?.productId)continue;const p=prod(o.productId);if(!p)continue;const qty=Math.max(0,Number(o.qty)||0);if(!qty)continue;const legacy=String(o.orderId)+':'+String(o.entryId),scoped=market+':'+legacy,prev=bucket[legacy]||bucket[scoped]||null,stage=marketplaceLifecycleStage(market,o.status,o.state),active=stage==='new'||stage==='transfer';const existingSale=state.sales.find(x=>x.externalKey===scoped||(market==='Kaspi'&&x.externalKey===legacy));const existingReservation=state.reservations.find(x=>x.active&&x.source===market&&(x.externalKey===scoped||(market==='Kaspi'&&x.externalKey===legacy)));const apiFeeTotal=Math.max(0,Number(o.marketplaceFee)||0)+Math.max(0,Number(o.sellerDeliveryCost)||0),apiFeePerUnit=qty?apiFeeTotal/qty:0;if(existingSale&&Number(o.unitPrice)>0)existingSale.price=Number(o.unitPrice);if(existingSale&&market==='Kaspi'&&apiFeeTotal>0){existingSale.fee=apiFeePerUnit;existingSale.feeSource=o.feeSource||'Kaspi API'}if(active&&!existingSale){if(existingReservation){existingReservation.productId=p.id;existingReservation.qty=qty;existingReservation.stage=stage;existingReservation.updatedAt=Date.now()}else{state.reservations.push({id:id(),productId:p.id,qty,active:true,source:market,externalKey:scoped,stage,date:Date.now(),updatedAt:Date.now()});reservedCount+=qty}}else if(stage==='delivery'){if(existingReservation)existingReservation.active=false;if(!existingSale&&(prev?.active||['new','transfer'].includes(String(prev?.stage||''))||marketplaceSaleTimestamp(market,o)>=liveSince)){const consumed=consumeSellableProduct(p,qty,market+' '+(o.code||''));state.sales.push({id:id(),productId:p.id,qty,price:Number(o.unitPrice)||0,cost:consumed.unitCost,fee:apiFeePerUnit,feeSource:o.feeSource||'',channel:market,date:marketplaceSaleTimestamp(market,o),externalKey:scoped,fifoLots:consumed.lots,stockShortage:consumed.shortage});if(isBundleProduct(p))p.cost=productDisplayCost(p);soldCount+=qty}}else if(stage==='cancelled'){if(existingReservation){existingReservation.active=false;cancelledCount+=Number(existingReservation.qty)||0}}bucket[legacy]={status:o.status,state:o.state,active,stage,qty,sku:o.sku,updatedAt:Date.now()}}if(market==='Kaspi')state.kaspiOrders=bucket;return {reserved:reservedCount,sold:soldCount,cancelled:cancelledCount}}
 async function apiJson(url){const r=await fetch(url,{cache:'no-store'});let data;try{data=await r.json()}catch(e){throw new Error('Сервер вернул не JSON (HTTP '+r.status+')')}if(!r.ok||data?.ok===false)throw new Error(data?.error||('HTTP '+r.status));return data}
-async function loadSharedOrderCache({silent=true}={}){try{const status=await apiJson(MILLIONER_API+'/api/market-status');state.settings.serverMarketStatus={};for(const x of(status.markets||[]))state.settings.serverMarketStatus[x.market]=x;const [kdResult,w1Result,w2Result]=await Promise.allSettled([apiJson(MILLIONER_API+'/api/orders?market=Kaspi&limit=500'),apiJson(MILLIONER_API+'/api/orders?market=WB&limit=500'),apiJson(MILLIONER_API+'/api/orders?market=WB2&limit=500')]);let k=[],w1=[],w2=[],warnings=[];if(kdResult.status==='fulfilled'){k=normalizeServerFeed(kdResult.value.orders,'Kaspi');if(k.length){state.kaspiOrderFeed=mergeOrderFeeds(state.kaspiOrderFeed,k);applyMarketplaceTransitions('Kaspi',state.kaspiOrderFeed)}}else warnings.push('Kaspi: '+String(kdResult.reason?.message||kdResult.reason));if(w1Result.status==='fulfilled'){w1=normalizeServerFeed(w1Result.value.orders,'WB');state.wbOrderFeed=mergeOrderFeeds(state.wbOrderFeed,w1);if(w1.length)applyMarketplaceTransitions('WB',state.wbOrderFeed.filter(o=>String(o.market||'WB')==='WB'))}else warnings.push('WB 1: '+String(w1Result.reason?.message||w1Result.reason));if(w2Result.status==='fulfilled'){w2=normalizeServerFeed(w2Result.value.orders,'WB2');state.wbOrderFeed=mergeOrderFeeds(state.wbOrderFeed,w2);if(w2.length)applyMarketplaceTransitions('WB2',state.wbOrderFeed.filter(o=>String(o.market||'WB')==='WB2'))}else warnings.push('WB 2: '+String(w2Result.reason?.message||w2Result.reason));const success=(status.markets||[]).map(x=>Number(x.lastSuccessAt||0)).filter(Boolean);if(success.length)state.settings.lastSync=Math.max(Number(state.settings.lastSync||0),...success);save();render();if(warnings.length)console.warn('Shared cache partial update',warnings.join('; '));return {kaspi:k.length,wb:w1.length,wb2:w2.length,status,warnings}}catch(e){console.error('Shared cache error',e);if(!silent)alert('Ошибка общей базы:\n'+String(e.message||e));return {kaspi:0,wb:0,wb2:0,error:e}}}
+async function loadSharedOrderCache({silent=true}={}){
+  try{
+    // Orders must never wait for the warehouse-cloud bootstrap or for market-status.
+    const [statusResult,kdResult,w1Result,w2Result]=await Promise.allSettled([
+      apiJson(MILLIONER_API+'/api/market-status'),
+      apiJson(MILLIONER_API+'/api/orders?market=Kaspi&limit=500'),
+      apiJson(MILLIONER_API+'/api/orders?market=WB&limit=500'),
+      apiJson(MILLIONER_API+'/api/orders?market=WB2&limit=500')
+    ]);
+    const status=statusResult.status==='fulfilled'?statusResult.value:{ok:false,markets:[]};
+    if(statusResult.status==='fulfilled'){
+      state.settings.serverMarketStatus={};
+      for(const x of(status.markets||[]))state.settings.serverMarketStatus[x.market]=x;
+    }
+    let k=[],w1=[],w2=[],warnings=[];
+    if(statusResult.status==='rejected')warnings.push('Статус: '+String(statusResult.reason?.message||statusResult.reason));
+    if(kdResult.status==='fulfilled'){
+      k=normalizeServerFeed(kdResult.value.orders,'Kaspi');
+      state.kaspiOrderFeed=mergeOrderFeeds(state.kaspiOrderFeed,k);
+      if(k.length)applyMarketplaceTransitions('Kaspi',state.kaspiOrderFeed);
+    }else warnings.push('Kaspi: '+String(kdResult.reason?.message||kdResult.reason));
+    if(w1Result.status==='fulfilled'){
+      w1=normalizeServerFeed(w1Result.value.orders,'WB');
+      state.wbOrderFeed=mergeOrderFeeds(state.wbOrderFeed,w1);
+      if(w1.length)applyMarketplaceTransitions('WB',state.wbOrderFeed.filter(o=>String(o.market||'WB')==='WB'));
+    }else warnings.push('WB 1: '+String(w1Result.reason?.message||w1Result.reason));
+    if(w2Result.status==='fulfilled'){
+      w2=normalizeServerFeed(w2Result.value.orders,'WB2');
+      state.wbOrderFeed=mergeOrderFeeds(state.wbOrderFeed,w2);
+      if(w2.length)applyMarketplaceTransitions('WB2',state.wbOrderFeed.filter(o=>String(o.market||'WB')==='WB2'));
+    }else warnings.push('WB 2: '+String(w2Result.reason?.message||w2Result.reason));
+    const success=(status.markets||[]).map(x=>Number(x.lastSuccessAt||0)).filter(Boolean);
+    if(success.length)state.settings.lastSync=Math.max(Number(state.settings.lastSync||0),...success);
+    saveLocalOnly();render();
+    if(warnings.length)console.warn('Shared cache partial update',warnings.join('; '));
+    const allFailed=!k.length&&!w1.length&&!w2.length&&kdResult.status==='rejected'&&w1Result.status==='rejected'&&w2Result.status==='rejected';
+    if(allFailed&&statusResult.status==='rejected')throw kdResult.reason||statusResult.reason;
+    return {kaspi:k.length,wb:w1.length,wb2:w2.length,status,warnings};
+  }catch(e){
+    console.error('Shared cache error',e);
+    if(!silent)alert('Ошибка общей базы:\n'+String(e.message||e));
+    return {kaspi:0,wb:0,wb2:0,error:e};
+  }
+}
 async function checkMarketStatus(market){await loadSharedOrderCache({silent:true});const st=marketServerStatus(market),label=market==='WB2'?'WB 2':market==='WB'?'WB 1':market;if(!st)return alert(label+': сервер пока не вернул статус');if(st.latest?.ok)return alert(`${label}: фоновая синхронизация работает.\nСтрок в общей базе: ${st.orderLines||0}\nПоследний успех: ${shortClock(st.lastSuccessAt)}`);if(isWbMarket(market)&&isWbRateLimit(st.latest?.error))return alert(`${label}: Wildberries включил лимит запросов.\nБраузер не дёргает WB напрямую.\nСледующая серверная попытка: ${shortClock(st.nextSyncAt)}`);if(isWbMarket(market)&&isWbTransient(st.latest?.error))return alert(`${label} временно не отвечает.\nВ D1 сейчас: ${st.orderLines||0} строк.\nСледующая попытка: ${shortClock(st.nextSyncAt)}\n${String(st.latest?.error||'').slice(0,180)}`);alert(`${label}: ошибка фоновой синхронизации\n${String(st.latest?.error||'неизвестная ошибка').slice(0,500)}`)}
 async function refreshWbFromServer(account='all'){await loadSharedOrderCache({silent:false});selectedOrderMarket='WB';selectedWbAccount=['WB','WB2'].includes(account)?account:'all';state.settings.selectedOrderMarket='WB';state.settings.selectedWbAccount=selectedWbAccount;save();render();const rows=(state.wbOrderFeed||[]).filter(o=>selectedWbAccount==='all'||String(o.market||'WB')===selectedWbAccount),count=groupMarketplaceOrders(rows).length,market=selectedWbAccount==='WB2'?'WB2':'WB',st=selectedWbAccount==='all'?null:marketServerStatus(market),label=selectedWbAccount==='WB2'?'WB 2':selectedWbAccount==='WB'?'WB 1':'WB';if(count)return alert(`${label}: показана серверная копия.\nЗаказов: ${count}`);if(st?.latest&&isWbTransient(st.latest.error))return alert(`${label}: заказов пока нет, последняя серверная попытка завершилась ошибкой.\n${String(st.latest.error).slice(0,180)}\nСледующая попытка: ${shortClock(st.nextSyncAt)}`);alert(label+': в общей базе пока нет заказов.')}
 async function testWbWorker(){return checkMarketStatus('WB')}
@@ -570,12 +614,21 @@ function renderDriveStatus(error=''){const input=document.getElementById('google
 async function maybeAutoGoogleBackup(){if(state.settings.autoBackup===false||!driveClientId())return;const last=Number(state.settings.lastGoogleBackupAt||0);if(Date.now()-last<24*60*60*1000)return;try{await getGoogleDriveToken(false);await createGoogleDriveBackupFile()}catch(e){console.info('Google Drive autobackup ждёт подключения:',String(e.message||e));renderDriveStatus()}}
 function backup(){let blob=new Blob([JSON.stringify(backupPayload(),null,2)],{type:'application/json'}),a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download='sklad-backup-'+new Date().toISOString().slice(0,10)+'.json';a.click();setTimeout(()=>URL.revokeObjectURL(a.href),1000)}
 function restore(){let i=document.createElement('input');i.type='file';i.accept='.json';i.onchange=()=>{let r=new FileReader();r.onload=()=>{try{const payload=JSON.parse(r.result),restored=normalizeRestoredState(payload?.state||payload),keep={googleClientId:state.settings.googleClientId,googleDriveFolderId:state.settings.googleDriveFolderId,lastGoogleBackupAt:state.settings.lastGoogleBackupAt,lastGoogleBackupFile:state.settings.lastGoogleBackupFile};restored.settings={...restored.settings,...keep};state=restored;save();render();alert('Восстановлено')}catch(e){alert('Неверная копия')}};r.readAsText(i.files[0])};i.click()}
-function openView(view,remember=true){const target=document.getElementById(view);const button=document.querySelector(`nav button[data-view="${view}"]`);if(!target||!button){view='home'}document.querySelectorAll('nav button').forEach(x=>x.classList.remove('active'));document.querySelectorAll('.view').forEach(x=>x.classList.remove('active'));const finalButton=document.querySelector(`nav button[data-view="${view}"]`);const finalView=document.getElementById(view);if(finalButton)finalButton.classList.add('active');if(finalView)finalView.classList.add('active');if(remember){state.settings.activeView=view;save()}render()}
-document.querySelectorAll('nav button').forEach(b=>b.onclick=()=>{openView(b.dataset.view,true);if(b.dataset.view==='settings'||b.dataset.view==='reports')loadSharedOrderCache({silent:true})});document.querySelectorAll('[data-period]').forEach(b=>b.onclick=()=>{selectedPeriodPreset=Number(b.dataset.period);if(selectedPeriodPreset===0){let d=prompt('Количество дней для своего периода',String(state.settings.selectedPeriod||14));selectedPeriod=Math.max(1,+d||1)}else selectedPeriod=selectedPeriodPreset;state.settings.selectedPeriodPreset=selectedPeriodPreset;state.settings.selectedPeriod=selectedPeriod;save();render()});document.getElementById('autoBackup').onchange=e=>{state.settings.autoBackup=e.target.checked;save();if(e.target.checked)maybeAutoGoogleBackup()};openView(state.settings.activeView||'home',false);setTimeout(()=>bootstrapWarehouseD1().finally(()=>{startWarehouseCloudWatcher();return loadSharedOrderCache({silent:true})}),0);setTimeout(()=>maybeAutoGoogleBackup(),2500);setInterval(()=>loadSharedOrderCache({silent:true}),300000);setInterval(()=>maybeAutoGoogleBackup(),60*60*1000);
+function openView(view,remember=true){
+  const valid=['home','products','movement','purchases','reports','settings'];
+  if(!valid.includes(view)||!document.getElementById(view))view='home';
+  document.querySelectorAll('nav button').forEach(x=>x.classList.remove('active'));
+  document.querySelectorAll('.view').forEach(x=>x.classList.remove('active'));
+  const finalButton=document.querySelector(`nav button[data-view="${view}"]`),finalView=document.getElementById(view);
+  if(finalButton)finalButton.classList.add('active');if(finalView)finalView.classList.add('active');
+  if(remember){localStorage.setItem(ACTIVE_VIEW_KEY,view);state.settings.activeView=view;saveLocalOnly()}
+  render();
+}
+document.querySelectorAll('nav button').forEach(b=>b.onclick=()=>{openView(b.dataset.view,true);if(b.dataset.view==='settings'||b.dataset.view==='reports')loadSharedOrderCache({silent:true})});document.querySelectorAll('[data-period]').forEach(b=>b.onclick=()=>{selectedPeriodPreset=Number(b.dataset.period);if(selectedPeriodPreset===0){let d=prompt('Количество дней для своего периода',String(state.settings.selectedPeriod||14));selectedPeriod=Math.max(1,+d||1)}else selectedPeriod=selectedPeriodPreset;state.settings.selectedPeriodPreset=selectedPeriodPreset;state.settings.selectedPeriod=selectedPeriod;save();render()});document.getElementById('autoBackup').onchange=e=>{state.settings.autoBackup=e.target.checked;save();if(e.target.checked)maybeAutoGoogleBackup()};const startupView=localStorage.getItem(ACTIVE_VIEW_KEY)||'home';openView(startupView,false);setTimeout(()=>loadSharedOrderCache({silent:true}),0);setTimeout(()=>bootstrapWarehouseD1().finally(()=>{startWarehouseCloudWatcher();setTimeout(()=>loadSharedOrderCache({silent:true}),0)}),0);setTimeout(()=>maybeAutoGoogleBackup(),2500);setInterval(()=>loadSharedOrderCache({silent:true}),300000);setInterval(()=>maybeAutoGoogleBackup(),60*60*1000);
 
 function enhanceArrivalProductSearch(){}
 </script>
-<script src="./cloud-sync-v3.js?v=20260814v4"></script>
+<script src="./cloud-sync-v3.js?v=20260814v5"></script>
 <script src="./kaspi-report-v2.js?v=20260814h"></script>
 </body>
 </html>

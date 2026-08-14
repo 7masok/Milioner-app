@@ -145,6 +145,7 @@ bootstrapWarehouseD1=async function(){
 
 startWarehouseCloudWatcher=function(){
   if(warehouseWatchStarted)return;warehouseWatchStarted=true;
+  setTimeout(()=>pullWarehouseFromD1({force:true}),800);
   setInterval(()=>pullWarehouseFromD1(),15000);
   document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='visible')pullWarehouseFromD1({force:true})});
   window.addEventListener('focus',()=>pullWarehouseFromD1({force:true}));window.addEventListener('online',()=>pullWarehouseFromD1({force:true}));
