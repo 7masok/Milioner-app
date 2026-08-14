@@ -1,0 +1,32 @@
+name: Compact D1 warehouse snapshot
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/compact-warehouse-cloud.yml'
+jobs:
+  compact:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Remove derived marketplace state from warehouse snapshot
+        run: |
+          python - <<'PY'
+          import json, subprocess, tempfile, os
+          url='https://millioner-api.7masok.workers.dev/api/warehouse-state'
+          headers=['-H','Origin: https://7masok.github.io']
+          raw=subprocess.check_output(['curl','-fSs','--max-time','60',*headers,url],text=True)
+          d=json.loads(raw); state=d.get('state') or {}; rev=int(d.get('revision') or 0)
+          before=len(json.dumps(state,ensure_ascii=False,separators=(',',':')).encode())
+          state.pop('marketOrderState',None)
+          state.pop('reservations',None)
+          body=json.dumps({'baseRevision':rev,'state':state},ensure_ascii=False,separators=(',',':'))
+          f=tempfile.NamedTemporaryFile('w',delete=False,encoding='utf-8');f.write(body);f.close()
+          p=subprocess.run(['curl','-fSs','--max-time','90','-X','PUT',*headers,'-H','Content-Type: application/json','--data-binary','@'+f.name,url],capture_output=True,text=True)
+          os.unlink(f.name)
+          if p.returncode: raise SystemExit('PUT failed: '+p.stderr)
+          out=json.loads(p.stdout); print('PUT',out)
+          raw2=subprocess.check_output(['curl','-fSs','--max-time','60',*headers,url],text=True)
+          d2=json.loads(raw2); state2=d2.get('state') or {}; after=len(json.dumps(state2,ensure_ascii=False,separators=(',',':')).encode())
+          print('before',before,'after',after,'revision',d2.get('revision'),'products',len(state2.get('products') or []),'sales',len(state2.get('sales') or []),'purchases',len(state2.get('purchases') or []),'movements',len(state2.get('movements') or []))
+          if after>=before: raise SystemExit('snapshot did not shrink')
+          PY
