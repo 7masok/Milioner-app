@@ -1,0 +1,26 @@
+name: Diagnose mixed purchase
+on:
+  push:
+    branches: [main]
+    paths: ['.github/workflows/diagnose-mixed-purchase.yml']
+permissions:
+  contents: read
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Inspect cloud purchases
+        run: |
+          python - <<'PY'
+          import json, urllib.request
+          req=urllib.request.Request('https://millioner-api.7masok.workers.dev/api/warehouse-state',headers={'Origin':'https://7masok.github.io','User-Agent':'diagnose'})
+          data=json.load(urllib.request.urlopen(req,timeout=30))
+          s=data.get('state') or {}
+          products={str(x.get('id')):x.get('name','') for x in s.get('products',[])}
+          rows=sorted(s.get('purchases',[]),key=lambda x:max(int(x.get('createdAt') or 0),int(x.get('orderedAt') or 0),int(x.get('date') or 0)),reverse=True)
+          print('REVISION',data.get('revision'),'PURCHASES',len(rows))
+          for x in rows[:60]:
+            name=products.get(str(x.get('productId')),'')
+            if 'хел' in name.lower() or 'kitty' in name.lower() or 'ловстрак' in name.lower() or rows.index(x)<20:
+              print(json.dumps({'name':name,'productId':x.get('productId'),'qty':x.get('qty'),'status':x.get('status'),'shipmentId':x.get('shipmentId'),'batch':x.get('batch'),'createdAt':x.get('createdAt')},ensure_ascii=False))
+          PY
