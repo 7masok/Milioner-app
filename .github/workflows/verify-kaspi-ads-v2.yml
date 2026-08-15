@@ -1,0 +1,25 @@
+name: Verify Kaspi ads accounting
+on:
+  push:
+    branches: [main]
+    paths: ['.github/workflows/verify-kaspi-ads-v2.yml']
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify code and current cloud data
+        run: |
+          node --check kaspi-ads-v2.js
+          grep -q 'kaspi-ads-v2.js?v=20260815b' index.html
+          grep -q "showKaspiAdsBreakdown('+days+')" kaspi-report-v2.js
+          python - <<'PY'
+          import json, urllib.request
+          req=urllib.request.Request('https://millioner-api.7masok.workers.dev/api/warehouse-state',headers={'Origin':'https://7masok.github.io','User-Agent':'verify-ads'})
+          data=json.load(urllib.request.urlopen(req,timeout=30))
+          state=data.get('state') or {}
+          ads=state.get('kaspiAdExpenses') or []
+          print('REVISION',data.get('revision'),'AD_IMPORTS',len(ads))
+          for b in sorted(ads,key=lambda x:int(x.get('importedAt') or 0),reverse=True)[:20]:
+              print(json.dumps({'campaign':b.get('campaignName') or b.get('sourceKey'),'from':b.get('fromDate'),'to':b.get('toDate'),'amount':b.get('amount'),'lines':len(b.get('lines') or []),'unmatched':b.get('unmatchedAmount')},ensure_ascii=False))
+          PY
