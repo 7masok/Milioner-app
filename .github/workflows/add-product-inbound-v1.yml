@@ -1,0 +1,75 @@
+name: Add inbound quantities to products
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/add-product-inbound-v1.yml'
+permissions:
+  contents: write
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Patch products view
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          p=Path('index.html')
+          s=p.read_text(encoding='utf-8')
+
+          old='<div class="card"><div class="label">В резерве</div><div class="num" id="productReservedQty">0 шт.</div></div><div class="card"><div class="label">Себестоимость остатка</div><div class="num" id="productStockCost">0 ₸</div></div>'
+          new='<div class="card"><div class="label">В резерве</div><div class="num" id="productReservedQty">0 шт.</div></div><div class="card"><div class="label">В пути</div><div class="num" id="productInboundQty">0 шт.</div></div><div class="card"><div class="label">Себестоимость остатка</div><div class="num" id="productStockCost">0 ₸</div></div>'
+          if old not in s and 'id="productInboundQty"' not in s:
+              raise SystemExit('product metrics marker missing')
+          if old in s:
+              s=s.replace(old,new,1)
+
+          old2="function purchaseInboundQty(productId){return (state.purchases||[]).filter(x=>String(x.productId)===String(productId)&&purchaseStatus(x)!=='received').reduce((sum,x)=>sum+Math.max(0,Number(x.qty)||0),0)}"
+          new2="function purchaseInboundQty(productId){return (state.purchases||[]).filter(x=>String(x.productId)===String(productId)&&purchaseStatus(x)!=='received').reduce((sum,x)=>sum+Math.max(0,Number(x.qty)||0),0)}\nfunction purchaseInboundTotalQty(){return stockProducts().reduce((sum,p)=>sum+purchaseInboundQty(p.id),0)}"
+          if old2 in s:
+              s=s.replace(old2,new2,1)
+          elif 'function purchaseInboundTotalQty()' not in s:
+              raise SystemExit('purchaseInboundQty marker missing')
+
+          old3="stockQty=document.getElementById('productStockQty'),reservedQty=document.getElementById('productReservedQty'),stockCost=document.getElementById('productStockCost')"
+          new3="stockQty=document.getElementById('productStockQty'),reservedQty=document.getElementById('productReservedQty'),inboundQty=document.getElementById('productInboundQty'),stockCost=document.getElementById('productStockCost')"
+          if old3 in s:
+              s=s.replace(old3,new3,1)
+          elif "inboundQty=document.getElementById('productInboundQty')" not in s:
+              raise SystemExit('renderProducts metrics marker missing')
+
+          old4="if(reservedQty)reservedQty.textContent=reservedStockTotal().toLocaleString('ru-RU')+' шт.';if(stockCost)stockCost.textContent=fmt(warehouseInventoryCost())"
+          new4="if(reservedQty)reservedQty.textContent=reservedStockTotal().toLocaleString('ru-RU')+' шт.';if(inboundQty)inboundQty.textContent=purchaseInboundTotalQty().toLocaleString('ru-RU')+' шт.';if(stockCost)stockCost.textContent=fmt(warehouseInventoryCost())"
+          if old4 in s:
+              s=s.replace(old4,new4,1)
+          elif "purchaseInboundTotalQty().toLocaleString('ru-RU')+' шт.'" not in s:
+              raise SystemExit('renderProducts value marker missing')
+
+          old5="function productCard(p,profit=productAllTimeProfitStats(p),d=productAverageDailySales(p,25),stock=productAvailableStock(p)){const kind=isBundleProduct(p)?'Набор · ':'',r=reserved(p),physical=isBundleProduct(p)?stock:(Number(p.stock)||0);return `"
+          new5="function productCard(p,profit=productAllTimeProfitStats(p),d=productAverageDailySales(p,25),stock=productAvailableStock(p)){const kind=isBundleProduct(p)?'Набор · ':'',r=reserved(p),physical=isBundleProduct(p)?stock:(Number(p.stock)||0),inbound=isBundleProduct(p)?0:purchaseInboundQty(p.id);return `"
+          if old5 in s:
+              s=s.replace(old5,new5,1)
+          elif 'inbound=isBundleProduct(p)?0:purchaseInboundQty(p.id)' not in s:
+              raise SystemExit('productCard header marker missing')
+
+          old6="${r>0?`<div class=\"muted\" style=\"color:#8a5300\">Резерв: ${r} шт. · физически: ${physical} шт.</div>`:''}<div class=\"muted\">Средняя прибыль/шт. за всё время: ${fmt(profit.unitProfit)}</div>"
+          new6="${r>0?`<div class=\"muted\" style=\"color:#8a5300\">Резерв: ${r} шт. · физически: ${physical} шт.</div>`:''}${inbound>0?`<div class=\"muted\" style=\"color:#6f42c1\">В пути: ${inbound} шт.</div>`:''}<div class=\"muted\">Средняя прибыль/шт. за всё время: ${fmt(profit.unitProfit)}</div>"
+          if old6 in s:
+              s=s.replace(old6,new6,1)
+          elif 'В пути: ${inbound} шт.' not in s:
+              raise SystemExit('productCard body marker missing')
+
+          p.write_text(s,encoding='utf-8')
+          PY
+          node -e "const fs=require('fs');const h=fs.readFileSync('index.html','utf8');if(!h.includes('productInboundQty')||!h.includes('В пути: ${inbound} шт.'))process.exit(1)"
+      - name: Commit
+        run: |
+          git config user.name 'millioner-maintenance'
+          git config user.email 'actions@users.noreply.github.com'
+          git add index.html
+          git diff --cached --quiet && exit 0
+          git commit -m 'Show inbound stock on product cards'
+          git push origin HEAD:main
