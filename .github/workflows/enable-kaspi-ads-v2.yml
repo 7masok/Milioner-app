@@ -19,27 +19,30 @@ jobs:
 
           p=Path('index.html')
           s=p.read_text(encoding='utf-8')
-          tag='<script src="./kaspi-ads-v2.js?v=20260815a"></script>'
-          if tag not in s:
+          tag='<script src="./kaspi-ads-v2.js?v=20260815b"></script>'
+          old_tag='<script src="./kaspi-ads-v2.js?v=20260815a"></script>'
+          if old_tag in s:
+              s=s.replace(old_tag,tag,1)
+          elif tag not in s:
               marker='<script src="./kaspi-report-v2.js?v=20260814h"></script>'
               if marker not in s:
                   raise SystemExit('kaspi report script marker missing')
-              s=s.replace(marker, marker+'\n'+tag, 1)
+              s=s.replace(marker,marker+'\n'+tag,1)
           p.write_text(s,encoding='utf-8')
 
           p=Path('kaspi-report-v2.js')
           s=p.read_text(encoding='utf-8')
           old='<div class="integration-actions"><button class="btn dark" onclick="openKaspiAdsImport()">Импорт рекламы</button><button class="btn" onclick="showKaspiAdsHistory()">История</button></div>'
-          new='<div class="integration-actions"><button class="btn" onclick="showKaspiAdsBreakdown('+"days"+')">Расходы</button><button class="btn dark" onclick="openKaspiAdsImport()">Импорт</button><button class="btn" onclick="showKaspiAdsHistory()">История</button></div>'
+          new="""<div class="integration-actions"><button class="btn" onclick="showKaspiAdsBreakdown('+days+')">Расходы</button><button class="btn dark" onclick="openKaspiAdsImport()">Импорт</button><button class="btn" onclick="showKaspiAdsHistory()">История</button></div>"""
           if old in s:
               s=s.replace(old,new,1)
-          elif 'showKaspiAdsBreakdown(' not in s:
+          elif "showKaspiAdsBreakdown('+days+')" not in s:
               raise SystemExit('Kaspi ads action marker missing')
           p.write_text(s,encoding='utf-8')
           PY
           node --check kaspi-ads-v2.js
           node --check kaspi-report-v2.js
-          node -e "const fs=require('fs'),s=fs.readFileSync('index.html','utf8');if(!s.includes('kaspi-ads-v2.js?v=20260815a'))process.exit(1)"
+          node -e "const fs=require('fs'),s=fs.readFileSync('index.html','utf8');if(!s.includes('kaspi-ads-v2.js?v=20260815b'))process.exit(1)"
       - name: Commit
         run: |
           git config user.name 'millioner-maintenance'
