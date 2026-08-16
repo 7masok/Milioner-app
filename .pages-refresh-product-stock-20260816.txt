@@ -1,0 +1,1 @@
+Publish product stock status split: in sale / in transit / at warehouse.
