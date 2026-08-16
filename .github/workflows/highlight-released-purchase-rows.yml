@@ -1,0 +1,37 @@
+name: Highlight released purchase rows
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/highlight-released-purchase-rows.yml'
+permissions:
+  contents: write
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Apply patch
+        run: python .github/scripts/highlight_released_purchase_rows.py
+      - name: Validate JavaScript
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import re
+          html=Path('index.html').read_text(encoding='utf-8')
+          scripts=re.findall(r'<script>(.*?)</script>',html,flags=re.S|re.I)
+          Path('/tmp/index-inline.js').write_text('\n'.join(scripts),encoding='utf-8')
+          if 'Частично в продаже' not in html or 'rowStatus' not in html:
+              raise SystemExit('status highlight patch missing')
+          PY
+          node --check /tmp/index-inline.js
+      - name: Commit
+        run: |
+          git config user.name 'millioner-maintenance'
+          git config user.email 'actions@users.noreply.github.com'
+          git add index.html
+          git diff --cached --quiet && exit 0
+          git commit -m 'Highlight released items in purchase cards'
+          git push origin HEAD:main
