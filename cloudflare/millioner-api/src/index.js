@@ -78,6 +78,20 @@ export default {
         return json({ ok: true, service: 'millioner-api', d1: db?.ok === 1 }, 200, cors);
       }
 
+      if (url.pathname === '/api/stock-sync-now' && request.method === 'POST') {
+        if (!isTrustedBrowserOrigin(origin, env)) return json({ ok:false, error:'Forbidden origin' },403,cors);
+        let body={}; try{ body=await request.json(); }catch{}
+        const requested=Array.isArray(body?.markets)?body.markets.map(normalizeMarket).filter(x=>['WB','WB2'].includes(x)):['WB','WB2'];
+        const markets=[...new Set(requested.length?requested:['WB','WB2'])];
+        const results={};
+        for(const market of markets){
+          try{ results[market]=await syncWbStockMarket(env,market,{force:body?.force===true}); }
+          catch(e){ results[market]={ok:false,market,error:String(e?.message||e)}; }
+        }
+        const ok=markets.every(m=>results[m]?.ok!==false);
+        return json({ok,serverTime:Date.now(),results},ok?200:502,cors);
+      }
+
       if (url.pathname === '/api/wb-access-check' && request.method === 'GET') {
         const market = normalizeMarket(url.searchParams.get('market'));
         if (!['WB','WB2'].includes(market)) return json({ok:false,error:'market must be WB or WB2'},400,cors);
