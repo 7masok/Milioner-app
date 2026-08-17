@@ -1,0 +1,36 @@
+name: Diagnose live Kaspi stock synchronization
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/diag-kaspi-stock-live-20260817.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Millioner market status
+        run: |
+          set -e
+          echo '=== MARKET STATUS ==='
+          curl -fsSL --max-time 30 -H 'Origin: https://7masok.github.io' 'https://millioner-api.7masok.workers.dev/api/market-status' | jq .
+      - name: Kaspi worker health
+        run: |
+          set +e
+          echo '=== KASPI WORKER HEALTH ==='
+          curl -sS -i --max-time 30 'https://fragrant-shadow-72ed.7masok.workers.dev/health'
+          echo
+          echo '=== KASPI WORKER SYNC ==='
+          curl -sS -i --max-time 60 'https://fragrant-shadow-72ed.7masok.workers.dev/kaspi/sync?days=1&size=20'
+      - name: Warehouse Kaspi linked products
+        run: |
+          set -e
+          curl -fsSL --max-time 30 -H 'Origin: https://7masok.github.io' 'https://millioner-api.7masok.workers.dev/api/warehouse-state' -o /tmp/warehouse.json
+          echo '=== KASPI LINKED PRODUCT COUNT ==='
+          jq '[.state.products[] | select((.kaspi // "") != "")] | length' /tmp/warehouse.json
+          echo '=== NONZERO KASPI LINKED SAMPLE ==='
+          jq '[.state.products[] | select((.kaspi // "") != "" and ((.stock // 0) > 0)) | {name,kaspi,stock}] | .[:20]' /tmp/warehouse.json
