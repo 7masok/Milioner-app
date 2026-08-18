@@ -267,7 +267,7 @@ export default {
             ctx.waitUntil(refreshKaspiReportHistory(env, { days: 14 }).catch(()=>null));
           }
           const orders = await kaspiReportOrdersFromDb(env.DB, bounds.start, bounds.end);
-          const recovered = await hydrateKaspiReportOrderLines(env, orders, 8);
+          const recovered = await hydrateKaspiReportOrderLines(env, orders, 8, String(url.searchParams.get('order') || ''));
           const returns = await kaspiReportReturnsFromDb(env.DB, bounds.start, bounds.end);
           const coverage = await kaspiReportCacheState(env.DB);
           const historyComplete = Boolean(coverage.coverageFrom && coverage.coverageFrom <= bounds.start);
@@ -515,6 +515,7 @@ function normalizeKaspiReportOrder(item){
     approvedByBankDate:toTimestamp(a?.approvedByBankDate),
     totalPrice:Number(a?.totalPrice||0),
     deliveryCostForSeller:Number(a?.deliveryCostForSeller||0),
+    entryCount:Array.isArray(item?.relationships?.entries?.data)?item.relationships.entries.data.length:0,
     lines:[]
   };
 }
@@ -571,8 +572,8 @@ async function kaspiReportCacheState(db){
 }
 
 async function kaspiReportOrdersFromDb(db,start,end){
-  const rows=await db.prepare(`SELECT order_id AS id,code,status,state,creation_date AS creationDate,completion_date AS completionDate,approved_by_bank_date AS approvedByBankDate,total_price AS totalPrice,delivery_cost_for_seller AS deliveryCostForSeller,lines_json AS linesJson FROM kaspi_report_orders WHERE completion_date>=? AND completion_date<? ORDER BY completion_date ASC`).bind(Number(start)||0,Number(end)||Date.now()+86400000).all();
-  return (rows.results||[]).map(x=>{let lines=[];try{const parsed=JSON.parse(String(x.linesJson||'[]'));if(Array.isArray(parsed))lines=parsed}catch{}const {linesJson,...order}=x;return {...order,lines}});
+  const rows=await db.prepare(`SELECT order_id AS id,code,status,state,creation_date AS creationDate,completion_date AS completionDate,approved_by_bank_date AS approvedByBankDate,total_price AS totalPrice,delivery_cost_for_seller AS deliveryCostForSeller,lines_json AS linesJson,raw_json AS rawJson FROM kaspi_report_orders WHERE completion_date>=? AND completion_date<? ORDER BY completion_date ASC`).bind(Number(start)||0,Number(end)||Date.now()+86400000).all();
+  return (rows.results||[]).map(x=>{let lines=[],entryCount=0;try{const parsed=JSON.parse(String(x.linesJson||'[]'));if(Array.isArray(parsed))lines=parsed}catch{}try{entryCount=Math.max(0,Number(JSON.parse(String(x.rawJson||'{}'))?.entryCount)||0)}catch{}const {linesJson,rawJson,...order}=x;return {...order,entryCount,lines}});
 }
 
 async function fetchKaspiReportLinesFromWorker(env,orders,days=14){
@@ -608,8 +609,9 @@ async function fetchKaspiReportLinesFromWorker(env,orders,days=14){
   return recovered;
 }
 
-async function hydrateKaspiReportOrderLines(env,orders,maxOrders=8){
-  const missing=(orders||[]).filter(o=>!Array.isArray(o.lines)||!o.lines.length).sort((a,b)=>(Number(b.completionDate)||0)-(Number(a.completionDate)||0)).slice(0,Math.max(0,Number(maxOrders)||0));
+async function hydrateKaspiReportOrderLines(env,orders,maxOrders=8,priorityCode=''){
+  const wantedCode=String(priorityCode||'').trim();
+  const missing=(orders||[]).filter(o=>!Array.isArray(o.lines)||!o.lines.length).sort((a,b)=>{const ap=wantedCode&&String(a.code||'')===wantedCode?1:0,bp=wantedCode&&String(b.code||'')===wantedCode?1:0;return (bp-ap)||((Number(b.entryCount)||0)-(Number(a.entryCount)||0))||((Number(b.completionDate)||0)-(Number(a.completionDate)||0))}).slice(0,Math.max(0,Number(maxOrders)||0));
   if(!missing.length)return {orders:0,lines:0};
   const token=String(env.KASPI_TOKEN||'').trim();
   const workerRecovered=token?new Map():await fetchKaspiReportLinesFromWorker(env,missing,14);
