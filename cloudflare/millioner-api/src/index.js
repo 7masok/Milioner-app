@@ -115,6 +115,56 @@ export default {
       }
     }
 
+
+    // FAST_KASPI_REPORT_READ_V1: report tab switches must never wait for full schema checks.
+    if (url.pathname === '/api/kaspi-report-orders' && request.method === 'GET') {
+      const rawDays = Number(url.searchParams.get('days') || 1);
+      const rawFrom = Number(url.searchParams.get('from') || 0);
+      const rawTo = Number(url.searchParams.get('to') || 0);
+      const bounds = kaspiReportPeriodBounds(rawDays, rawFrom, rawTo);
+      try {
+        let coverage = await kaspiReportCacheState(env.DB);
+        const stale = !coverage.lastRefreshAt || Date.now() - coverage.lastRefreshAt > 2 * 60 * 1000;
+        let orders = await kaspiReportOrdersFromDb(env.DB, bounds.start, bounds.end);
+        if (!orders.length || !coverage.lastRefreshAt) {
+          await refreshKaspiReportHistory(env, { days: 14 });
+          orders = await kaspiReportOrdersFromDb(env.DB, bounds.start, bounds.end);
+          coverage = await kaspiReportCacheState(env.DB);
+        } else if (stale) {
+          ctx.waitUntil(refreshKaspiReportHistory(env, { days: 14 }).catch(()=>null));
+        }
+        const priorityCode = String(url.searchParams.get('order') || '').trim();
+        let recovered = { orders:0, lines:0 };
+        let recoveryQueued = false;
+        if (priorityCode) recovered = await hydrateKaspiReportOrderLines(env, orders, 1, priorityCode);
+        else recoveryQueued = queueKaspiReportLineRecovery(ctx, env, orders, 8);
+        const returns = await kaspiReportReturnsFromDb(env.DB, bounds.start, bounds.end);
+        const historyComplete = Boolean(coverage.coverageFrom && coverage.coverageFrom <= bounds.start);
+        const warnings = [];
+        if (!historyComplete && coverage.coverageFrom) warnings.push(`История Kaspi в автоматическом кеше начинается ${new Date(coverage.coverageFrom).toLocaleDateString('ru-RU',{timeZone:'Asia/Almaty'})}. Более старые дни не подменяются приблизительными данными.`);
+        return json({
+          ok:true,
+          days:rawDays,
+          from:rawFrom||null,
+          to:rawTo||null,
+          fetchedAt:Date.now(),
+          source:'Kaspi exact completionDate paged cache',
+          historyComplete,
+          coverageFrom:coverage.coverageFrom||null,
+          coverageTo:coverage.coverageTo||null,
+          lastRefreshAt:coverage.lastRefreshAt||null,
+          warnings,
+          recoveredLines:recovered.lines,
+          recoveredOrders:recovered.orders,
+          recoveryQueued,
+          orders,
+          returns
+        }, 200, cors);
+      } catch (e) {
+        return json({ ok:false, error:String(e?.message || e) }, 502, cors);
+      }
+    }
+
     try {
       await ensureSchema(env.DB);
 
@@ -252,53 +302,6 @@ export default {
         return json({ ok: true, orders: rows.results || [] }, 200, cors);
       }
 
-      if (url.pathname === '/api/kaspi-report-orders' && request.method === 'GET') {
-        const rawDays = Number(url.searchParams.get('days') || 1);
-        const rawFrom = Number(url.searchParams.get('from') || 0);
-        const rawTo = Number(url.searchParams.get('to') || 0);
-        const bounds = kaspiReportPeriodBounds(rawDays, rawFrom, rawTo);
-        try {
-          const cached = await kaspiReportCacheState(env.DB);
-          const stale = !cached.lastRefreshAt || Date.now() - cached.lastRefreshAt > 2 * 60 * 1000;
-          const requestedRows = await kaspiReportOrdersFromDb(env.DB, bounds.start, bounds.end);
-          if (!requestedRows.length || !cached.lastRefreshAt) {
-            await refreshKaspiReportHistory(env, { days: 14 });
-          } else if (stale) {
-            ctx.waitUntil(refreshKaspiReportHistory(env, { days: 14 }).catch(()=>null));
-          }
-          const orders = await kaspiReportOrdersFromDb(env.DB, bounds.start, bounds.end);
-          const priorityCode = String(url.searchParams.get('order') || '').trim();
-          let recovered = { orders:0, lines:0 };
-          let recoveryQueued = false;
-          if (priorityCode) recovered = await hydrateKaspiReportOrderLines(env, orders, 1, priorityCode);
-          else recoveryQueued = await queueKaspiReportLineRecovery(ctx, env, orders, 8);
-          const returns = await kaspiReportReturnsFromDb(env.DB, bounds.start, bounds.end);
-          const coverage = await kaspiReportCacheState(env.DB);
-          const historyComplete = Boolean(coverage.coverageFrom && coverage.coverageFrom <= bounds.start);
-          const warnings = [];
-          if (!historyComplete && coverage.coverageFrom) warnings.push(`История Kaspi в автоматическом кеше начинается ${new Date(coverage.coverageFrom).toLocaleDateString('ru-RU',{timeZone:'Asia/Almaty'})}. Более старые дни не подменяются приблизительными данными.`);
-          return json({
-            ok:true,
-            days:rawDays,
-            from:rawFrom||null,
-            to:rawTo||null,
-            fetchedAt:Date.now(),
-            source:'Kaspi exact completionDate paged cache',
-            historyComplete,
-            coverageFrom:coverage.coverageFrom||null,
-            coverageTo:coverage.coverageTo||null,
-            lastRefreshAt:coverage.lastRefreshAt||null,
-            warnings,
-            recoveredLines:recovered.lines,
-            recoveredOrders:recovered.orders,
-            recoveryQueued,
-            orders,
-            returns
-          }, 200, cors);
-        } catch (e) {
-          return json({ ok:false, error:String(e?.message || e) }, 502, cors);
-        }
-      }
 
       if (url.pathname === '/api/products' && request.method === 'GET') {
         const rows = await env.DB.prepare(`
@@ -648,13 +651,13 @@ async function hydrateKaspiReportOrderLines(env,orders,maxOrders=8,priorityCode=
   }
   return {orders:recoveredOrders,lines:recoveredLines};
 }
-async function queueKaspiReportLineRecovery(ctx,env,orders,maxOrders=8){
+function queueKaspiReportLineRecovery(ctx,env,orders,maxOrders=8){
   const missing=(orders||[]).filter(order=>!Array.isArray(order.lines)||!order.lines.length);
   if(!missing.length)return false;
-  const now=Date.now(),staleBefore=now-2*60*1000;
-  const claim=await env.DB.prepare(`INSERT INTO kaspi_report_cache_state(id,last_refresh_at,last_items,last_error,line_recovery_started_at,line_recovery_finished_at) VALUES(1,0,0,'',?,0) ON CONFLICT(id) DO UPDATE SET line_recovery_started_at=excluded.line_recovery_started_at WHERE kaspi_report_cache_state.line_recovery_started_at=0 OR kaspi_report_cache_state.line_recovery_started_at<?`).bind(now,staleBefore).run();
-  if(Number(claim?.meta?.changes||0)<1)return false;
   ctx.waitUntil((async()=>{
+    const now=Date.now(),staleBefore=now-2*60*1000;
+    const claim=await env.DB.prepare(`INSERT INTO kaspi_report_cache_state(id,last_refresh_at,last_items,last_error,line_recovery_started_at,line_recovery_finished_at) VALUES(1,0,0,'',?,0) ON CONFLICT(id) DO UPDATE SET line_recovery_started_at=excluded.line_recovery_started_at WHERE kaspi_report_cache_state.line_recovery_started_at=0 OR kaspi_report_cache_state.line_recovery_started_at<?`).bind(now,staleBefore).run();
+    if(Number(claim?.meta?.changes||0)<1)return;
     try{
       await hydrateKaspiReportOrderLines(env,missing,maxOrders);
     }catch(e){
@@ -662,10 +665,9 @@ async function queueKaspiReportLineRecovery(ctx,env,orders,maxOrders=8){
     }finally{
       await env.DB.prepare(`UPDATE kaspi_report_cache_state SET line_recovery_started_at=0,line_recovery_finished_at=? WHERE id=1`).bind(Date.now()).run();
     }
-  })());
+  })().catch(e=>console.warn('Kaspi report recovery queue failed',String(e?.message||e))));
   return true;
 }
-
 async function kaspiReportReturnsFromDb(db,start,end){
   const rows=await db.prepare(`SELECT order_id AS id,code,amount,return_date AS returnDate,original_completion_date AS originalCompletionDate,detected_at AS detectedAt,date_source AS dateSource FROM kaspi_report_returns WHERE return_date>=? AND return_date<? ORDER BY return_date ASC`).bind(Number(start)||0,Number(end)||Date.now()+86400000).all();
   return rows.results||[];
