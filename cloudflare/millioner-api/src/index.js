@@ -413,7 +413,12 @@ export default {
     ctx.waitUntil((async () => {
       await ensureSchema(env.DB);
       let kaspiReport = null;
-      try { kaspiReport = await refreshKaspiReportHistory(env, { days: 14 }); }
+      try {
+        kaspiReport = await refreshKaspiReportHistory(env, { days: 14 });
+        const bounds = kaspiReportPeriodBounds(14, 0, 0);
+        const reportOrders = await kaspiReportOrdersFromDb(env.DB, bounds.start, bounds.end);
+        kaspiReport.recovery = await hydrateKaspiReportOrderLines(env, reportOrders, 8);
+      }
       catch (e) { kaspiReport = { ok:false, error:String(e?.message||e) }; }
       const orders = await syncAll(env, { scheduled: true });
       const stocks = {};
@@ -570,28 +575,70 @@ async function kaspiReportOrdersFromDb(db,start,end){
   return (rows.results||[]).map(x=>{let lines=[];try{const parsed=JSON.parse(String(x.linesJson||'[]'));if(Array.isArray(parsed))lines=parsed}catch{}const {linesJson,...order}=x;return {...order,lines}});
 }
 
+async function fetchKaspiReportLinesFromWorker(env,orders,days=14){
+  const wanted=new Map((orders||[]).map(order=>[String(order?.id||''),order]).filter(([id])=>id));
+  const positions=new Map();
+  let ordinal=0,pageCount=1;
+  for(let batch=0;batch<Math.min(KASPI_MAX_BATCHES,pageCount);batch++){
+    const page=await fetchKaspiReportPage(env,{days,batch,size:100});
+    pageCount=Math.max(1,Number(page?.meta?.pageCount)||1);
+    for(let index=0;index<page.items.length;index++){
+      const id=String(page.items[index]?.id||'');
+      if(wanted.has(id))positions.set(id,ordinal+index);
+    }
+    ordinal+=page.items.length;
+    if(positions.size===wanted.size)break;
+  }
+  const base=cleanUrl(env.KASPI_WORKER_URL)||'https://kaspi-worker.internal';
+  const recovered=new Map();
+  for(const [id,batch] of positions){
+    try{
+      const q=new URLSearchParams({days:String(Math.max(1,Math.min(14,Number(days)||14))),state:'ARCHIVE',batch:String(batch),size:'1'});
+      const req=new Request(`${base}/kaspi/sync?${q.toString()}`,{headers:{Accept:'application/json'}});
+      const response=env.KASPI_WORKER?await env.KASPI_WORKER.fetch(req):await fetch(req);
+      const data=await safeJson(response,`Kaspi report lines ${id}`);
+      if(!response.ok||data?.ok===false)throw new Error(data?.error||data?.message||`Kaspi Worker HTTP ${response.status}`);
+      const match=(Array.isArray(data?.orders)?data.orders:[]).find(order=>String(order?.id||'')===id);
+      const lines=Array.isArray(match?.lines)?match.lines:[];
+      if(lines.length)recovered.set(id,lines);
+    }catch(e){
+      console.warn('Kaspi Worker report line recovery failed',id,String(e?.message||e));
+    }
+  }
+  return recovered;
+}
+
 async function hydrateKaspiReportOrderLines(env,orders,maxOrders=8){
-  const token=String(env.KASPI_TOKEN||'').trim();
   const missing=(orders||[]).filter(o=>!Array.isArray(o.lines)||!o.lines.length).sort((a,b)=>(Number(b.completionDate)||0)-(Number(a.completionDate)||0)).slice(0,Math.max(0,Number(maxOrders)||0));
-  if(!token||!missing.length)return {orders:0,lines:0};
+  if(!missing.length)return {orders:0,lines:0};
+  const token=String(env.KASPI_TOKEN||'').trim();
+  const workerRecovered=token?new Map():await fetchKaspiReportLinesFromWorker(env,missing,14);
   let budget=Math.min(32,KASPI_EXTERNAL_BUDGET),recoveredOrders=0,recoveredLines=0;
   for(const order of missing){
-    if(budget<1)break;
+    if(token&&budget<1)break;
     try{
-      const recovered=await fetchKaspiOrderLinesDirect(token,order,budget);
-      budget=recovered.budget;
-      if(!recovered.lines.length)continue;
-      order.lines=recovered.lines;
-      await env.DB.prepare(`UPDATE kaspi_report_orders SET lines_json=?,updated_at=? WHERE order_id=?`).bind(JSON.stringify(recovered.lines),Date.now(),String(order.id||'')).run();
+      let lines=[];
+      if(token){
+        const recovered=await fetchKaspiOrderLinesDirect(token,order,budget);
+        budget=recovered.budget;
+        lines=recovered.lines;
+      }else{
+        lines=workerRecovered.get(String(order.id||''))||[];
+      }
+      if(!lines.length)continue;
+      order.lines=lines;
+      await env.DB.prepare(`UPDATE kaspi_report_orders SET lines_json=?,updated_at=? WHERE order_id=?`).bind(JSON.stringify(lines),Date.now(),String(order.id||'')).run();
+      const normalized=[];
+      appendKaspiLines(normalized,order,lines);
+      await upsertOrderLines(env.DB,'Kaspi',normalized);
       recoveredOrders++;
-      recoveredLines+=recovered.lines.length;
+      recoveredLines+=lines.length;
     }catch(e){
       console.warn('Kaspi report line recovery failed',String(order.code||order.id||''),String(e?.message||e));
     }
   }
   return {orders:recoveredOrders,lines:recoveredLines};
 }
-
 async function kaspiReportReturnsFromDb(db,start,end){
   const rows=await db.prepare(`SELECT order_id AS id,code,amount,return_date AS returnDate,original_completion_date AS originalCompletionDate,detected_at AS detectedAt,date_source AS dateSource FROM kaspi_report_returns WHERE return_date>=? AND return_date<? ORDER BY return_date ASC`).bind(Number(start)||0,Number(end)||Date.now()+86400000).all();
   return rows.results||[];
