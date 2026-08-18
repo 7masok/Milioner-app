@@ -137,7 +137,7 @@ export default {
         let recovered = { orders:0, lines:0 };
         let recoveryQueued = false;
         if (priorityCode) recovered = await hydrateKaspiReportOrderLines(env, orders, 1, priorityCode);
-        else recoveryQueued = queueKaspiReportLineRecovery(ctx, env, orders, 8);
+        else recoveryQueued = queueKaspiReportLineRecovery(ctx, env, orders, 36);
         const returns = await kaspiReportReturnsFromDb(env.DB, bounds.start, bounds.end);
         const historyComplete = Boolean(coverage.coverageFrom && coverage.coverageFrom <= bounds.start);
         const warnings = [];
@@ -600,20 +600,32 @@ async function fetchKaspiReportLinesFromWorker(env,orders,days=14){
     ordinal+=page.items.length;
     if(positions.size===wanted.size)break;
   }
+  const windowSize=6,windows=new Map();
+  for(const [id,position] of positions){
+    const batch=Math.floor(position/windowSize);
+    if(!windows.has(batch))windows.set(batch,new Set());
+    windows.get(batch).add(id);
+  }
   const base=cleanUrl(env.KASPI_WORKER_URL)||'https://kaspi-worker.internal';
-  const recovered=new Map();
-  for(const [id,batch] of positions){
-    try{
-      const q=new URLSearchParams({days:String(Math.max(1,Math.min(14,Number(days)||14))),state:'ARCHIVE',batch:String(batch),size:'1'});
-      const req=new Request(`${base}/kaspi/sync?${q.toString()}`,{headers:{Accept:'application/json'}});
-      const response=env.KASPI_WORKER?await env.KASPI_WORKER.fetch(req):await fetch(req);
-      const data=await safeJson(response,`Kaspi report lines ${id}`);
-      if(!response.ok||data?.ok===false)throw new Error(data?.error||data?.message||`Kaspi Worker HTTP ${response.status}`);
-      const match=(Array.isArray(data?.orders)?data.orders:[]).find(order=>String(order?.id||'')===id);
-      const lines=Array.isArray(match?.lines)?match.lines:[];
-      if(lines.length)recovered.set(id,lines);
-    }catch(e){
-      console.warn('Kaspi Worker report line recovery failed',id,String(e?.message||e));
+  const recovered=new Map(),entries=[...windows.entries()];
+  for(let offset=0;offset<entries.length;offset+=6){
+    const slice=entries.slice(offset,offset+6);
+    const results=await Promise.all(slice.map(async([batch,ids])=>{
+      try{
+        const q=new URLSearchParams({days:String(Math.max(1,Math.min(14,Number(days)||14))),state:'ARCHIVE',batch:String(batch),size:String(windowSize)});
+        const req=new Request(`${base}/kaspi/sync?${q.toString()}`,{headers:{Accept:'application/json'}});
+        const response=env.KASPI_WORKER?await env.KASPI_WORKER.fetch(req):await fetch(req);
+        const data=await safeJson(response,`Kaspi report lines window ${batch}`);
+        if(!response.ok||data?.ok===false)throw new Error(data?.error||data?.message||`Kaspi Worker HTTP ${response.status}`);
+        return (Array.isArray(data?.orders)?data.orders:[]).filter(order=>ids.has(String(order?.id||'')));
+      }catch(e){
+        console.warn('Kaspi Worker report line window recovery failed',batch,String(e?.message||e));
+        return [];
+      }
+    }));
+    for(const order of results.flat()){
+      const id=String(order?.id||''),lines=Array.isArray(order?.lines)?order.lines:[];
+      if(id&&lines.length)recovered.set(id,lines);
     }
   }
   return recovered;
