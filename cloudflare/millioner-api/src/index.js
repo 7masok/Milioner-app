@@ -11,6 +11,34 @@ const WB_ADVERT_BASE = 'https://advert-api.wildberries.ru';
 const WB_FINANCE_SYNC_MS = 6 * 60 * 60 * 1000;
 const WB_STOCK_PREVIEW_MIN_MS = 10 * 60 * 1000;
 
+function preserveExistingMarketplaceLinks(currentWarehouse, incomingWarehouse) {
+  const currentProducts = Array.isArray(currentWarehouse?.products) ? currentWarehouse.products : [];
+  const incomingProducts = Array.isArray(incomingWarehouse?.products) ? incomingWarehouse.products : [];
+  incomingWarehouse.products = incomingProducts;
+  const incomingById = new Map(incomingProducts.map(product => [String(product?.id || ''), product]));
+  const fields = ['kaspi', 'wb', 'wb2', 'ozon'];
+  for (const currentProduct of currentProducts) {
+    const id = String(currentProduct?.id || '');
+    if (!id) continue;
+    const hasMarketplaceLink = fields.some(field => String(currentProduct?.[field] || '').trim());
+    let incomingProduct = incomingById.get(id);
+    if (!incomingProduct) {
+      if (hasMarketplaceLink) {
+        incomingProduct = { ...currentProduct };
+        incomingProducts.push(incomingProduct);
+        incomingById.set(id, incomingProduct);
+      }
+      continue;
+    }
+    for (const field of fields) {
+      const currentSku = String(currentProduct?.[field] || '').trim();
+      const incomingSku = String(incomingProduct?.[field] || '').trim();
+      if (currentSku && !incomingSku) incomingProduct[field] = currentSku;
+    }
+  }
+  return incomingWarehouse;
+}
+
 export default {
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
@@ -273,14 +301,16 @@ export default {
       if (url.pathname === '/api/warehouse-state' && request.method === 'PUT') {
         if (!isTrustedBrowserOrigin(origin, env)) return json({ ok: false, error: 'Forbidden origin' }, 403, cors);
         const body = await request.json();
-        const warehouse = sanitizeWarehouseState(body?.state);
-        await applyKaspiSkuAliases(env.DB, warehouse);
-        const raw = JSON.stringify(warehouse);
-        if (raw.length > 1500000) return json({ ok: false, error: 'Warehouse snapshot is too large' }, 413, cors);
-        const current = await env.DB.prepare('SELECT revision FROM warehouse_state WHERE id=1').first();
+        const current = await env.DB.prepare('SELECT payload,revision FROM warehouse_state WHERE id=1').first();
         const currentRevision = Number(current?.revision || 0);
         const baseRevision = Number(body?.baseRevision || 0);
         if (current && baseRevision !== currentRevision) return json({ ok: false, error: 'revision-conflict', revision: currentRevision }, 409, cors);
+        let currentWarehouse = {};
+        try { currentWarehouse = JSON.parse(current?.payload || '{}'); } catch {}
+        const warehouse = preserveExistingMarketplaceLinks(currentWarehouse, sanitizeWarehouseState(body?.state));
+        await applyKaspiSkuAliases(env.DB, warehouse);
+        const raw = JSON.stringify(warehouse);
+        if (raw.length > 1500000) return json({ ok: false, error: 'Warehouse snapshot is too large' }, 413, cors);
         const nextRevision = currentRevision + 1;
         const now = Date.now();
         await env.DB.prepare(`INSERT INTO warehouse_state(id,payload,revision,updated_at) VALUES(1,?,?,?)
