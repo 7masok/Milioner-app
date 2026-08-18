@@ -267,6 +267,7 @@ export default {
             ctx.waitUntil(refreshKaspiReportHistory(env, { days: 14 }).catch(()=>null));
           }
           const orders = await kaspiReportOrdersFromDb(env.DB, bounds.start, bounds.end);
+          const recovered = await hydrateKaspiReportOrderLines(env, orders, 8);
           const returns = await kaspiReportReturnsFromDb(env.DB, bounds.start, bounds.end);
           const coverage = await kaspiReportCacheState(env.DB);
           const historyComplete = Boolean(coverage.coverageFrom && coverage.coverageFrom <= bounds.start);
@@ -284,6 +285,8 @@ export default {
             coverageTo:coverage.coverageTo||null,
             lastRefreshAt:coverage.lastRefreshAt||null,
             warnings,
+            recoveredLines:recovered.lines,
+            recoveredOrders:recovered.orders,
             orders,
             returns
           }, 200, cors);
@@ -474,6 +477,7 @@ async function ensureSchema(db) {
   await ensureColumn(db,'marketplace_order_lines','seller_delivery_cost','REAL NOT NULL DEFAULT 0');
   await ensureColumn(db,'marketplace_order_lines','marketplace_fee','REAL NOT NULL DEFAULT 0');
   await ensureColumn(db,'marketplace_order_lines','fee_source',"TEXT NOT NULL DEFAULT ''");
+  await ensureColumn(db,'kaspi_report_orders','lines_json',"TEXT NOT NULL DEFAULT ''");
   await ensureColumn(db,'wb_finance_rows','sale_date','INTEGER NOT NULL DEFAULT 0');
   await db.prepare(`CREATE INDEX IF NOT EXISTS idx_wb_finance_market_sale_date ON wb_finance_rows(market,sale_date DESC)`).run();
   await db.prepare(`UPDATE wb_finance_rows SET sale_date=COALESCE(CAST(strftime('%s',json_extract(raw_json,'$.saleDt')) AS INTEGER)*1000,CAST(strftime('%s',json_extract(raw_json,'$.sale_dt')) AS INTEGER)*1000,rr_date) WHERE sale_date=0`).run();
@@ -562,8 +566,30 @@ async function kaspiReportCacheState(db){
 }
 
 async function kaspiReportOrdersFromDb(db,start,end){
-  const rows=await db.prepare(`SELECT order_id AS id,code,status,state,creation_date AS creationDate,completion_date AS completionDate,approved_by_bank_date AS approvedByBankDate,total_price AS totalPrice,delivery_cost_for_seller AS deliveryCostForSeller FROM kaspi_report_orders WHERE completion_date>=? AND completion_date<? ORDER BY completion_date ASC`).bind(Number(start)||0,Number(end)||Date.now()+86400000).all();
-  return (rows.results||[]).map(x=>({...x,lines:[]}));
+  const rows=await db.prepare(`SELECT order_id AS id,code,status,state,creation_date AS creationDate,completion_date AS completionDate,approved_by_bank_date AS approvedByBankDate,total_price AS totalPrice,delivery_cost_for_seller AS deliveryCostForSeller,lines_json AS linesJson FROM kaspi_report_orders WHERE completion_date>=? AND completion_date<? ORDER BY completion_date ASC`).bind(Number(start)||0,Number(end)||Date.now()+86400000).all();
+  return (rows.results||[]).map(x=>{let lines=[];try{const parsed=JSON.parse(String(x.linesJson||'[]'));if(Array.isArray(parsed))lines=parsed}catch{}const {linesJson,...order}=x;return {...order,lines}});
+}
+
+async function hydrateKaspiReportOrderLines(env,orders,maxOrders=8){
+  const token=String(env.KASPI_TOKEN||'').trim();
+  const missing=(orders||[]).filter(o=>!Array.isArray(o.lines)||!o.lines.length).sort((a,b)=>(Number(b.completionDate)||0)-(Number(a.completionDate)||0)).slice(0,Math.max(0,Number(maxOrders)||0));
+  if(!token||!missing.length)return {orders:0,lines:0};
+  let budget=Math.min(32,KASPI_EXTERNAL_BUDGET),recoveredOrders=0,recoveredLines=0;
+  for(const order of missing){
+    if(budget<1)break;
+    try{
+      const recovered=await fetchKaspiOrderLinesDirect(token,order,budget);
+      budget=recovered.budget;
+      if(!recovered.lines.length)continue;
+      order.lines=recovered.lines;
+      await env.DB.prepare(`UPDATE kaspi_report_orders SET lines_json=?,updated_at=? WHERE order_id=?`).bind(JSON.stringify(recovered.lines),Date.now(),String(order.id||'')).run();
+      recoveredOrders++;
+      recoveredLines+=recovered.lines.length;
+    }catch(e){
+      console.warn('Kaspi report line recovery failed',String(order.code||order.id||''),String(e?.message||e));
+    }
+  }
+  return {orders:recoveredOrders,lines:recoveredLines};
 }
 
 async function kaspiReportReturnsFromDb(db,start,end){
