@@ -39,6 +39,23 @@ function preserveExistingMarketplaceLinks(currentWarehouse, incomingWarehouse) {
   return incomingWarehouse;
 }
 
+function preserveExistingPurchases(currentWarehouse, incomingWarehouse) {
+  const currentPurchases = Array.isArray(currentWarehouse?.purchases) ? currentWarehouse.purchases : [];
+  const incomingPurchases = Array.isArray(incomingWarehouse?.purchases) ? incomingWarehouse.purchases : [];
+  incomingWarehouse.purchases = incomingPurchases;
+  const purchaseKey = row => String(row?.shipmentId || row?.id || '');
+  const incomingKeys = new Set(incomingPurchases.map(purchaseKey).filter(Boolean));
+  const missingGroups = new Map();
+  for (const purchase of currentPurchases) {
+    const key = purchaseKey(purchase);
+    if (!key || incomingKeys.has(key)) continue;
+    if (!missingGroups.has(key)) missingGroups.set(key, []);
+    missingGroups.get(key).push(purchase);
+  }
+  for (const rows of missingGroups.values()) incomingPurchases.push(...rows);
+  return incomingWarehouse;
+}
+
 export default {
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
@@ -307,7 +324,7 @@ export default {
         if (current && baseRevision !== currentRevision) return json({ ok: false, error: 'revision-conflict', revision: currentRevision }, 409, cors);
         let currentWarehouse = {};
         try { currentWarehouse = JSON.parse(current?.payload || '{}'); } catch {}
-        const warehouse = preserveExistingMarketplaceLinks(currentWarehouse, sanitizeWarehouseState(body?.state));
+        const warehouse = preserveExistingPurchases(currentWarehouse, preserveExistingMarketplaceLinks(currentWarehouse, sanitizeWarehouseState(body?.state)));
         await applyKaspiSkuAliases(env.DB, warehouse);
         const raw = JSON.stringify(warehouse);
         if (raw.length > 1500000) return json({ ok: false, error: 'Warehouse snapshot is too large' }, 413, cors);
