@@ -42,7 +42,7 @@ export default {
     if (url.pathname === '/api/orders' && request.method === 'GET') {
       try {
         const market = normalizeMarket(url.searchParams.get('market'));
-        const limit = Math.max(1, Math.min(1000, Number(url.searchParams.get('limit') || 500) || 500));
+        const limit = Math.max(1, Math.min(5000, Number(url.searchParams.get('limit') || 1000) || 1000));
         const where = market ? 'WHERE o.market = ?' : '';
         const args = market ? [market, limit] : [limit];
         const sql = `
@@ -769,7 +769,7 @@ async function fetchKaspi(env) {
   let directError = null;
   if (token) {
     try {
-      deliveryFeed = await fetchKaspiOrdersDirect(token, { days: 7, state: 'KASPI_DELIVERY' });
+      deliveryFeed = await fetchKaspiOrdersDirect(token, { days: 30, state: 'KASPI_DELIVERY' });
     } catch (e) {
       directError = String(e?.message || e);
       console.warn('Kaspi direct order feed failed', directError);
