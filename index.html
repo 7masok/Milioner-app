@@ -143,33 +143,34 @@ async function triggerImmediateWbStockSync(){
 async function pushWarehouseToD1(){if(!warehouseRemoteReady||warehouseSaveInFlight||!warehouseLocalDirty)return false;warehouseSaveInFlight=true;cloudStatus('сохраняю…','warn');try{for(let attempt=0;attempt<3;attempt++){const localSnap=normalizeWarehouseSnapshot(warehouseSnapshot()),sentText=JSON.stringify(localSnap),r=await fetch(MILLIONER_API+'/api/warehouse-state',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({baseRevision:warehouseRemoteRevision,state:localSnap})});let data={};try{data=await r.json()}catch{}if(r.status===409){const remoteData=await fetchWarehouseCloud();const remoteSnap=normalizeWarehouseSnapshot(remoteData.state),localUpdated=Number(state.settings.localWarehouseUpdatedAt||Date.now()),merged=mergeWarehouseSnapshots(warehouseLastCloudSnapshot,remoteSnap,localSnap,Number(remoteData.updatedAt||0),localUpdated);warehouseRemoteRevision=Number(remoteData.revision||0);warehouseRemoteUpdatedAt=Number(remoteData.updatedAt||0);warehouseLastCloudSnapshot=remoteSnap;warehouseLastSyncedText=JSON.stringify(remoteSnap);applyWarehouseSnapshot(merged);saveLocalOnly();markWarehouseDirty();continue}if(!r.ok||data.ok===false)throw new Error(data.error||('HTTP '+r.status));warehouseRemoteRevision=Number(data.revision||warehouseRemoteRevision);warehouseRemoteUpdatedAt=Number(data.updatedAt||Date.now());warehouseLastCloudSnapshot=localSnap;warehouseLastSyncedText=sentText;state.settings.d1WarehouseRevision=warehouseRemoteRevision;state.settings.d1WarehouseUpdatedAt=warehouseRemoteUpdatedAt;state.settings.d1MigratedAt=state.settings.d1MigratedAt||Date.now();saveLocalOnly();const currentText=JSON.stringify(normalizeWarehouseSnapshot(warehouseSnapshot()));if(currentText===sentText){clearWarehouseDirty();cloudStatus('синхронизировано','ok');setTimeout(()=>triggerImmediateWbStockSync(),50)}else{markWarehouseDirty();scheduleWarehouseSave(100)}return true}throw new Error('Не удалось разрешить конфликт версий')}finally{warehouseSaveInFlight=false}}
 async function pullWarehouseFromD1({force=false}={}){if(warehousePullInFlight||warehouseSaveInFlight)return false;if(!navigator.onLine){cloudStatus('офлайн','warn');return false}warehousePullInFlight=true;if(force)cloudStatus('проверяю…','warn');try{const data=await fetchWarehouseCloud();if(!data.exists){warehouseRemoteRevision=0;warehouseRemoteUpdatedAt=0;warehouseRemoteReady=true;warehouseLastCloudSnapshot=normalizeWarehouseSnapshot({});warehouseLastSyncedText=JSON.stringify(warehouseLastCloudSnapshot);markWarehouseDirty();await pushWarehouseToD1();return true}const remoteRevision=Number(data.revision||0),remoteUpdated=Number(data.updatedAt||0),remoteSnap=normalizeWarehouseSnapshot(data.state);if(!warehouseRemoteReady){warehouseRemoteRevision=remoteRevision;warehouseRemoteUpdatedAt=remoteUpdated;warehouseRemoteReady=true;warehouseLastCloudSnapshot=remoteSnap;warehouseLastSyncedText=JSON.stringify(remoteSnap)}if(remoteRevision>warehouseRemoteRevision||force){if(warehouseLocalDirty){const merged=mergeWarehouseSnapshots(warehouseLastCloudSnapshot,remoteSnap,warehouseSnapshot(),remoteUpdated,Number(state.settings.localWarehouseUpdatedAt||0));warehouseRemoteRevision=remoteRevision;warehouseRemoteUpdatedAt=remoteUpdated;warehouseLastCloudSnapshot=remoteSnap;warehouseLastSyncedText=JSON.stringify(remoteSnap);applyWarehouseSnapshot(merged);saveLocalOnly();markWarehouseDirty();await pushWarehouseToD1()}else{warehouseRemoteRevision=remoteRevision;warehouseRemoteUpdatedAt=remoteUpdated;warehouseLastCloudSnapshot=remoteSnap;warehouseLastSyncedText=JSON.stringify(remoteSnap);applyWarehouseSnapshot(remoteSnap);clearWarehouseDirty();state.settings.d1WarehouseRevision=remoteRevision;state.settings.d1WarehouseUpdatedAt=remoteUpdated;saveLocalOnly();render();cloudStatus('синхронизировано','ok')}}else cloudStatus(warehouseLocalDirty?'есть изменения':'синхронизировано',warehouseLocalDirty?'warn':'ok');return true}catch(e){console.warn('D1 warehouse pull failed',e);cloudStatus('ошибка/офлайн','bad');return false}finally{warehousePullInFlight=false}}
 function restoreMarketplaceLinksFromLocalBackup(){
-  const raw=localStorage.getItem(KEY+'_pre_cloud_v2')||localStorage.getItem(KEY+'_pre_d1');
-  if(!raw)return 0;
-  try{
-    const payload=JSON.parse(raw),backup=payload?.state||payload,oldProducts=Array.isArray(backup?.products)?backup.products:[];
-    if(!oldProducts.length)return 0;
-    const current=state.products||[],byId=new Map(current.map(p=>[String(p.id||''),p])),byName=new Map();
-    for(const p of current){const k=normalizeName(p.name);if(!k)continue;if(byName.has(k))byName.set(k,null);else byName.set(k,p)}
-    let restored=0;
-    for(const old of oldProducts){
-      const hasMarketplaceSku=['kaspi','wb','wb2','ozon'].some(field=>String(old?.[field]||'').trim());
-      let target=byId.get(String(old?.id||''))||byName.get(normalizeName(old?.name));
-      if(!target&&hasMarketplaceSku){
-        target={...old};
-        current.push(target);
-        byId.set(String(target.id||''),target);
-        const nameKey=normalizeName(target.name);
-        if(nameKey&&!byName.has(nameKey))byName.set(nameKey,target);
-        restored++;
-      }
-      if(!target)continue;
-      for(const field of ['kaspi','wb','wb2','ozon']){
-        const oldSku=String(old?.[field]||'').trim(),currentSku=String(target?.[field]||'').trim();
-        if(!currentSku&&oldSku){target[field]=oldSku;restored++}
-      }
+  const backups=[];
+  for(const storageKey of [KEY+'_pre_d1',KEY+'_pre_cloud_v2']){
+    const raw=localStorage.getItem(storageKey);
+    if(!raw)continue;
+    try{const payload=JSON.parse(raw),snap=payload?.state||payload;if(Array.isArray(snap?.products)&&snap.products.length)backups.push(snap)}catch(e){console.warn('Local marketplace-link backup could not be read',storageKey,e)}
+  }
+  if(!backups.length)return 0;
+  const current=state.products||[],byId=new Map(current.map(p=>[String(p.id||''),p])),byName=new Map();
+  for(const p of current){const k=normalizeName(p.name);if(!k)continue;if(byName.has(k))byName.set(k,null);else byName.set(k,p)}
+  let restored=0;
+  for(const backup of backups)for(const old of backup.products){
+    const hasMarketplaceSku=['kaspi','wb','wb2','ozon'].some(field=>String(old?.[field]||'').trim());
+    let target=byId.get(String(old?.id||''))||byName.get(normalizeName(old?.name));
+    if(!target&&hasMarketplaceSku){
+      target={...old};
+      current.push(target);
+      byId.set(String(target.id||''),target);
+      const nameKey=normalizeName(target.name);
+      if(nameKey&&!byName.has(nameKey))byName.set(nameKey,target);
+      restored++;
     }
-    return restored;
-  }catch(e){console.warn('Local marketplace-link backup could not be read',e);return 0}
+    if(!target)continue;
+    for(const field of ['kaspi','wb','wb2','ozon']){
+      const oldSku=String(old?.[field]||'').trim(),currentSku=String(target?.[field]||'').trim();
+      if(!currentSku&&oldSku){target[field]=oldSku;restored++}
+    }
+  }
+  return restored;
 }
 async function bootstrapWarehouseD1(){const rawLocal=localStorage.getItem(KEY);if(rawLocal&&!localStorage.getItem(KEY+'_pre_d1'))localStorage.setItem(KEY+'_pre_d1',rawLocal);if(rawLocal&&!localStorage.getItem(KEY+'_pre_cloud_v2'))localStorage.setItem(KEY+'_pre_cloud_v2',rawLocal);const localSnap=normalizeWarehouseSnapshot(warehouseSnapshot()),localUpdated=Number(state.settings.localWarehouseUpdatedAt||0);cloudStatus('подключение…','warn');try{const data=await fetchWarehouseCloud();warehouseRemoteRevision=Number(data.revision||0);warehouseRemoteUpdatedAt=Number(data.updatedAt||0);warehouseRemoteReady=true;if(!data.exists){warehouseLastCloudSnapshot=normalizeWarehouseSnapshot({});warehouseLastSyncedText=JSON.stringify(warehouseLastCloudSnapshot);markWarehouseDirty();await pushWarehouseToD1();localStorage.setItem(WAREHOUSE_MIGRATION_KEY,'1');return {mode:'uploaded-local'}}const remoteSnap=normalizeWarehouseSnapshot(data.state),previousCloudSnapshot=warehouseLastCloudSnapshot;warehouseLastCloudSnapshot=remoteSnap;warehouseLastSyncedText=JSON.stringify(remoteSnap);const firstV2=localStorage.getItem(WAREHOUSE_MIGRATION_KEY)!=='1';if(firstV2){applyWarehouseSnapshot(remoteSnap);clearWarehouseDirty();localStorage.setItem(WAREHOUSE_MIGRATION_KEY,'1');saveLocalOnly();render();cloudStatus('синхронизировано','ok');return {mode:'loaded-cloud-first'}}if(warehouseLocalDirty){if(previousCloudSnapshot){const merged=mergeWarehouseSnapshots(previousCloudSnapshot,remoteSnap,localSnap,warehouseRemoteUpdatedAt,localUpdated);applyWarehouseSnapshot(merged);saveLocalOnly();markWarehouseDirty();await pushWarehouseToD1();render();return {mode:'merged-dirty'}}applyWarehouseSnapshot(remoteSnap);clearWarehouseDirty();saveLocalOnly();render();cloudStatus('синхронизировано','ok');return {mode:'remote-recovered'}}applyWarehouseSnapshot(remoteSnap);clearWarehouseDirty();state.settings.d1WarehouseRevision=warehouseRemoteRevision;state.settings.d1WarehouseUpdatedAt=warehouseRemoteUpdatedAt;state.settings.d1MigratedAt=state.settings.d1MigratedAt||Date.now();const restoredLinks=restoreMarketplaceLinksFromLocalBackup();saveLocalOnly();if(restoredLinks){markWarehouseDirty();await pushWarehouseToD1()}render();cloudStatus('синхронизировано','ok');return {mode:restoredLinks?'restored-local-links':'loaded-d1',restoredLinks}}catch(e){warehouseRemoteReady=false;console.warn('D1 warehouse bootstrap failed; keeping local data',e);cloudStatus('офлайн — локальная копия','warn');return {mode:'local-fallback',error:String(e.message||e)}}}
 function startWarehouseCloudWatcher(){if(warehouseWatchStarted)return;warehouseWatchStarted=true;setInterval(()=>pullWarehouseFromD1(),15000);document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='visible')pullWarehouseFromD1({force:true})});window.addEventListener('focus',()=>pullWarehouseFromD1({force:true}));window.addEventListener('online',()=>pullWarehouseFromD1({force:true}));window.addEventListener('beforeunload',()=>{if(warehouseLocalDirty)try{navigator.sendBeacon&&navigator.sendBeacon(MILLIONER_API+'/api/warehouse-state-beacon','')}catch{}})}
@@ -724,6 +725,6 @@ function enhanceArrivalProductSearch(){}
 <script src="./kaspi-ads-v2.js?v=20260815b"></script>
 <!-- cross-device-sync-v3 -->
 <!-- runtime-hotfix-268d -->
-<!-- restore-missing-products-and-links-from-local-backup -->
+<!-- merge-all-precloud-marketplace-link-backups -->
 </body>
 </html>
