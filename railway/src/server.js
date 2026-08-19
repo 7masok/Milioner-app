@@ -27,6 +27,24 @@ app.get('/health', async (_req, res, next) => {
   } catch (error) { next(error); }
 });
 
+app.get('/api/kaspi-sync-status', requireTrustedOrigin, async (_req, res, next) => {
+  try {
+    const latest = await pool.query("SELECT id,started_at,finished_at,ok,items,error FROM sync_runs WHERE market='Kaspi' ORDER BY id DESC LIMIT 1");
+    const success = await pool.query("SELECT MAX(finished_at) AS last_success_at FROM sync_runs WHERE market='Kaspi' AND ok=1");
+    const count = await pool.query("SELECT COUNT(*)::bigint AS n FROM marketplace_order_lines WHERE market='Kaspi'");
+    res.json({
+      ok: true,
+      architecture: 'GitHub Pages -> Railway API -> PostgreSQL; Kaspi sync: Railway -> Kaspi API direct; Cloudflare Worker fallback only',
+      directTokenConfigured: Boolean(String(config.kaspiToken || '').trim()),
+      fallbackWorkerConfigured: Boolean(String(config.kaspiWorkerUrl || '').trim()),
+      latest: latest.rows[0] || null,
+      lastSuccessAt: Number(success.rows[0]?.last_success_at || 0) || null,
+      orderLines: Number(count.rows[0]?.n || 0),
+      serverTime: Date.now()
+    });
+  } catch (error) { next(error); }
+});
+
 app.post('/api/kaspi-sync-now', requireTrustedOrigin, async (req, res, next) => {
   try { res.json(await syncKaspiOrders({ days: Math.max(1, Math.min(14, Number(req.body?.days || 2) || 2)) })); }
   catch (error) { next(error); }
