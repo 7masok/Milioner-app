@@ -5,8 +5,12 @@ const DEFAULT_KASPI_WORKER = 'https://fragrant-shadow-72ed.7masok.workers.dev';
 const SYNC_INTERVAL_MS = 5 * 60 * 1000;
 let syncInFlight = null;
 
-function workerBase() {
-  return String(config.kaspiWorkerUrl || DEFAULT_KASPI_WORKER).replace(/\/$/, '');
+function configuredWorkerBase() {
+  return String(config.kaspiWorkerUrl || '').trim().replace(/\/$/, '');
+}
+
+function workerCandidates() {
+  return [...new Set([configuredWorkerBase(), DEFAULT_KASPI_WORKER].filter(Boolean))];
 }
 
 function n(value, fallback = 0) {
@@ -62,16 +66,30 @@ function normalizeOrder(raw) {
   return { orderId, code, status, state, creationDate, lines: normalized, raw };
 }
 
-async function fetchBatch(batch, days = 2) {
+async function fetchFromWorker(base, batch, days) {
   const q = new URLSearchParams({ days: String(days), batch: String(batch), size: '100' });
-  const response = await fetch(`${workerBase()}/kaspi/sync?${q.toString()}`, { headers: { Accept: 'application/json' } });
-  const text = await response.text();
-  let data = {};
-  try { data = JSON.parse(text); } catch {}
-  if (!response.ok || data?.ok === false) throw new Error(data?.error || data?.message || `Kaspi Worker HTTP ${response.status}`);
-  const orders = Array.isArray(data?.orders) ? data.orders : Array.isArray(data?.data) ? data.data : [];
-  const meta = data?.meta || {};
-  return { orders, meta };
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 45_000);
+  try {
+    const response = await fetch(`${base}/kaspi/sync?${q.toString()}`, { headers: { Accept: 'application/json' }, signal: controller.signal });
+    const text = await response.text();
+    let data = {};
+    try { data = JSON.parse(text); } catch {}
+    if (!response.ok || data?.ok === false) throw new Error(data?.error || data?.message || `Kaspi Worker HTTP ${response.status}`);
+    const orders = Array.isArray(data?.orders) ? data.orders : Array.isArray(data?.data) ? data.data : [];
+    return { orders, meta: data?.meta || {}, upstream: base };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function fetchBatch(batch, days = 2) {
+  const errors = [];
+  for (const base of workerCandidates()) {
+    try { return await fetchFromWorker(base, batch, days); }
+    catch (error) { errors.push(`${base}: ${String(error?.message || error)}`); }
+  }
+  throw new Error(errors.join(' | ') || 'Kaspi Worker is unavailable');
 }
 
 async function upsertOrder(order) {
@@ -101,10 +119,12 @@ export async function syncKaspiOrders({ days = 2 } = {}) {
     const run = await pool.query("INSERT INTO sync_runs(market,started_at,ok,items,error) VALUES('Kaspi',$1,0,0,'') RETURNING id", [startedAt]);
     const runId = run.rows[0].id;
     let items = 0;
+    let upstream = '';
     try {
       let pageCount = 1;
       for (let batch = 0; batch < Math.min(10, pageCount); batch++) {
         const page = await fetchBatch(batch, days);
+        upstream = page.upstream || upstream;
         pageCount = Math.max(1, Math.min(10, n(page.meta?.pageCount ?? page.meta?.totalPages ?? 1, 1)));
         for (const raw of page.orders) {
           const order = normalizeOrder(raw);
@@ -114,11 +134,15 @@ export async function syncKaspiOrders({ days = 2 } = {}) {
         }
         if (!page.orders.length) break;
       }
-      await pool.query('UPDATE sync_runs SET finished_at=$1,ok=1,items=$2,error=\'\' WHERE id=$3', [Date.now(), items, runId]);
-      return { ok: true, items, finishedAt: Date.now() };
+      const finishedAt = Date.now();
+      await pool.query('UPDATE sync_runs SET finished_at=$1,ok=1,items=$2,error=\'\' WHERE id=$3', [finishedAt, items, runId]);
+      return { ok: true, items, finishedAt, upstream };
     } catch (error) {
-      await pool.query('UPDATE sync_runs SET finished_at=$1,ok=0,items=$2,error=$3 WHERE id=$4', [Date.now(), items, String(error?.message || error).slice(0, 1000), runId]).catch(() => {});
-      throw error;
+      const message = String(error?.message || error).slice(0, 1000);
+      await pool.query('UPDATE sync_runs SET finished_at=$1,ok=0,items=$2,error=$3 WHERE id=$4', [Date.now(), items, message, runId]).catch(() => {});
+      const wrapped = new Error(message);
+      wrapped.status = 502;
+      throw wrapped;
     }
   })();
   try { return await syncInFlight; } finally { syncInFlight = null; }
