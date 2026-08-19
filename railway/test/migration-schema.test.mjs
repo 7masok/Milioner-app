@@ -29,6 +29,8 @@ test('report period is retained in the authoritative warehouse settings', async 
   const volatile = html.match(/const WAREHOUSE_VOLATILE_SETTINGS=new Set\(\[(.*?)\]\)/)?.[1] || '';
   assert.doesNotMatch(volatile, /reportPeriodPreset|reportCustomFrom|reportCustomTo/);
   assert.match(html, /REPORT_PERIOD_UI_KEY=KEY\+'_report_period_ui'/);
+  assert.match(html, /reportPeriodUpdatedAt=Date\.now\(\)/);
   assert.match(html, /rememberReportPeriodUiPreference\(\)/);
   assert.match(sync, /const persistedReportPeriod=Number\(state\.settings\?\.reportPeriodPreset\)/);
+  assert.match(sync, /reportPeriodUiPendingServerSave/);
 });
