@@ -24,6 +24,21 @@ function cleanState(input) {
   return result;
 }
 
+async function repairProductLinks(client, products) {
+  const now = Date.now();
+  for (const product of products || []) {
+    const id = String(product?.id || '').trim();
+    if (!id) continue;
+    for (const [market, field] of [['Kaspi', 'kaspi'], ['WB', 'wb'], ['WB2', 'wb2'], ['Ozon', 'ozon']]) {
+      const sku = String(product?.[field] || '').trim();
+      if (!sku) continue;
+      await client.query(`INSERT INTO product_links(product_id,market,sku,created_at,updated_at)
+        VALUES($1,$2,$3,$4,$4) ON CONFLICT(market,sku) DO UPDATE SET product_id=excluded.product_id,updated_at=excluded.updated_at`,
+      [id, market, sku, now]);
+    }
+  }
+}
+
 async function mirrorProducts(client, products) {
   const now = Date.now();
   const ids = [];
@@ -58,6 +73,12 @@ warehouseRouter.get('/warehouse-state', requireTrustedOrigin, asyncRoute(async (
   const result = await pool.query(`SELECT ${fields} FROM warehouse_state WHERE id=1`);
   if (!result.rowCount) return res.json({ ok: true, exists: false, revision: 0, updatedAt: null, state: metaOnly ? undefined : null });
   const row = result.rows[0];
+  const state = metaOnly ? undefined : parsePayload(row.payload);
+  if (!metaOnly) {
+    // Self-heal normalized marketplace links after migration or a partial sync.
+    // The warehouse snapshot remains authoritative for product -> marketplace SKU mapping.
+    await repairProductLinks(pool, state.products);
+  }
   res.setHeader('ETag', `"${row.revision}"`);
   res.setHeader('X-Warehouse-Revision', String(row.revision));
   return res.json({
@@ -65,7 +86,7 @@ warehouseRouter.get('/warehouse-state', requireTrustedOrigin, asyncRoute(async (
     exists: true,
     revision: Number(row.revision || 0),
     updatedAt: Number(row.updated_at || 0),
-    state: metaOnly ? undefined : parsePayload(row.payload)
+    state
   });
 }));
 
