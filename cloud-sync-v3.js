@@ -8,6 +8,7 @@ const sleep=ms=>new Promise(resolve=>setTimeout(resolve,ms));
 // snapshot duplicates thousands of rows and can make an otherwise unchanged
 // warehouse save exceed the snapshot limit.
 const SERVER_MANAGED_CACHE_KEYS=['kaspiOrderFeed','wbOrderFeed','ozonOrderFeed','kaspiOrders','marketOrderState','marketplaceLiveSince'];
+let reportPeriodUiPendingServerSave=false;
 
 function serverSnapshot(source){
   const input=source&&typeof source==='object'&&!Array.isArray(source)?source:{};
@@ -30,7 +31,21 @@ warehouseSnapshot=function(){return serverSnapshot(state)};
 applyWarehouseSnapshot=function(remote){
   state=serverSnapshot(remote);
   const persistedReportPeriod=Number(state.settings?.reportPeriodPreset);
-  if([-1,0,1,7,30].includes(persistedReportPeriod)){
+  const serverReportPeriodUpdatedAt=Number(state.settings?.reportPeriodUpdatedAt||0);
+  const localReportPeriodUpdatedAt=Number(reportPeriodUiPreference?.updatedAt||0);
+  const keepNewerUiPreference=[-1,0,1,7,30].includes(Number(reportPeriodUiPreference?.preset))&&localReportPeriodUpdatedAt>serverReportPeriodUpdatedAt;
+  if(keepNewerUiPreference){
+    reportPeriodPreset=Number(reportPeriodUiPreference.preset);
+    reportPeriod=reportPeriodPreset===0?0:reportPeriodPreset;
+    reportCustomFrom=String(reportPeriodUiPreference.from||'');
+    reportCustomTo=String(reportPeriodUiPreference.to||'');
+    state.settings.reportPeriodPreset=reportPeriodPreset;
+    state.settings.reportPeriod=reportPeriod;
+    state.settings.reportCustomFrom=reportCustomFrom;
+    state.settings.reportCustomTo=reportCustomTo;
+    state.settings.reportPeriodUpdatedAt=localReportPeriodUpdatedAt;
+    reportPeriodUiPendingServerSave=true;
+  }else if([-1,0,1,7,30].includes(persistedReportPeriod)){
     reportPeriodPreset=persistedReportPeriod;
     reportPeriod=reportPeriodPreset===0?0:reportPeriodPreset;
     reportCustomFrom=String(state.settings?.reportCustomFrom||'');
@@ -131,7 +146,9 @@ bootstrapWarehouseD1=async function(){
     const remote=await fetchServer(false,4);if(!remote.exists)throw new Error('Серверная база склада пуста — запись заблокирована до завершения миграции');
     warehouseRemoteRevision=Number(remote.revision||0);warehouseRemoteUpdatedAt=Number(remote.updatedAt||0);
     warehouseLastCloudSnapshot=serverSnapshot(remote.state);warehouseLastSyncedText=snapshotText(remote.state);applyWarehouseSnapshot(remote.state);
-    clearWarehouseDirty();warehouseRemoteReady=true;render();cloudStatus('сервер подключён','ok');return {mode:'server-authoritative',revision:warehouseRemoteRevision};
+    clearWarehouseDirty();warehouseRemoteReady=true;
+    if(reportPeriodUiPendingServerSave){reportPeriodUiPendingServerSave=false;markWarehouseDirty();scheduleWarehouseSave(0)}
+    render();cloudStatus('сервер подключён','ok');return {mode:'server-authoritative',revision:warehouseRemoteRevision};
   }catch(error){warehouseRemoteReady=false;clearWarehouseDirty();console.error('server bootstrap failed',error);cloudStatus('нет связи с сервером · изменения заблокированы','warn');return {mode:'server-unavailable',error:String(error?.message||error)}}
 };
 
