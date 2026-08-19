@@ -96,7 +96,7 @@ const KEY='sklad_mvp_v2';
 const ACTIVE_VIEW_KEY=KEY+'_active_view_device';
 const KASPI_WORKER='https://fragrant-shadow-72ed.7masok.workers.dev';
 const WB_WORKER='https://wb-sync.7masok.workers.dev';
-const MILLIONER_API=String(window.MILLIONER_API_URL||'https://millioner-api.7masok.workers.dev').replace(/\/$/,'');
+const MILLIONER_API=String(window.MILLIONER_API_URL||'https://milioner-app-staging.up.railway.app').replace(/\/$/,'');
 // PostgreSQL through the server API is authoritative. Old localStorage data is
 // kept only as an emergency pre-migration backup and is never loaded as live data.
 let state={products:[],movements:[],sales:[],purchases:[],reservations:[],settings:{autoBackup:true,lastSync:null}};
