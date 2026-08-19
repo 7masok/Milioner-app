@@ -3,6 +3,9 @@ import { pool } from './db.js';
 
 const DEFAULT_KASPI_WORKER = 'https://fragrant-shadow-72ed.7masok.workers.dev';
 const SYNC_INTERVAL_MS = 5 * 60 * 1000;
+const FETCH_TIMEOUT_MS = 20_000;
+const STALE_RUN_MS = 3 * 60 * 1000;
+const MAX_BATCHES = 3;
 let syncInFlight = null;
 
 function configuredWorkerBase() {
@@ -69,7 +72,7 @@ function normalizeOrder(raw) {
 async function fetchFromWorker(base, batch, days) {
   const q = new URLSearchParams({ days: String(days), batch: String(batch), size: '100' });
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 45_000);
+  const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
   try {
     const response = await fetch(`${base}/kaspi/sync?${q.toString()}`, { headers: { Accept: 'application/json' }, signal: controller.signal });
     const text = await response.text();
@@ -78,6 +81,9 @@ async function fetchFromWorker(base, batch, days) {
     if (!response.ok || data?.ok === false) throw new Error(data?.error || data?.message || `Kaspi Worker HTTP ${response.status}`);
     const orders = Array.isArray(data?.orders) ? data.orders : Array.isArray(data?.data) ? data.data : [];
     return { orders, meta: data?.meta || {}, upstream: base };
+  } catch (error) {
+    if (error?.name === 'AbortError') throw new Error(`Kaspi Worker timeout after ${FETCH_TIMEOUT_MS / 1000}s`);
+    throw error;
   } finally {
     clearTimeout(timer);
   }
@@ -112,9 +118,17 @@ async function upsertOrder(order) {
   }
 }
 
+async function closeStaleRuns() {
+  const cutoff = Date.now() - STALE_RUN_MS;
+  await pool.query(`UPDATE sync_runs
+    SET finished_at=$1,ok=0,error='stale sync abandoned after deploy/restart'
+    WHERE market='Kaspi' AND finished_at IS NULL AND started_at < $2`, [Date.now(), cutoff]);
+}
+
 export async function syncKaspiOrders({ days = 2 } = {}) {
   if (syncInFlight) return syncInFlight;
   syncInFlight = (async () => {
+    await closeStaleRuns();
     const startedAt = Date.now();
     const run = await pool.query("INSERT INTO sync_runs(market,started_at,ok,items,error) VALUES('Kaspi',$1,0,0,'') RETURNING id", [startedAt]);
     const runId = run.rows[0].id;
@@ -122,10 +136,10 @@ export async function syncKaspiOrders({ days = 2 } = {}) {
     let upstream = '';
     try {
       let pageCount = 1;
-      for (let batch = 0; batch < Math.min(10, pageCount); batch++) {
+      for (let batch = 0; batch < Math.min(MAX_BATCHES, pageCount); batch++) {
         const page = await fetchBatch(batch, days);
         upstream = page.upstream || upstream;
-        pageCount = Math.max(1, Math.min(10, n(page.meta?.pageCount ?? page.meta?.totalPages ?? 1, 1)));
+        pageCount = Math.max(1, Math.min(MAX_BATCHES, n(page.meta?.pageCount ?? page.meta?.totalPages ?? 1, 1)));
         for (const raw of page.orders) {
           const order = normalizeOrder(raw);
           if (!order) continue;
@@ -135,7 +149,7 @@ export async function syncKaspiOrders({ days = 2 } = {}) {
         if (!page.orders.length) break;
       }
       const finishedAt = Date.now();
-      await pool.query('UPDATE sync_runs SET finished_at=$1,ok=1,items=$2,error=\'\' WHERE id=$3', [finishedAt, items, runId]);
+      await pool.query("UPDATE sync_runs SET finished_at=$1,ok=1,items=$2,error='' WHERE id=$3", [finishedAt, items, runId]);
       return { ok: true, items, finishedAt, upstream };
     } catch (error) {
       const message = String(error?.message || error).slice(0, 1000);
@@ -149,6 +163,7 @@ export async function syncKaspiOrders({ days = 2 } = {}) {
 }
 
 export function startKaspiSyncLoop() {
+  closeStaleRuns().catch(error => console.error('Kaspi stale-run cleanup failed', error));
   const run = () => syncKaspiOrders({ days: 2 }).catch(error => console.error('Kaspi background sync failed', error));
   setTimeout(run, 2_000).unref();
   const timer = setInterval(run, SYNC_INTERVAL_MS);
