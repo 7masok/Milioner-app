@@ -20,6 +20,10 @@ function normalizeName(value) {
     .replace(/\s+/g, ' ');
 }
 
+function nameTokens(value) {
+  return normalizeName(value).split(' ').filter(Boolean);
+}
+
 function levenshtein(a, b) {
   if (a === b) return 0;
   if (!a) return b.length;
@@ -48,15 +52,28 @@ function similarity(a, b) {
   return max ? 1 - levenshtein(left, right) / max : 0;
 }
 
+function candidateScore(orderName, productName) {
+  const direct = similarity(orderName, productName);
+  const orderTokens = new Set(nameTokens(orderName));
+  const productTokens = nameTokens(productName);
+  if (productTokens.length >= 2 && productTokens.every(token => orderTokens.has(token))) {
+    // A short warehouse name such as "Стич Розовый" can be a strict subset of
+    // the longer Kaspi title "Брелок LuxAr Стич Розовый 6 см ...". Treat this
+    // as high confidence, while still requiring uniqueness below.
+    return Math.max(direct, 0.985 + Math.min(0.014, productTokens.length * 0.002));
+  }
+  return direct;
+}
+
 function safeNameFallback(row, products) {
   if (row.productId || !row.productName) return null;
   const scored = products
-    .map(product => ({ product, score: similarity(row.productName, product.name) }))
+    .map(product => ({ product, score: candidateScore(row.productName, product.name) }))
     .filter(item => item.score >= 0.94)
     .sort((a, b) => b.score - a.score);
   if (!scored.length) return null;
-  if (scored.length > 1 && scored[0].score - scored[1].score < 0.03) return null;
-  return scored[0].product;
+  if (scored.length > 1 && scored[0].score - scored[1].score < 0.015) return null;
+  return scored[0];
 }
 
 ordersRouter.get('/orders', asyncRoute(async (req, res) => {
@@ -69,15 +86,44 @@ ordersRouter.get('/orders', asyncRoute(async (req, res) => {
     pool.query(`SELECT o.market,o.order_id AS "orderId",o.code,o.entry_id AS "entryId",o.status,o.state,
       o.creation_date AS "creationDate",o.sku,o.product_name AS "productName",o.qty,o.unit_price AS "unitPrice",
       o.total_price AS "totalPrice",o.seller_delivery_cost AS "sellerDeliveryCost",o.marketplace_fee AS "marketplaceFee",
-      o.fee_source AS "feeSource",l.product_id AS "productId"
-      FROM marketplace_order_lines o LEFT JOIN product_links l ON l.market=o.market AND l.sku=o.sku
+      o.fee_source AS "feeSource",resolved.product_id AS "productId",resolved.link_source AS "linkSource"
+      FROM marketplace_order_lines o
+      LEFT JOIN LATERAL (
+        SELECT pl.product_id,
+          CASE WHEN pl.sku=o.sku THEN 'sku-exact' ELSE 'kaspi-sku-alias' END AS link_source
+        FROM product_links pl
+        WHERE pl.market=o.market AND (
+          pl.sku=o.sku OR (
+            o.market='Kaspi' AND EXISTS (
+              SELECT 1 FROM kaspi_sku_aliases a
+              WHERE (a.old_sku=o.sku AND a.seller_sku=pl.sku)
+                 OR (a.seller_sku=o.sku AND a.old_sku=pl.sku)
+            )
+          )
+        )
+        ORDER BY CASE WHEN pl.sku=o.sku THEN 0 ELSE 1 END
+        LIMIT 1
+      ) resolved ON TRUE
       ${where} ORDER BY o.creation_date DESC LIMIT $${params.length}`, params),
     pool.query('SELECT id,name FROM products')
   ]);
+  const inferredLinks = new Map();
   const out = rows.rows.map(row => {
     if (row.productId) return row;
     const fallback = safeNameFallback(row, products.rows);
-    return fallback ? { ...row, productId: fallback.id, productName: fallback.name, linkSource: 'name-typo-fallback' } : row;
+    if (!fallback) return row;
+    if (row.market === 'Kaspi' && row.sku) inferredLinks.set(String(row.sku), String(fallback.product.id));
+    return { ...row, productId: fallback.product.id, productName: fallback.product.name, linkSource: 'name-safe-fallback' };
   });
+
+  // Persist only unique, high-confidence Kaspi title matches so the next load is
+  // resolved by SKU and does not depend on title matching again.
+  const now = Date.now();
+  for (const [sku, productId] of inferredLinks) {
+    await pool.query(`INSERT INTO product_links(product_id,market,sku,created_at,updated_at)
+      VALUES($1,'Kaspi',$2,$3,$3)
+      ON CONFLICT(market,sku) DO NOTHING`, [productId, sku, now]);
+  }
+
   res.json({ ok: true, orders: out });
 }));
