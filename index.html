@@ -322,7 +322,7 @@ function purchaseShipmentTotals(g){const rows=g?.rows||[],qty=rows.reduce((a,x)=
 function purchaseDeliveryDue(groups){return (groups||[]).filter(g=>g.status==='to_me').reduce((sum,g)=>sum+purchaseShipmentTotals(g).delivery,0)}
 let purchasePlanSelection=new Set();
 function syncPurchasePlanSelection(rows){const valid=new Set((rows||[]).map(x=>String(x.productId)));for(const id of [...purchasePlanSelection])if(!valid.has(String(id)))purchasePlanSelection.delete(id)}
-function togglePurchasePlanSelection(productId,checked){const key=String(productId);if(checked)purchasePlanSelection.add(key);else purchasePlanSelection.delete(key);updatePurchasePlanBulkControls()}
+function togglePurchasePlanSelection(productId,checked){const key=decodeURIComponent(String(productId||''));if(checked)purchasePlanSelection.add(key);else purchasePlanSelection.delete(key);updatePurchasePlanBulkControls()}
 function selectAllPurchasePlan(){const rows=purchaseRecommendations();purchasePlanSelection=new Set(rows.map(x=>String(x.productId)));renderPurchasePlan()}
 function clearPurchasePlanSelection(){purchasePlanSelection.clear();renderPurchasePlan()}
 function updatePurchasePlanBulkControls(){const count=purchasePlanSelection.size,btn=document.getElementById('purchasePlanBulkBtn'),counter=document.getElementById('purchasePlanBulkCount');if(btn){btn.disabled=count===0;btn.textContent=count?`Общая закупка · ${count} поз.`:'Общая закупка'}if(counter)counter.textContent=count?`Выбрано: ${count}`:'Ничего не выбрано'}
