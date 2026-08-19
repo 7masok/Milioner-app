@@ -5,6 +5,10 @@ import { asyncRoute, requireTrustedOrigin, requireWritesEnabled } from './http.j
 
 export const warehouseRouter = express.Router();
 
+// Order feeds are canonical in their own PostgreSQL tables. They must not be
+// kept inside the warehouse document as that creates a growing duplicate cache.
+const DERIVED_CACHE_KEYS = ['kaspiOrderFeed', 'wbOrderFeed', 'ozonOrderFeed', 'kaspiOrders', 'marketOrderState', 'marketplaceLiveSince'];
+
 function parsePayload(raw) {
   try { return JSON.parse(String(raw || '{}')); } catch { return {}; }
 }
@@ -16,6 +20,7 @@ function cleanState(input) {
     result[key] = Array.isArray(state[key]) ? state[key] : [];
   }
   result.settings = state.settings && typeof state.settings === 'object' && !Array.isArray(state.settings) ? state.settings : {};
+  for (const key of DERIVED_CACHE_KEYS) delete result[key];
   return result;
 }
 
@@ -92,4 +97,3 @@ warehouseRouter.put('/warehouse-state', requireTrustedOrigin, requireWritesEnabl
 }));
 
 warehouseRouter.post('/warehouse-state-beacon', (_req, res) => res.status(204).end());
-
