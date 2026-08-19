@@ -135,7 +135,7 @@ pullWarehouseFromD1=async function({force=false}={}){
     if(!meta.exists||revision<=warehouseRemoteRevision){cloudStatus('сервер подключён','ok');return true}
     const remote=await fetchServer(false,3);warehouseRemoteRevision=Number(remote.revision||revision);warehouseRemoteUpdatedAt=Number(remote.updatedAt||0);
     warehouseRemoteReady=true;warehouseLastCloudSnapshot=serverSnapshot(remote.state);warehouseLastSyncedText=snapshotText(remote.state);
-    applyWarehouseSnapshot(remote.state);clearWarehouseDirty();render();cloudStatus('обновлено с сервера','ok');return true;
+    applyWarehouseSnapshot(remote.state);clearWarehouseDirty();render();cloudStatus('обновлено с сервера','ok');return true
   }catch(error){console.warn('server warehouse pull failed',error);cloudStatus('сервер временно недоступен','warn');return false}
   finally{warehousePullInFlight=false}
 };
@@ -157,4 +157,45 @@ startWarehouseCloudWatcher=function(){
   document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='visible')pullWarehouseFromD1({force:true})});
   window.addEventListener('focus',()=>pullWarehouseFromD1({force:true}));window.addEventListener('online',()=>pullWarehouseFromD1({force:true}));
 };
+
+// The order period is a per-device UI preference. It is intentionally excluded
+// from the authoritative warehouse snapshot, so keep it in localStorage instead.
+const ORDER_PERIOD_UI_KEY='milioner_order_period_ui_v1';
+function readOrderPeriodUi(){
+  try{return JSON.parse(localStorage.getItem(ORDER_PERIOD_UI_KEY)||'{}')||{}}catch{return {}}
+}
+function rememberOrderPeriodUi(mode){
+  try{
+    const current=readOrderPeriodUi();
+    localStorage.setItem(ORDER_PERIOD_UI_KEY,JSON.stringify({
+      mode:mode||current.mode||'today',
+      from:document.getElementById('orderDateFrom')?.value||current.from||'',
+      to:document.getElementById('orderDateTo')?.value||current.to||''
+    }));
+  }catch{}
+}
+const originalSetOrderPeriod=window.setOrderPeriod;
+if(typeof originalSetOrderPeriod==='function'){
+  window.setOrderPeriod=function(mode){
+    const result=originalSetOrderPeriod(mode);
+    rememberOrderPeriodUi(mode);
+    return result;
+  };
+}
+const originalSetOrderCustomDate=window.setOrderCustomDate;
+if(typeof originalSetOrderCustomDate==='function'){
+  window.setOrderCustomDate=function(which,value){
+    const result=originalSetOrderCustomDate(which,value);
+    rememberOrderPeriodUi('custom');
+    return result;
+  };
+}
+const savedOrderPeriodUi=readOrderPeriodUi();
+if(['today','yesterday','week','month','custom'].includes(savedOrderPeriodUi.mode)&&typeof originalSetOrderPeriod==='function'){
+  if(savedOrderPeriodUi.mode==='custom'&&typeof originalSetOrderCustomDate==='function'){
+    if(savedOrderPeriodUi.from)originalSetOrderCustomDate('from',savedOrderPeriodUi.from);
+    if(savedOrderPeriodUi.to)originalSetOrderCustomDate('to',savedOrderPeriodUi.to);
+  }
+  originalSetOrderPeriod(savedOrderPeriodUi.mode);
+}
 })();
