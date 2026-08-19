@@ -4,6 +4,7 @@ import { config, assertRuntimeConfig } from './config.js';
 import { pool } from './db.js';
 import { exactCors, noStore } from './http.js';
 import { warehouseRouter } from './warehouse.js';
+import { ordersRouter } from './orders.js';
 import { reportsRouter } from './reports.js';
 import { stockRouter, kaspiFeedHandler } from './stock.js';
 
@@ -26,6 +27,7 @@ app.get('/health', async (_req, res, next) => {
 });
 
 app.use('/api', warehouseRouter);
+app.use('/api', ordersRouter);
 app.use('/api', reportsRouter);
 app.use('/api', stockRouter);
 app.get('/kaspi/price-list.xml', kaspiFeedHandler);
