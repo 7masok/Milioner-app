@@ -2,11 +2,12 @@ import express from 'express';
 import helmet from 'helmet';
 import { config, assertRuntimeConfig } from './config.js';
 import { pool } from './db.js';
-import { exactCors, noStore } from './http.js';
+import { exactCors, noStore, requireTrustedOrigin } from './http.js';
 import { warehouseRouter } from './warehouse.js';
 import { ordersRouter } from './orders.js';
 import { reportsRouter } from './reports.js';
 import { stockRouter, kaspiFeedHandler } from './stock.js';
+import { startKaspiSyncLoop, syncKaspiOrders } from './kaspi-sync.js';
 
 assertRuntimeConfig();
 const app = express();
@@ -22,8 +23,13 @@ app.get('/health', async (_req, res, next) => {
     const db = await pool.query('SELECT 1 AS ok');
     const migrations = await pool.query("SELECT to_regclass('public.schema_migrations') AS name");
     res.json({ ok: db.rows[0]?.ok === 1, service: 'millioner-railway-api', postgres: true,
-      writesEnabled: config.writesEnabled, marketSyncEnabled: config.marketSyncEnabled, migrationsReady: Boolean(migrations.rows[0]?.name) });
+      writesEnabled: config.writesEnabled, marketSyncEnabled: true, migrationsReady: Boolean(migrations.rows[0]?.name) });
   } catch (error) { next(error); }
+});
+
+app.post('/api/kaspi-sync-now', requireTrustedOrigin, async (req, res, next) => {
+  try { res.json(await syncKaspiOrders({ days: Math.max(1, Math.min(14, Number(req.body?.days || 2) || 2)) })); }
+  catch (error) { next(error); }
 });
 
 app.use('/api', warehouseRouter);
@@ -39,7 +45,10 @@ app.use((error, _req, res, _next) => {
   res.status(status).json({ ok: false, error: status >= 500 ? 'Internal server error' : String(error.message || error) });
 });
 
-const server = app.listen(config.port, '0.0.0.0', () => console.log(`millioner Railway API listening on ${config.port}`));
+const server = app.listen(config.port, '0.0.0.0', () => {
+  console.log(`millioner Railway API listening on ${config.port}`);
+  startKaspiSyncLoop();
+});
 
 async function shutdown(signal) {
   console.log(`received ${signal}, shutting down`);
@@ -52,4 +61,3 @@ async function shutdown(signal) {
 
 process.on('SIGTERM', () => shutdown('SIGTERM'));
 process.on('SIGINT', () => shutdown('SIGINT'));
-
