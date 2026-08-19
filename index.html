@@ -107,7 +107,7 @@ let warehouseRemoteReady=false,warehouseRemoteRevision=0,warehouseRemoteUpdatedA
 const WAREHOUSE_DIRTY_KEY=KEY+'_cloud_dirty_v2',WAREHOUSE_MIGRATION_KEY=KEY+'_cloud_sync_v2_migrated';
 let warehouseLocalDirty=localStorage.getItem(WAREHOUSE_DIRTY_KEY)==='1',warehouseLastCloudSnapshot=null,warehouseLastSyncedText='',warehouseLastObservedSnapshot=null;
 const WAREHOUSE_ARRAY_FIELDS=['products','movements','sales','purchases','reservations','kaspiAdExpenses'];
-const WAREHOUSE_VOLATILE_SETTINGS=new Set(['serverMarketStatus','d1WarehouseRevision','d1WarehouseUpdatedAt','d1MigratedAt','localWarehouseUpdatedAt','activeView','selectedOrderMarket','selectedWbAccount','orderPeriodMode','orderCustomFrom','orderCustomTo','reportPeriodPreset','reportPeriod','reportCustomFrom','reportCustomTo','selectedPeriodPreset','selectedPeriod','unmatchedOrderFilter']);
+const WAREHOUSE_VOLATILE_SETTINGS=new Set(['serverMarketStatus','d1WarehouseRevision','d1WarehouseUpdatedAt','d1MigratedAt','localWarehouseUpdatedAt','activeView','selectedOrderMarket','selectedWbAccount','orderPeriodMode','orderCustomFrom','orderCustomTo','selectedPeriodPreset','selectedPeriod','unmatchedOrderFilter']);
 function saveLocalOnly(){localStorage.setItem(KEY,JSON.stringify(state))}
 function cloudStatus(text,mode=''){const el=document.getElementById('cloudStatus');if(!el)return;el.textContent=text;el.style.color=mode==='bad'?'var(--bad)':mode==='warn'?'var(--warn)':mode==='ok'?'var(--ok)':''}
 function warehouseSnapshot(){const settings={...(state.settings||{})};for(const k of WAREHOUSE_VOLATILE_SETTINGS)delete settings[k];return {products:state.products||[],movements:state.movements||[],sales:state.sales||[],purchases:state.purchases||[],reservations:state.reservations||[],kaspiAdExpenses:state.kaspiAdExpenses||[],settings,marketOrderState:state.marketOrderState||{},marketplaceLiveSince:state.marketplaceLiveSince||{},kaspiBaselineAt:state.kaspiBaselineAt||null}}
@@ -710,7 +710,7 @@ document.querySelectorAll('nav button').forEach(b=>b.onclick=()=>{openView(b.dat
 
 function enhanceArrivalProductSearch(){}
 </script>
-<script src="./cloud-sync-v3.js?v=20260820-server-cache"></script>
+<script src="./cloud-sync-v3.js?v=20260820-report-period"></script>
 <script src="./kaspi-report-v2.js?v=20260818-report3"></script>
 <script src="./kaspi-ads-v2.js?v=20260815b"></script>
 <!-- cross-device-sync-v3 -->

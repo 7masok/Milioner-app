@@ -29,6 +29,11 @@ function snapshotText(source){return JSON.stringify(serverSnapshot(source));}
 warehouseSnapshot=function(){return serverSnapshot(state)};
 applyWarehouseSnapshot=function(remote){
   state=serverSnapshot(remote);
+  const persistedReportPeriod=Number(state.settings?.reportPeriodPreset);
+  reportPeriodPreset=[-1,0,1,7,30].includes(persistedReportPeriod)?persistedReportPeriod:1;
+  reportPeriod=reportPeriodPreset===0?0:reportPeriodPreset;
+  reportCustomFrom=String(state.settings?.reportCustomFrom||'');
+  reportCustomTo=String(state.settings?.reportCustomTo||'');
   state.purchases.forEach(item=>{
     item.status=['to_forwarder','to_me','at_warehouse','received'].includes(String(item.status||''))?String(item.status):'received';
     if(item.status==='received'){
