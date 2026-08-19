@@ -21,8 +21,6 @@ function serverSnapshot(source){
   snapshot.kaspiAdExpenses=Array.isArray(snapshot.kaspiAdExpenses)?snapshot.kaspiAdExpenses:[];
   snapshot.settings=snapshot.settings&&typeof snapshot.settings==='object'?snapshot.settings:{};
   for(const key of WAREHOUSE_VOLATILE_SETTINGS||[])delete snapshot.settings[key];
-  // This timestamp used to turn every UI-only action into a warehouse write.
-  // It is metadata, not business state, so never use it for snapshot equality.
   delete snapshot.settings.serverUpdatedAt;
   for(const key of SERVER_MANAGED_CACHE_KEYS)delete snapshot[key];
   return snapshot;
@@ -60,8 +58,6 @@ applyWarehouseSnapshot=function(remote){
   warehouseLastObservedSnapshot=normalizeWarehouseSnapshot(state);
 };
 
-// Business data is never written to localStorage. Old browser copies remain only
-// as emergency pre-migration backups and are never read or uploaded.
 saveLocalOnly=function(){};
 markWarehouseDirty=function(){warehouseLocalDirty=true;cloudStatus('есть несохранённые изменения','warn')};
 clearWarehouseDirty=function(){warehouseLocalDirty=false};
@@ -93,7 +89,7 @@ scheduleWarehouseSave=function(delay=350){
 };
 
 save=function(){
-  if(!warehouseRemoteReady){cloudStatus('сервер ещё не загружен · изменение заблокировано','warn');return false}
+  if(!warehouseRemoteReady)return false;
   stampChangedWarehouseEntities();
   warehouseLastObservedSnapshot=normalizeWarehouseSnapshot(state);
   if(snapshotText(state)!==warehouseLastSyncedText){
@@ -157,8 +153,6 @@ startWarehouseCloudWatcher=function(){
   window.addEventListener('focus',()=>pullWarehouseFromD1({force:true}));window.addEventListener('online',()=>pullWarehouseFromD1({force:true}));
 };
 
-// The order period is a per-device UI preference. It is intentionally excluded
-// from the authoritative warehouse snapshot, so keep it in localStorage instead.
 const ORDER_PERIOD_UI_KEY='milioner_order_period_ui_v1';
 function readOrderPeriodUi(){
   try{return JSON.parse(localStorage.getItem(ORDER_PERIOD_UI_KEY)||'{}')||{}}catch{return {}}
@@ -190,12 +184,11 @@ if(typeof originalSetOrderCustomDate==='function'){
   };
 }
 const savedOrderPeriodUi=readOrderPeriodUi();
-if(['today','yesterday','week','month','custom'].includes(savedOrderPeriodUi.mode)&&typeof originalSetOrderPeriod==='function'){
-  if(savedOrderPeriodUi.mode==='custom'&&typeof originalSetOrderCustomDate==='function'){
-    if(savedOrderPeriodUi.from)originalSetOrderCustomDate('from',savedOrderPeriodUi.from);
-    if(savedOrderPeriodUi.to)originalSetOrderCustomDate('to',savedOrderPeriodUi.to);
-  }
-  originalSetOrderPeriod(savedOrderPeriodUi.mode);
+if(['today','yesterday','week','month','custom'].includes(savedOrderPeriodUi.mode)){
+  orderPeriodMode=savedOrderPeriodUi.mode;
+  if(savedOrderPeriodUi.from)orderCustomFrom=savedOrderPeriodUi.from;
+  if(savedOrderPeriodUi.to)orderCustomTo=savedOrderPeriodUi.to;
+  renderOrderPeriodControls?.();
 }
 
 function syncLabel(ts){
@@ -214,6 +207,11 @@ function showKaspiLastSync(){
 const originalLoadSharedOrderCache=window.loadSharedOrderCache;
 if(typeof originalLoadSharedOrderCache==='function'){
   window.loadSharedOrderCache=async function(options){
+    // Never render marketplace rows against an empty product catalog during
+    // startup. That caused a brief screen where nearly every order looked
+    // unlinked until the warehouse snapshot arrived.
+    for(let waited=0;!warehouseRemoteReady&&waited<15000;waited+=50)await sleep(50);
+    if(!warehouseRemoteReady)return {error:new Error('warehouse-not-ready')};
     const result=await originalLoadSharedOrderCache(options);showKaspiLastSync();return result;
   };
 }
