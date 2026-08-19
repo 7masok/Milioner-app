@@ -3,6 +3,12 @@
 
 const sleep=ms=>new Promise(resolve=>setTimeout(resolve,ms));
 
+// Marketplace feeds are already stored in dedicated PostgreSQL tables and are
+// reloaded through /api/orders.  Keeping the same data inside the warehouse
+// snapshot duplicates thousands of rows and can make an otherwise unchanged
+// warehouse save exceed the snapshot limit.
+const SERVER_MANAGED_CACHE_KEYS=['kaspiOrderFeed','wbOrderFeed','ozonOrderFeed','kaspiOrders','marketOrderState','marketplaceLiveSince'];
+
 function serverSnapshot(source){
   const input=source&&typeof source==='object'&&!Array.isArray(source)?source:{};
   const snapshot=JSON.parse(JSON.stringify(input));
@@ -14,6 +20,7 @@ function serverSnapshot(source){
   snapshot.kaspiAdExpenses=Array.isArray(snapshot.kaspiAdExpenses)?snapshot.kaspiAdExpenses:[];
   snapshot.settings=snapshot.settings&&typeof snapshot.settings==='object'?snapshot.settings:{};
   for(const key of WAREHOUSE_VOLATILE_SETTINGS||[])delete snapshot.settings[key];
+  for(const key of SERVER_MANAGED_CACHE_KEYS)delete snapshot[key];
   return snapshot;
 }
 
@@ -126,4 +133,3 @@ startWarehouseCloudWatcher=function(){
   window.addEventListener('focus',()=>pullWarehouseFromD1({force:true}));window.addEventListener('online',()=>pullWarehouseFromD1({force:true}));
 };
 })();
-
