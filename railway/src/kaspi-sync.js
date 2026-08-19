@@ -2,10 +2,12 @@ import { config } from './config.js';
 import { pool } from './db.js';
 
 const DEFAULT_KASPI_WORKER = 'https://fragrant-shadow-72ed.7masok.workers.dev';
+const KASPI_API = 'https://kaspi.kz/shop/api/v2';
 const SYNC_INTERVAL_MS = 5 * 60 * 1000;
 const FETCH_TIMEOUT_MS = 20_000;
 const STALE_RUN_MS = 3 * 60 * 1000;
 const MAX_BATCHES = 3;
+const MAX_DIRECT_ORDERS = 120;
 let syncInFlight = null;
 
 function configuredWorkerBase() {
@@ -37,15 +39,15 @@ function normalizeLine(order, line, index) {
     line?.merchantCode ?? line?.sku ?? order?.merchantCode ?? order?.sku ?? ''
   ).trim();
   const qty = Math.max(1, n(attrs.quantity ?? attrs.qty ?? line?.quantity ?? line?.qty ?? 1, 1));
-  const unitPrice = n(attrs.unitPrice ?? attrs.price ?? line?.unitPrice ?? line?.price ?? 0, 0);
-  const totalPrice = n(attrs.totalPrice ?? line?.totalPrice ?? (unitPrice * qty), unitPrice * qty);
+  const totalPrice = n(attrs.totalPrice ?? line?.totalPrice ?? 0, 0);
+  const unitPrice = n(attrs.unitPrice ?? attrs.price ?? attrs.basePrice ?? line?.unitPrice ?? line?.price ?? (qty ? totalPrice / qty : 0), 0);
   return {
     entryId: String(line?.id ?? attrs.id ?? attrs.entryId ?? `${order?.id || orderAttrs.id || 'order'}-${index}`),
     sku,
     productName: String(attrs.productName ?? attrs.name ?? line?.productName ?? line?.name ?? ''),
     qty,
     unitPrice,
-    totalPrice
+    totalPrice: totalPrice || unitPrice * qty
   };
 }
 
@@ -69,27 +71,122 @@ function normalizeOrder(raw) {
   return { orderId, code, status, state, creationDate, lines: normalized, raw };
 }
 
-async function fetchFromWorker(base, batch, days) {
-  const q = new URLSearchParams({ days: String(days), batch: String(batch), size: '100' });
+async function fetchJson(url, options = {}, label = 'request') {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
   try {
-    const response = await fetch(`${base}/kaspi/sync?${q.toString()}`, { headers: { Accept: 'application/json' }, signal: controller.signal });
+    const response = await fetch(url, { ...options, signal: controller.signal });
     const text = await response.text();
     let data = {};
-    try { data = JSON.parse(text); } catch {}
-    if (!response.ok || data?.ok === false) throw new Error(data?.error || data?.message || `Kaspi Worker HTTP ${response.status}`);
-    const orders = Array.isArray(data?.orders) ? data.orders : Array.isArray(data?.data) ? data.data : [];
-    return { orders, meta: data?.meta || {}, upstream: base };
+    try { data = text ? JSON.parse(text) : {}; } catch {}
+    if (!response.ok) throw new Error(data?.message || data?.error || `${label} HTTP ${response.status}`);
+    return data;
   } catch (error) {
-    if (error?.name === 'AbortError') throw new Error(`Kaspi Worker timeout after ${FETCH_TIMEOUT_MS / 1000}s`);
+    if (error?.name === 'AbortError') throw new Error(`${label} timeout after ${FETCH_TIMEOUT_MS / 1000}s`);
     throw error;
   } finally {
     clearTimeout(timer);
   }
 }
 
-async function fetchBatch(batch, days = 2) {
+function kaspiHeaders() {
+  const token = String(config.kaspiToken || '').trim();
+  if (!token) throw new Error('KASPI_TOKEN is not configured on Railway');
+  return {
+    Accept: 'application/vnd.api+json',
+    'Content-Type': 'application/vnd.api+json',
+    'X-Auth-Token': token
+  };
+}
+
+async function directOrderPage({ days, state, page }) {
+  const end = Date.now();
+  const start = end - Math.max(1, Number(days) || 2) * 86_400_000;
+  const q = new URLSearchParams();
+  q.set('page[number]', String(page));
+  q.set('page[size]', '100');
+  q.set('filter[orders][creationDate][$ge]', String(start));
+  q.set('filter[orders][creationDate][$le]', String(end));
+  if (state) q.set('filter[orders][state]', state);
+  const data = await fetchJson(`${KASPI_API}/orders?${q.toString()}`, { headers: kaspiHeaders() }, 'Kaspi orders');
+  return {
+    orders: Array.isArray(data?.data) ? data.data : [],
+    pageCount: Math.max(1, n(data?.meta?.pageCount ?? data?.meta?.totalPages ?? 1, 1))
+  };
+}
+
+async function directOrderLines(order, productCache) {
+  const orderId = String(order?.id || '').trim();
+  if (!orderId) return [];
+  const entries = await fetchJson(`${KASPI_API}/orders/${encodeURIComponent(orderId)}/entries`, { headers: kaspiHeaders() }, 'Kaspi order entries');
+  const lines = [];
+  for (const entry of Array.isArray(entries?.data) ? entries.data : []) {
+    const attrs = entry?.attributes || {};
+    const masterProductId = String(entry?.relationships?.product?.data?.id || '').trim();
+    let product = productCache.get(masterProductId) || null;
+    if (masterProductId && product === undefined) product = null;
+    if (masterProductId && !productCache.has(masterProductId)) {
+      try {
+        const data = await fetchJson(`${KASPI_API}/masterproducts/${encodeURIComponent(masterProductId)}/merchantProduct`, { headers: kaspiHeaders() }, 'Kaspi merchant product');
+        product = {
+          code: String(data?.data?.attributes?.code || '').trim(),
+          name: String(data?.data?.attributes?.name || '').trim()
+        };
+      } catch {
+        product = { code: '', name: '' };
+      }
+      productCache.set(masterProductId, product);
+    }
+    const qty = Math.max(1, n(attrs.quantity, 1));
+    const totalPrice = n(attrs.totalPrice, n(attrs.basePrice, 0) * qty);
+    lines.push({
+      id: String(entry?.id || ''),
+      merchantCode: String(product?.code || '').trim(),
+      productName: String(product?.name || attrs?.category?.title || '').trim(),
+      quantity: qty,
+      basePrice: n(attrs.basePrice, qty ? totalPrice / qty : 0),
+      totalPrice
+    });
+  }
+  return lines;
+}
+
+async function fetchDirect(days = 2) {
+  const token = String(config.kaspiToken || '').trim();
+  if (!token) throw new Error('KASPI_TOKEN is not configured on Railway');
+  const byId = new Map();
+  for (const state of ['KASPI_DELIVERY', 'ARCHIVE']) {
+    let pageCount = 1;
+    for (let page = 0; page < Math.min(MAX_BATCHES, pageCount); page++) {
+      const result = await directOrderPage({ days, state, page });
+      pageCount = Math.max(1, Math.min(MAX_BATCHES, result.pageCount));
+      for (const raw of result.orders) {
+        const id = String(raw?.id || '');
+        if (id) byId.set(id, raw);
+        if (byId.size >= MAX_DIRECT_ORDERS) break;
+      }
+      if (!result.orders.length || byId.size >= MAX_DIRECT_ORDERS) break;
+    }
+    if (byId.size >= MAX_DIRECT_ORDERS) break;
+  }
+  const productCache = new Map();
+  const orders = [];
+  for (const raw of byId.values()) {
+    let lines = [];
+    try { lines = await directOrderLines(raw, productCache); } catch {}
+    orders.push({ ...raw, lines });
+  }
+  return { orders, meta: { pageCount: 1 }, upstream: 'Kaspi API direct via Railway' };
+}
+
+async function fetchFromWorker(base, batch, days) {
+  const q = new URLSearchParams({ days: String(days), batch: String(batch), size: '100' });
+  const data = await fetchJson(`${base}/kaspi/sync?${q.toString()}`, { headers: { Accept: 'application/json' } }, 'Kaspi Worker');
+  const orders = Array.isArray(data?.orders) ? data.orders : Array.isArray(data?.data) ? data.data : [];
+  return { orders, meta: data?.meta || {}, upstream: base };
+}
+
+async function fetchWorkerBatch(batch, days = 2) {
   const errors = [];
   for (const base of workerCandidates()) {
     try { return await fetchFromWorker(base, batch, days); }
@@ -135,18 +232,33 @@ export async function syncKaspiOrders({ days = 2 } = {}) {
     let items = 0;
     let upstream = '';
     try {
-      let pageCount = 1;
-      for (let batch = 0; batch < Math.min(MAX_BATCHES, pageCount); batch++) {
-        const page = await fetchBatch(batch, days);
-        upstream = page.upstream || upstream;
-        pageCount = Math.max(1, Math.min(MAX_BATCHES, n(page.meta?.pageCount ?? page.meta?.totalPages ?? 1, 1)));
-        for (const raw of page.orders) {
-          const order = normalizeOrder(raw);
-          if (!order) continue;
-          await upsertOrder(order);
-          items += order.lines.filter(line => line.entryId !== '__pending__').length || 1;
+      let payload = null;
+      let directError = '';
+      try {
+        payload = await fetchDirect(days);
+      } catch (error) {
+        directError = String(error?.message || error);
+      }
+      if (!payload || !payload.orders.length) {
+        const pages = [];
+        let pageCount = 1;
+        for (let batch = 0; batch < Math.min(MAX_BATCHES, pageCount); batch++) {
+          const page = await fetchWorkerBatch(batch, days);
+          pages.push(...page.orders);
+          upstream = page.upstream || upstream;
+          pageCount = Math.max(1, Math.min(MAX_BATCHES, n(page.meta?.pageCount ?? page.meta?.totalPages ?? 1, 1)));
+          if (!page.orders.length) break;
         }
-        if (!page.orders.length) break;
+        payload = { orders: pages, upstream: upstream || 'Cloudflare Kaspi Worker' };
+      } else {
+        upstream = payload.upstream;
+      }
+      if (!payload.orders.length) throw new Error(`Kaspi returned no orders${directError ? `; direct=${directError}` : ''}`);
+      for (const raw of payload.orders) {
+        const order = normalizeOrder(raw);
+        if (!order) continue;
+        await upsertOrder(order);
+        items += order.lines.filter(line => line.entryId !== '__pending__').length || 1;
       }
       const finishedAt = Date.now();
       await pool.query("UPDATE sync_runs SET finished_at=$1,ok=1,items=$2,error='' WHERE id=$3", [finishedAt, items, runId]);
