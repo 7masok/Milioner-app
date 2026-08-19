@@ -4,7 +4,7 @@
 const sleep=ms=>new Promise(resolve=>setTimeout(resolve,ms));
 
 // Marketplace feeds are already stored in dedicated PostgreSQL tables and are
-// reloaded through /api/orders.  Keeping the same data inside the warehouse
+// reloaded through /api/orders. Keeping the same data inside the warehouse
 // snapshot duplicates thousands of rows and can make an otherwise unchanged
 // warehouse save exceed the snapshot limit.
 const SERVER_MANAGED_CACHE_KEYS=['kaspiOrderFeed','wbOrderFeed','ozonOrderFeed','kaspiOrders','marketOrderState','marketplaceLiveSince'];
@@ -21,6 +21,9 @@ function serverSnapshot(source){
   snapshot.kaspiAdExpenses=Array.isArray(snapshot.kaspiAdExpenses)?snapshot.kaspiAdExpenses:[];
   snapshot.settings=snapshot.settings&&typeof snapshot.settings==='object'?snapshot.settings:{};
   for(const key of WAREHOUSE_VOLATILE_SETTINGS||[])delete snapshot.settings[key];
+  // This timestamp used to turn every UI-only action into a warehouse write.
+  // It is metadata, not business state, so never use it for snapshot equality.
+  delete snapshot.settings.serverUpdatedAt;
   for(const key of SERVER_MANAGED_CACHE_KEYS)delete snapshot[key];
   return snapshot;
 }
@@ -39,12 +42,6 @@ applyWarehouseSnapshot=function(remote){
     reportPeriod=reportPeriodPreset===0?0:reportPeriodPreset;
     reportCustomFrom=String(reportPeriodUiPreference.from||'');
     reportCustomTo=String(reportPeriodUiPreference.to||'');
-    state.settings.reportPeriodPreset=reportPeriodPreset;
-    state.settings.reportPeriod=reportPeriod;
-    state.settings.reportCustomFrom=reportCustomFrom;
-    state.settings.reportCustomTo=reportCustomTo;
-    state.settings.reportPeriodUpdatedAt=localReportPeriodUpdatedAt;
-    reportPeriodUiPendingServerSave=true;
   }else if([-1,0,1,7,30].includes(persistedReportPeriod)){
     reportPeriodPreset=persistedReportPeriod;
     reportPeriod=reportPeriodPreset===0?0:reportPeriodPreset;
@@ -97,9 +94,12 @@ scheduleWarehouseSave=function(delay=350){
 
 save=function(){
   if(!warehouseRemoteReady){cloudStatus('сервер ещё не загружен · изменение заблокировано','warn');return false}
-  stampChangedWarehouseEntities();state.settings=state.settings||{};state.settings.serverUpdatedAt=Date.now();
+  stampChangedWarehouseEntities();
   warehouseLastObservedSnapshot=normalizeWarehouseSnapshot(state);
-  if(snapshotText(state)!==warehouseLastSyncedText){markWarehouseDirty();scheduleWarehouseSave()}
+  if(snapshotText(state)!==warehouseLastSyncedText){
+    state.settings=state.settings||{};state.settings.serverUpdatedAt=Date.now();
+    markWarehouseDirty();scheduleWarehouseSave();
+  }
   return true;
 };
 
@@ -116,8 +116,8 @@ pushWarehouseToD1=async function(){
     if(response.status===409){
       const remote=await fetchServer(false,3);warehouseRemoteRevision=Number(remote.revision||0);warehouseRemoteUpdatedAt=Number(remote.updatedAt||0);
       warehouseLastCloudSnapshot=serverSnapshot(remote.state);warehouseLastSyncedText=snapshotText(remote.state);applyWarehouseSnapshot(remote.state);
-      clearWarehouseDirty();render();cloudStatus('загружена более новая версия сервера','warn');
-      alert('Данные уже были изменены на другом устройстве. Загружена последняя серверная версия; повторите своё изменение.');return false;
+      clearWarehouseDirty();render();cloudStatus('обновлено с сервера','ok');
+      return false;
     }
     if(!response.ok||data.ok===false)throw new Error(data.error||('HTTP '+response.status));
     warehouseRemoteRevision=Number(data.revision||warehouseRemoteRevision);warehouseRemoteUpdatedAt=Number(data.updatedAt||Date.now());
@@ -146,8 +146,7 @@ bootstrapWarehouseD1=async function(){
     const remote=await fetchServer(false,4);if(!remote.exists)throw new Error('Серверная база склада пуста — запись заблокирована до завершения миграции');
     warehouseRemoteRevision=Number(remote.revision||0);warehouseRemoteUpdatedAt=Number(remote.updatedAt||0);
     warehouseLastCloudSnapshot=serverSnapshot(remote.state);warehouseLastSyncedText=snapshotText(remote.state);applyWarehouseSnapshot(remote.state);
-    clearWarehouseDirty();warehouseRemoteReady=true;
-    if(reportPeriodUiPendingServerSave){reportPeriodUiPendingServerSave=false;markWarehouseDirty();scheduleWarehouseSave(0)}
+    clearWarehouseDirty();warehouseRemoteReady=true;reportPeriodUiPendingServerSave=false;
     render();cloudStatus('сервер подключён','ok');return {mode:'server-authoritative',revision:warehouseRemoteRevision};
   }catch(error){warehouseRemoteReady=false;clearWarehouseDirty();console.error('server bootstrap failed',error);cloudStatus('нет связи с сервером · изменения заблокированы','warn');return {mode:'server-unavailable',error:String(error?.message||error)}}
 };
@@ -198,4 +197,42 @@ if(['today','yesterday','week','month','custom'].includes(savedOrderPeriodUi.mod
   }
   originalSetOrderPeriod(savedOrderPeriodUi.mode);
 }
+
+function syncLabel(ts){
+  const value=Number(ts)||0;if(!value)return '—';
+  const d=new Date(value),now=new Date();
+  const time=d.toLocaleTimeString('ru-RU',{hour:'2-digit',minute:'2-digit'});
+  const same=d.getFullYear()===now.getFullYear()&&d.getMonth()===now.getMonth()&&d.getDate()===now.getDate();
+  const y=new Date(now);y.setDate(now.getDate()-1);
+  const yesterday=d.getFullYear()===y.getFullYear()&&d.getMonth()===y.getMonth()&&d.getDate()===y.getDate();
+  return same?time:yesterday?'вчера '+time:d.toLocaleDateString('ru-RU',{day:'2-digit',month:'2-digit'})+' '+time;
+}
+function showKaspiLastSync(){
+  const kaspi=state.settings?.serverMarketStatus?.Kaspi;
+  const el=document.getElementById('lastSync');if(el)el.textContent=syncLabel(kaspi?.lastSuccessAt);
+}
+const originalLoadSharedOrderCache=window.loadSharedOrderCache;
+if(typeof originalLoadSharedOrderCache==='function'){
+  window.loadSharedOrderCache=async function(options){
+    const result=await originalLoadSharedOrderCache(options);showKaspiLastSync();return result;
+  };
+}
+window.syncNow=async function(){
+  const btn=document.querySelector('header .btn'),old=btn?.textContent;
+  if(btn){btn.disabled=true;btn.textContent='…'}
+  try{
+    cloudStatus('обновляю Kaspi…','warn');
+    const r=await fetch(MILLIONER_API+'/api/kaspi-sync-now',{method:'POST',headers:{'Content-Type':'application/json',Accept:'application/json'},body:JSON.stringify({days:2}),cache:'no-store'});
+    let data={};try{data=await r.json()}catch{}
+    if(!r.ok||data?.ok===false)throw new Error(data?.error||('HTTP '+r.status));
+    await window.loadSharedOrderCache?.({silent:false});
+    showKaspiLastSync();cloudStatus('сервер подключён','ok');
+  }catch(e){
+    await window.loadSharedOrderCache?.({silent:true}).catch(()=>{});showKaspiLastSync();
+    const st=state.settings?.serverMarketStatus?.Kaspi,detail=st?.latest?.error?String(st.latest.error):String(e?.message||e);
+    alert('Ошибка синхронизации Kaspi:\n'+detail.slice(0,500));
+    cloudStatus('сервер подключён · Kaspi ошибка','warn');
+  }finally{if(btn){btn.disabled=false;btn.textContent=old||'↻'}}
+};
+setTimeout(showKaspiLastSync,0);
 })();
