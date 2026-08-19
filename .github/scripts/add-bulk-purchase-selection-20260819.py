@@ -2,7 +2,8 @@ from pathlib import Path
 
 p = Path('index.html')
 s = p.read_text(encoding='utf-8')
-start = s.index('function renderPurchasePlan(){')
+marker = 'let purchasePlanSelection=new Set();'
+start = s.index(marker) if marker in s else s.index('function renderPurchasePlan(){')
 end = s.index('function renderPurchases(){', start)
 new = r'''let purchasePlanSelection=new Set();
 function syncPurchasePlanSelection(rows){const valid=new Set((rows||[]).map(x=>String(x.productId)));for(const id of [...purchasePlanSelection])if(!valid.has(String(id)))purchasePlanSelection.delete(id)}
