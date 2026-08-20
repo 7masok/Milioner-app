@@ -1,0 +1,66 @@
+name: Fix authoritative empty Kaspi sync
+on:
+  push:
+    branches: [codex/railway-migration]
+    paths:
+      - '.github/workflows/temp-fix-kaspi-zero.yml'
+permissions:
+  contents: write
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Patch Kaspi fallback logic safely
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          p=Path('railway/src/kaspi-sync.js')
+          s=p.read_text()
+          old="""      if (!payload || !payload.orders.length) {
+        const pages = [];
+        let pageCount = 1;
+        for (let batch = 0; batch < Math.min(MAX_BATCHES, pageCount); batch++) {
+          const page = await fetchWorkerBatch(batch, days);
+          pages.push(...page.orders);
+          upstream = page.upstream || upstream;
+          pageCount = Math.max(1, Math.min(MAX_BATCHES, n(page.meta?.pageCount ?? page.meta?.totalPages ?? 1, 1)));
+          if (!page.orders.length) break;
+        }
+        payload = { orders: pages, upstream: upstream || 'Cloudflare Kaspi Worker' };
+      } else {
+        upstream = payload.upstream;
+      }
+      if (!payload.orders.length) throw new Error(`Kaspi returned no orders${directError ? `; direct=${directError}` : ''}`);
+"""
+          new="""      // A successful direct response with zero orders is authoritative.
+      // Falling back in that case revives historical Worker rows as if they were live.
+      if (!payload) {
+        const pages = [];
+        let pageCount = 1;
+        for (let batch = 0; batch < Math.min(MAX_BATCHES, pageCount); batch++) {
+          const page = await fetchWorkerBatch(batch, days);
+          pages.push(...page.orders);
+          upstream = page.upstream || upstream;
+          pageCount = Math.max(1, Math.min(MAX_BATCHES, n(page.meta?.pageCount ?? page.meta?.totalPages ?? 1, 1)));
+          if (!page.orders.length) break;
+        }
+        payload = { orders: pages, upstream: upstream || 'Cloudflare Kaspi Worker' };
+        if (!payload.orders.length) throw new Error(`Kaspi fallback returned no orders; direct=${directError || 'unavailable'}`);
+      } else {
+        upstream = payload.upstream;
+      }
+"""
+          if old not in s:
+              raise SystemExit('expected Kaspi sync block not found; refusing to patch')
+          p.write_text(s.replace(old,new,1))
+          PY
+      - name: Commit patch
+        run: |
+          set -euo pipefail
+          git config user.name 'millioner-fix'
+          git config user.email 'actions@users.noreply.github.com'
+          git add railway/src/kaspi-sync.js
+          git diff --cached --check
+          git commit -m 'Treat empty direct Kaspi response as authoritative'
+          git push origin HEAD:codex/railway-migration
