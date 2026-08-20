@@ -3,8 +3,6 @@
 const ALERT_DAYS=1.15;
 const COVER_DAYS=25;
 const HIDDEN_KEY='milioner_low_stock_hidden_v1';
-const RESCUE_DONE_KEY='milioner_purchase_rescue_20260820_v1';
-const STATE_KEY='sklad_mvp_v2';
 let lastSignature='';
 
 function safeNum(v){const n=Number(v);return Number.isFinite(n)?n:0}
@@ -55,25 +53,6 @@ window.openStockAlertProduct=function(pid){if(!serverReady())return alert('До�
 window.openStockAlertWarehouse=function(pid){if(!serverReady())return alert('Дождитесь статуса «онлайн».');closeModal();focusProduct(pid);setTimeout(()=>openProductWarehouseRelease(pid),120)};
 window.openStockAlertPurchase=function(pid){if(!serverReady())return alert('Дождитесь статуса «онлайн».');const x=stockAlertFor(findProduct(pid));if(!x)return;const qty=Math.max(1,x.buyQty||Math.ceil(x.daily*COVER_DAYS));window.pendingPurchaseRecommendations=[{productId:pid,qty,unitCost:lastUnitCost(pid)}];window.pendingPurchaseHint=`Запас примерно на ${dayText(x.days)}; цель — около ${COVER_DAYS} дней.`;closeModal();openView('purchases',true);setTimeout(()=>openModal('purchase'),100)};
 
-function purchaseStatusRaw(x){const v=String(x?.status||'');return ['to_forwarder','to_me','at_warehouse','received'].includes(v)?v:'received'}
-function parseBackup(raw){try{const x=JSON.parse(raw||'null');return x?.state&&typeof x.state==='object'?x.state:x}catch{return null}}
-function rescueMissingOpenPurchases(){
-  if(localStorage.getItem(RESCUE_DONE_KEY)==='1'||!serverReady())return false;
-  const current=Array.isArray(state?.purchases)?state.purchases:[],currentOpen=current.filter(x=>purchaseStatusRaw(x)!=='received');
-  if(currentOpen.length>0)return false;
-  const backups=[localStorage.getItem(STATE_KEY+'_pre_cloud_v2'),localStorage.getItem(STATE_KEY+'_pre_d1')].map(parseBackup).filter(Boolean);
-  const candidates=[];for(const b of backups){for(const x of(Array.isArray(b?.purchases)?b.purchases:[])){if(purchaseStatusRaw(x)==='received')continue;candidates.push(x)}}
-  if(!candidates.length)return false;
-  const byId=new Set(current.map(x=>String(x?.id||'')).filter(Boolean));
-  const byShipmentProduct=new Set(current.map(x=>String(x?.shipmentId||'')+'|'+String(x?.productId||'')).filter(x=>x!=='|'));
-  const add=[];for(const x of candidates){const xid=String(x?.id||''),sp=String(x?.shipmentId||'')+'|'+String(x?.productId||'');if(xid&&byId.has(xid))continue;if(sp!=='|'&&byShipmentProduct.has(sp))continue;add.push({...x,_syncUpdatedAt:Date.now()});if(xid)byId.add(xid);if(sp!=='|')byShipmentProduct.add(sp)}
-  if(!add.length)return false;
-  state.purchases=[...add,...current];
-  localStorage.setItem(RESCUE_DONE_KEY,'1');
-  try{save();render();setTimeout(()=>{try{openView('purchases',true)}catch{}},100);alert(`Восстановлены пропавшие незавершённые закупки: ${add.length} поз. Проверьте список «Закупки».`)}catch(e){console.error('purchase rescue failed',e)}
-  return true;
-}
-function tryRescue(attempt=0){if(rescueMissingOpenPurchases())return;if(attempt<20)setTimeout(()=>tryRescue(attempt+1),1000)}
-function start(){ensureBell();paintBell();setInterval(paintBell,30000);document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='visible')setTimeout(paintBell,300)});window.addEventListener('focus',()=>setTimeout(paintBell,300));setTimeout(()=>tryRescue(0),2500)}
+function start(){ensureBell();paintBell();setInterval(paintBell,30000);document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='visible')setTimeout(paintBell,300)});window.addEventListener('focus',()=>setTimeout(paintBell,300))}
 if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',start,{once:true});else start();setTimeout(paintBell,1800);setTimeout(paintBell,5000);
 })();
