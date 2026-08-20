@@ -191,6 +191,45 @@ if(['today','yesterday','week','month','custom'].includes(savedOrderPeriodUi.mod
   renderOrderPeriodControls?.();
 }
 
+const ORDER_MARKET_UI_KEY='milioner_order_market_ui_v1';
+function readOrderMarketUi(){
+  try{return JSON.parse(localStorage.getItem(ORDER_MARKET_UI_KEY)||'{}')||{}}catch{return {}}
+}
+function rememberOrderMarketUi(next={}){
+  try{
+    const current=readOrderMarketUi();
+    localStorage.setItem(ORDER_MARKET_UI_KEY,JSON.stringify({
+      market:next.market||current.market||'Kaspi',
+      wbAccount:next.wbAccount||current.wbAccount||'all'
+    }));
+  }catch{}
+}
+const originalSelectOrderMarket=window.selectOrderMarket;
+if(typeof originalSelectOrderMarket==='function'){
+  window.selectOrderMarket=function(market){
+    const result=originalSelectOrderMarket(market);
+    if(['Kaspi','WB','Ozon'].includes(market))rememberOrderMarketUi({market});
+    return result;
+  };
+}
+const originalSelectWbAccount=window.selectWbAccount;
+if(typeof originalSelectWbAccount==='function'){
+  window.selectWbAccount=function(account){
+    const result=originalSelectWbAccount(account);
+    if(['all','WB','WB2'].includes(account))rememberOrderMarketUi({wbAccount:account});
+    return result;
+  };
+}
+function restoreOrderMarketUi(){
+  const saved=readOrderMarketUi();
+  if(['Kaspi','WB','Ozon'].includes(saved.market)&&typeof window.selectOrderMarket==='function'){
+    window.selectOrderMarket(saved.market);
+    if(saved.market==='WB'&&['all','WB','WB2'].includes(saved.wbAccount)&&typeof window.selectWbAccount==='function')window.selectWbAccount(saved.wbAccount);
+  }
+}
+setTimeout(restoreOrderMarketUi,0);
+setTimeout(restoreOrderMarketUi,800);
+
 function syncLabel(ts){
   const value=Number(ts)||0;if(!value)return '—';
   const d=new Date(value),now=new Date();
