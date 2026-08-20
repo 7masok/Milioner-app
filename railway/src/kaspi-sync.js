@@ -239,7 +239,9 @@ export async function syncKaspiOrders({ days = 2 } = {}) {
       } catch (error) {
         directError = String(error?.message || error);
       }
-      if (!payload || !payload.orders.length) {
+      // A successful direct response with zero orders is authoritative. Falling
+      // back in that case revives historical Worker rows as if they were live.
+      if (!payload) {
         const pages = [];
         let pageCount = 1;
         for (let batch = 0; batch < Math.min(MAX_BATCHES, pageCount); batch++) {
@@ -250,10 +252,10 @@ export async function syncKaspiOrders({ days = 2 } = {}) {
           if (!page.orders.length) break;
         }
         payload = { orders: pages, upstream: upstream || 'Cloudflare Kaspi Worker' };
+        if (!payload.orders.length) throw new Error(`Kaspi fallback returned no orders; direct=${directError || 'unavailable'}`);
       } else {
         upstream = payload.upstream;
       }
-      if (!payload.orders.length) throw new Error(`Kaspi returned no orders${directError ? `; direct=${directError}` : ''}`);
       for (const raw of payload.orders) {
         const order = normalizeOrder(raw);
         if (!order) continue;
