@@ -3,7 +3,7 @@ import { pool } from './db.js';
 
 export const kaspiLiveReportRouter = express.Router();
 const ALMATY_OFFSET = 5 * 60 * 60 * 1000;
-const CANCELLED = new Set(['CANCELLED','CANCELLING','RETURNED','KASPI_DELIVERY_RETURN_REQUESTED']);
+const SALES_STATUSES = new Set(['ACCEPTED_BY_MERCHANT', 'COMPLETED']);
 
 function periodBounds(days = 1, from = 0, to = 0) {
   if (Number(days) === 0 && Number(from) > 0 && Number(to) > Number(from)) return { start: Number(from), end: Number(to) };
@@ -28,7 +28,10 @@ kaspiLiveReportRouter.get('/kaspi-report-orders', async (req, res, next) => {
 
     const grouped = new Map();
     for (const row of rows.rows) {
-      if (CANCELLED.has(String(row.status || '').toUpperCase())) continue;
+      const sourceStatus = String(row.status || '').toUpperCase();
+      // Kaspi APPROVED_BY_BANK means the seller still has to accept the order.
+      // It is an incoming order, not yet a sale for the operational sales report.
+      if (!SALES_STATUSES.has(sourceStatus)) continue;
       const id = String(row.id || '').trim();
       if (!id) continue;
       let order = grouped.get(id);
@@ -36,11 +39,10 @@ kaspiLiveReportRouter.get('/kaspi-report-orders', async (req, res, next) => {
         order = {
           id,
           code: row.code || id,
-          // The current report is intentionally based on active orders by creation time.
-          // The browser's older report layer only accepts COMPLETED rows, so expose the
-          // active order as report-ready while preserving the real state separately.
+          // The browser report layer expects COMPLETED rows. We preserve the
+          // real Kaspi status separately while marking accepted sales report-ready.
           status: 'COMPLETED',
-          sourceStatus: row.status,
+          sourceStatus,
           state: row.state,
           creationDate: Number(row.creationDate) || 0,
           completionDate: Number(row.creationDate) || 0,
@@ -79,7 +81,7 @@ kaspiLiveReportRouter.get('/kaspi-report-orders', async (req, res, next) => {
       from: req.query.from ? Number(req.query.from) : null,
       to: req.query.to ? Number(req.query.to) : null,
       fetchedAt: Date.now(),
-      source: 'PostgreSQL current Kaspi order feed by creation date',
+      source: 'PostgreSQL accepted Kaspi orders by creation date',
       historyComplete: true,
       coverageFrom: bounds.start,
       coverageTo: bounds.end,
