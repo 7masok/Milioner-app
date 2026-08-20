@@ -1,4 +1,4 @@
-# rerun: target marketplace rows
+# rerun: after exact Kaspi verifier
 name: Temporary reservation diagnostic
 on:
   push:
