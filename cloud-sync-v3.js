@@ -232,3 +232,60 @@ window.syncNow=async function(){
 setInterval(()=>showMarketSyncTimes(),30000);
 setTimeout(showMarketSyncTimes,0);
 })();
+
+/* compact marketplace status rows */
+(function(){
+'use strict';
+function addCompactStyles(){
+  if(document.getElementById('compactMarketStatusStyle'))return;
+  const style=document.createElement('style');style.id='compactMarketStatusStyle';style.textContent=`
+  .sync.sync-compact{margin-top:7px;display:flex;align-items:flex-start;justify-content:space-between;gap:12px;font-size:12px;color:var(--muted)}
+  .compact-cloud{display:flex;align-items:center;gap:5px;white-space:nowrap;min-width:0;padding-top:1px}
+  .compact-cloud-label{color:var(--muted)}
+  #cloudStatus{font-weight:650;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:120px}
+  .compact-market-stack{display:flex;flex-direction:column;align-items:flex-start;gap:2px;min-width:138px}
+  .compact-market-row{appearance:none;border:0;background:transparent;padding:1px 0;color:var(--muted);display:grid;grid-template-columns:11px 38px auto;align-items:center;gap:3px;font-size:11px;line-height:1.35;text-align:left;white-space:nowrap}
+  .compact-market-row b{color:var(--text);font-size:11px}.compact-market-time{font-variant-numeric:tabular-nums;color:var(--muted)}
+  .compact-market-row .dot{margin:0;width:7px;height:7px}.compact-market-row:active{opacity:.65}
+  @media(max-width:380px){.sync.sync-compact{gap:7px}.compact-cloud{font-size:11px}#cloudStatus{max-width:92px}.compact-market-stack{min-width:124px}.compact-market-row{grid-template-columns:10px 34px auto;font-size:10px}.compact-market-row b{font-size:10px}}
+  `;document.head.appendChild(style);
+}
+function buildCompactStatus(){
+  addCompactStyles();
+  const sync=document.querySelector('header .sync');if(!sync)return false;
+  if(sync.dataset.compactBuilt==='1')return true;
+  const cloud=document.getElementById('cloudStatus');
+  const cloudText=cloud?.textContent||'…';
+  sync.classList.add('sync-compact');
+  sync.innerHTML=`<div class="compact-market-stack">
+    <button class="compact-market-row" id="kaspiStatusRow" type="button"><span id="dotKaspi" class="dot warn"></span><b>Kaspi</b><span id="lastSync" class="compact-market-time">—</span></button>
+    <button class="compact-market-row" id="wb1StatusRow" type="button"><span id="dotWB1" class="dot off"></span><b>WB1</b><span id="wb1Sync" class="compact-market-time">—</span></button>
+    <button class="compact-market-row" id="wb2StatusRow" type="button"><span id="dotWB2" class="dot off"></span><b>WB2</b><span id="wb2Sync" class="compact-market-time">—</span></button>
+  </div><div class="compact-cloud"><span class="compact-cloud-label">Облако</span><span id="cloudStatus">${cloudText}</span></div><span id="dotWB" class="dot off" style="display:none"></span><span id="wbStockStatus" style="display:none">—</span>`;
+  sync.dataset.compactBuilt='1';
+  return true;
+}
+function fmt(ts){
+  const value=Number(ts)||0;if(!value)return '—';const d=new Date(value),now=new Date(),time=d.toLocaleTimeString('ru-RU',{hour:'2-digit',minute:'2-digit'});
+  const same=d.getFullYear()===now.getFullYear()&&d.getMonth()===now.getMonth()&&d.getDate()===now.getDate(),y=new Date(now);y.setDate(now.getDate()-1);
+  const yesterday=d.getFullYear()===y.getFullYear()&&d.getMonth()===y.getMonth()&&d.getDate()===y.getDate();
+  return same?time:yesterday?'вчера '+time:d.toLocaleDateString('ru-RU',{day:'2-digit',month:'2-digit'})+' '+time;
+}
+function health(name){
+  const item=state?.settings?.serverMarketStatus?.[name]||{},last=Number(item.lastSuccessAt||0),latest=item.latest||null,age=last?Date.now()-last:Infinity;
+  const failed=latest&&Number(latest.ok)!==1&&Number(latest.finished_at||0)>0&&Number(latest.started_at||0)>=last;
+  if(failed)return {cls:'bad',label:'ошибка',last,latest};if(age<=10*60*1000)return {cls:'',label:'есть связь',last,latest};if(age<=30*60*1000)return {cls:'warn',label:'задержка',last,latest};if(last)return {cls:'bad',label:'нет свежей связи',last,latest};return {cls:'off',label:'нет данных',last,latest};
+}
+function paint(name,dotId,timeId){const h=health(name),dot=document.getElementById(dotId),time=document.getElementById(timeId);if(dot){dot.className='dot'+(h.cls?' '+h.cls:'');dot.title=(name==='WB'?'WB1':name)+': '+h.label}if(time)time.textContent=fmt(h.last);return h}
+function compactCloudText(){const el=document.getElementById('cloudStatus');if(!el)return;const raw=String(el.textContent||'').trim().toLowerCase();let short='';if(/сохраня|отправля/.test(raw))short='сохранение…';else if(/подключ|сохранено|обновлено|сервер подключён/.test(raw))short='онлайн';else if(/загружа|проверя|подключение/.test(raw))short='…';else if(/ошиб|нет связи|недоступ/.test(raw))short='ошибка';if(short&&el.textContent!==short)el.textContent=short}
+function refresh(){if(!buildCompactStatus())return;paint('Kaspi','dotKaspi','lastSync');paint('WB','dotWB1','wb1Sync');paint('WB2','dotWB2','wb2Sync');compactCloudText()}
+async function details(name){
+  const label=name==='WB2'?'WB2':'WB1',h=health(name);let extra='';
+  try{const r=await fetch(MILLIONER_API+'/api/wb-sync-status',{cache:'no-store',headers:{Accept:'application/json'}}),data=await r.json().catch(()=>({}));if(r.ok&&data?.ok){const latest=(data.latest||[]).find(x=>String(x.market)===name),newest=(data.newestOrders||[]).find(x=>String(x.market)===name);if(latest){extra+=`\nПоследняя попытка: ${Number(latest.ok)===1?'OK':'ОШИБКА'}`;if(latest.error)extra+=`\n${String(latest.error).slice(0,350)}`}if(newest?.newest_order_at)extra+=`\nПоследний заказ: ${fmt(newest.newest_order_at)}`}}catch{extra+='\nДиагностика недоступна'}
+  alert(`${label}: ${h.label}\nПоследний успех: ${fmt(h.last)}${extra}`);
+}
+function bind(){if(!buildCompactStatus())return;const wb1=document.getElementById('wb1StatusRow'),wb2=document.getElementById('wb2StatusRow');if(wb1&&!wb1.dataset.bound){wb1.dataset.bound='1';wb1.addEventListener('click',()=>details('WB'))}if(wb2&&!wb2.dataset.bound){wb2.dataset.bound='1';wb2.addEventListener('click',()=>details('WB2'))}const cloud=document.getElementById('cloudStatus');if(cloud&&!cloud.dataset.compactObserver){cloud.dataset.compactObserver='1';new MutationObserver(compactCloudText).observe(cloud,{childList:true,characterData:true,subtree:true})}refresh()}
+if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',bind,{once:true});else bind();
+window.addEventListener('load',()=>{bind();setTimeout(refresh,300);setTimeout(refresh,1200)});
+setInterval(refresh,15000);
+})();
