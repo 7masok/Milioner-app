@@ -3857,8 +3857,8 @@
     "latestSync": [
         {
             "market": "Kaspi",
-            "id": 4236,
-            "startedAt": 1787250699178,
+            "id": 4266,
+            "startedAt": 1787251203376,
             "finishedAt": null,
             "ok": 0,
             "items": 0,
@@ -3866,18 +3866,18 @@
         },
         {
             "market": "WB",
-            "id": 4237,
-            "startedAt": 1787250701067,
-            "finishedAt": 1787250701378,
+            "id": 4269,
+            "startedAt": 1787251262497,
+            "finishedAt": 1787251262605,
             "ok": 1,
             "items": 30,
             "error": ""
         },
         {
             "market": "WB2",
-            "id": 4238,
-            "startedAt": 1787250701597,
-            "finishedAt": 1787250701768,
+            "id": 4270,
+            "startedAt": 1787251262895,
+            "finishedAt": 1787251263500,
             "ok": 1,
             "items": 19,
             "error": ""
