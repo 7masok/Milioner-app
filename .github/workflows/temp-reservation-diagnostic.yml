@@ -1,4 +1,4 @@
-# rerun: exact UI reserve contributors
+# rerun: target marketplace rows
 name: Temporary reservation diagnostic
 on:
   push:
