@@ -11,6 +11,7 @@
 'use strict';
 const ALERT_DAYS=1.15;
 const COVER_DAYS=25;
+const HIDDEN_KEY='milioner_low_stock_hidden_v1';
 let lastSignature='';
 
 function safeNum(v){const n=Number(v);return Number.isFinite(n)?n:0}
@@ -24,6 +25,8 @@ function atWarehouse(pid){try{return Math.max(0,safeNum(purchaseAtWarehouseQty(p
 function inbound(pid){try{return Math.max(0,safeNum(purchaseInboundQty(pid)))}catch{return 0}}
 function demand(p,days){try{return Math.max(0,safeNum(purchaseDemandQty(p,days)))}catch{return 0}}
 function lastUnitCost(pid){try{return Math.max(0,safeNum(purchaseLastUnitCost(pid)))}catch{return 0}}
+function readHidden(){try{return JSON.parse(localStorage.getItem(HIDDEN_KEY)||'{}')||{}}catch{return {}}}
+function writeHidden(v){try{localStorage.setItem(HIDDEN_KEY,JSON.stringify(v||{}))}catch{}}
 
 function stockAlertFor(p){
   if(!p||isBundle(p))return null;
@@ -34,9 +37,24 @@ function stockAlertFor(p){
   const warehouse=atWarehouse(p.id),coming=inbound(p.id),book=Math.max(0,safeNum(p.stock)),reserve=activeReserved(p);
   const target=Math.ceil(daily*COVER_DAYS);
   const buyQty=Math.max(0,target-available-warehouse-coming);
-  return {p,daily,available,days,warehouse,coming,book,reserve,buyQty,target};
+  const signature=[book,reserve,warehouse,coming].join(':');
+  return {p,daily,available,days,warehouse,coming,book,reserve,buyQty,target,signature};
 }
-function currentAlerts(){return products().map(stockAlertFor).filter(Boolean).sort((a,b)=>a.days-b.days||b.daily-a.daily||String(a.p.name).localeCompare(String(b.p.name),'ru'))}
+function allAlerts(){return products().map(stockAlertFor).filter(Boolean).sort((a,b)=>a.days-b.days||b.daily-a.daily||String(a.p.name).localeCompare(String(b.p.name),'ru'))}
+function currentAlerts(){
+  const hidden=readHidden(),alerts=allAlerts(),activeIds=new Set(alerts.map(x=>String(x.p.id)));
+  let changed=false;
+  for(const key of Object.keys(hidden)){if(!activeIds.has(String(key))){delete hidden[key];changed=true}}
+  const visible=[];
+  for(const x of alerts){
+    const key=String(x.p.id),saved=hidden[key];
+    if(saved&&saved===x.signature)continue;
+    if(saved&&saved!==x.signature){delete hidden[key];changed=true}
+    visible.push(x);
+  }
+  if(changed)writeHidden(hidden);
+  return visible;
+}
 function dayText(x){if(!Number.isFinite(x))return '—';if(x<=0)return 'закончился';if(x<0.1)return '< 0,1 дня';return x.toFixed(1).replace('.',',')+' дня'}
 
 function ensureStyle(){
@@ -47,6 +65,7 @@ function ensureStyle(){
   .stock-alert-card{border-left:4px solid #c62828;cursor:pointer}.stock-alert-card+.stock-alert-card{margin-top:8px}
   .stock-alert-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:7px;margin-top:10px}.stock-alert-mini{background:#f6f7f8;border-radius:11px;padding:9px}
   .inventory-diff-note{margin:10px 0;padding:11px;border-radius:12px;background:#f6f7f8;line-height:1.45}.inventory-diff-note.bad{background:#fff1f1;color:#9d1717}.inventory-diff-note.ok{background:#edf8ef;color:#196b2b}
+  .stock-alert-hide{width:100%;margin-top:8px;color:var(--muted);background:#f6f7f8;border-color:#eceef0}
   `;document.head.appendChild(st);
 }
 function ensureBell(){
@@ -68,8 +87,9 @@ function paintBell(){
 }
 
 function alertCard(x){
+  const pid=String(x.p.id).replace(/'/g,"\\'");
   const action=x.warehouse>0?`На складе ждёт ввода в продажу: <b>${x.warehouse} шт.</b>`:x.buyQty>0?`Рекомендуется закупить примерно <b>${x.buyQty} шт.</b>`:'Поставка уже в пути';
-  return `<div class="item stock-alert-card" onclick="openStockAlertProduct('${String(x.p.id).replace(/'/g,"\\'")}')">
+  return `<div class="item stock-alert-card" onclick="openStockAlertProduct('${pid}')">
     <div class="row"><div class="grow"><div class="name">${escText(x.p.name)}</div><div class="muted">Запаса к продаже осталось примерно на ${dayText(x.days)}</div></div><span class="badge bad">${x.available} шт.</span></div>
     <div class="stock-alert-grid">
       <div class="stock-alert-mini"><div class="label">По учёту в продаже</div><b>${x.book} шт.</b></div>
@@ -78,16 +98,24 @@ function alertCard(x){
       <div class="stock-alert-mini"><div class="label">В пути</div><b>${x.coming} шт.</b></div>
     </div><div class="muted" style="margin-top:9px">${action}. Нажмите, чтобы пересчитать товар и начать инвентаризацию.</div>
     <div class="actions" onclick="event.stopPropagation()">
-      ${x.warehouse>0?`<button class="btn" onclick="openStockAlertWarehouse('${String(x.p.id).replace(/'/g,"\\'")}')">Со склада</button>`:''}
-      <button class="btn" onclick="openStockAlertPurchase('${String(x.p.id).replace(/'/g,"\\'")}')">Закупить</button>
-      <button class="btn dark" onclick="openStockAlertProduct('${String(x.p.id).replace(/'/g,"\\'")}')">Пересчитать</button>
+      ${x.warehouse>0?`<button class="btn" onclick="openStockAlertWarehouse('${pid}')">Со склада</button>`:''}
+      <button class="btn" onclick="openStockAlertPurchase('${pid}')">Закупить</button>
+      <button class="btn dark" onclick="openStockAlertProduct('${pid}')">Пересчитать</button>
     </div>
+    <button class="btn stock-alert-hide" onclick="event.stopPropagation();hideStockAlert('${pid}')">Скрыть · я в курсе</button>
   </div>`;
 }
 window.openStockAlerts=function(){
   const alerts=currentAlerts();
-  if(!alerts.length)return alert('Сейчас нет товаров с запасом примерно на один день.');
-  showSheet(`<h3>Нужно проверить остаток · ${alerts.length}</h3><div class="link-note">Тревога считается по реальным заказам за 7 и 25 дней. Берётся более высокий среднесуточный темп. Остаток — свободное количество после активного резерва. Перед закупкой лучше физически пересчитать товар.</div>${alerts.map(alertCard).join('')}`);
+  if(!alerts.length)return alert('Сейчас нет новых уведомлений по остаткам.');
+  showSheet(`<h3>Нужно проверить остаток · ${alerts.length}</h3><div class="link-note">Тревога считается по реальным заказам за 7 и 25 дней. Берётся более высокий среднесуточный темп. Остаток — свободное количество после активного резерва. «Скрыть» убирает текущую тревогу, но она вернётся, если изменится остаток, резерв, товар на складе или в пути.</div>${alerts.map(alertCard).join('')}`);
+};
+window.hideStockAlert=function(pid){
+  const x=stockAlertFor(findProduct(pid));if(!x)return;
+  const hidden=readHidden();hidden[String(pid)]=x.signature;writeHidden(hidden);paintBell();
+  const left=currentAlerts();
+  if(!left.length){closeModal();return}
+  window.openStockAlerts();
 };
 function findProduct(pid){try{return prod(pid)}catch{return products().find(p=>String(p.id)===String(pid))||null}}
 function focusProduct(pid){
