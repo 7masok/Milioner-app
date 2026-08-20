@@ -4,8 +4,10 @@ import { pool } from './db.js';
 const DEFAULT_WB_WORKER = 'https://wb-sync.7masok.workers.dev';
 const WB_ORDERS_URL = 'https://statistics-api.wildberries.ru/api/v1/supplier/orders';
 const SYNC_INTERVAL_MS = 30 * 60 * 1000;
+const STARTUP_SYNC_DELAY_MS = 60 * 1000;
 const FETCH_TIMEOUT_MS = 30_000;
 let syncInFlight = null;
+let wbRetryAt = 0;
 
 function baseUrl() {
   return String(config.wbWorkerUrl || DEFAULT_WB_WORKER).trim().replace(/\/$/, '');
@@ -83,7 +85,30 @@ function normalizeOrder(raw, index) {
   };
 }
 
+function retryAtFromHeader(value) {
+  const raw = String(value || '').trim();
+  if (!raw) return Date.now() + 60_000;
+
+  const numeric = Number(raw);
+  if (Number.isFinite(numeric) && numeric > 0) {
+    if (numeric > 1e12) return numeric;
+    if (numeric > 1e9) return numeric * 1000;
+    return Date.now() + numeric * 1000;
+  }
+
+  const parsed = Date.parse(raw);
+  return Number.isFinite(parsed) ? parsed : Date.now() + 60_000;
+}
+
 async function fetchJson(url, headers = {}) {
+  if (Date.now() < wbRetryAt) {
+    const seconds = Math.max(1, Math.ceil((wbRetryAt - Date.now()) / 1000));
+    const error = new Error(`WB 429: rate limit active, retry in ${seconds}s`);
+    error.status = 429;
+    error.retryAt = wbRetryAt;
+    throw error;
+  }
+
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
   try {
@@ -91,10 +116,25 @@ async function fetchJson(url, headers = {}) {
     const text = await response.text();
     let data = {};
     try { data = text ? JSON.parse(text) : {}; } catch {}
+
+    if (response.status === 429) {
+      wbRetryAt = retryAtFromHeader(response.headers.get('x-ratelimit-retry') || response.headers.get('retry-after'));
+      const seconds = Math.max(1, Math.ceil((wbRetryAt - Date.now()) / 1000));
+      const detail = data?.detail || data?.error || data?.message || text || 'rate limit exceeded';
+      const error = new Error(`WB 429: ${String(detail).slice(0, 500)}; retry in ${seconds}s`);
+      error.status = 429;
+      error.retryAt = wbRetryAt;
+      throw error;
+    }
+
     if (!response.ok) {
       const detail = data?.detail || data?.error || data?.message || text || response.statusText;
-      throw new Error(`WB ${response.status}: ${String(detail).slice(0, 700)}`);
+      const error = new Error(`WB ${response.status}: ${String(detail).slice(0, 700)}`);
+      error.status = response.status;
+      throw error;
     }
+
+    wbRetryAt = 0;
     return data;
   } catch (error) {
     if (error?.name === 'AbortError') throw new Error(`WB timeout after ${FETCH_TIMEOUT_MS / 1000}s`);
@@ -203,7 +243,8 @@ export async function syncWbOrders({ days = 2 } = {}) {
       return await persistPayload(payload, baseUrl());
     } catch (error) {
       const wrapped = new Error(String(error?.message || error).slice(0, 1000));
-      wrapped.status = 502;
+      wrapped.status = Number(error?.status) || 502;
+      if (error?.retryAt) wrapped.retryAt = error.retryAt;
       throw wrapped;
     }
   })();
@@ -212,7 +253,7 @@ export async function syncWbOrders({ days = 2 } = {}) {
 
 export function startWbSyncLoop() {
   const run = () => syncWbOrders({ days: 2 }).catch(error => console.error('WB background sync failed', error));
-  setTimeout(run, 4_000).unref();
+  setTimeout(run, STARTUP_SYNC_DELAY_MS).unref();
   const timer = setInterval(run, SYNC_INTERVAL_MS);
   timer.unref();
   return timer;
