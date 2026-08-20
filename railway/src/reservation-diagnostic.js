@@ -73,6 +73,45 @@ reservationDiagnosticRouter.get('/reservation-diagnostic', asyncRoute(async (req
   const activeReservationsAll = reservations.filter(r => r?.active);
   const output = [];
 
+  const directReserveByProduct = new Map();
+  for (const r of activeReservationsAll) {
+    const id = String(r.productId || '');
+    directReserveByProduct.set(id, (directReserveByProduct.get(id) || 0) + Math.max(0, Number(r.qty || 0)));
+  }
+  const derivedReserveByProduct = new Map();
+  for (const bundle of allProducts) {
+    if (String(bundle?.kind || '') !== 'bundle' || !Array.isArray(bundle?.components)) continue;
+    const bundleReserve = directReserveByProduct.get(String(bundle.id || '')) || 0;
+    if (!bundleReserve) continue;
+    for (const component of bundle.components) {
+      const id = String(component?.productId || '');
+      if (!id) continue;
+      const componentQty = Math.max(1, Number(component?.qty || 1));
+      derivedReserveByProduct.set(id, (derivedReserveByProduct.get(id) || 0) + bundleReserve * componentQty);
+    }
+  }
+  const reserveMetricContributors = [];
+  for (const product of allProducts) {
+    if (String(product?.kind || '') === 'bundle') continue;
+    const direct = directReserveByProduct.get(String(product.id || '')) || 0;
+    const derived = derivedReserveByProduct.get(String(product.id || '')) || 0;
+    const reserve = direct + derived;
+    const stock = Math.max(0, Number(product.stock || 0));
+    const contribution = Math.min(stock, Math.max(0, reserve));
+    if (contribution > 0) reserveMetricContributors.push({
+      productId: product.id,
+      productName: product.name,
+      stock,
+      directReserve: direct,
+      derivedReserve: derived,
+      reserve,
+      contribution,
+      reservations: activeReservationsAll.filter(r => String(r.productId || '') === String(product.id || '')).map(r => ({
+        qty: Number(r.qty || 0), source: String(r.source || ''), externalKey: String(r.externalKey || ''), stage: r.stage || null
+      }))
+    });
+  }
+
   for (const product of products) {
     const active = activeReservationsAll.filter(r => String(r.productId || '') === String(product.id || ''));
     const decorated = [];
@@ -146,6 +185,8 @@ reservationDiagnosticRouter.get('/reservation-diagnostic', asyncRoute(async (req
     products: output,
     allActiveReservations: allActiveSummary,
     allActiveReservationQty: allActiveSummary.reduce((sum, r) => sum + Math.max(0, Number(r.qty || 0)), 0),
+    uiReservedStockTotal: reserveMetricContributors.reduce((sum, r) => sum + Number(r.contribution || 0), 0),
+    reserveMetricContributors,
     latestSync
   });
 }));
