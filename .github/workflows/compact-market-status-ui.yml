@@ -1,6 +1,7 @@
 name: Compact marketplace status UI
 
 on:
+  workflow_dispatch:
   push:
     paths:
       - '.github/workflows/compact-market-status-ui.yml'
@@ -110,8 +111,9 @@ async function showWbOne(name){
   alert(`${label}: ${h.label}\nПоследний успех: ${fmtSync(h.last)}${extra}`);
 }
 function bind(){
-  document.getElementById('wb1StatusRow')?.addEventListener('click',()=>showWbOne('WB'));
-  document.getElementById('wb2StatusRow')?.addEventListener('click',()=>showWbOne('WB2'));
+  const wb1=document.getElementById('wb1StatusRow'),wb2=document.getElementById('wb2StatusRow');
+  if(wb1&&!wb1.dataset.bound){wb1.dataset.bound='1';wb1.addEventListener('click',()=>showWbOne('WB'));}
+  if(wb2&&!wb2.dataset.bound){wb2.dataset.bound='1';wb2.addEventListener('click',()=>showWbOne('WB2'));}
   const cloud=document.getElementById('cloudStatus');if(cloud&&!cloud.dataset.compactObserver){cloud.dataset.compactObserver='1';new MutationObserver(()=>compactCloud()).observe(cloud,{childList:true,characterData:true,subtree:true});}
   refreshCompactMarketStatus();
 }
