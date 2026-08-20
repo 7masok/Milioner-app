@@ -9,4 +9,9 @@
   extra.src='./stock-alerts-rescue-v1.js?v=20260820-1732';
   extra.async=false;
   document.head.appendChild(extra);
+
+  const rescue=document.createElement('script');
+  rescue.src='./cloudflare-purchase-rescue-v1.js?v=20260820-1748';
+  rescue.async=false;
+  document.head.appendChild(rescue);
 })();
