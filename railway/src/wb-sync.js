@@ -1,0 +1,158 @@
+import { config } from './config.js';
+import { pool } from './db.js';
+
+const DEFAULT_WB_WORKER = 'https://wb-sync.7masok.workers.dev';
+const SYNC_INTERVAL_MS = 5 * 60 * 1000;
+const FETCH_TIMEOUT_MS = 30_000;
+let syncInFlight = null;
+
+function baseUrl() {
+  return String(config.wbWorkerUrl || DEFAULT_WB_WORKER).trim().replace(/\/$/, '');
+}
+
+function n(value, fallback = 0) {
+  const x = Number(value);
+  return Number.isFinite(x) ? x : fallback;
+}
+
+function ts(value) {
+  if (value == null || value === '') return Date.now();
+  const num = Number(value);
+  if (Number.isFinite(num) && num > 0) return num < 1e12 ? num * 1000 : num;
+  const parsed = Date.parse(String(value));
+  return Number.isFinite(parsed) ? parsed : Date.now();
+}
+
+function normalizeMarket(value) {
+  const s = String(value || '').trim().toUpperCase();
+  if (s === 'WB2' || s.includes('WB 2') || s.includes('WB_2')) return 'WB2';
+  return 'WB';
+}
+
+function pickOrders(data) {
+  if (Array.isArray(data)) return data;
+  for (const key of ['orders', 'data', 'items', 'result']) {
+    if (Array.isArray(data?.[key])) return data[key];
+  }
+  const combined = [];
+  if (Array.isArray(data?.wb)) combined.push(...data.wb.map(x => ({ ...x, market: x?.market || 'WB' })));
+  if (Array.isArray(data?.wb2)) combined.push(...data.wb2.map(x => ({ ...x, market: x?.market || 'WB2' })));
+  return combined;
+}
+
+function normalizeLine(order, line, index) {
+  const src = line || {};
+  const sku = String(src.merchantCode ?? src.sku ?? src.article ?? src.vendorCode ?? order?.merchantCode ?? order?.sku ?? order?.article ?? order?.vendorCode ?? order?.nmId ?? '').trim();
+  const qty = Math.max(1, n(src.quantity ?? src.qty ?? order?.quantity ?? order?.qty ?? 1, 1));
+  const explicitTotal = n(src.totalPrice ?? order?.totalPrice ?? 0, 0);
+  const unitPrice = n(src.unitPrice ?? src.convertedFinalPrice ?? src.convertedPrice ?? src.finalPrice ?? src.price ?? order?.unitPrice ?? order?.convertedFinalPrice ?? order?.convertedPrice ?? order?.finalPrice ?? order?.price ?? (qty ? explicitTotal / qty : 0), 0);
+  return {
+    entryId: String(src.entryId ?? src.id ?? order?.entryId ?? order?.id ?? `${order?.orderId || order?.orderUid || 'wb'}-${index}`),
+    sku,
+    productName: String(src.productName ?? src.name ?? order?.productName ?? order?.name ?? ''),
+    qty,
+    unitPrice,
+    totalPrice: explicitTotal || unitPrice * qty
+  };
+}
+
+function normalizeOrder(raw, index) {
+  const orderId = String(raw?.orderId ?? raw?.id ?? raw?.orderUid ?? raw?.rid ?? raw?.srid ?? '').trim();
+  if (!orderId) return null;
+  const lines = Array.isArray(raw?.lines) && raw.lines.length ? raw.lines : [raw];
+  const market = normalizeMarket(raw?.market ?? raw?.account ?? raw?.seller ?? raw?.cabinet ?? raw?.shop);
+  return {
+    market,
+    orderId,
+    code: String(raw?.code ?? raw?.orderUid ?? raw?.rid ?? raw?.id ?? orderId),
+    status: String(raw?.status ?? raw?.supplierStatus ?? raw?.wbStatus ?? 'NEW'),
+    state: String(raw?.state ?? raw?.deliveryType ?? raw?.warehouseType ?? 'FBS'),
+    creationDate: ts(raw?.creationDate ?? raw?.createdAt ?? raw?.date ?? raw?.lastChangeDate),
+    lines: lines.map((line, i) => normalizeLine(raw, line, i)).filter(Boolean),
+    raw,
+    index
+  };
+}
+
+async function fetchWorker(days) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
+  try {
+    const url = `${baseUrl()}/wb/sync?days=${encodeURIComponent(days)}`;
+    const response = await fetch(url, { cache: 'no-store', headers: { Accept: 'application/json' }, signal: controller.signal });
+    const text = await response.text();
+    let data = {};
+    try { data = text ? JSON.parse(text) : {}; } catch {}
+    if (!response.ok || data?.ok === false) throw new Error(data?.error || data?.message || `WB Worker HTTP ${response.status}`);
+    return data;
+  } catch (error) {
+    if (error?.name === 'AbortError') throw new Error(`WB Worker timeout after ${FETCH_TIMEOUT_MS / 1000}s`);
+    throw error;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function upsertOrder(order) {
+  const now = Date.now();
+  for (const line of order.lines) {
+    await pool.query(`INSERT INTO marketplace_order_lines
+      (market,order_id,code,entry_id,status,state,creation_date,sku,product_name,qty,unit_price,total_price,seller_delivery_cost,marketplace_fee,fee_source,raw_json,first_seen_at,updated_at)
+      VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,0,0,'',$13,$14,$14)
+      ON CONFLICT(market,order_id,entry_id) DO UPDATE SET
+        code=excluded.code,status=excluded.status,state=excluded.state,creation_date=excluded.creation_date,
+        sku=excluded.sku,product_name=excluded.product_name,qty=excluded.qty,unit_price=excluded.unit_price,
+        total_price=excluded.total_price,raw_json=excluded.raw_json,updated_at=excluded.updated_at`, [
+      order.market, order.orderId, order.code, line.entryId, order.status, order.state, order.creationDate,
+      line.sku, line.productName, line.qty, line.unitPrice, line.totalPrice, JSON.stringify(order.raw || {}), now
+    ]);
+  }
+}
+
+async function createRun(market) {
+  const r = await pool.query('INSERT INTO sync_runs(market,started_at,ok,items,error) VALUES($1,$2,0,0,\'\') RETURNING id', [market, Date.now()]);
+  return r.rows[0].id;
+}
+
+export async function syncWbOrders({ days = 2 } = {}) {
+  if (syncInFlight) return syncInFlight;
+  syncInFlight = (async () => {
+    const runs = new Map();
+    const counts = new Map();
+    try {
+      const payload = await fetchWorker(days);
+      const rows = pickOrders(payload);
+      if (!rows.length) throw new Error('WB Worker returned no orders');
+      for (let i = 0; i < rows.length; i++) {
+        const order = normalizeOrder(rows[i], i);
+        if (!order) continue;
+        if (!runs.has(order.market)) runs.set(order.market, await createRun(order.market));
+        await upsertOrder(order);
+        counts.set(order.market, (counts.get(order.market) || 0) + Math.max(1, order.lines.length));
+      }
+      const finishedAt = Date.now();
+      for (const [market, runId] of runs) {
+        await pool.query('UPDATE sync_runs SET finished_at=$1,ok=1,items=$2,error=\'\' WHERE id=$3', [finishedAt, counts.get(market) || 0, runId]);
+      }
+      return { ok: true, finishedAt, markets: Object.fromEntries(counts), upstream: baseUrl() };
+    } catch (error) {
+      const message = String(error?.message || error).slice(0, 1000);
+      if (!runs.size) runs.set('WB', await createRun('WB'));
+      for (const [, runId] of runs) {
+        await pool.query('UPDATE sync_runs SET finished_at=$1,ok=0,error=$2 WHERE id=$3', [Date.now(), message, runId]).catch(() => {});
+      }
+      const wrapped = new Error(message);
+      wrapped.status = 502;
+      throw wrapped;
+    }
+  })();
+  try { return await syncInFlight; } finally { syncInFlight = null; }
+}
+
+export function startWbSyncLoop() {
+  const run = () => syncWbOrders({ days: 2 }).catch(error => console.error('WB background sync failed', error));
+  setTimeout(run, 4_000).unref();
+  const timer = setInterval(run, SYNC_INTERVAL_MS);
+  timer.unref();
+  return timer;
+}
