@@ -19,7 +19,7 @@ function findMatchingActiveReservation(market,order,reservations){
   let match=reservations.find(r=>r?.active&&sameText(r.source,market)&&(
     sameText(r.externalKey,scoped)||sameText(r.externalKey,legacy)
   ));
-  if(match)return {reservation:match,scoped};
+  if(match)return {reservation:match,scoped,legacy};
 
   // WB order numbers changed from the internal API id to public gNumber/orderNumber.
   // Repair that historical key only when the current row clearly uses the public
@@ -34,14 +34,17 @@ function findMatchingActiveReservation(market,order,reservations){
     const reservedProductId=String(r.productId??'');
     return reservedProductId!==''&&reservedProductId===productId;
   });
-  return match?{reservation:match,scoped}:null;
+  return match?{reservation:match,scoped,legacy}:null;
 }
 
 applyMarketplaceTransitions=function(market,feed){
   const rows=Array.isArray(feed)?feed:[];
   const reservations=Array.isArray(state?.reservations)?state.reservations:[];
   const now=Date.now();
-  let repaired=0;
+  state.marketOrderState||={};
+  const bucket=state.marketOrderState[market]||(market==='Kaspi'?{...(state.kaspiOrders||{})}:{});
+  state.marketOrderState[market]=bucket;
+  let repaired=0,seeded=0;
 
   for(const order of rows){
     const found=findMatchingActiveReservation(market,order,reservations);
@@ -52,16 +55,29 @@ applyMarketplaceTransitions=function(market,feed){
       found.reservation.keyRepairedAt=now;
       repaired++;
     }
+    // An exact active reservation is proof that this order previously occupied
+    // stock. Seed the transition cache only when it is missing, so a later exact
+    // COMPLETED status converts the reserve into a sale instead of merely hiding it.
+    if(!bucket[found.legacy]&&!bucket[found.scoped]){
+      bucket[found.legacy]={
+        status:'',state:'',active:true,
+        stage:String(found.reservation.stage||'new'),
+        qty:Number(found.reservation.qty||order?.qty||0)||0,
+        sku:String(order?.sku||''),
+        updatedAt:Number(found.reservation.updatedAt||found.reservation.date||now)||now
+      };
+      seeded++;
+    }
   }
 
   const result=originalApplyMarketplaceTransitions(market,rows);
-  if(repaired)console.info('reservation keys repaired',market,repaired);
+  if(repaired||seeded)console.info('reservation compatibility',market,{repaired,seeded});
   return result;
 };
 
 // The first startup order-cache read may have happened before this module loaded.
-// Run one ordinary refresh after the warehouse is online so the repaired key goes
-// through the existing terminal-status logic immediately.
+// Run one ordinary refresh after the warehouse is online so repaired/seeded state
+// immediately goes through the existing exact marketplace transition logic.
 function refreshOnce(attempt=0){
   let ready=false;
   try{ready=typeof warehouseRemoteReady!=='undefined'&&warehouseRemoteReady===true}catch{}
