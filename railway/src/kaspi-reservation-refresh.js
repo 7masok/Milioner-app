@@ -4,10 +4,15 @@ import { pool } from './db.js';
 const KASPI_API = 'https://kaspi.kz/shop/api/v2';
 const FETCH_TIMEOUT_MS = 15_000;
 const STALE_ROW_MS = 10 * 60 * 1000;
-const START_DELAY_MS = 30_000;
-const LOOP_INTERVAL_MS = 5 * 60 * 1000;
-const MAX_ORDERS_PER_RUN = 20;
+const START_DELAY_MS = 5_000;
+const LOOP_INTERVAL_MS = 10 * 60 * 1000;
+const MAX_ORDERS_PER_RUN = 200;
+const BETWEEN_REQUESTS_MS = 120;
 let refreshInFlight = null;
+
+function sleep(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
 
 function parseWarehouse(raw) {
   try {
@@ -103,26 +108,31 @@ export async function refreshStaleKaspiReservationOrders() {
       try { live = await fetchExactOrderByCode(stored.code); }
       catch (error) {
         console.warn('Kaspi reservation exact refresh failed', String(error?.message || error));
+        await sleep(BETWEEN_REQUESTS_MS);
         continue;
       }
       checked++;
-      if (!live) continue;
-      const liveId = String(live?.id || '').trim();
-      const liveCode = String(live?.attributes?.code ?? live?.code ?? '').trim();
-      if (!liveId || liveId !== String(stored.orderId) || liveCode !== String(stored.code)) continue;
-      const status = String(live?.attributes?.status ?? live?.status ?? '').trim();
-      const state = String(live?.attributes?.state ?? live?.state ?? '').trim();
-      if (!status) continue;
-      const isChanged = status !== String(stored.status || '') || state !== String(stored.state || '');
-      const now = Date.now();
-      const result = await pool.query(`UPDATE marketplace_order_lines
-        SET status=$1,state=$2,updated_at=$3
-        WHERE market='Kaspi' AND order_id=$4 AND code=$5`,
-      [status, state, now, stored.orderId, stored.code]);
-      if (result.rowCount) {
-        touched += result.rowCount;
-        if (isChanged) changed += result.rowCount;
+      if (live) {
+        const liveId = String(live?.id || '').trim();
+        const liveCode = String(live?.attributes?.code ?? live?.code ?? '').trim();
+        if (liveId && liveId === String(stored.orderId) && liveCode === String(stored.code)) {
+          const status = String(live?.attributes?.status ?? live?.status ?? '').trim();
+          const state = String(live?.attributes?.state ?? live?.state ?? '').trim();
+          if (status) {
+            const isChanged = status !== String(stored.status || '') || state !== String(stored.state || '');
+            const now = Date.now();
+            const result = await pool.query(`UPDATE marketplace_order_lines
+              SET status=$1,state=$2,updated_at=$3
+              WHERE market='Kaspi' AND order_id=$4 AND code=$5`,
+            [status, state, now, stored.orderId, stored.code]);
+            if (result.rowCount) {
+              touched += result.rowCount;
+              if (isChanged) changed += result.rowCount;
+            }
+          }
+        }
       }
+      await sleep(BETWEEN_REQUESTS_MS);
     }
     if (checked || touched) console.log(`Kaspi reservation exact refresh: checked=${checked} touched=${touched} changed=${changed}`);
     return { checked, touched, changed };
