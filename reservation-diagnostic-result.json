@@ -1,0 +1,26 @@
+{
+    "ok": true,
+    "revision": 1879,
+    "warehouseUpdatedAt": 1787244283980,
+    "products": [
+        {
+            "id": "msmvmk2d93q69",
+            "name": "\u041b\u0443\u043d\u0430 \u0431\u043b\u044d\u043a",
+            "stock": 2,
+            "kaspi": "",
+            "wb": "Luna black",
+            "wb2": "",
+            "activeReservations": []
+        },
+        {
+            "id": "msmvmoht2tt0c",
+            "name": "\u041b\u0443\u043d\u0430 \u0432\u0430\u0439\u0442",
+            "stock": 23,
+            "kaspi": "",
+            "wb": "Luna white",
+            "wb2": "",
+            "activeReservations": []
+        }
+    ],
+    "latestSync": []
+}
