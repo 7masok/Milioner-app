@@ -3,7 +3,7 @@ import { pool } from './db.js';
 
 const DEFAULT_WB_WORKER = 'https://wb-sync.7masok.workers.dev';
 const WB_ORDERS_URL = 'https://statistics-api.wildberries.ru/api/v1/supplier/orders';
-const SYNC_INTERVAL_MS = 5 * 60 * 1000;
+const SYNC_INTERVAL_MS = 30 * 60 * 1000;
 const FETCH_TIMEOUT_MS = 30_000;
 let syncInFlight = null;
 
@@ -65,8 +65,6 @@ function normalizeLine(order, line, index) {
 }
 
 function normalizeOrder(raw, index) {
-  // The official Statistics API uses `srid` as a technical row identifier.
-  // `gNumber` is the human-facing WB order number and is what the UI should show.
   const orderId = String(raw?.gNumber ?? raw?.orderId ?? raw?.id ?? raw?.orderUid ?? raw?.rid ?? raw?.srid ?? '').trim();
   if (!orderId) return null;
   const lines = Array.isArray(raw?.lines) && raw.lines.length ? raw.lines : [raw];
@@ -139,8 +137,6 @@ async function fetchWorker(days) {
 async function upsertOrder(order) {
   const now = Date.now();
   for (const line of order.lines) {
-    // Migrate rows written before gNumber support. Their order_id was the technical srid,
-    // while entry_id stays stable, so remove the legacy duplicate before the new upsert.
     await pool.query(
       'DELETE FROM marketplace_order_lines WHERE market=$1 AND entry_id=$2 AND order_id<>$3',
       [order.market, line.entryId, order.orderId]
