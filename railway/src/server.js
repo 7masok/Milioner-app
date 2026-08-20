@@ -6,6 +6,7 @@ import { exactCors, noStore, requireTrustedOrigin } from './http.js';
 import { warehouseRouter } from './warehouse.js';
 import { ordersRouter } from './orders.js';
 import { reportsRouter } from './reports.js';
+import { kaspiLiveReportRouter } from './kaspi-live-report.js';
 import { stockRouter, kaspiFeedHandler } from './stock.js';
 import { startKaspiSyncLoop, syncKaspiOrders } from './kaspi-sync.js';
 import { startWbSyncLoop, syncWbOrders, importWbPayload } from './wb-sync.js';
@@ -88,6 +89,7 @@ app.post('/api/wb-sync-import', requireTrustedOrigin, async (req, res, next) => 
 
 app.use('/api', warehouseRouter);
 app.use('/api', ordersRouter);
+app.use('/api', kaspiLiveReportRouter);
 app.use('/api', reportsRouter);
 app.use('/api', stockRouter);
 app.get('/kaspi/price-list.xml', kaspiFeedHandler);
