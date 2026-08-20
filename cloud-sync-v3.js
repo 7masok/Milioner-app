@@ -103,7 +103,8 @@ pullWarehouseFromD1=async function({force=false}={}){
   warehousePullInFlight=true;if(force)cloudStatus('проверяю сервер…','warn');
   try{
     const meta=await fetchServer(true,2),revision=Number(meta.revision||0);
-    if(!meta.exists||revision<=warehouseRemoteRevision){cloudStatus('сервер подключён','ok');return true}
+    if(!meta.exists){cloudStatus('серверная база недоступна','warn');return false}
+    if(revision<=warehouseRemoteRevision&&warehouseRemoteReady){cloudStatus('сервер подключён','ok');return true}
     const remote=await fetchServer(false,3);warehouseRemoteRevision=Number(remote.revision||revision);warehouseRemoteUpdatedAt=Number(remote.updatedAt||0);
     warehouseRemoteReady=true;warehouseLastCloudSnapshot=serverSnapshot(remote.state);warehouseLastSyncedText=snapshotText(remote.state);
     applyWarehouseSnapshot(remote.state);clearWarehouseDirty();render();cloudStatus('обновлено с сервера','ok');setTimeout(restoreOrderMarketUi,0);return true;
