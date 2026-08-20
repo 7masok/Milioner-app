@@ -5,6 +5,11 @@
   saveGuard.async=false;
   document.head.appendChild(saveGuard);
 
+  const purchaseDelete=document.createElement('script');
+  purchaseDelete.src='./purchase-delete-v1.js?v=20260821-0014';
+  purchaseDelete.async=false;
+  document.head.appendChild(purchaseDelete);
+
   const ads=document.createElement('script');
   ads.src='./kaspi-ads-v2-original.js?v=20260820-low-stock-alerts';
   ads.async=false;
