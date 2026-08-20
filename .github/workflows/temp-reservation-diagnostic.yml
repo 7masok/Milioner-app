@@ -1,3 +1,4 @@
+# rerun: bundle-derived reserve check
 name: Temporary reservation diagnostic
 on:
   push:
