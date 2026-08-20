@@ -110,38 +110,52 @@ async function upsertOrder(order) {
 }
 
 async function createRun(market) {
-  const r = await pool.query('INSERT INTO sync_runs(market,started_at,ok,items,error) VALUES($1,$2,0,0,\'\') RETURNING id', [market, Date.now()]);
+  const r = await pool.query("INSERT INTO sync_runs(market,started_at,ok,items,error) VALUES($1,$2,0,0,'') RETURNING id", [market, Date.now()]);
   return r.rows[0].id;
+}
+
+async function persistPayload(payload, source = 'WB Worker') {
+  const rows = pickOrders(payload);
+  if (!rows.length) throw new Error(`${source} returned no orders`);
+  const runs = new Map();
+  const counts = new Map();
+  let newestOrderAt = 0;
+  try {
+    for (let i = 0; i < rows.length; i++) {
+      const order = normalizeOrder(rows[i], i);
+      if (!order) continue;
+      if (!runs.has(order.market)) runs.set(order.market, await createRun(order.market));
+      await upsertOrder(order);
+      counts.set(order.market, (counts.get(order.market) || 0) + Math.max(1, order.lines.length));
+      newestOrderAt = Math.max(newestOrderAt, Number(order.creationDate) || 0);
+    }
+    const finishedAt = Date.now();
+    for (const [market, runId] of runs) {
+      await pool.query("UPDATE sync_runs SET finished_at=$1,ok=1,items=$2,error='' WHERE id=$3", [finishedAt, counts.get(market) || 0, runId]);
+    }
+    return { ok: true, finishedAt, newestOrderAt, markets: Object.fromEntries(counts), upstream: source };
+  } catch (error) {
+    const message = String(error?.message || error).slice(0, 1000);
+    if (!runs.size) runs.set('WB', await createRun('WB'));
+    for (const [, runId] of runs) {
+      await pool.query('UPDATE sync_runs SET finished_at=$1,ok=0,error=$2 WHERE id=$3', [Date.now(), message, runId]).catch(() => {});
+    }
+    throw error;
+  }
+}
+
+export async function importWbPayload(payload) {
+  return persistPayload(payload, 'WB Worker via browser fallback');
 }
 
 export async function syncWbOrders({ days = 2 } = {}) {
   if (syncInFlight) return syncInFlight;
   syncInFlight = (async () => {
-    const runs = new Map();
-    const counts = new Map();
     try {
       const payload = await fetchWorker(days);
-      const rows = pickOrders(payload);
-      if (!rows.length) throw new Error('WB Worker returned no orders');
-      for (let i = 0; i < rows.length; i++) {
-        const order = normalizeOrder(rows[i], i);
-        if (!order) continue;
-        if (!runs.has(order.market)) runs.set(order.market, await createRun(order.market));
-        await upsertOrder(order);
-        counts.set(order.market, (counts.get(order.market) || 0) + Math.max(1, order.lines.length));
-      }
-      const finishedAt = Date.now();
-      for (const [market, runId] of runs) {
-        await pool.query('UPDATE sync_runs SET finished_at=$1,ok=1,items=$2,error=\'\' WHERE id=$3', [finishedAt, counts.get(market) || 0, runId]);
-      }
-      return { ok: true, finishedAt, markets: Object.fromEntries(counts), upstream: baseUrl() };
+      return await persistPayload(payload, baseUrl());
     } catch (error) {
-      const message = String(error?.message || error).slice(0, 1000);
-      if (!runs.size) runs.set('WB', await createRun('WB'));
-      for (const [, runId] of runs) {
-        await pool.query('UPDATE sync_runs SET finished_at=$1,ok=0,error=$2 WHERE id=$3', [Date.now(), message, runId]).catch(() => {});
-      }
-      const wrapped = new Error(message);
+      const wrapped = new Error(String(error?.message || error).slice(0, 1000));
       wrapped.status = 502;
       throw wrapped;
     }
