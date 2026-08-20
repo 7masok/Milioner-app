@@ -65,14 +65,16 @@ reservationDiagnosticRouter.get('/reservation-diagnostic', asyncRoute(async (req
   if (!snapshot.rowCount) return res.json({ ok: true, products: [] });
   const state = parsePayload(snapshot.rows[0].payload);
   const allProducts = Array.isArray(state.products) ? state.products : [];
+  const productById = new Map(allProducts.map(p => [String(p?.id || ''), p]));
   const products = allProducts.filter(product =>
     String(product?.name || '').toLocaleLowerCase('ru-RU').includes(query)
   );
   const reservations = Array.isArray(state.reservations) ? state.reservations : [];
+  const activeReservationsAll = reservations.filter(r => r?.active);
   const output = [];
 
   for (const product of products) {
-    const active = reservations.filter(r => r?.active && String(r.productId || '') === String(product.id || ''));
+    const active = activeReservationsAll.filter(r => String(r.productId || '') === String(product.id || ''));
     const decorated = [];
     for (const reservation of active) decorated.push(await decorateReservation(reservation));
 
@@ -81,7 +83,7 @@ reservationDiagnosticRouter.get('/reservation-diagnostic', asyncRoute(async (req
       const components = Array.isArray(bundle?.components) ? bundle.components : [];
       const component = components.find(c => String(c?.productId || '') === String(product.id || ''));
       if (!component) continue;
-      const bundleReservations = reservations.filter(r => r?.active && String(r.productId || '') === String(bundle.id || ''));
+      const bundleReservations = activeReservationsAll.filter(r => String(r.productId || '') === String(bundle.id || ''));
       const bundleDecorated = [];
       for (const reservation of bundleReservations) bundleDecorated.push(await decorateReservation(reservation));
       componentOf.push({
@@ -109,10 +111,27 @@ reservationDiagnosticRouter.get('/reservation-diagnostic', asyncRoute(async (req
     });
   }
 
-  const sources = [...new Set(output.flatMap(p => [
-    ...p.activeReservations.map(r => r.source),
-    ...p.componentOf.flatMap(b => b.activeReservations.map(r => r.source))
-  ]).filter(Boolean))];
+  const allActiveSummary = activeReservationsAll.map(r => {
+    const p = productById.get(String(r.productId || ''));
+    return {
+      productId: r.productId || null,
+      productName: p?.name || null,
+      qty: Number(r.qty || 0),
+      source: String(r.source || ''),
+      externalKey: String(r.externalKey || ''),
+      stage: r.stage || null,
+      date: Number(r.date || 0) || null,
+      updatedAt: Number(r.updatedAt || 0) || null
+    };
+  });
+
+  const sources = [...new Set([
+    ...allActiveSummary.map(r => r.source),
+    ...output.flatMap(p => [
+      ...p.activeReservations.map(r => r.source),
+      ...p.componentOf.flatMap(b => b.activeReservations.map(r => r.source))
+    ])
+  ].filter(Boolean))];
   const latestSync = [];
   for (const source of sources) {
     const run = await pool.query(`SELECT market,id,started_at AS "startedAt",finished_at AS "finishedAt",ok,items,error
@@ -125,6 +144,8 @@ reservationDiagnosticRouter.get('/reservation-diagnostic', asyncRoute(async (req
     revision: Number(snapshot.rows[0].revision || 0),
     warehouseUpdatedAt: Number(snapshot.rows[0].updated_at || 0),
     products: output,
+    allActiveReservations: allActiveSummary,
+    allActiveReservationQty: allActiveSummary.reduce((sum, r) => sum + Math.max(0, Number(r.qty || 0)), 0),
     latestSync
   });
 }));
