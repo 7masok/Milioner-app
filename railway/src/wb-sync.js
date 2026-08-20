@@ -1,5 +1,5 @@
 import { config } from './config.js';
-import { pool } from './db.js';
+import { pool, transaction } from './db.js';
 
 const DEFAULT_WB_WORKER = 'https://wb-sync.7masok.workers.dev';
 const WB_NEW_ORDERS_URL = 'https://marketplace-api.wildberries.ru/api/v3/orders/new';
@@ -183,28 +183,35 @@ async function reconcileWarehouseReservations(market, rows) {
     if (!order) continue;
     for (const line of order.lines) currentKeys.add(`${market}:${order.orderId}:${line.entryId}`);
   }
-  const current = await pool.query('SELECT payload,revision FROM warehouse_state WHERE id=1');
-  if (!current.rowCount) return 0;
-  let state = {};
-  try { state = JSON.parse(String(current.rows[0].payload || '{}')); } catch { return 0; }
-  if (!Array.isArray(state.reservations)) return 0;
-  let changed = 0;
-  const now = Date.now();
-  for (const reservation of state.reservations) {
-    if (!reservation?.active || String(reservation.source || '') !== market) continue;
-    const key = String(reservation.externalKey || '');
-    if (!currentKeys.has(key)) {
-      reservation.active = false;
-      reservation.updatedAt = now;
-      reservation.closedReason = 'wb-not-in-current-new-orders';
-      changed++;
+
+  // Use the same transaction lock as the normal warehouse PUT. This prevents
+  // a background WB reconciliation from writing an older snapshot over a
+  // manual warehouse edit made at the same time.
+  return transaction(async client => {
+    await client.query('SELECT pg_advisory_xact_lock($1)', [730021]);
+    const current = await client.query('SELECT payload,revision FROM warehouse_state WHERE id=1 FOR UPDATE');
+    if (!current.rowCount) return 0;
+    let state = {};
+    try { state = JSON.parse(String(current.rows[0].payload || '{}')); } catch { return 0; }
+    if (!Array.isArray(state.reservations)) return 0;
+    let changed = 0;
+    const now = Date.now();
+    for (const reservation of state.reservations) {
+      if (!reservation?.active || String(reservation.source || '') !== market) continue;
+      const key = String(reservation.externalKey || '');
+      if (!currentKeys.has(key)) {
+        reservation.active = false;
+        reservation.updatedAt = now;
+        reservation.closedReason = 'wb-not-in-current-new-orders';
+        changed++;
+      }
     }
-  }
-  if (!changed) return 0;
-  const revision = Number(current.rows[0].revision || 0) + 1;
-  await pool.query('UPDATE warehouse_state SET payload=$1,revision=$2,updated_at=$3 WHERE id=1', [JSON.stringify(state), revision, now]);
-  console.log(`WB ${market}: deactivated ${changed} stale warehouse reservations`);
-  return changed;
+    if (!changed) return 0;
+    const revision = Number(current.rows[0].revision || 0) + 1;
+    await client.query('UPDATE warehouse_state SET payload=$1,revision=$2,updated_at=$3 WHERE id=1', [JSON.stringify(state), revision, now]);
+    console.log(`WB ${market}: deactivated ${changed} stale warehouse reservations`);
+    return changed;
+  });
 }
 
 async function createRun(market) {
