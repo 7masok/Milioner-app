@@ -148,7 +148,8 @@ ordersRouter.get('/orders', asyncRoute(async (req, res) => {
     pool.query(`SELECT o.market,o.order_id AS "orderId",o.code,o.entry_id AS "entryId",o.status,o.state,
       o.creation_date AS "creationDate",o.sku,o.product_name AS "productName",o.qty,o.unit_price AS "unitPrice",
       o.total_price AS "totalPrice",o.seller_delivery_cost AS "sellerDeliveryCost",o.marketplace_fee AS "marketplaceFee",
-      o.fee_source AS "feeSource",o.raw_json AS "rawJson",resolved.product_id AS "productId",resolved.link_source AS "linkSource"
+      o.fee_source AS "feeSource",o.raw_json AS "rawJson",o.first_seen_at AS "firstSeenAt",o.updated_at AS "updatedAt",
+      resolved.product_id AS "productId",resolved.link_source AS "linkSource"
       FROM marketplace_order_lines o
       LEFT JOIN LATERAL (
         SELECT pl.product_id,
