@@ -3,6 +3,7 @@ import helmet from 'helmet';
 import { config, assertRuntimeConfig } from './config.js';
 import { pool } from './db.js';
 import { exactCors, noStore, requireTrustedOrigin } from './http.js';
+import { warehouseRescueRouter } from './warehouse-rescue.js';
 import { warehouseRouter } from './warehouse.js';
 import { ordersRouter } from './orders.js';
 import { reportsRouter } from './reports.js';
@@ -87,6 +88,7 @@ app.post('/api/wb-sync-import', requireTrustedOrigin, async (req, res, next) => 
   } catch (error) { next(error); }
 });
 
+app.use('/api', warehouseRescueRouter);
 app.use('/api', warehouseRouter);
 app.use('/api', ordersRouter);
 app.use('/api', kaspiLiveReportRouter);
