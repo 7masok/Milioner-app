@@ -33,11 +33,7 @@ function levenshtein(a, b) {
   for (let i = 1; i <= a.length; i++) {
     cur[0] = i;
     for (let j = 1; j <= b.length; j++) {
-      cur[j] = Math.min(
-        cur[j - 1] + 1,
-        prev[j] + 1,
-        prev[j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1)
-      );
+      cur[j] = Math.min(cur[j - 1] + 1, prev[j] + 1, prev[j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1));
     }
     for (let j = 0; j <= b.length; j++) prev[j] = cur[j];
   }
@@ -73,28 +69,43 @@ function safeNameFallback(row, products) {
   return scored[0];
 }
 
-function parseWarehouseProducts(raw) {
+function parseWarehouse(raw) {
   try {
     const payload = JSON.parse(String(raw || '{}'));
-    return Array.isArray(payload?.products) ? payload.products.filter(x => x && x.id) : [];
+    return payload && typeof payload === 'object' ? payload : {};
   } catch {
-    return [];
+    return {};
   }
 }
 
-async function loadCanonicalProducts() {
+async function loadWarehouseContext() {
   const warehouse = await pool.query('SELECT payload FROM warehouse_state WHERE id=1');
-  const fromWarehouse = parseWarehouseProducts(warehouse.rows[0]?.payload);
-  if (fromWarehouse.length) return fromWarehouse.map(p => ({
+  const payload = parseWarehouse(warehouse.rows[0]?.payload);
+  let products = Array.isArray(payload.products) ? payload.products.filter(x => x && x.id).map(p => ({
     id: String(p.id),
     name: String(p.name || ''),
     kaspi: String(p.kaspi || '').trim(),
     wb: String(p.wb || '').trim(),
     wb2: String(p.wb2 || '').trim(),
     ozon: String(p.ozon || '').trim()
-  }));
-  const fallback = await pool.query('SELECT id,name FROM products');
-  return fallback.rows.map(p => ({ id: String(p.id), name: String(p.name || ''), kaspi: '', wb: '', wb2: '', ozon: '' }));
+  })) : [];
+  if (!products.length) {
+    const fallback = await pool.query('SELECT id,name FROM products');
+    products = fallback.rows.map(p => ({ id: String(p.id), name: String(p.name || ''), kaspi: '', wb: '', wb2: '', ozon: '' }));
+  }
+
+  const historical = new Map();
+  const addHistory = (source, externalKey, productId) => {
+    const pid = String(productId || '').trim();
+    const key = String(externalKey || '').trim();
+    const src = String(source || '').trim();
+    if (!pid || !key || !src) return;
+    historical.set(key, pid);
+    if (!key.startsWith(src + ':')) historical.set(src + ':' + key, pid);
+  };
+  for (const sale of Array.isArray(payload.sales) ? payload.sales : []) addHistory(sale.channel, sale.externalKey, sale.productId);
+  for (const reservation of Array.isArray(payload.reservations) ? payload.reservations : []) addHistory(reservation.source, reservation.externalKey, reservation.productId);
+  return { products, historical };
 }
 
 function exactWarehouseSku(row, products) {
@@ -105,6 +116,17 @@ function exactWarehouseSku(row, products) {
   return matches.length === 1 ? matches[0] : null;
 }
 
+function historicalProductId(row, historical, canonicalIds) {
+  const marketName = String(row.market || '').trim();
+  const legacy = String(row.orderId || '') + ':' + String(row.entryId || '');
+  const keys = [marketName + ':' + legacy, legacy];
+  for (const key of keys) {
+    const pid = String(historical.get(key) || '');
+    if (pid && canonicalIds.has(pid)) return pid;
+  }
+  return null;
+}
+
 ordersRouter.get('/orders', asyncRoute(async (req, res) => {
   const selected = market(req.query.market);
   const limit = Math.max(1, Math.min(5000, Number(req.query.limit || 1000) || 1000));
@@ -112,7 +134,7 @@ ordersRouter.get('/orders', asyncRoute(async (req, res) => {
   const where = selected ? `WHERE o.market=$${params.push(selected)}` : '';
   params.push(limit);
 
-  const [rows, products] = await Promise.all([
+  const [rows, context] = await Promise.all([
     pool.query(`SELECT o.market,o.order_id AS "orderId",o.code,o.entry_id AS "entryId",o.status,o.state,
       o.creation_date AS "creationDate",o.sku,o.product_name AS "productName",o.qty,o.unit_price AS "unitPrice",
       o.total_price AS "totalPrice",o.seller_delivery_cost AS "sellerDeliveryCost",o.marketplace_fee AS "marketplaceFee",
@@ -135,34 +157,48 @@ ordersRouter.get('/orders', asyncRoute(async (req, res) => {
         LIMIT 1
       ) resolved ON TRUE
       ${where} ORDER BY o.creation_date DESC LIMIT $${params.length}`, params),
-    loadCanonicalProducts()
+    loadWarehouseContext()
   ]);
 
-  const inferredLinks = new Map();
+  const products = context.products;
   const canonicalIds = new Set(products.map(p => String(p.id)));
+  const productById = new Map(products.map(p => [String(p.id), p]));
+  const inferredLinks = new Map();
+  const remember = (row, productId) => {
+    const m = String(row.market || '').trim(), sku = String(row.sku || '').trim();
+    if (m && sku && productId) inferredLinks.set(m + '\u0000' + sku, String(productId));
+  };
+
   const out = rows.rows.map(row => {
-    // A stale normalized-table link must never override the authoritative
-    // warehouse snapshot after migration.
     if (row.productId && canonicalIds.has(String(row.productId))) return row;
 
     const exact = exactWarehouseSku(row, products);
     if (exact) {
-      if (row.market === 'Kaspi' && row.sku) inferredLinks.set(String(row.sku), String(exact.id));
+      remember(row, exact.id);
       return { ...row, productId: exact.id, productName: exact.name || row.productName, linkSource: 'warehouse-sku-exact' };
+    }
+
+    const historicalId = historicalProductId(row, context.historical, canonicalIds);
+    if (historicalId) {
+      const p = productById.get(historicalId);
+      remember(row, historicalId);
+      return { ...row, productId: historicalId, productName: p?.name || row.productName, linkSource: 'warehouse-history' };
     }
 
     const cleanRow = { ...row, productId: null };
     const fallback = safeNameFallback(cleanRow, products);
     if (!fallback) return cleanRow;
-    if (row.market === 'Kaspi' && row.sku) inferredLinks.set(String(row.sku), String(fallback.product.id));
+    remember(row, fallback.product.id);
     return { ...cleanRow, productId: fallback.product.id, productName: fallback.product.name, linkSource: 'warehouse-name-safe-fallback' };
   });
 
   const now = Date.now();
-  for (const [sku, productId] of inferredLinks) {
+  for (const [key, productId] of inferredLinks) {
+    const split = key.indexOf('\u0000');
+    const marketName = key.slice(0, split), sku = key.slice(split + 1);
     await pool.query(`INSERT INTO product_links(product_id,market,sku,created_at,updated_at)
-      VALUES($1,'Kaspi',$2,$3,$3)
-      ON CONFLICT(market,sku) DO UPDATE SET product_id=excluded.product_id,updated_at=excluded.updated_at`, [productId, sku, now]);
+      VALUES($1,$2,$3,$4,$4)
+      ON CONFLICT(market,sku) DO NOTHING`, [productId, marketName, sku, now]);
   }
 
   res.json({ ok: true, orders: out });
