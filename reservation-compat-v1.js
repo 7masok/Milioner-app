@@ -6,6 +6,14 @@ const originalApplyMarketplaceTransitions=applyMarketplaceTransitions;
 
 function sameText(a,b){return String(a??'')===String(b??'')}
 function isWbReservationMarket(market){return market==='WB'||market==='WB2'}
+function transitionFreshMs(market){return isWbReservationMarket(market)?5*60*1000:market==='Kaspi'?15*60*1000:15*60*1000}
+function freshTransitionRows(market,feed){
+  const now=Date.now(),maxAge=transitionFreshMs(market);
+  return (Array.isArray(feed)?feed:[]).filter(order=>{
+    const updatedAt=Number(order?.updatedAt||0);
+    return updatedAt>0&&updatedAt<=now+60*1000&&now-updatedAt<=maxAge;
+  });
+}
 
 function findMatchingActiveReservation(market,order,reservations){
   const orderId=String(order?.orderId??'');
@@ -14,16 +22,11 @@ function findMatchingActiveReservation(market,order,reservations){
   const legacy=orderId+':'+entryId;
   const scoped=market+':'+legacy;
 
-  // Exact keys are always authoritative. Legacy unscoped keys are accepted
-  // only inside the same marketplace source, so they cannot collide cross-market.
   let match=reservations.find(r=>r?.active&&sameText(r.source,market)&&(
     sameText(r.externalKey,scoped)||sameText(r.externalKey,legacy)
   ));
   if(match)return {reservation:match,scoped,legacy};
 
-  // WB order numbers changed from the internal API id to public gNumber/orderNumber.
-  // Repair that historical key only when the current row clearly uses the public
-  // number (orderId != entryId) and the stable entryId + productId both agree.
   if(!isWbReservationMarket(market)||orderId===entryId)return null;
   const productId=String(order?.productId??'');
   if(!productId)return null;
@@ -38,7 +41,11 @@ function findMatchingActiveReservation(market,order,reservations){
 }
 
 applyMarketplaceTransitions=function(market,feed){
-  const rows=Array.isArray(feed)?feed:[];
+  // Order history is kept for reports, but only rows touched by a recent
+  // authoritative server sync are allowed to change warehouse reservations.
+  // This prevents old NEW/WAITING rows from recreating phantom reserves.
+  const rows=freshTransitionRows(market,feed);
+  if(!rows.length)return {reserved:0,sold:0,cancelled:0};
   const reservations=Array.isArray(state?.reservations)?state.reservations:[];
   const now=Date.now();
   state.marketOrderState||={};
@@ -55,9 +62,6 @@ applyMarketplaceTransitions=function(market,feed){
       found.reservation.keyRepairedAt=now;
       repaired++;
     }
-    // An exact active reservation is proof that this order previously occupied
-    // stock. Seed the transition cache only when it is missing, so a later exact
-    // COMPLETED status converts the reserve into a sale instead of merely hiding it.
     if(!bucket[found.legacy]&&!bucket[found.scoped]){
       bucket[found.legacy]={
         status:'',state:'',active:true,
@@ -75,9 +79,6 @@ applyMarketplaceTransitions=function(market,feed){
   return result;
 };
 
-// The first startup order-cache read may have happened before this module loaded.
-// Run one ordinary refresh after the warehouse is online so repaired/seeded state
-// immediately goes through the existing exact marketplace transition logic.
 function refreshOnce(attempt=0){
   let ready=false;
   try{ready=typeof warehouseRemoteReady!=='undefined'&&warehouseRemoteReady===true}catch{}
