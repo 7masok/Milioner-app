@@ -23,13 +23,49 @@ function parseExternalKey(source, value) {
   return { orderId: key.slice(0, split), entryId: key.slice(split + 1) };
 }
 
+async function decorateReservation(reservation) {
+  const source = String(reservation.source || '');
+  const parsed = parseExternalKey(source, reservation.externalKey);
+  let exact = [];
+  let candidates = [];
+  if (parsed && source) {
+    exact = (await pool.query(`SELECT market,order_id AS "orderId",entry_id AS "entryId",code,sku,product_name AS "productName",
+      qty,status,state,creation_date AS "creationDate",updated_at AS "updatedAt"
+      FROM marketplace_order_lines
+      WHERE market=$1 AND order_id=$2 AND entry_id=$3
+      ORDER BY updated_at DESC LIMIT 10`, [source, parsed.orderId, parsed.entryId])).rows;
+    if (!exact.length) {
+      candidates = (await pool.query(`SELECT market,order_id AS "orderId",entry_id AS "entryId",code,sku,product_name AS "productName",
+        qty,status,state,creation_date AS "creationDate",updated_at AS "updatedAt"
+        FROM marketplace_order_lines
+        WHERE market=$1 AND entry_id=$2
+        ORDER BY updated_at DESC LIMIT 10`, [source, parsed.entryId])).rows;
+    }
+  }
+  return {
+    id: reservation.id || null,
+    productId: reservation.productId || null,
+    qty: Number(reservation.qty || 0),
+    source,
+    externalKey: String(reservation.externalKey || ''),
+    stage: reservation.stage || null,
+    date: Number(reservation.date || 0) || null,
+    updatedAt: Number(reservation.updatedAt || 0) || null,
+    closedReason: reservation.closedReason || null,
+    parsed,
+    exact,
+    candidates
+  };
+}
+
 reservationDiagnosticRouter.get('/reservation-diagnostic', asyncRoute(async (req, res) => {
   if (String(req.query.key || '') !== DIAG_KEY) return res.status(404).json({ ok: false, error: 'not-found' });
   const query = String(req.query.name || 'луна').trim().toLocaleLowerCase('ru-RU');
   const snapshot = await pool.query('SELECT payload,revision,updated_at FROM warehouse_state WHERE id=1');
   if (!snapshot.rowCount) return res.json({ ok: true, products: [] });
   const state = parsePayload(snapshot.rows[0].payload);
-  const products = (Array.isArray(state.products) ? state.products : []).filter(product =>
+  const allProducts = Array.isArray(state.products) ? state.products : [];
+  const products = allProducts.filter(product =>
     String(product?.name || '').toLocaleLowerCase('ru-RU').includes(query)
   );
   const reservations = Array.isArray(state.reservations) ? state.reservations : [];
@@ -38,51 +74,45 @@ reservationDiagnosticRouter.get('/reservation-diagnostic', asyncRoute(async (req
   for (const product of products) {
     const active = reservations.filter(r => r?.active && String(r.productId || '') === String(product.id || ''));
     const decorated = [];
-    for (const reservation of active) {
-      const source = String(reservation.source || '');
-      const parsed = parseExternalKey(source, reservation.externalKey);
-      let exact = [];
-      let candidates = [];
-      if (parsed && source) {
-        exact = (await pool.query(`SELECT market,order_id AS "orderId",entry_id AS "entryId",code,sku,product_name AS "productName",
-          qty,status,state,creation_date AS "creationDate",updated_at AS "updatedAt"
-          FROM marketplace_order_lines
-          WHERE market=$1 AND order_id=$2 AND entry_id=$3
-          ORDER BY updated_at DESC LIMIT 10`, [source, parsed.orderId, parsed.entryId])).rows;
-        if (!exact.length) {
-          candidates = (await pool.query(`SELECT market,order_id AS "orderId",entry_id AS "entryId",code,sku,product_name AS "productName",
-            qty,status,state,creation_date AS "creationDate",updated_at AS "updatedAt"
-            FROM marketplace_order_lines
-            WHERE market=$1 AND entry_id=$2
-            ORDER BY updated_at DESC LIMIT 10`, [source, parsed.entryId])).rows;
-        }
-      }
-      decorated.push({
-        id: reservation.id || null,
-        qty: Number(reservation.qty || 0),
-        source,
-        externalKey: String(reservation.externalKey || ''),
-        stage: reservation.stage || null,
-        date: Number(reservation.date || 0) || null,
-        updatedAt: Number(reservation.updatedAt || 0) || null,
-        closedReason: reservation.closedReason || null,
-        parsed,
-        exact,
-        candidates
+    for (const reservation of active) decorated.push(await decorateReservation(reservation));
+
+    const componentOf = [];
+    for (const bundle of allProducts) {
+      const components = Array.isArray(bundle?.components) ? bundle.components : [];
+      const component = components.find(c => String(c?.productId || '') === String(product.id || ''));
+      if (!component) continue;
+      const bundleReservations = reservations.filter(r => r?.active && String(r.productId || '') === String(bundle.id || ''));
+      const bundleDecorated = [];
+      for (const reservation of bundleReservations) bundleDecorated.push(await decorateReservation(reservation));
+      componentOf.push({
+        id: bundle.id,
+        name: bundle.name,
+        kind: bundle.kind || null,
+        componentQty: Math.max(1, Number(component.qty || 1)),
+        activeReservations: bundleDecorated,
+        derivedReserveQty: bundleDecorated.reduce((sum, r) => sum + Math.max(0, Number(r.qty || 0)) * Math.max(1, Number(component.qty || 1)), 0)
       });
     }
+
     output.push({
       id: product.id,
       name: product.name,
+      kind: product.kind || null,
       stock: Number(product.stock || 0),
       kaspi: product.kaspi || '',
       wb: product.wb || '',
       wb2: product.wb2 || '',
-      activeReservations: decorated
+      activeReservations: decorated,
+      componentOf,
+      directReserveQty: decorated.reduce((sum, r) => sum + Math.max(0, Number(r.qty || 0)), 0),
+      derivedReserveQty: componentOf.reduce((sum, b) => sum + Number(b.derivedReserveQty || 0), 0)
     });
   }
 
-  const sources = [...new Set(output.flatMap(p => p.activeReservations.map(r => r.source)).filter(Boolean))];
+  const sources = [...new Set(output.flatMap(p => [
+    ...p.activeReservations.map(r => r.source),
+    ...p.componentOf.flatMap(b => b.activeReservations.map(r => r.source))
+  ]).filter(Boolean))];
   const latestSync = [];
   for (const source of sources) {
     const run = await pool.query(`SELECT market,id,started_at AS "startedAt",finished_at AS "finishedAt",ok,items,error
