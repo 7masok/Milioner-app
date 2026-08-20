@@ -73,7 +73,6 @@ function normalizeLine(order, line, index) {
 }
 
 function normalizeOrder(raw, index) {
-  // Marketplace API assembly-order ID is the short number shown in the WB seller UI.
   const orderId = String(raw?.id ?? raw?.orderId ?? raw?.orderID ?? raw?.orderUid ?? raw?.gNumber ?? raw?.rid ?? raw?.srid ?? '').trim();
   if (!orderId) return null;
   const lines = Array.isArray(raw?.lines) && raw.lines.length ? raw.lines : [raw];
@@ -177,6 +176,15 @@ async function upsertOrder(order) {
   }
 }
 
+async function cleanRecentLegacyStatisticsRows(market) {
+  const cutoff = Date.now() - 3 * 24 * 60 * 60 * 1000;
+  const result = await pool.query(`DELETE FROM marketplace_order_lines
+    WHERE market=$1 AND creation_date >= $2
+      AND raw_json::jsonb ? 'gNumber'
+      AND NOT (raw_json::jsonb ? 'id')`, [market, cutoff]);
+  if (result.rowCount) console.log(`WB ${market}: removed ${result.rowCount} recent legacy statistics rows`);
+}
+
 async function createRun(market) {
   const r = await pool.query("INSERT INTO sync_runs(market,started_at,ok,items,error) VALUES($1,$2,0,0,'') RETURNING id", [market, Date.now()]);
   return r.rows[0].id;
@@ -194,8 +202,10 @@ async function persistAccountRows(rows, market, source) {
       count += Math.max(1, order.lines.length);
       newestOrderAt = Math.max(newestOrderAt, Number(order.creationDate) || 0);
     }
+    if (source.startsWith('Wildberries Marketplace API')) await cleanRecentLegacyStatisticsRows(market);
     const finishedAt = Date.now();
     await pool.query("UPDATE sync_runs SET finished_at=$1,ok=1,items=$2,error='' WHERE id=$3", [finishedAt, count, runId]);
+    console.log(`WB realtime sync OK ${market}: ${count} items, newest=${newestOrderAt || 0}`);
     return { ok: true, market, finishedAt, newestOrderAt, items: count, upstream: source };
   } catch (error) {
     await pool.query('UPDATE sync_runs SET finished_at=$1,ok=0,error=$2 WHERE id=$3', [Date.now(), String(error?.message || error).slice(0, 1000), runId]).catch(() => {});
