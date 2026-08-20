@@ -1533,11 +1533,1516 @@
         }
     ],
     "allActiveReservationQty": 151,
+    "uiReservedStockTotal": 154,
+    "reserveMetricContributors": [
+        {
+            "productId": "msoi9gopf6975",
+            "productName": "CarKey",
+            "stock": 2,
+            "directReserve": 0,
+            "derivedReserve": 2,
+            "reserve": 2,
+            "contribution": 2,
+            "reservations": []
+        },
+        {
+            "productId": "msmxgmwvaw91o",
+            "productName": "\u0410\u043c\u043e\u0440 \u0427\u0435\u0440\u043d\u044b\u0439",
+            "stock": 20,
+            "directReserve": 1,
+            "derivedReserve": 0,
+            "reserve": 1,
+            "contribution": 1,
+            "reservations": [
+                {
+                    "qty": 1,
+                    "source": "WB",
+                    "externalKey": "WB:5540911581:5540911581",
+                    "stage": "new"
+                }
+            ]
+        },
+        {
+            "productId": "msmxbo0xwjkkt",
+            "productName": "\u0411\u0430\u0442\u043e\u043d",
+            "stock": 79,
+            "directReserve": 1,
+            "derivedReserve": 0,
+            "reserve": 1,
+            "contribution": 1,
+            "reservations": [
+                {
+                    "qty": 1,
+                    "source": "WB",
+                    "externalKey": "WB:5540404112:5540404112",
+                    "stage": "new"
+                }
+            ]
+        },
+        {
+            "productId": "msmxc8r1c0ni0",
+            "productName": "\u0411\u0440\u0438\u043b\u043b\u0438\u0430\u043d\u0442 \u0424\u043e\u0440\u0435\u0432\u0435\u0440",
+            "stock": 10,
+            "directReserve": 1,
+            "derivedReserve": 0,
+            "reserve": 1,
+            "contribution": 1,
+            "reservations": [
+                {
+                    "qty": 1,
+                    "source": "WB",
+                    "externalKey": "WB:5540564588:5540564588",
+                    "stage": "new"
+                }
+            ]
+        },
+        {
+            "productId": "msmcblccl3sx3",
+            "productName": "\u0413\u0430\u0435\u0447\u043d\u044b\u0439 \u041a\u043b\u044e\u0447",
+            "stock": 7,
+            "directReserve": 1,
+            "derivedReserve": 0,
+            "reserve": 1,
+            "contribution": 1,
+            "reservations": [
+                {
+                    "qty": 1,
+                    "source": "Kaspi",
+                    "externalKey": "Kaspi:MTAzOTQyMzE0MA:MTAzOTQyMzE0MCMjMg",
+                    "stage": "new"
+                }
+            ]
+        },
+        {
+            "productId": "msm931ksl4cfk",
+            "productName": "\u0414\u0432\u0435 \u043e\u0442\u0432\u0435\u0440\u0442\u043a\u0438 \u0447\u0435\u0440\u043d\u044b\u0439",
+            "stock": 1,
+            "directReserve": 2,
+            "derivedReserve": 0,
+            "reserve": 2,
+            "contribution": 1,
+            "reservations": [
+                {
+                    "qty": 1,
+                    "source": "Kaspi",
+                    "externalKey": "Kaspi:MTAzOTQyMzE0MA:MTAzOTQyMzE0MCMjMA",
+                    "stage": "new"
+                },
+                {
+                    "qty": 1,
+                    "source": "Kaspi",
+                    "externalKey": "Kaspi:MTAzNTI3NzUwNw:MTAzNTI3NzUwNyMjMA",
+                    "stage": "new"
+                }
+            ]
+        },
+        {
+            "productId": "msog0waq5n90a",
+            "productName": "\u0414\u0440\u0430\u0439\u0432\u0435\u0440 \u0431\u043b\u044d\u043a",
+            "stock": 3,
+            "directReserve": 1,
+            "derivedReserve": 0,
+            "reserve": 1,
+            "contribution": 1,
+            "reservations": [
+                {
+                    "qty": 1,
+                    "source": "Kaspi",
+                    "externalKey": "Kaspi:MTAzOTQyMzE0MA:MTAzOTQyMzE0MCMjMQ",
+                    "stage": "new"
+                }
+            ]
+        },
+        {
+            "productId": "msmcbzlvcg43t",
+            "productName": "\u0417\u0430\u0439\u043a\u0430 \u0411\u0435\u043b\u044b\u0439",
+            "stock": 46,
+            "directReserve": 1,
+            "derivedReserve": 0,
+            "reserve": 1,
+            "contribution": 1,
+            "reservations": [
+                {
+                    "qty": 1,
+                    "source": "Kaspi",
+                    "externalKey": "Kaspi:MTAzOTA3MzcwNQ:MTAzOTA3MzcwNSMjMA",
+                    "stage": "new"
+                }
+            ]
+        },
+        {
+            "productId": "msmbcmxslnhk7",
+            "productName": "\u041a\u043e\u043a\u0430 \u043a\u043e\u043b\u043b\u0430",
+            "stock": 59,
+            "directReserve": 3,
+            "derivedReserve": 0,
+            "reserve": 3,
+            "contribution": 3,
+            "reservations": [
+                {
+                    "qty": 1,
+                    "source": "Kaspi",
+                    "externalKey": "Kaspi:MTA0MDQ5OTg2MA:MTA0MDQ5OTg2MCMjMA",
+                    "stage": "new"
+                },
+                {
+                    "qty": 1,
+                    "source": "Kaspi",
+                    "externalKey": "Kaspi:MTAzOTM0MTExNQ:MTAzOTM0MTExNSMjMA",
+                    "stage": "new"
+                },
+                {
+                    "qty": 1,
+                    "source": "Kaspi",
+                    "externalKey": "Kaspi:MTA0MjUyNDg3Mw:MTA0MjUyNDg3MyMjMA",
+                    "stage": "new"
+                }
+            ]
+        },
+        {
+            "productId": "msmveh8q3r0jd",
+            "productName": "\u041a\u043e\u0442\u0443\u043d \u0411\u0435\u043b\u044b\u0439",
+            "stock": 23,
+            "directReserve": 1,
+            "derivedReserve": 0,
+            "reserve": 1,
+            "contribution": 1,
+            "reservations": [
+                {
+                    "qty": 1,
+                    "source": "WB",
+                    "externalKey": "WB:5538669845:5538669845",
+                    "stage": "new"
+                }
+            ]
+        },
+        {
+            "productId": "msnnce2blsbie",
+            "productName": "\u041a\u043e\u0442\u044b \u0445\u0443\u043b\u0438\u0433\u0430\u043d\u044b \u0441\u0435\u0440\u044b\u0439",
+            "stock": 9,
+            "directReserve": 1,
+            "derivedReserve": 0,
+            "reserve": 1,
+            "contribution": 1,
+            "reservations": [
+                {
+                    "qty": 1,
+                    "source": "Kaspi",
+                    "externalKey": "Kaspi:MTAzODY3MjY1NA:MTAzODY3MjY1NCMjMA",
+                    "stage": "new"
+                }
+            ]
+        },
+        {
+            "productId": "msmcb2pkmi4y1",
+            "productName": "\u041a\u043e\u0442\u044b \u0445\u0443\u043b\u0438\u0433\u0430\u043d\u044b \u0427\u0435\u0440\u043d\u044b\u0439",
+            "stock": 8,
+            "directReserve": 2,
+            "derivedReserve": 0,
+            "reserve": 2,
+            "contribution": 2,
+            "reservations": [
+                {
+                    "qty": 1,
+                    "source": "Kaspi",
+                    "externalKey": "Kaspi:MTAzOTk4NTM4Mw:MTAzOTk4NTM4MyMjMA",
+                    "stage": "new"
+                },
+                {
+                    "qty": 1,
+                    "source": "Kaspi",
+                    "externalKey": "Kaspi:MTAzNzYwMjQwMg:MTAzNzYwMjQwMiMjMA",
+                    "stage": "new"
+                }
+            ]
+        },
+        {
+            "productId": "msm8jy14bavzn",
+            "productName": "\u041a\u043e\u0442\u044f\u0440\u0430",
+            "stock": 13,
+            "directReserve": 1,
+            "derivedReserve": 0,
+            "reserve": 1,
+            "contribution": 1,
+            "reservations": [
+                {
+                    "qty": 1,
+                    "source": "Kaspi",
+                    "externalKey": "Kaspi:MTA0MDE1MzU5MA:MTA0MDE1MzU5MCMjMA",
+                    "stage": "new"
+                }
+            ]
+        },
+        {
+            "productId": "msllna5181my3",
+            "productName": "\u041a\u043e\u0448\u0430\u0447\u044c\u044f \u043f\u0430\u0440\u0430",
+            "stock": 26,
+            "directReserve": 5,
+            "derivedReserve": 0,
+            "reserve": 5,
+            "contribution": 5,
+            "reservations": [
+                {
+                    "qty": 1,
+                    "source": "Kaspi",
+                    "externalKey": "Kaspi:MTAzODk4NjA5NQ:MTAzODk4NjA5NSMjMQ",
+                    "stage": "new"
+                },
+                {
+                    "qty": 1,
+                    "source": "Kaspi",
+                    "externalKey": "Kaspi:MTAzODgzMTE0OQ:MTAzODgzMTE0OSMjMQ",
+                    "stage": "new"
+                },
+                {
+                    "qty": 1,
+                    "source": "Kaspi",
+                    "externalKey": "Kaspi:MTAzNzU1OTE2Nw:MTAzNzU1OTE2NyMjMA",
+                    "stage": "new"
+                },
+                {
+                    "qty": 1,
+                    "source": "WB",
+                    "externalKey": "WB:5538432427:5538432427",
+                    "stage": "new"
+                },
+                {
+                    "qty": 1,
+                    "source": "WB",
+                    "externalKey": "WB:5539942357:5539942357",
+                    "stage": "new"
+                }
+            ]
+        },
+        {
+            "productId": "msmvndmuiv7k6",
+            "productName": "\u041a\u043e\u0448\u0430\u0447\u044c\u044f \u043f\u0430\u0440\u0430 \u0441\u0435\u0440\u0435\u0431\u0440\u0438\u0441\u0442\u044b\u0439",
+            "stock": 95,
+            "directReserve": 1,
+            "derivedReserve": 0,
+            "reserve": 1,
+            "contribution": 1,
+            "reservations": [
+                {
+                    "qty": 1,
+                    "source": "WB2",
+                    "externalKey": "WB2:5538810546:5538810546",
+                    "stage": "new"
+                }
+            ]
+        },
+        {
+            "productId": "mslyfmtfmga57",
+            "productName": "\u041a\u0440\u044b\u043b\u044c\u044f \u0430\u043d\u0433\u0435\u043b\u0430",
+            "stock": 276,
+            "directReserve": 11,
+            "derivedReserve": 0,
+            "reserve": 11,
+            "contribution": 11,
+            "reservations": [
+                {
+                    "qty": 1,
+                    "source": "Kaspi",
+                    "externalKey": "Kaspi:MTA0MTYzOTIwNA:MTA0MTYzOTIwNCMjMA",
+                    "stage": "new"
+                },
+                {
+                    "qty": 1,
+                    "source": "Kaspi",
+                    "externalKey": "Kaspi:MTAzOTE5Nzk5MQ:MTAzOTE5Nzk5MSMjMA",
+                    "stage": "new"
+                },
+                {
+                    "qty": 1,
+                    "source": "WB2",
+                    "externalKey": "WB2:5538385268:5538385268",
+                    "stage": "new"
+                },
+                {
+                    "qty": 1,
+                    "source": "WB",
+                    "externalKey": "WB:5538735944:5538735944",
+                    "stage": "new"
+                },
+                {
+                    "qty": 1,
+                    "source": "WB",
+                    "externalKey": "WB:5538688199:5538688199",
+                    "stage": "new"
+                },
+                {
+                    "qty": 1,
+                    "source": "WB2",
+                    "externalKey": "WB2:5539053934:5539053934",
+                    "stage": "new"
+                },
+                {
+                    "qty": 1,
+                    "source": "WB2",
+                    "externalKey": "WB2:5539488829:5539488829",
+                    "stage": "new"
+                },
+                {
+                    "qty": 1,
+                    "source": "WB",
+                    "externalKey": "WB:5539804101:5539804101",
+                    "stage": "new"
+                },
+                {
+                    "qty": 1,
+                    "source": "WB2",
+                    "externalKey": "WB2:5540202836:5540202836",
+                    "stage": "new"
+                },
+                {
+                    "qty": 1,
+                    "source": "WB2",
+                    "externalKey": "WB2:5540008914:5540008914",
+                    "stage": "new"
+                },
+                {
+                    "qty": 1,
+                    "source": "WB",
+                    "externalKey": "WB:5540737690:5540737690",
+                    "stage": "new"
+                }
+            ]
+        },
+        {
+            "productId": "msm8kdni9c6i8",
+            "productName": "\u041b\u0435\u0432 \u0421\u0435\u0440\u0435\u0431\u0440\u043e",
+            "stock": 55,
+            "directReserve": 1,
+            "derivedReserve": 0,
+            "reserve": 1,
+            "contribution": 1,
+            "reservations": [
+                {
+                    "qty": 1,
+                    "source": "WB",
+                    "externalKey": "WB:5538423308:5538423308",
+                    "stage": "new"
+                }
+            ]
+        },
+        {
+            "productId": "msm8lfuw5eggw",
+            "productName": "\u041b\u0435\u0434\u0435\u043d\u0435\u0446 \u0420\u043e\u0437\u043e\u0432\u044b\u0439",
+            "stock": 102,
+            "directReserve": 3,
+            "derivedReserve": 0,
+            "reserve": 3,
+            "contribution": 3,
+            "reservations": [
+                {
+                    "qty": 1,
+                    "source": "Kaspi",
+                    "externalKey": "Kaspi:MTA0MDg2NjQ3Nw:MTA0MDg2NjQ3NyMjMA",
+                    "stage": "new"
+                },
+                {
+                    "qty": 1,
+                    "source": "Kaspi",
+                    "externalKey": "Kaspi:MTA0MDc5ODc1Ng:MTA0MDc5ODc1NiMjMA",
+                    "stage": "new"
+                },
+                {
+                    "qty": 1,
+                    "source": "Kaspi",
+                    "externalKey": "Kaspi:MTAzOTMxMTg1OA:MTAzOTMxMTg1OCMjMA",
+                    "stage": "new"
+                }
+            ]
+        },
+        {
+            "productId": "msolr7h5s9fge",
+            "productName": "\u041b\u0438\u043d\u0435\u0439\u043a\u0430 \u043b\u0430\u0442\u0443\u043d\u044c",
+            "stock": 35,
+            "directReserve": 1,
+            "derivedReserve": 0,
+            "reserve": 1,
+            "contribution": 1,
+            "reservations": [
+                {
+                    "qty": 1,
+                    "source": "WB2",
+                    "externalKey": "WB2:5539113980:5539113980",
+                    "stage": "new"
+                }
+            ]
+        },
+        {
+            "productId": "msmcdx5vskvfo",
+            "productName": "\u041c\u0438\u043d\u0438-\u0422\u0435\u0442\u0440\u0438\u0441 BLACK",
+            "stock": 3,
+            "directReserve": 1,
+            "derivedReserve": 0,
+            "reserve": 1,
+            "contribution": 1,
+            "reservations": [
+                {
+                    "qty": 1,
+                    "source": "Kaspi",
+                    "externalKey": "Kaspi:MTA0MTA3NzI5MQ:MTA0MTA3NzI5MSMjMA",
+                    "stage": "new"
+                }
+            ]
+        },
+        {
+            "productId": "msmaknr2n9lo1",
+            "productName": "\u041c\u0438\u043d\u0438-\u0422\u0435\u0442\u0440\u0438\u0441 BLUE",
+            "stock": 2,
+            "directReserve": 1,
+            "derivedReserve": 0,
+            "reserve": 1,
+            "contribution": 1,
+            "reservations": [
+                {
+                    "qty": 1,
+                    "source": "Kaspi",
+                    "externalKey": "Kaspi:MTAzNzI0MzI4Mg:MTAzNzI0MzI4MiMjMA",
+                    "stage": "new"
+                }
+            ]
+        },
+        {
+            "productId": "msm8g4syehx3r",
+            "productName": "\u041c\u0438\u043d\u0438-\u0422\u0435\u0442\u0440\u0438\u0441 \u0411\u0435\u043b\u044b\u0439",
+            "stock": 16,
+            "directReserve": 1,
+            "derivedReserve": 0,
+            "reserve": 1,
+            "contribution": 1,
+            "reservations": [
+                {
+                    "qty": 1,
+                    "source": "Kaspi",
+                    "externalKey": "Kaspi:MTA0MDc0MDUxMg:MTA0MDc0MDUxMiMjMQ",
+                    "stage": "new"
+                }
+            ]
+        },
+        {
+            "productId": "msm6xm3tgkymu",
+            "productName": "\u041c\u0438\u043d\u0438-\u0422\u0435\u0442\u0440\u0438\u0441 \u0417\u0435\u043b\u0451\u043d\u044b\u0439",
+            "stock": 18,
+            "directReserve": 2,
+            "derivedReserve": 0,
+            "reserve": 2,
+            "contribution": 2,
+            "reservations": [
+                {
+                    "qty": 1,
+                    "source": "Kaspi",
+                    "externalKey": "Kaspi:MTA0MTI0MDA2Mg:MTA0MTI0MDA2MiMjMA",
+                    "stage": "new"
+                },
+                {
+                    "qty": 1,
+                    "source": "Kaspi",
+                    "externalKey": "Kaspi:MTAzOTM0MTExNQ:MTAzOTM0MTExNSMjMQ",
+                    "stage": "new"
+                }
+            ]
+        },
+        {
+            "productId": "msm8htx86cz5b",
+            "productName": "\u041c\u0438\u043d\u0438-\u0422\u0435\u0442\u0440\u0438\u0441 \u041a\u0440\u0430\u0441\u043d\u044b\u0439",
+            "stock": 6,
+            "directReserve": 3,
+            "derivedReserve": 0,
+            "reserve": 3,
+            "contribution": 3,
+            "reservations": [
+                {
+                    "qty": 1,
+                    "source": "Kaspi",
+                    "externalKey": "Kaspi:MTA0MTkwNDc0OQ:MTA0MTkwNDc0OSMjMA",
+                    "stage": "new"
+                },
+                {
+                    "qty": 1,
+                    "source": "Kaspi",
+                    "externalKey": "Kaspi:MTA0MTg4MDk2OQ:MTA0MTg4MDk2OSMjMA",
+                    "stage": "new"
+                },
+                {
+                    "qty": 1,
+                    "source": "Kaspi",
+                    "externalKey": "Kaspi:MTA0MTMyMzYxOQ:MTA0MTMyMzYxOSMjMA",
+                    "stage": "new"
+                }
+            ]
+        },
+        {
+            "productId": "msmbdw94hm3b8",
+            "productName": "\u041c\u0438\u043d\u0438-\u0422\u0435\u0442\u0440\u0438\u0441 \u0421\u0438\u043d\u0438\u0439",
+            "stock": 24,
+            "directReserve": 2,
+            "derivedReserve": 0,
+            "reserve": 2,
+            "contribution": 2,
+            "reservations": [
+                {
+                    "qty": 1,
+                    "source": "Kaspi",
+                    "externalKey": "Kaspi:MTA0MTU5NDkzOQ:MTA0MTU5NDkzOSMjMA",
+                    "stage": "new"
+                },
+                {
+                    "qty": 1,
+                    "source": "Kaspi",
+                    "externalKey": "Kaspi:MTAzNzg3Mjk4Ng:MTAzNzg3Mjk4NiMjMA",
+                    "stage": "new"
+                }
+            ]
+        },
+        {
+            "productId": "msm8hmjyxyh0p",
+            "productName": "\u041c\u0438\u043d\u0438-\u0422\u0435\u0442\u0440\u0438\u0441 \u0427\u0435\u0440\u043d\u044b\u0439",
+            "stock": 6,
+            "directReserve": 3,
+            "derivedReserve": 0,
+            "reserve": 3,
+            "contribution": 3,
+            "reservations": [
+                {
+                    "qty": 1,
+                    "source": "Kaspi",
+                    "externalKey": "Kaspi:MTA0MTcyNTI3OQ:MTA0MTcyNTI3OSMjMA",
+                    "stage": "new"
+                },
+                {
+                    "qty": 1,
+                    "source": "Kaspi",
+                    "externalKey": "Kaspi:MTA0MTAxNzQ0NA:MTA0MTAxNzQ0NCMjMA",
+                    "stage": "new"
+                },
+                {
+                    "qty": 1,
+                    "source": "Kaspi",
+                    "externalKey": "Kaspi:MTA0MDA3Nzk5Mw:MTA0MDA3Nzk5MyMjMA",
+                    "stage": "new"
+                }
+            ]
+        },
+        {
+            "productId": "msm8iwstumowc",
+            "productName": "\u041c\u0438\u0448\u043a\u0438",
+            "stock": 34,
+            "directReserve": 5,
+            "derivedReserve": 0,
+            "reserve": 5,
+            "contribution": 5,
+            "reservations": [
+                {
+                    "qty": 1,
+                    "source": "Kaspi",
+                    "externalKey": "Kaspi:MTA0MjM3MjgyMA:MTA0MjM3MjgyMCMjMA",
+                    "stage": "new"
+                },
+                {
+                    "qty": 1,
+                    "source": "Kaspi",
+                    "externalKey": "Kaspi:MTA0MTg5MzE0NA:MTA0MTg5MzE0NCMjMA",
+                    "stage": "new"
+                },
+                {
+                    "qty": 1,
+                    "source": "Kaspi",
+                    "externalKey": "Kaspi:MTA0MDY5MzYxNA:MTA0MDY5MzYxNCMjMA",
+                    "stage": "new"
+                },
+                {
+                    "qty": 1,
+                    "source": "Kaspi",
+                    "externalKey": "Kaspi:MTA0MDQ5ODk1NA:MTA0MDQ5ODk1NCMjMA",
+                    "stage": "new"
+                },
+                {
+                    "qty": 1,
+                    "source": "Kaspi",
+                    "externalKey": "Kaspi:MTAzODU3MTk5Nw:MTAzODU3MTk5NyMjMA",
+                    "stage": "new"
+                }
+            ]
+        },
+        {
+            "productId": "msm1y5o5ykop5",
+            "productName": "\u041c\u044d\u043d\u0434\u044d\u043c\u0441 \u0436\u0435\u043b\u0442\u044b\u0439",
+            "stock": 22,
+            "directReserve": 1,
+            "derivedReserve": 2,
+            "reserve": 3,
+            "contribution": 3,
+            "reservations": [
+                {
+                    "qty": 1,
+                    "source": "Kaspi",
+                    "externalKey": "Kaspi:MTA0MDAwNTMxMg:MTA0MDAwNTMxMiMjMg",
+                    "stage": "new"
+                }
+            ]
+        },
+        {
+            "productId": "msm8lnlp7dq2z",
+            "productName": "\u041c\u044d\u043d\u0434\u044d\u043c\u0441 \u0417\u0435\u043b\u0451\u043d\u044b\u0439",
+            "stock": 26,
+            "directReserve": 1,
+            "derivedReserve": 2,
+            "reserve": 3,
+            "contribution": 3,
+            "reservations": [
+                {
+                    "qty": 1,
+                    "source": "Kaspi",
+                    "externalKey": "Kaspi:MTA0MDAwNTMxMg:MTA0MDAwNTMxMiMjMA",
+                    "stage": "new"
+                }
+            ]
+        },
+        {
+            "productId": "msm1xgluj2vyz",
+            "productName": "\u041c\u044d\u043d\u0434\u044d\u043c\u0441 \u041a\u0440\u0430\u0441\u043d\u044b\u0439",
+            "stock": 24,
+            "directReserve": 2,
+            "derivedReserve": 0,
+            "reserve": 2,
+            "contribution": 2,
+            "reservations": [
+                {
+                    "qty": 1,
+                    "source": "Kaspi",
+                    "externalKey": "Kaspi:MTA0MDI5MDU3Ng:MTA0MDI5MDU3NiMjMA",
+                    "stage": "new"
+                },
+                {
+                    "qty": 1,
+                    "source": "Kaspi",
+                    "externalKey": "Kaspi:MTA0MDAwNTMxMg:MTA0MDAwNTMxMiMjMQ",
+                    "stage": "new"
+                }
+            ]
+        },
+        {
+            "productId": "msm8hfdeha3vt",
+            "productName": "\u041c\u044d\u043d\u0434\u044d\u043c\u0441 \u0421\u0438\u043d\u0438\u0439",
+            "stock": 39,
+            "directReserve": 2,
+            "derivedReserve": 2,
+            "reserve": 4,
+            "contribution": 4,
+            "reservations": [
+                {
+                    "qty": 1,
+                    "source": "Kaspi",
+                    "externalKey": "Kaspi:MTA0MDAwNTMxMg:MTA0MDAwNTMxMiMjMw",
+                    "stage": "new"
+                },
+                {
+                    "qty": 1,
+                    "source": "Kaspi",
+                    "externalKey": "Kaspi:MTAzODA2NzAyNg:MTAzODA2NzAyNiMjMA",
+                    "stage": "new"
+                }
+            ]
+        },
+        {
+            "productId": "msm1x0vgs0tzx",
+            "productName": "\u041f\u0443\u043b\u044f \u043d\u043e\u0436",
+            "stock": 83,
+            "directReserve": 10,
+            "derivedReserve": 0,
+            "reserve": 10,
+            "contribution": 10,
+            "reservations": [
+                {
+                    "qty": 1,
+                    "source": "Kaspi",
+                    "externalKey": "Kaspi:MTA0MjA1MzI2MA:MTA0MjA1MzI2MCMjMA",
+                    "stage": "new"
+                },
+                {
+                    "qty": 1,
+                    "source": "Kaspi",
+                    "externalKey": "Kaspi:MTA0MTE3NzQyMg:MTA0MTE3NzQyMiMjMA",
+                    "stage": "new"
+                },
+                {
+                    "qty": 1,
+                    "source": "Kaspi",
+                    "externalKey": "Kaspi:MTAzOTk3MjAyOA:MTAzOTk3MjAyOCMjMA",
+                    "stage": "new"
+                },
+                {
+                    "qty": 1,
+                    "source": "Kaspi",
+                    "externalKey": "Kaspi:MTAzODk3OTkwMA:MTAzODk3OTkwMCMjMA",
+                    "stage": "new"
+                },
+                {
+                    "qty": 1,
+                    "source": "Kaspi",
+                    "externalKey": "Kaspi:MTAzNzI5MDExMA:MTAzNzI5MDExMCMjMA",
+                    "stage": "new"
+                },
+                {
+                    "qty": 1,
+                    "source": "WB2",
+                    "externalKey": "WB2:5538360296:5538360296",
+                    "stage": "new"
+                },
+                {
+                    "qty": 1,
+                    "source": "Kaspi",
+                    "externalKey": "Kaspi:MTA0MjQzNDg5Mg:MTA0MjQzNDg5MiMjMA",
+                    "stage": "new"
+                },
+                {
+                    "qty": 1,
+                    "source": "WB2",
+                    "externalKey": "WB2:5539392728:5539392728",
+                    "stage": "new"
+                },
+                {
+                    "qty": 1,
+                    "source": "Kaspi",
+                    "externalKey": "Kaspi:MTA0MjYwNDQxOQ:MTA0MjYwNDQxOSMjMA",
+                    "stage": "new"
+                },
+                {
+                    "qty": 1,
+                    "source": "WB2",
+                    "externalKey": "WB2:5540398231:5540398231",
+                    "stage": "new"
+                }
+            ]
+        },
+        {
+            "productId": "msm8inek6iqiy",
+            "productName": "\u0420\u0443\u043b\u0435\u0442\u043a\u0430 \u041a\u0430\u0437\u0438\u043d\u043e \u0417\u043e\u043b\u043e\u0442\u0438\u0441\u0442\u044b\u0439",
+            "stock": 36,
+            "directReserve": 7,
+            "derivedReserve": 0,
+            "reserve": 7,
+            "contribution": 7,
+            "reservations": [
+                {
+                    "qty": 1,
+                    "source": "Kaspi",
+                    "externalKey": "Kaspi:MTA0MjM0NjQ2NQ:MTA0MjM0NjQ2NSMjMA",
+                    "stage": "new"
+                },
+                {
+                    "qty": 1,
+                    "source": "Kaspi",
+                    "externalKey": "Kaspi:MTA0MTYwMDM3OQ:MTA0MTYwMDM3OSMjMA",
+                    "stage": "new"
+                },
+                {
+                    "qty": 1,
+                    "source": "Kaspi",
+                    "externalKey": "Kaspi:MTA0MTE1Mjg0Ng:MTA0MTE1Mjg0NiMjMA",
+                    "stage": "new"
+                },
+                {
+                    "qty": 1,
+                    "source": "Kaspi",
+                    "externalKey": "Kaspi:MTAzOTgxNDcyNw:MTAzOTgxNDcyNyMjMA",
+                    "stage": "new"
+                },
+                {
+                    "qty": 1,
+                    "source": "Kaspi",
+                    "externalKey": "Kaspi:MTAzODgzMTE0OQ:MTAzODgzMTE0OSMjMA",
+                    "stage": "new"
+                },
+                {
+                    "qty": 1,
+                    "source": "Kaspi",
+                    "externalKey": "Kaspi:MTAzODcxNTc5MQ:MTAzODcxNTc5MSMjMA",
+                    "stage": "new"
+                },
+                {
+                    "qty": 1,
+                    "source": "Kaspi",
+                    "externalKey": "Kaspi:MTAzODM4Nzc1NQ:MTAzODM4Nzc1NSMjMA",
+                    "stage": "new"
+                }
+            ]
+        },
+        {
+            "productId": "msm8h75mwtrpj",
+            "productName": "\u0420\u044b\u0431\u0430\u043b\u043a\u0430 #1",
+            "stock": 27,
+            "directReserve": 5,
+            "derivedReserve": 0,
+            "reserve": 5,
+            "contribution": 5,
+            "reservations": [
+                {
+                    "qty": 1,
+                    "source": "Kaspi",
+                    "externalKey": "Kaspi:MTA0MTU1MjA4Ng:MTA0MTU1MjA4NiMjMA",
+                    "stage": "new"
+                },
+                {
+                    "qty": 1,
+                    "source": "Kaspi",
+                    "externalKey": "Kaspi:MTA0MDIwOTc5Ng:MTA0MDIwOTc5NiMjMA",
+                    "stage": "new"
+                },
+                {
+                    "qty": 1,
+                    "source": "Kaspi",
+                    "externalKey": "Kaspi:MTAzODQ5NDcwNA:MTAzODQ5NDcwNCMjMA",
+                    "stage": "new"
+                },
+                {
+                    "qty": 1,
+                    "source": "Kaspi",
+                    "externalKey": "Kaspi:MTAzNzY5ODc3Nw:MTAzNzY5ODc3NyMjMA",
+                    "stage": "new"
+                },
+                {
+                    "qty": 1,
+                    "source": "WB",
+                    "externalKey": "WB:5540825791:5540825791",
+                    "stage": "new"
+                }
+            ]
+        },
+        {
+            "productId": "msm8ibjm69hbb",
+            "productName": "\u0421\u0430\u043a\u0443\u0440\u0430 \u043a\u044d\u0442 \u0424\u0438\u043e\u043b\u0435\u0442\u043e\u0432\u044b\u0439",
+            "stock": 22,
+            "directReserve": 2,
+            "derivedReserve": 0,
+            "reserve": 2,
+            "contribution": 2,
+            "reservations": [
+                {
+                    "qty": 1,
+                    "source": "Kaspi",
+                    "externalKey": "Kaspi:MTA0MjMwMDcxMQ:MTA0MjMwMDcxMSMjMA",
+                    "stage": "new"
+                },
+                {
+                    "qty": 1,
+                    "source": "Kaspi",
+                    "externalKey": "Kaspi:MTAzODk4NjA5NQ:MTAzODk4NjA5NSMjMA",
+                    "stage": "new"
+                }
+            ]
+        },
+        {
+            "productId": "msvkubn3hi59t",
+            "productName": "\u0421\u0435\u0440\u0434\u0446\u0435 \u0440\u0443\u0431\u0438\u043d \u0431\u043e\u043b\u044c\u0448\u043e\u0435",
+            "stock": 49,
+            "directReserve": 1,
+            "derivedReserve": 0,
+            "reserve": 1,
+            "contribution": 1,
+            "reservations": [
+                {
+                    "qty": 1,
+                    "source": "WB",
+                    "externalKey": "WB:5538657118:5538657118",
+                    "stage": "new"
+                }
+            ]
+        },
+        {
+            "productId": "msmahkl00398f",
+            "productName": "\u0421\u043a\u043b\u0430\u0434\u043d\u043e\u0439 \u043d\u043e\u0436\u0438\u043a \u0427\u0435\u0440\u043d\u044b\u0439",
+            "stock": 26,
+            "directReserve": 5,
+            "derivedReserve": 0,
+            "reserve": 5,
+            "contribution": 5,
+            "reservations": [
+                {
+                    "qty": 1,
+                    "source": "Kaspi",
+                    "externalKey": "Kaspi:MTAzOTQyMzE0MA:MTAzOTQyMzE0MCMjMw",
+                    "stage": "new"
+                },
+                {
+                    "qty": 1,
+                    "source": "Kaspi",
+                    "externalKey": "Kaspi:MTAzNzkxNzU3MQ:MTAzNzkxNzU3MSMjMA",
+                    "stage": "new"
+                },
+                {
+                    "qty": 1,
+                    "source": "WB2",
+                    "externalKey": "WB2:5538538306:5538538306",
+                    "stage": "new"
+                },
+                {
+                    "qty": 1,
+                    "source": "WB",
+                    "externalKey": "WB:5539057023:5539057023",
+                    "stage": "new"
+                },
+                {
+                    "qty": 1,
+                    "source": "WB",
+                    "externalKey": "WB:5540080006:5540080006",
+                    "stage": "new"
+                }
+            ]
+        },
+        {
+            "productId": "msm1yw0tyxgyf",
+            "productName": "\u0421\u0442\u0438\u043a\u043c\u044d\u043d \u0414\u0432\u0435 \u043f\u043e\u043b\u043e\u0432\u0438\u043d\u043a\u0438",
+            "stock": 43,
+            "directReserve": 1,
+            "derivedReserve": 0,
+            "reserve": 1,
+            "contribution": 1,
+            "reservations": [
+                {
+                    "qty": 1,
+                    "source": "Kaspi",
+                    "externalKey": "Kaspi:MTA0MjA0NjI0Mg:MTA0MjA0NjI0MiMjMA",
+                    "stage": "new"
+                }
+            ]
+        },
+        {
+            "productId": "msm8gosaei39o",
+            "productName": "\u0421\u0442\u0438\u043a\u043c\u044d\u043d \u041e\u0434\u043d\u043e \u043d\u0430 \u0434\u0432\u043e\u0438\u0445",
+            "stock": 41,
+            "directReserve": 2,
+            "derivedReserve": 0,
+            "reserve": 2,
+            "contribution": 2,
+            "reservations": [
+                {
+                    "qty": 1,
+                    "source": "Kaspi",
+                    "externalKey": "Kaspi:MTA0MTMzMTIwMw:MTA0MTMzMTIwMyMjMA",
+                    "stage": "new"
+                },
+                {
+                    "qty": 1,
+                    "source": "Kaspi",
+                    "externalKey": "Kaspi:MTA0MTE0NjIzMQ:MTA0MTE0NjIzMSMjMA",
+                    "stage": "new"
+                }
+            ]
+        },
+        {
+            "productId": "msm1ycuc86ate",
+            "productName": "\u0421\u0442\u0438\u0447 \u0420\u043e\u0437\u043e\u0432\u044b\u0439",
+            "stock": 119,
+            "directReserve": 7,
+            "derivedReserve": 0,
+            "reserve": 7,
+            "contribution": 7,
+            "reservations": [
+                {
+                    "qty": 1,
+                    "source": "Kaspi",
+                    "externalKey": "Kaspi:MTA0MTQ0ODAzNQ:MTA0MTQ0ODAzNSMjMA",
+                    "stage": "new"
+                },
+                {
+                    "qty": 1,
+                    "source": "Kaspi",
+                    "externalKey": "Kaspi:MTA0MTM2OTU4MQ:MTA0MTM2OTU4MSMjMA",
+                    "stage": "new"
+                },
+                {
+                    "qty": 1,
+                    "source": "Kaspi",
+                    "externalKey": "Kaspi:MTA0MDc0MDUxMg:MTA0MDc0MDUxMiMjMA",
+                    "stage": "new"
+                },
+                {
+                    "qty": 1,
+                    "source": "Kaspi",
+                    "externalKey": "Kaspi:MTA0MDYxMjMzNA:MTA0MDYxMjMzNCMjMA",
+                    "stage": "new"
+                },
+                {
+                    "qty": 1,
+                    "source": "Kaspi",
+                    "externalKey": "Kaspi:MTAzOTYzODYyMQ:MTAzOTYzODYyMSMjMA",
+                    "stage": "new"
+                },
+                {
+                    "qty": 1,
+                    "source": "Kaspi",
+                    "externalKey": "Kaspi:MTAzOTA3NDQwMg:MTAzOTA3NDQwMiMjMQ",
+                    "stage": "new"
+                },
+                {
+                    "qty": 1,
+                    "source": "Kaspi",
+                    "externalKey": "Kaspi:MTAzODcxNzEwOA:MTAzODcxNzEwOCMjMA",
+                    "stage": "new"
+                }
+            ]
+        },
+        {
+            "productId": "msm1xppjcflgj",
+            "productName": "\u0421\u0442\u0438\u0447 \u0421\u0438\u043d\u0438\u0439",
+            "stock": 114,
+            "directReserve": 7,
+            "derivedReserve": 0,
+            "reserve": 7,
+            "contribution": 7,
+            "reservations": [
+                {
+                    "qty": 1,
+                    "source": "Kaspi",
+                    "externalKey": "Kaspi:MTA0MTQwMzkzNw:MTA0MTQwMzkzNyMjMA",
+                    "stage": "new"
+                },
+                {
+                    "qty": 1,
+                    "source": "Kaspi",
+                    "externalKey": "Kaspi:MTA0MDc0MDUxMg:MTA0MDc0MDUxMiMjMg",
+                    "stage": "new"
+                },
+                {
+                    "qty": 1,
+                    "source": "Kaspi",
+                    "externalKey": "Kaspi:MTA0MDI3NTg5MA:MTA0MDI3NTg5MCMjMA",
+                    "stage": "new"
+                },
+                {
+                    "qty": 1,
+                    "source": "Kaspi",
+                    "externalKey": "Kaspi:MTAzOTYzODYyMQ:MTAzOTYzODYyMSMjMQ",
+                    "stage": "new"
+                },
+                {
+                    "qty": 1,
+                    "source": "Kaspi",
+                    "externalKey": "Kaspi:MTAzOTQxNzc0Ng:MTAzOTQxNzc0NiMjMA",
+                    "stage": "new"
+                },
+                {
+                    "qty": 1,
+                    "source": "Kaspi",
+                    "externalKey": "Kaspi:MTAzOTA3NDQwMg:MTAzOTA3NDQwMiMjMA",
+                    "stage": "new"
+                },
+                {
+                    "qty": 1,
+                    "source": "Kaspi",
+                    "externalKey": "Kaspi:MTAzODY3MzcwMg:MTAzODY3MzcwMiMjMA",
+                    "stage": "new"
+                }
+            ]
+        },
+        {
+            "productId": "msm6xct3k0yg5",
+            "productName": "\u0421\u0442\u043e \u0431\u0430\u043a\u0441\u043e\u0432",
+            "stock": 13,
+            "directReserve": 2,
+            "derivedReserve": 0,
+            "reserve": 2,
+            "contribution": 2,
+            "reservations": [
+                {
+                    "qty": 1,
+                    "source": "Kaspi",
+                    "externalKey": "Kaspi:MTAzODc3OTQxMw:MTAzODc3OTQxMyMjMA",
+                    "stage": "new"
+                },
+                {
+                    "qty": 1,
+                    "source": "WB",
+                    "externalKey": "WB:5540770550:5540770550",
+                    "stage": "new"
+                }
+            ]
+        },
+        {
+            "productId": "msmccep0fzhg5",
+            "productName": "\u0421\u0442\u043e \u043f\u0440\u0438\u0437\u043d\u0430\u043d\u0438\u0439 \u043d\u0430 100 \u044f\u0437\u044b\u043a\u0430\u0445 \u0417\u043e\u043b\u043e\u0442\u043e",
+            "stock": 19,
+            "directReserve": 2,
+            "derivedReserve": 0,
+            "reserve": 2,
+            "contribution": 2,
+            "reservations": [
+                {
+                    "qty": 1,
+                    "source": "Kaspi",
+                    "externalKey": "Kaspi:MTA0MjM3MjgyMA:MTA0MjM3MjgyMCMjMQ",
+                    "stage": "new"
+                },
+                {
+                    "qty": 1,
+                    "source": "Kaspi",
+                    "externalKey": "Kaspi:MTAzOTIzMTk5MA:MTAzOTIzMTk5MCMjMA",
+                    "stage": "new"
+                }
+            ]
+        },
+        {
+            "productId": "msmvk45jyrfuw",
+            "productName": "\u0421\u0442\u043e \u043f\u0440\u0438\u0437\u043d\u0430\u043d\u0438\u0439 \u043d\u0430 100 \u044f\u0437\u044b\u043a\u0430\u0445 \u041f\u043b\u0430\u0442\u0438\u043d\u0430",
+            "stock": 2,
+            "directReserve": 1,
+            "derivedReserve": 0,
+            "reserve": 1,
+            "contribution": 1,
+            "reservations": [
+                {
+                    "qty": 1,
+                    "source": "Kaspi",
+                    "externalKey": "Kaspi:MTA0MTYzOTIwNA:MTA0MTYzOTIwNCMjMQ",
+                    "stage": "new"
+                }
+            ]
+        },
+        {
+            "productId": "msr5ljnsbisdt",
+            "productName": "\u0422\u0440\u0438 \u043a\u043e\u0442\u0430 \u0440\u044b\u0436\u0438\u0439",
+            "stock": 24,
+            "directReserve": 1,
+            "derivedReserve": 0,
+            "reserve": 1,
+            "contribution": 1,
+            "reservations": [
+                {
+                    "qty": 1,
+                    "source": "WB",
+                    "externalKey": "WB:5539786259:5539786259",
+                    "stage": "new"
+                }
+            ]
+        },
+        {
+            "productId": "msm1z3pwwo24n",
+            "productName": "\u0422\u0443\u0437 \u041f\u0438\u043a",
+            "stock": 14,
+            "directReserve": 1,
+            "derivedReserve": 0,
+            "reserve": 1,
+            "contribution": 1,
+            "reservations": [
+                {
+                    "qty": 1,
+                    "source": "Kaspi",
+                    "externalKey": "Kaspi:MTA0MTI1NjE2OQ:MTA0MTI1NjE2OSMjMA",
+                    "stage": "new"
+                }
+            ]
+        },
+        {
+            "productId": "msm8k53gxj2gn",
+            "productName": "\u0424\u0438\u043a\u0441 \u041b\u0430\u0442\u0443\u043d\u044c",
+            "stock": 56,
+            "directReserve": 1,
+            "derivedReserve": 0,
+            "reserve": 1,
+            "contribution": 1,
+            "reservations": [
+                {
+                    "qty": 1,
+                    "source": "WB",
+                    "externalKey": "WB:5540470782:5540470782",
+                    "stage": "new"
+                }
+            ]
+        },
+        {
+            "productId": "msm1xxrslrwmu",
+            "productName": "\u0424\u0438\u043a\u0441 \u0421\u0435\u0440\u0435\u0431\u0440\u0438\u0441\u0442\u044b\u0439",
+            "stock": 6,
+            "directReserve": 1,
+            "derivedReserve": 0,
+            "reserve": 1,
+            "contribution": 1,
+            "reservations": [
+                {
+                    "qty": 1,
+                    "source": "Kaspi",
+                    "externalKey": "Kaspi:MTAzOTc1Mjc0OQ:MTAzOTc1Mjc0OSMjMA",
+                    "stage": "new"
+                }
+            ]
+        },
+        {
+            "productId": "msm94w2k6i7bs",
+            "productName": "\u0425\u0435\u043b\u043b\u043e \u041a\u0438\u0442\u0442\u0438 \u0410\u043d\u0433\u0440\u0438",
+            "stock": 26,
+            "directReserve": 1,
+            "derivedReserve": 0,
+            "reserve": 1,
+            "contribution": 1,
+            "reservations": [
+                {
+                    "qty": 1,
+                    "source": "Kaspi",
+                    "externalKey": "Kaspi:MTA0MjQyNzA2OA:MTA0MjQyNzA2OCMjMA",
+                    "stage": "new"
+                }
+            ]
+        },
+        {
+            "productId": "msmcf9gbmwga9",
+            "productName": "\u0425\u0435\u043b\u043b\u043e \u041a\u0438\u0442\u0442\u0438 \u041a\u0440\u0430\u0438\u043d\u0433",
+            "stock": 7,
+            "directReserve": 3,
+            "derivedReserve": 0,
+            "reserve": 3,
+            "contribution": 3,
+            "reservations": [
+                {
+                    "qty": 1,
+                    "source": "Kaspi",
+                    "externalKey": "Kaspi:MTAzODU0MzQ2Nw:MTAzODU0MzQ2NyMjMQ",
+                    "stage": "new"
+                },
+                {
+                    "qty": 1,
+                    "source": "Kaspi",
+                    "externalKey": "Kaspi:MTAzNzYxNTQ3Mw:MTAzNzYxNTQ3MyMjMA",
+                    "stage": "new"
+                },
+                {
+                    "qty": 1,
+                    "source": "Kaspi",
+                    "externalKey": "Kaspi:MTA0Mjc5MDE3NA:MTA0Mjc5MDE3NCMjMA",
+                    "stage": "new"
+                }
+            ]
+        },
+        {
+            "productId": "msm95i03wbykk",
+            "productName": "\u0425\u0435\u043b\u043b\u043e \u041a\u0438\u0442\u0442\u0438 \u041b\u043e\u0432\u0441\u0442\u0440\u0430\u043a",
+            "stock": 23,
+            "directReserve": 4,
+            "derivedReserve": 0,
+            "reserve": 4,
+            "contribution": 4,
+            "reservations": [
+                {
+                    "qty": 1,
+                    "source": "Kaspi",
+                    "externalKey": "Kaspi:MTA0MDkyOTM5Nw:MTA0MDkyOTM5NyMjMA",
+                    "stage": "new"
+                },
+                {
+                    "qty": 1,
+                    "source": "Kaspi",
+                    "externalKey": "Kaspi:MTA0MDE4NTYwOA:MTA0MDE4NTYwOCMjMA",
+                    "stage": "new"
+                },
+                {
+                    "qty": 1,
+                    "source": "Kaspi",
+                    "externalKey": "Kaspi:MTA0MDEyNDczNA:MTA0MDEyNDczNCMjMA",
+                    "stage": "new"
+                },
+                {
+                    "qty": 1,
+                    "source": "Kaspi",
+                    "externalKey": "Kaspi:MTA0MjgwODM5Ng:MTA0MjgwODM5NiMjMA",
+                    "stage": "new"
+                }
+            ]
+        },
+        {
+            "productId": "msm93ostgwdr8",
+            "productName": "\u0425\u0435\u043b\u043b\u043e \u041a\u0438\u0442\u0442\u0438 \u0421\u0438\u043c\u043f\u043b",
+            "stock": 16,
+            "directReserve": 9,
+            "derivedReserve": 0,
+            "reserve": 9,
+            "contribution": 9,
+            "reservations": [
+                {
+                    "qty": 1,
+                    "source": "Kaspi",
+                    "externalKey": "Kaspi:MTA0MjAwMDg2OQ:MTA0MjAwMDg2OSMjMA",
+                    "stage": "new"
+                },
+                {
+                    "qty": 1,
+                    "source": "Kaspi",
+                    "externalKey": "Kaspi:MTA0MTI5OTk3MA:MTA0MTI5OTk3MCMjMA",
+                    "stage": "new"
+                },
+                {
+                    "qty": 2,
+                    "source": "Kaspi",
+                    "externalKey": "Kaspi:MTA0MDkwNzk0MQ:MTA0MDkwNzk0MSMjMA",
+                    "stage": "new"
+                },
+                {
+                    "qty": 1,
+                    "source": "Kaspi",
+                    "externalKey": "Kaspi:MTA0MDYzNzE2MQ:MTA0MDYzNzE2MSMjMA",
+                    "stage": "new"
+                },
+                {
+                    "qty": 1,
+                    "source": "Kaspi",
+                    "externalKey": "Kaspi:MTA0MDMwMjEyNQ:MTA0MDMwMjEyNSMjMA",
+                    "stage": "new"
+                },
+                {
+                    "qty": 1,
+                    "source": "Kaspi",
+                    "externalKey": "Kaspi:MTAzOTI5OTI2OQ:MTAzOTI5OTI2OSMjMA",
+                    "stage": "new"
+                },
+                {
+                    "qty": 1,
+                    "source": "Kaspi",
+                    "externalKey": "Kaspi:MTAzODU0MzQ2Nw:MTAzODU0MzQ2NyMjMA",
+                    "stage": "new"
+                },
+                {
+                    "qty": 1,
+                    "source": "Kaspi",
+                    "externalKey": "Kaspi:MTAzNzU2MzQ5NA:MTAzNzU2MzQ5NCMjMA",
+                    "stage": "new"
+                }
+            ]
+        },
+        {
+            "productId": "msm923in314q4",
+            "productName": "\u0425\u0435\u043b\u043b\u043e \u041a\u0438\u0442\u0442\u0438 \u0421\u044d\u0441\u0441\u0438",
+            "stock": 46,
+            "directReserve": 4,
+            "derivedReserve": 0,
+            "reserve": 4,
+            "contribution": 4,
+            "reservations": [
+                {
+                    "qty": 1,
+                    "source": "Kaspi",
+                    "externalKey": "Kaspi:MTA0MjAzODgzMA:MTA0MjAzODgzMCMjMA",
+                    "stage": "new"
+                },
+                {
+                    "qty": 1,
+                    "source": "Kaspi",
+                    "externalKey": "Kaspi:MTA0MDM1MjIxNg:MTA0MDM1MjIxNiMjMA",
+                    "stage": "new"
+                },
+                {
+                    "qty": 1,
+                    "source": "Kaspi",
+                    "externalKey": "Kaspi:MTA0MDAyMjgwNQ:MTA0MDAyMjgwNSMjMA",
+                    "stage": "new"
+                },
+                {
+                    "qty": 1,
+                    "source": "Kaspi",
+                    "externalKey": "Kaspi:MTAzNzcxMzMwOQ:MTAzNzcxMzMwOSMjMA",
+                    "stage": "new"
+                }
+            ]
+        },
+        {
+            "productId": "msmc27en72y12",
+            "productName": "\u0425\u0435\u043b\u043b\u043e \u041a\u0438\u0442\u0442\u0438 \u0425\u0430\u043d\u0433\u0440\u0438",
+            "stock": 23,
+            "directReserve": 4,
+            "derivedReserve": 0,
+            "reserve": 4,
+            "contribution": 4,
+            "reservations": [
+                {
+                    "qty": 1,
+                    "source": "Kaspi",
+                    "externalKey": "Kaspi:MTA0MDI2ODcxNA:MTA0MDI2ODcxNCMjMA",
+                    "stage": "new"
+                },
+                {
+                    "qty": 1,
+                    "source": "Kaspi",
+                    "externalKey": "Kaspi:MTAzOTExNjU3OA:MTAzOTExNjU3OCMjMA",
+                    "stage": "new"
+                },
+                {
+                    "qty": 1,
+                    "source": "Kaspi",
+                    "externalKey": "Kaspi:MTAzODU0MzQ2Nw:MTAzODU0MzQ2NyMjMg",
+                    "stage": "new"
+                },
+                {
+                    "qty": 1,
+                    "source": "Kaspi",
+                    "externalKey": "Kaspi:MTAzNzYxNTQ3Mw:MTAzNzYxNTQ3MyMjMQ",
+                    "stage": "new"
+                }
+            ]
+        },
+        {
+            "productId": "msoh4grkya29y",
+            "productName": "\u0427\u0435\u0440\u0435\u043f\u0430\u0448\u043a\u0438 \u0420\u0430\u0444\u0430\u044d\u043b\u044c",
+            "stock": 3,
+            "directReserve": 1,
+            "derivedReserve": 0,
+            "reserve": 1,
+            "contribution": 1,
+            "reservations": [
+                {
+                    "qty": 1,
+                    "source": "Kaspi",
+                    "externalKey": "Kaspi:MTA0MTMyMzYxOQ:MTA0MTMyMzYxOSMjMQ",
+                    "stage": "new"
+                }
+            ]
+        },
+        {
+            "productId": "msmvttjbdgd2r",
+            "productName": "\u0427\u0435\u0440\u0435\u043f \u0441\u0435\u0440\u0435\u0431\u0440\u0438\u0441\u0442\u044b\u0439",
+            "stock": 10,
+            "directReserve": 1,
+            "derivedReserve": 0,
+            "reserve": 1,
+            "contribution": 1,
+            "reservations": [
+                {
+                    "qty": 1,
+                    "source": "WB",
+                    "externalKey": "WB:5538871830:5538871830",
+                    "stage": "new"
+                }
+            ]
+        },
+        {
+            "productId": "msn7flt0laljc",
+            "productName": "\u0428\u0442\u0430\u043d\u0433\u0435\u043d\u0446\u0438\u0440\u043a\u0443\u043b\u044c \u0441\u0435\u0440\u0435\u0431\u0440\u0438\u0441\u0442\u044b\u0439",
+            "stock": 35,
+            "directReserve": 2,
+            "derivedReserve": 0,
+            "reserve": 2,
+            "contribution": 2,
+            "reservations": [
+                {
+                    "qty": 1,
+                    "source": "WB2",
+                    "externalKey": "WB2:5539406535:5539406535",
+                    "stage": "new"
+                },
+                {
+                    "qty": 1,
+                    "source": "WB2",
+                    "externalKey": "WB2:5540121310:5540121310",
+                    "stage": "new"
+                }
+            ]
+        }
+    ],
     "latestSync": [
         {
             "market": "Kaspi",
-            "id": 4212,
-            "startedAt": 1787250401156,
+            "id": 4223,
+            "startedAt": 1787250549543,
             "finishedAt": null,
             "ok": 0,
             "items": 0,
@@ -1545,18 +3050,18 @@
         },
         {
             "market": "WB",
-            "id": 4213,
-            "startedAt": 1787250403437,
-            "finishedAt": 1787250403596,
+            "id": 4224,
+            "startedAt": 1787250551536,
+            "finishedAt": 1787250551847,
             "ok": 1,
             "items": 30,
             "error": ""
         },
         {
             "market": "WB2",
-            "id": 4214,
-            "startedAt": 1787250403832,
-            "finishedAt": 1787250403928,
+            "id": 4225,
+            "startedAt": 1787250552065,
+            "finishedAt": 1787250552265,
             "ok": 1,
             "items": 19,
             "error": ""
