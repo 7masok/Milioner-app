@@ -138,59 +138,46 @@ if(['today','yesterday','week','month','custom'].includes(savedOrderPeriodUi.mod
 
 const ORDER_MARKET_UI_KEY='milioner_order_market_ui_v2';
 function readOrderMarketUi(){try{return JSON.parse(localStorage.getItem(ORDER_MARKET_UI_KEY)||'{}')||{}}catch{return {}}}
-function rememberOrderMarketUi(next={}){
-  try{const current=readOrderMarketUi();localStorage.setItem(ORDER_MARKET_UI_KEY,JSON.stringify({market:next.market||current.market||'Kaspi',wbAccount:next.wbAccount||current.wbAccount||'all',updatedAt:Date.now()}))}catch{}
-}
-document.addEventListener('click',event=>{
-  const marketBtn=event.target?.closest?.('[data-market]');
-  if(marketBtn){const market=String(marketBtn.dataset.market||'');if(['Kaspi','WB','Ozon'].includes(market))rememberOrderMarketUi({market})}
-  const wbBtn=event.target?.closest?.('[data-wb-account]');
-  if(wbBtn){const wbAccount=String(wbBtn.dataset.wbAccount||'');if(['all','WB','WB2'].includes(wbAccount))rememberOrderMarketUi({market:'WB',wbAccount})}
-},true);
-function restoreOrderMarketUi(){
-  const saved=readOrderMarketUi();
-  if(!['Kaspi','WB','Ozon'].includes(saved.market))return;
-  const marketBtn=document.querySelector(`[data-market="${saved.market}"]`);
-  if(marketBtn&&!marketBtn.classList.contains('active'))marketBtn.click();
-  if(saved.market==='WB'&&['all','WB','WB2'].includes(saved.wbAccount)){
-    const wbBtn=document.querySelector(`[data-wb-account="${saved.wbAccount}"]`);
-    if(wbBtn&&!wbBtn.classList.contains('active'))wbBtn.click();
-  }
-}
+function rememberOrderMarketUi(next={}){try{const current=readOrderMarketUi();localStorage.setItem(ORDER_MARKET_UI_KEY,JSON.stringify({market:next.market||current.market||'Kaspi',wbAccount:next.wbAccount||current.wbAccount||'all',updatedAt:Date.now()}))}catch{}}
+document.addEventListener('click',event=>{const marketBtn=event.target?.closest?.('[data-market]');if(marketBtn){const market=String(marketBtn.dataset.market||'');if(['Kaspi','WB','Ozon'].includes(market))rememberOrderMarketUi({market})}const wbBtn=event.target?.closest?.('[data-wb-account]');if(wbBtn){const wbAccount=String(wbBtn.dataset.wbAccount||'');if(['all','WB','WB2'].includes(wbAccount))rememberOrderMarketUi({market:'WB',wbAccount})}},true);
+function restoreOrderMarketUi(){const saved=readOrderMarketUi();if(!['Kaspi','WB','Ozon'].includes(saved.market))return;const marketBtn=document.querySelector(`[data-market="${saved.market}"]`);if(marketBtn&&!marketBtn.classList.contains('active'))marketBtn.click();if(saved.market==='WB'&&['all','WB','WB2'].includes(saved.wbAccount)){const wbBtn=document.querySelector(`[data-wb-account="${saved.wbAccount}"]`);if(wbBtn&&!wbBtn.classList.contains('active'))wbBtn.click()}}
 window.addEventListener('load',()=>{[0,250,800,1800,3500].forEach(ms=>setTimeout(restoreOrderMarketUi,ms))});
 
-function syncLabel(ts){
-  const value=Number(ts)||0;if(!value)return '—';const d=new Date(value),now=new Date();const time=d.toLocaleTimeString('ru-RU',{hour:'2-digit',minute:'2-digit'});
-  const same=d.getFullYear()===now.getFullYear()&&d.getMonth()===now.getMonth()&&d.getDate()===now.getDate();const y=new Date(now);y.setDate(now.getDate()-1);
-  const yesterday=d.getFullYear()===y.getFullYear()&&d.getMonth()===y.getMonth()&&d.getDate()===y.getDate();
-  return same?time:yesterday?'вчера '+time:d.toLocaleDateString('ru-RU',{day:'2-digit',month:'2-digit'})+' '+time;
-}
-function showMarketSyncTimes(){
-  const status=state.settings?.serverMarketStatus||{};
-  const kaspi=document.getElementById('lastSync');if(kaspi)kaspi.textContent=syncLabel(status.Kaspi?.lastSuccessAt);
-  const wb=document.getElementById('wbStockStatus');if(wb){const t=Math.max(Number(status.WB?.lastSuccessAt||0),Number(status.WB2?.lastSuccessAt||0));wb.textContent=t?syncLabel(t):'—'}
-}
+function syncLabel(ts){const value=Number(ts)||0;if(!value)return '—';const d=new Date(value),now=new Date();const time=d.toLocaleTimeString('ru-RU',{hour:'2-digit',minute:'2-digit'});const same=d.getFullYear()===now.getFullYear()&&d.getMonth()===now.getMonth()&&d.getDate()===now.getDate();const y=new Date(now);y.setDate(now.getDate()-1);const yesterday=d.getFullYear()===y.getFullYear()&&d.getMonth()===y.getMonth()&&d.getDate()===y.getDate();return same?time:yesterday?'вчера '+time:d.toLocaleDateString('ru-RU',{day:'2-digit',month:'2-digit'})+' '+time}
+function showMarketSyncTimes(){const status=state.settings?.serverMarketStatus||{};const kaspi=document.getElementById('lastSync');if(kaspi)kaspi.textContent=syncLabel(status.Kaspi?.lastSuccessAt);const wb=document.getElementById('wbStockStatus');if(wb){const t=Math.max(Number(status.WB?.lastSuccessAt||0),Number(status.WB2?.lastSuccessAt||0));wb.textContent=t?syncLabel(t):'—'}}
 const originalLoadSharedOrderCache=window.loadSharedOrderCache;
-if(typeof originalLoadSharedOrderCache==='function'){
-  window.loadSharedOrderCache=async function(options){
-    for(let waited=0;!warehouseRemoteReady&&waited<15000;waited+=50)await sleep(50);
-    if(!warehouseRemoteReady)return {error:new Error('warehouse-not-ready')};
-    const result=await originalLoadSharedOrderCache(options);showMarketSyncTimes();restoreOrderMarketUi();setTimeout(restoreOrderMarketUi,100);return result;
-  };
+if(typeof originalLoadSharedOrderCache==='function')window.loadSharedOrderCache=async function(options){for(let waited=0;!warehouseRemoteReady&&waited<15000;waited+=50)await sleep(50);if(!warehouseRemoteReady)return {error:new Error('warehouse-not-ready')};const result=await originalLoadSharedOrderCache(options);showMarketSyncTimes();restoreOrderMarketUi();setTimeout(restoreOrderMarketUi,100);return result};
+
+async function postJson(url,body){const r=await fetch(url,{method:'POST',headers:{'Content-Type':'application/json',Accept:'application/json'},body:JSON.stringify(body),cache:'no-store'});const d=await r.json().catch(()=>({}));if(!r.ok||d?.ok===false)throw new Error(d?.error||('HTTP '+r.status));return d}
+async function syncWbWithBrowserFallback(){
+  try{return await postJson(MILLIONER_API+'/api/wb-sync-now',{days:2})}
+  catch(serverError){
+    console.warn('Railway WB sync failed; trying browser Worker fallback',serverError);
+    const payload=await requestWbSync(2);
+    const imported=await postJson(MILLIONER_API+'/api/wb-sync-import',{payload});
+    return {...imported,fallback:true};
+  }
 }
-window.syncNow=async function(){
-  const btn=document.querySelector('header .btn'),old=btn?.textContent;if(btn){btn.disabled=true;btn.textContent='…'}
-  try{
-    cloudStatus('обновляю маркетплейсы…','warn');
-    const results=await Promise.allSettled([
-      fetch(MILLIONER_API+'/api/kaspi-sync-now',{method:'POST',headers:{'Content-Type':'application/json',Accept:'application/json'},body:JSON.stringify({days:2}),cache:'no-store'}).then(async r=>{const d=await r.json().catch(()=>({}));if(!r.ok||d?.ok===false)throw new Error(d?.error||('Kaspi HTTP '+r.status));return d}),
-      fetch(MILLIONER_API+'/api/wb-sync-now',{method:'POST',headers:{'Content-Type':'application/json',Accept:'application/json'},body:JSON.stringify({days:2}),cache:'no-store'}).then(async r=>{const d=await r.json().catch(()=>({}));if(!r.ok||d?.ok===false)throw new Error(d?.error||('WB HTTP '+r.status));return d})
-    ]);
-    await window.loadSharedOrderCache?.({silent:false});showMarketSyncTimes();restoreOrderMarketUi();
-    const failed=results.filter(x=>x.status==='rejected');if(failed.length)console.warn('market sync partial failure',failed);
-    cloudStatus('сервер подключён','ok');
-  }catch(e){await window.loadSharedOrderCache?.({silent:true}).catch(()=>{});showMarketSyncTimes();cloudStatus('сервер подключён · ошибка синхронизации','warn')}
-  finally{if(btn){btn.disabled=false;btn.textContent=old||'↻'}}
-};
+async function refreshAllMarkets(){
+  const results=await Promise.allSettled([
+    postJson(MILLIONER_API+'/api/kaspi-sync-now',{days:2}),
+    syncWbWithBrowserFallback()
+  ]);
+  await window.loadSharedOrderCache?.({silent:false});showMarketSyncTimes();restoreOrderMarketUi();
+  return results;
+}
+window.syncNow=async function(){const btn=document.querySelector('header .btn'),old=btn?.textContent;if(btn){btn.disabled=true;btn.textContent='…'}try{cloudStatus('обновляю маркетплейсы…','warn');const results=await refreshAllMarkets();const failed=results.filter(x=>x.status==='rejected');if(failed.length){console.warn('market sync partial failure',failed);cloudStatus('сервер подключён · часть синхронизации с ошибкой','warn')}else cloudStatus('сервер подключён','ok')}catch(e){console.error('market sync failed',e);await window.loadSharedOrderCache?.({silent:true}).catch(()=>{});showMarketSyncTimes();cloudStatus('сервер подключён · ошибка синхронизации','warn')}finally{if(btn){btn.disabled=false;btn.textContent=old||'↻'}}};
+
+let autoWbRefreshStarted=false;
+async function autoRefreshStaleWb(){
+  if(autoWbRefreshStarted||!warehouseRemoteReady)return;
+  const st=state.settings?.serverMarketStatus||{};
+  const last=Math.max(Number(st.WB?.lastSuccessAt||0),Number(st.WB2?.lastSuccessAt||0));
+  if(last&&Date.now()-last<10*60*1000)return;
+  autoWbRefreshStarted=true;
+  try{await syncWbWithBrowserFallback();await window.loadSharedOrderCache?.({silent:true});showMarketSyncTimes();restoreOrderMarketUi()}
+  catch(e){console.warn('automatic WB refresh failed',e)}
+}
+window.addEventListener('load',()=>setTimeout(autoRefreshStaleWb,4500));
 setTimeout(showMarketSyncTimes,0);
 })();
