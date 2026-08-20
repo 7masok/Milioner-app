@@ -6,7 +6,7 @@
   document.head.appendChild(ads);
 
   const reservationCompat=document.createElement('script');
-  reservationCompat.src='./reservation-compat-v1.js?v=20260820-2200';
+  reservationCompat.src='./reservation-compat-v1.js?v=20260820-2236';
   reservationCompat.async=false;
   document.head.appendChild(reservationCompat);
 
