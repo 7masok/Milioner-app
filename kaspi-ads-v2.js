@@ -62,10 +62,12 @@ function ensureStyle(){
   const st=document.createElement('style');st.id='stockAlertStyle';st.textContent=`
   .stock-alert-button{position:relative;min-width:44px;height:44px;padding:0 12px;font-size:20px;display:inline-flex;align-items:center;justify-content:center}
   .stock-alert-count{position:absolute;right:-4px;top:-5px;min-width:19px;height:19px;padding:0 5px;border-radius:12px;background:#c62828;color:#fff;font:800 11px/19px system-ui;text-align:center;border:2px solid #fff}
-  .stock-alert-card{border-left:4px solid #c62828;cursor:pointer}.stock-alert-card+.stock-alert-card{margin-top:8px}
+  .stock-alert-card{position:relative;border-left:4px solid #c62828;cursor:pointer}.stock-alert-card+.stock-alert-card{margin-top:8px}
   .stock-alert-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:7px;margin-top:10px}.stock-alert-mini{background:#f6f7f8;border-radius:11px;padding:9px}
   .inventory-diff-note{margin:10px 0;padding:11px;border-radius:12px;background:#f6f7f8;line-height:1.45}.inventory-diff-note.bad{background:#fff1f1;color:#9d1717}.inventory-diff-note.ok{background:#edf8ef;color:#196b2b}
-  .stock-alert-hide{width:100%;margin-top:8px;color:var(--muted);background:#f6f7f8;border-color:#eceef0}
+  .stock-alert-dismiss{position:absolute;right:8px;top:8px;width:34px;height:34px;border:0;border-radius:50%;background:#f1f2f3;color:#666;font:500 25px/32px system-ui;z-index:2;padding:0;text-align:center}
+  .stock-alert-dismiss:active{background:#e5e7e9;transform:scale(.95)}
+  .stock-alert-card>.row:first-of-type{padding-right:34px}
   `;document.head.appendChild(st);
 }
 function ensureBell(){
@@ -90,6 +92,7 @@ function alertCard(x){
   const pid=String(x.p.id).replace(/'/g,"\\'");
   const action=x.warehouse>0?`На складе ждёт ввода в продажу: <b>${x.warehouse} шт.</b>`:x.buyQty>0?`Рекомендуется закупить примерно <b>${x.buyQty} шт.</b>`:'Поставка уже в пути';
   return `<div class="item stock-alert-card" onclick="openStockAlertProduct('${pid}')">
+    <button type="button" class="stock-alert-dismiss" aria-label="Скрыть уведомление" title="Скрыть · я в курсе" onclick="event.stopPropagation();hideStockAlert('${pid}')">×</button>
     <div class="row"><div class="grow"><div class="name">${escText(x.p.name)}</div><div class="muted">Запаса к продаже осталось примерно на ${dayText(x.days)}</div></div><span class="badge bad">${x.available} шт.</span></div>
     <div class="stock-alert-grid">
       <div class="stock-alert-mini"><div class="label">По учёту в продаже</div><b>${x.book} шт.</b></div>
@@ -102,13 +105,12 @@ function alertCard(x){
       <button class="btn" onclick="openStockAlertPurchase('${pid}')">Закупить</button>
       <button class="btn dark" onclick="openStockAlertProduct('${pid}')">Пересчитать</button>
     </div>
-    <button class="btn stock-alert-hide" onclick="event.stopPropagation();hideStockAlert('${pid}')">Скрыть · я в курсе</button>
   </div>`;
 }
 window.openStockAlerts=function(){
   const alerts=currentAlerts();
   if(!alerts.length)return alert('Сейчас нет новых уведомлений по остаткам.');
-  showSheet(`<h3>Нужно проверить остаток · ${alerts.length}</h3><div class="link-note">Тревога считается по реальным заказам за 7 и 25 дней. Берётся более высокий среднесуточный темп. Остаток — свободное количество после активного резерва. «Скрыть» убирает текущую тревогу, но она вернётся, если изменится остаток, резерв, товар на складе или в пути.</div>${alerts.map(alertCard).join('')}`);
+  showSheet(`<h3>Нужно проверить остаток · ${alerts.length}</h3><div class="link-note">Тревога считается по реальным заказам за 7 и 25 дней. Берётся более высокий среднесуточный темп. Остаток — свободное количество после активного резерва. Крестик × означает «я в курсе»: тревога вернётся, если изменится остаток, резерв, товар на складе или в пути.</div>${alerts.map(alertCard).join('')}`);
 };
 window.hideStockAlert=function(pid){
   const x=stockAlertFor(findProduct(pid));if(!x)return;
