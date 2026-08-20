@@ -1,0 +1,93 @@
+name: Polish integrations UI
+
+on:
+  push:
+    paths:
+      - '.github/workflows/polish-integrations-ui.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+      - name: Polish integration cards
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          p=Path('index.html')
+          s=p.read_text(encoding='utf-8')
+
+          kaspi='''<div class="setting" style="display:block">
+  <div class="integration-title"><b>Kaspi API</b><span id="kaspiApiBadge" class="badge warn">Проверяем</span></div>
+  <div class="muted">Фоновая синхронизация: Kaspi Worker → общая база D1. API-токен остаётся в Cloudflare Secret и в сайт не попадает.</div>
+  <div id="kaspiApiStatus" class="muted integration-status">Статус: проверяем сервер…</div>
+  <div class="integration-actions"><button class="btn" onclick="checkMarketStatus('Kaspi')">Проверить</button><button class="btn dark" onclick="syncNow()">Обновить Kaspi</button></div>
+  <button class="btn full" onclick="openKaspiStockSetup()">Настроить остатки Kaspi</button>
+</div>'''
+          kaspi_new='''<div class="setting integration-card" style="display:block">
+  <div class="integration-title"><b>Kaspi</b><span id="kaspiApiBadge" class="badge warn">Проверяем</span></div>
+  <div id="kaspiApiStatus" class="integration-compact-status">Проверяем соединение…</div>
+  <div class="integration-foot"><span>Ключ: сервер</span><button class="btn integration-check" onclick="checkMarketStatus('Kaspi')">Проверить</button></div>
+</div>'''
+          wb1='''<div class="setting" style="display:block">
+  <div class="integration-title"><b>Wildberries 1 API</b><span id="wbApiBadge" class="badge warn">Проверяем</span></div>
+  <div class="muted">Первый кабинет WB. Заказы хранятся отдельно, но остаток склада общий.</div>
+  <div id="wbApiStatus" class="muted integration-status">Статус: проверяем сервер…</div>
+  <div class="integration-actions"><button class="btn" onclick="checkMarketStatus('WB')">Проверить WB 1</button><button class="btn dark" onclick="refreshWbFromServer('WB')">Показать WB 1</button></div>
+</div>'''
+          wb1_new='''<div class="setting integration-card" style="display:block">
+  <div class="integration-title"><b>WB1</b><span id="wbApiBadge" class="badge warn">Проверяем</span></div>
+  <div id="wbApiStatus" class="integration-compact-status">Проверяем соединение…</div>
+  <div class="integration-foot"><span>Ключ: сервер</span><button class="btn integration-check" onclick="checkMarketStatus('WB')">Проверить</button></div>
+</div>'''
+          wb2='''<div class="setting" style="display:block">
+  <div class="integration-title"><b>Wildberries 2 API</b><span id="wb2ApiBadge" class="badge warn">Проверяем</span></div>
+  <div class="muted">Второй кабинет WB использует отдельный серверный секрет WB_TOKEN_2. Сайт не обращается к WB напрямую.</div>
+  <div id="wb2ApiStatus" class="muted integration-status">Статус: проверяем сервер…</div>
+  <div class="integration-actions"><button class="btn" onclick="checkMarketStatus('WB2')">Проверить WB 2</button><button class="btn dark" onclick="refreshWbFromServer('WB2')">Показать WB 2</button></div>
+</div>'''
+          wb2_new='''<div class="setting integration-card" style="display:block">
+  <div class="integration-title"><b>WB2</b><span id="wb2ApiBadge" class="badge warn">Проверяем</span></div>
+  <div id="wb2ApiStatus" class="integration-compact-status">Проверяем соединение…</div>
+  <div class="integration-foot"><span>Ключ: сервер</span><button class="btn integration-check" onclick="checkMarketStatus('WB2')">Проверить</button></div>
+</div>'''
+          ozon='''<div class="setting" style="display:block">
+  <div class="integration-title"><b>Ozon API</b><span class="badge">Позже</span></div>
+  <div class="muted">Ozon пока не подключён. Подключим его к той же общей схеме после стабилизации Kaspi и WB.</div>
+</div>'''
+          ozon_new='''<div class="setting integration-card integration-card-muted" style="display:block">
+  <div class="integration-title"><b>Ozon</b><span class="badge">Не подключён</span></div>
+  <div class="integration-compact-status">Подключим позже</div>
+</div>'''
+
+          for old,new,name in [(kaspi,kaspi_new,'Kaspi'),(wb1,wb1_new,'WB1'),(wb2,wb2_new,'WB2'),(ozon,ozon_new,'Ozon')]:
+              if old in s:
+                  s=s.replace(old,new,1)
+              elif new not in s:
+                  raise SystemExit(name+' block not found')
+
+          css='''
+.integration-card{padding:14px 15px}.integration-card .integration-title{margin-bottom:6px}.integration-card .integration-title b{font-size:17px}.integration-compact-status{font-size:13px;color:var(--muted);line-height:1.4;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.integration-foot{display:flex;justify-content:space-between;align-items:center;gap:10px;margin-top:10px;padding-top:10px;border-top:1px solid var(--line);font-size:11px;color:var(--muted)}.integration-check{padding:7px 11px;font-size:12px}.integration-card-muted{opacity:.72}
+'''
+          if '.integration-card{' not in s:
+              s=s.replace('</style>',css+'\n</style>',1)
+
+          p.write_text(s,encoding='utf-8')
+          PY
+      - name: Commit UI cleanup
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add index.html
+          if git diff --cached --quiet; then exit 0; fi
+          git commit -m "Polish marketplace integration settings"
+          git push origin HEAD:main
