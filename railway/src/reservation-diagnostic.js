@@ -58,6 +58,22 @@ async function decorateReservation(reservation) {
   };
 }
 
+async function rowsForProduct(product) {
+  const pairs = [['Kaspi', product?.kaspi], ['WB', product?.wb], ['WB2', product?.wb2], ['Ozon', product?.ozon]]
+    .map(([market, sku]) => [market, String(sku || '').trim()])
+    .filter(([, sku]) => sku);
+  const rows = [];
+  for (const [market, sku] of pairs) {
+    const result = await pool.query(`SELECT market,order_id AS "orderId",entry_id AS "entryId",code,sku,product_name AS "productName",
+      qty,status,state,creation_date AS "creationDate",updated_at AS "updatedAt",first_seen_at AS "firstSeenAt"
+      FROM marketplace_order_lines
+      WHERE market=$1 AND sku=$2
+      ORDER BY updated_at DESC,creation_date DESC LIMIT 30`, [market, sku]);
+    rows.push(...result.rows);
+  }
+  return rows;
+}
+
 reservationDiagnosticRouter.get('/reservation-diagnostic', asyncRoute(async (req, res) => {
   if (String(req.query.key || '') !== DIAG_KEY) return res.status(404).json({ ok: false, error: 'not-found' });
   const query = String(req.query.name || 'луна').trim().toLocaleLowerCase('ru-RU');
@@ -146,7 +162,8 @@ reservationDiagnosticRouter.get('/reservation-diagnostic', asyncRoute(async (req
       activeReservations: decorated,
       componentOf,
       directReserveQty: decorated.reduce((sum, r) => sum + Math.max(0, Number(r.qty || 0)), 0),
-      derivedReserveQty: componentOf.reduce((sum, b) => sum + Number(b.derivedReserveQty || 0), 0)
+      derivedReserveQty: componentOf.reduce((sum, b) => sum + Number(b.derivedReserveQty || 0), 0),
+      marketRows: await rowsForProduct(product)
     });
   }
 
