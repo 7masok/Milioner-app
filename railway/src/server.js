@@ -8,7 +8,6 @@ import { warehouseRouter } from './warehouse.js';
 import { ordersRouter } from './orders.js';
 import { reportsRouter } from './reports.js';
 import { kaspiLiveReportRouter } from './kaspi-live-report.js';
-import { reservationDiagnosticRouter } from './reservation-diagnostic.js';
 import { stockRouter, kaspiFeedHandler } from './stock.js';
 import { startKaspiSyncLoop, syncKaspiOrders } from './kaspi-sync.js';
 import { startKaspiReservationRefreshLoop } from './kaspi-reservation-refresh.js';
@@ -90,7 +89,6 @@ app.post('/api/wb-sync-import', requireTrustedOrigin, async (req, res, next) => 
   } catch (error) { next(error); }
 });
 
-app.use('/api', reservationDiagnosticRouter);
 app.use('/api', warehouseRescueRouter);
 app.use('/api', warehouseRouter);
 app.use('/api', ordersRouter);
