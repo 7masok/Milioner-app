@@ -2,12 +2,12 @@ import { config } from './config.js';
 import { pool } from './db.js';
 
 const DEFAULT_WB_WORKER = 'https://wb-sync.7masok.workers.dev';
-const WB_ORDERS_URL = 'https://statistics-api.wildberries.ru/api/v1/supplier/orders';
-const SYNC_INTERVAL_MS = 30 * 60 * 1000;
-const STARTUP_SYNC_DELAY_MS = 60 * 1000;
-const FETCH_TIMEOUT_MS = 30_000;
+const WB_NEW_ORDERS_URL = 'https://marketplace-api.wildberries.ru/api/v3/orders/new';
+const SYNC_INTERVAL_MS = 60 * 1000;
+const STARTUP_SYNC_DELAY_MS = 3 * 1000;
+const FETCH_TIMEOUT_MS = 20_000;
 let syncInFlight = null;
-let wbRetryAt = 0;
+const retryAtByMarket = new Map();
 
 function baseUrl() {
   return String(config.wbWorkerUrl || DEFAULT_WB_WORKER).trim().replace(/\/$/, '');
@@ -16,6 +16,11 @@ function baseUrl() {
 function n(value, fallback = 0) {
   const x = Number(value);
   return Number.isFinite(x) ? x : fallback;
+}
+
+function money100(value, fallback = 0) {
+  const x = Number(value);
+  return Number.isFinite(x) ? x / 100 : fallback;
 }
 
 function ts(value) {
@@ -46,18 +51,19 @@ function pickOrders(data) {
 function normalizeLine(order, line, index) {
   const src = line || {};
   const sku = String(
-    src.merchantCode ?? src.sku ?? src.article ?? src.vendorCode ?? src.supplierArticle ?? src.nmId ??
-    order?.merchantCode ?? order?.sku ?? order?.article ?? order?.vendorCode ?? order?.supplierArticle ?? order?.nmId ?? ''
+    src.article ?? src.vendorCode ?? src.supplierArticle ?? src.merchantCode ?? src.sku ??
+    order?.article ?? order?.vendorCode ?? order?.supplierArticle ?? order?.merchantCode ?? order?.sku ??
+    src.nmId ?? order?.nmId ?? ''
   ).trim();
   const qty = Math.max(1, n(src.quantity ?? src.qty ?? order?.quantity ?? order?.qty ?? 1, 1));
+
+  const marketplacePrice = src.convertedFinalPrice ?? order?.convertedFinalPrice ?? src.finalPrice ?? order?.finalPrice;
+  const legacyPrice = src.unitPrice ?? src.priceWithDisc ?? src.finishedPrice ?? order?.unitPrice ?? order?.priceWithDisc ?? order?.finishedPrice;
+  const unitPrice = marketplacePrice != null ? money100(marketplacePrice, 0) : n(legacyPrice ?? src.price ?? order?.price ?? 0, 0);
   const explicitTotal = n(src.totalPrice ?? order?.totalPrice ?? 0, 0);
-  const unitPrice = n(
-    src.unitPrice ?? src.convertedFinalPrice ?? src.convertedPrice ?? src.finalPrice ?? src.finishedPrice ?? src.priceWithDisc ?? src.price ??
-    order?.unitPrice ?? order?.convertedFinalPrice ?? order?.convertedPrice ?? order?.finalPrice ?? order?.finishedPrice ?? order?.priceWithDisc ?? order?.price ??
-    (qty ? explicitTotal / qty : 0), 0
-  );
+
   return {
-    entryId: String(src.entryId ?? src.id ?? src.srid ?? order?.entryId ?? order?.id ?? order?.srid ?? `${order?.orderId || order?.orderUid || 'wb'}-${index}`),
+    entryId: String(src.id ?? order?.id ?? src.entryId ?? src.srid ?? order?.entryId ?? order?.srid ?? `${order?.orderId || order?.orderUid || 'wb'}-${index}`),
     sku,
     productName: String(src.productName ?? src.name ?? src.subject ?? order?.productName ?? order?.name ?? order?.subject ?? ''),
     qty,
@@ -67,7 +73,8 @@ function normalizeLine(order, line, index) {
 }
 
 function normalizeOrder(raw, index) {
-  const orderId = String(raw?.gNumber ?? raw?.orderId ?? raw?.id ?? raw?.orderUid ?? raw?.rid ?? raw?.srid ?? '').trim();
+  // Marketplace API assembly-order ID is the short number shown in the WB seller UI.
+  const orderId = String(raw?.id ?? raw?.orderId ?? raw?.orderID ?? raw?.orderUid ?? raw?.gNumber ?? raw?.rid ?? raw?.srid ?? '').trim();
   if (!orderId) return null;
   const lines = Array.isArray(raw?.lines) && raw.lines.length ? raw.lines : [raw];
   const market = normalizeMarket(raw?.market ?? raw?.account ?? raw?.seller ?? raw?.cabinet ?? raw?.shop);
@@ -75,10 +82,10 @@ function normalizeOrder(raw, index) {
   return {
     market,
     orderId,
-    code: String(raw?.gNumber ?? raw?.orderNumber ?? raw?.code ?? raw?.orderUid ?? raw?.rid ?? raw?.srid ?? raw?.id ?? orderId),
-    status: String(raw?.status ?? raw?.supplierStatus ?? raw?.wbStatus ?? (cancelled ? 'CANCELLED' : 'NEW')),
-    state: String(raw?.state ?? raw?.deliveryType ?? raw?.warehouseType ?? raw?.warehouseName ?? 'FBS'),
-    creationDate: ts(raw?.creationDate ?? raw?.createdAt ?? raw?.date ?? raw?.lastChangeDate),
+    code: String(raw?.id ?? raw?.orderId ?? raw?.orderID ?? raw?.orderNumber ?? raw?.code ?? orderId),
+    status: String(raw?.supplierStatus ?? raw?.status ?? raw?.wbStatus ?? (cancelled ? 'CANCELLED' : 'NEW')),
+    state: String(raw?.deliveryType ?? raw?.state ?? raw?.warehouseType ?? raw?.warehouseName ?? 'FBS'),
+    creationDate: ts(raw?.createdAt ?? raw?.creationDate ?? raw?.date ?? raw?.lastChangeDate),
     lines: lines.map((line, i) => normalizeLine(raw, line, i)).filter(Boolean),
     raw,
     index
@@ -88,24 +95,23 @@ function normalizeOrder(raw, index) {
 function retryAtFromHeader(value) {
   const raw = String(value || '').trim();
   if (!raw) return Date.now() + 60_000;
-
   const numeric = Number(raw);
   if (Number.isFinite(numeric) && numeric > 0) {
     if (numeric > 1e12) return numeric;
     if (numeric > 1e9) return numeric * 1000;
     return Date.now() + numeric * 1000;
   }
-
   const parsed = Date.parse(raw);
   return Number.isFinite(parsed) ? parsed : Date.now() + 60_000;
 }
 
-async function fetchJson(url, headers = {}) {
-  if (Date.now() < wbRetryAt) {
-    const seconds = Math.max(1, Math.ceil((wbRetryAt - Date.now()) / 1000));
-    const error = new Error(`WB 429: rate limit active, retry in ${seconds}s`);
+async function fetchJson(url, headers = {}, market = 'WB') {
+  const retryAt = Number(retryAtByMarket.get(market) || 0);
+  if (Date.now() < retryAt) {
+    const seconds = Math.max(1, Math.ceil((retryAt - Date.now()) / 1000));
+    const error = new Error(`WB ${market} 429: retry in ${seconds}s`);
     error.status = 429;
-    error.retryAt = wbRetryAt;
+    error.retryAt = retryAt;
     throw error;
   }
 
@@ -118,60 +124,37 @@ async function fetchJson(url, headers = {}) {
     try { data = text ? JSON.parse(text) : {}; } catch {}
 
     if (response.status === 429) {
-      wbRetryAt = retryAtFromHeader(response.headers.get('x-ratelimit-retry') || response.headers.get('retry-after'));
-      const seconds = Math.max(1, Math.ceil((wbRetryAt - Date.now()) / 1000));
+      const next = retryAtFromHeader(response.headers.get('x-ratelimit-retry') || response.headers.get('retry-after'));
+      retryAtByMarket.set(market, next);
+      const seconds = Math.max(1, Math.ceil((next - Date.now()) / 1000));
       const detail = data?.detail || data?.error || data?.message || text || 'rate limit exceeded';
-      const error = new Error(`WB 429: ${String(detail).slice(0, 500)}; retry in ${seconds}s`);
+      const error = new Error(`WB ${market} 429: ${String(detail).slice(0, 400)}; retry in ${seconds}s`);
       error.status = 429;
-      error.retryAt = wbRetryAt;
+      error.retryAt = next;
       throw error;
     }
 
     if (!response.ok) {
       const detail = data?.detail || data?.error || data?.message || text || response.statusText;
-      const error = new Error(`WB ${response.status}: ${String(detail).slice(0, 700)}`);
+      const error = new Error(`WB ${market} ${response.status}: ${String(detail).slice(0, 700)}`);
       error.status = response.status;
       throw error;
     }
 
-    wbRetryAt = 0;
+    retryAtByMarket.delete(market);
     return data;
   } catch (error) {
-    if (error?.name === 'AbortError') throw new Error(`WB timeout after ${FETCH_TIMEOUT_MS / 1000}s`);
+    if (error?.name === 'AbortError') throw new Error(`WB ${market} timeout after ${FETCH_TIMEOUT_MS / 1000}s`);
     throw error;
   } finally {
     clearTimeout(timer);
   }
 }
 
-async function fetchOfficialAccount(token, market, days) {
-  const dateFrom = new Date(Date.now() - Math.max(1, days) * 24 * 60 * 60 * 1000).toISOString();
-  const url = `${WB_ORDERS_URL}?dateFrom=${encodeURIComponent(dateFrom)}&flag=0`;
-  const data = await fetchJson(url, { Authorization: token });
-  if (!Array.isArray(data)) throw new Error(`WB ${market} returned an unexpected payload`);
-  return data.map(row => ({ ...row, market }));
-}
-
-async function fetchOfficialWb(days) {
-  const accounts = [
-    { token: String(config.wbToken || '').trim(), market: 'WB' },
-    { token: String(config.wbToken2 || '').trim(), market: 'WB2' }
-  ].filter(x => x.token);
-  if (!accounts.length) return null;
-
-  const combined = [];
-  for (const account of accounts) {
-    const rows = await fetchOfficialAccount(account.token, account.market, days);
-    combined.push(...rows);
-  }
-  return combined;
-}
-
-async function fetchWorker(days) {
-  const url = `${baseUrl()}/wb/sync?days=${encodeURIComponent(days)}`;
-  const data = await fetchJson(url);
-  if (data?.ok === false) throw new Error(data?.error || data?.message || 'WB Worker failed');
-  return data;
+async function fetchMarketplaceAccount(token, market) {
+  const data = await fetchJson(WB_NEW_ORDERS_URL, { Authorization: token }, market);
+  if (!Array.isArray(data?.orders)) throw new Error(`WB ${market} returned an unexpected Marketplace payload`);
+  return data.orders.map(row => ({ ...row, market }));
 }
 
 async function upsertOrder(order) {
@@ -199,54 +182,81 @@ async function createRun(market) {
   return r.rows[0].id;
 }
 
-async function persistPayload(payload, source = 'WB') {
-  const rows = pickOrders(payload);
-  if (!rows.length) return { ok: true, finishedAt: Date.now(), newestOrderAt: 0, markets: {}, upstream: source };
-  const runs = new Map();
-  const counts = new Map();
+async function persistAccountRows(rows, market, source) {
+  const runId = await createRun(market);
+  let count = 0;
   let newestOrderAt = 0;
   try {
     for (let i = 0; i < rows.length; i++) {
-      const order = normalizeOrder(rows[i], i);
+      const order = normalizeOrder({ ...rows[i], market }, i);
       if (!order) continue;
-      if (!runs.has(order.market)) runs.set(order.market, await createRun(order.market));
       await upsertOrder(order);
-      counts.set(order.market, (counts.get(order.market) || 0) + Math.max(1, order.lines.length));
+      count += Math.max(1, order.lines.length);
       newestOrderAt = Math.max(newestOrderAt, Number(order.creationDate) || 0);
     }
     const finishedAt = Date.now();
-    for (const [market, runId] of runs) {
-      await pool.query("UPDATE sync_runs SET finished_at=$1,ok=1,items=$2,error='' WHERE id=$3", [finishedAt, counts.get(market) || 0, runId]);
-    }
-    return { ok: true, finishedAt, newestOrderAt, markets: Object.fromEntries(counts), upstream: source };
+    await pool.query("UPDATE sync_runs SET finished_at=$1,ok=1,items=$2,error='' WHERE id=$3", [finishedAt, count, runId]);
+    return { ok: true, market, finishedAt, newestOrderAt, items: count, upstream: source };
   } catch (error) {
-    const message = String(error?.message || error).slice(0, 1000);
-    if (!runs.size) runs.set('WB', await createRun('WB'));
-    for (const [, runId] of runs) {
-      await pool.query('UPDATE sync_runs SET finished_at=$1,ok=0,error=$2 WHERE id=$3', [Date.now(), message, runId]).catch(() => {});
-    }
+    await pool.query('UPDATE sync_runs SET finished_at=$1,ok=0,error=$2 WHERE id=$3', [Date.now(), String(error?.message || error).slice(0, 1000), runId]).catch(() => {});
     throw error;
   }
 }
 
+async function recordFailedRun(market, error) {
+  const runId = await createRun(market);
+  await pool.query('UPDATE sync_runs SET finished_at=$1,ok=0,error=$2 WHERE id=$3', [Date.now(), String(error?.message || error).slice(0, 1000), runId]).catch(() => {});
+}
+
+async function fetchWorker(days) {
+  const url = `${baseUrl()}/wb/sync?days=${encodeURIComponent(days)}`;
+  return fetchJson(url, {}, 'WB');
+}
+
 export async function importWbPayload(payload) {
-  return persistPayload(payload, 'WB Worker via browser fallback');
+  const rows = pickOrders(payload);
+  const grouped = new Map();
+  for (const raw of rows) {
+    const market = normalizeMarket(raw?.market);
+    if (!grouped.has(market)) grouped.set(market, []);
+    grouped.get(market).push(raw);
+  }
+  const results = [];
+  for (const [market, marketRows] of grouped) results.push(await persistAccountRows(marketRows, market, 'WB Worker via browser fallback'));
+  return { ok: true, results };
 }
 
 export async function syncWbOrders({ days = 2 } = {}) {
   if (syncInFlight) return syncInFlight;
   syncInFlight = (async () => {
-    try {
-      const direct = await fetchOfficialWb(days);
-      if (direct) return await persistPayload(direct, 'Wildberries official API');
+    const accounts = [
+      { token: String(config.wbToken || '').trim(), market: 'WB' },
+      { token: String(config.wbToken2 || '').trim(), market: 'WB2' }
+    ].filter(x => x.token);
+
+    if (!accounts.length) {
       const payload = await fetchWorker(days);
-      return await persistPayload(payload, baseUrl());
-    } catch (error) {
-      const wrapped = new Error(String(error?.message || error).slice(0, 1000));
-      wrapped.status = Number(error?.status) || 502;
-      if (error?.retryAt) wrapped.retryAt = error.retryAt;
-      throw wrapped;
+      return importWbPayload(payload);
     }
+
+    const results = [];
+    let firstError = null;
+    for (const account of accounts) {
+      try {
+        const rows = await fetchMarketplaceAccount(account.token, account.market);
+        results.push(await persistAccountRows(rows, account.market, 'Wildberries Marketplace API /api/v3/orders/new'));
+      } catch (error) {
+        await recordFailedRun(account.market, error).catch(() => {});
+        firstError ||= error;
+        results.push({ ok: false, market: account.market, error: String(error?.message || error) });
+      }
+    }
+
+    if (results.some(x => x.ok)) return { ok: true, results };
+    const wrapped = new Error(String(firstError?.message || 'WB sync failed').slice(0, 1000));
+    wrapped.status = Number(firstError?.status) || 502;
+    if (firstError?.retryAt) wrapped.retryAt = firstError.retryAt;
+    throw wrapped;
   })();
   try { return await syncInFlight; } finally { syncInFlight = null; }
 }
