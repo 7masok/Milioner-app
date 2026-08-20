@@ -8,6 +8,7 @@ import { ordersRouter } from './orders.js';
 import { reportsRouter } from './reports.js';
 import { stockRouter, kaspiFeedHandler } from './stock.js';
 import { startKaspiSyncLoop, syncKaspiOrders } from './kaspi-sync.js';
+import { startWbSyncLoop, syncWbOrders } from './wb-sync.js';
 
 assertRuntimeConfig();
 const app = express();
@@ -45,8 +46,35 @@ app.get('/api/kaspi-sync-status', requireTrustedOrigin, async (_req, res, next) 
   } catch (error) { next(error); }
 });
 
+app.get('/api/wb-sync-status', requireTrustedOrigin, async (_req, res, next) => {
+  try {
+    const rows = await pool.query(`SELECT market,
+      MAX(finished_at) FILTER (WHERE ok=1) AS last_success_at,
+      MAX(started_at) AS last_attempt_at
+      FROM sync_runs WHERE market IN ('WB','WB2') GROUP BY market ORDER BY market`);
+    const latest = await pool.query(`SELECT DISTINCT ON (market) market,id,started_at,finished_at,ok,items,error
+      FROM sync_runs WHERE market IN ('WB','WB2') ORDER BY market,id DESC`);
+    const newest = await pool.query(`SELECT market,MAX(creation_date) AS newest_order_at,COUNT(*)::bigint AS lines
+      FROM marketplace_order_lines WHERE market IN ('WB','WB2') GROUP BY market ORDER BY market`);
+    res.json({
+      ok: true,
+      architecture: 'Railway -> WB Worker -> PostgreSQL',
+      worker: String(config.wbWorkerUrl || 'https://wb-sync.7masok.workers.dev'),
+      status: rows.rows,
+      latest: latest.rows,
+      newestOrders: newest.rows,
+      serverTime: Date.now()
+    });
+  } catch (error) { next(error); }
+});
+
 app.post('/api/kaspi-sync-now', requireTrustedOrigin, async (req, res, next) => {
   try { res.json(await syncKaspiOrders({ days: Math.max(1, Math.min(14, Number(req.body?.days || 2) || 2)) })); }
+  catch (error) { next(error); }
+});
+
+app.post('/api/wb-sync-now', requireTrustedOrigin, async (req, res, next) => {
+  try { res.json(await syncWbOrders({ days: Math.max(1, Math.min(14, Number(req.body?.days || 2) || 2)) })); }
   catch (error) { next(error); }
 });
 
@@ -66,6 +94,7 @@ app.use((error, _req, res, _next) => {
 const server = app.listen(config.port, '0.0.0.0', () => {
   console.log(`millioner Railway API listening on ${config.port}`);
   startKaspiSyncLoop();
+  startWbSyncLoop();
 });
 
 async function shutdown(signal) {
