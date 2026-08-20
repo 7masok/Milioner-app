@@ -78,6 +78,16 @@ function parseWarehouse(raw) {
   }
 }
 
+function publicOrderRow(row) {
+  const { rawJson, ...clean } = row;
+  if (row.market !== 'WB' && row.market !== 'WB2') return clean;
+  let raw = {};
+  try { raw = JSON.parse(String(rawJson || '{}')); } catch {}
+  const number = String(raw?.gNumber ?? raw?.orderNumber ?? '').trim();
+  if (!number) return clean;
+  return { ...clean, orderId: number, code: number };
+}
+
 async function loadWarehouseContext() {
   const warehouse = await pool.query('SELECT payload FROM warehouse_state WHERE id=1');
   const payload = parseWarehouse(warehouse.rows[0]?.payload);
@@ -138,7 +148,7 @@ ordersRouter.get('/orders', asyncRoute(async (req, res) => {
     pool.query(`SELECT o.market,o.order_id AS "orderId",o.code,o.entry_id AS "entryId",o.status,o.state,
       o.creation_date AS "creationDate",o.sku,o.product_name AS "productName",o.qty,o.unit_price AS "unitPrice",
       o.total_price AS "totalPrice",o.seller_delivery_cost AS "sellerDeliveryCost",o.marketplace_fee AS "marketplaceFee",
-      o.fee_source AS "feeSource",resolved.product_id AS "productId",resolved.link_source AS "linkSource"
+      o.fee_source AS "feeSource",o.raw_json AS "rawJson",resolved.product_id AS "productId",resolved.link_source AS "linkSource"
       FROM marketplace_order_lines o
       LEFT JOIN LATERAL (
         SELECT pl.product_id,
@@ -201,5 +211,5 @@ ordersRouter.get('/orders', asyncRoute(async (req, res) => {
       ON CONFLICT(market,sku) DO NOTHING`, [productId, marketName, sku, now]);
   }
 
-  res.json({ ok: true, orders: out });
+  res.json({ ok: true, orders: out.map(publicOrderRow) });
 }));
