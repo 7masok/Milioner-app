@@ -65,7 +65,9 @@ function normalizeLine(order, line, index) {
 }
 
 function normalizeOrder(raw, index) {
-  const orderId = String(raw?.orderId ?? raw?.id ?? raw?.orderUid ?? raw?.rid ?? raw?.srid ?? '').trim();
+  // The official Statistics API uses `srid` as a technical row identifier.
+  // `gNumber` is the human-facing WB order number and is what the UI should show.
+  const orderId = String(raw?.gNumber ?? raw?.orderId ?? raw?.id ?? raw?.orderUid ?? raw?.rid ?? raw?.srid ?? '').trim();
   if (!orderId) return null;
   const lines = Array.isArray(raw?.lines) && raw.lines.length ? raw.lines : [raw];
   const market = normalizeMarket(raw?.market ?? raw?.account ?? raw?.seller ?? raw?.cabinet ?? raw?.shop);
@@ -73,7 +75,7 @@ function normalizeOrder(raw, index) {
   return {
     market,
     orderId,
-    code: String(raw?.code ?? raw?.orderUid ?? raw?.rid ?? raw?.srid ?? raw?.id ?? orderId),
+    code: String(raw?.gNumber ?? raw?.orderNumber ?? raw?.code ?? raw?.orderUid ?? raw?.rid ?? raw?.srid ?? raw?.id ?? orderId),
     status: String(raw?.status ?? raw?.supplierStatus ?? raw?.wbStatus ?? (cancelled ? 'CANCELLED' : 'NEW')),
     state: String(raw?.state ?? raw?.deliveryType ?? raw?.warehouseType ?? raw?.warehouseName ?? 'FBS'),
     creationDate: ts(raw?.creationDate ?? raw?.createdAt ?? raw?.date ?? raw?.lastChangeDate),
@@ -137,6 +139,12 @@ async function fetchWorker(days) {
 async function upsertOrder(order) {
   const now = Date.now();
   for (const line of order.lines) {
+    // Migrate rows written before gNumber support. Their order_id was the technical srid,
+    // while entry_id stays stable, so remove the legacy duplicate before the new upsert.
+    await pool.query(
+      'DELETE FROM marketplace_order_lines WHERE market=$1 AND entry_id=$2 AND order_id<>$3',
+      [order.market, line.entryId, order.orderId]
+    );
     await pool.query(`INSERT INTO marketplace_order_lines
       (market,order_id,code,entry_id,status,state,creation_date,sku,product_name,qty,unit_price,total_price,seller_delivery_cost,marketplace_fee,fee_source,raw_json,first_seen_at,updated_at)
       VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,0,0,'',$13,$14,$14)
