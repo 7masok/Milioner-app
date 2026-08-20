@@ -55,7 +55,8 @@ async function mirrorProducts(client, products) {
       Math.max(0, Number(product?.cost || 0) || 0), Number(product?.totalProfit || 0) || 0,
       Number(product?.createdAt || now) || now, now
     ]);
-    await client.query('DELETE FROM product_links WHERE product_id=$1', [id]);
+    // Do not delete existing product_links here. WB/Kaspi may have historical or
+    // manually linked aliases that are not representable by one field on product.
     for (const [market, field] of [['Kaspi', 'kaspi'], ['WB', 'wb'], ['WB2', 'wb2'], ['Ozon', 'ozon']]) {
       const sku = String(product?.[field] || '').trim();
       if (!sku) continue;
