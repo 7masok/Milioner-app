@@ -1,0 +1,116 @@
+name: Hotfix WB warehouse lock
+on:
+  push:
+    branches: [codex/railway-migration]
+    paths:
+      - '.github/workflows/hotfix-wb-warehouse-lock-20260820.yml'
+permissions:
+  contents: write
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Make WB reservation reconcile transactional
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+          p=Path('railway/src/wb-sync.js')
+          s=p.read_text()
+          old_import="import { pool } from './db.js';"
+          new_import="import { pool, transaction } from './db.js';"
+          if old_import in s:
+              s=s.replace(old_import,new_import,1)
+          elif new_import not in s:
+              raise SystemExit('db import shape unexpected; refusing to patch')
+
+          old="""async function reconcileWarehouseReservations(market, rows) {
+  const currentKeys = new Set();
+  for (let i = 0; i < rows.length; i++) {
+    const order = normalizeOrder({ ...rows[i], market }, i);
+    if (!order) continue;
+    for (const line of order.lines) currentKeys.add(`${market}:${order.orderId}:${line.entryId}`);
+  }
+  const current = await pool.query('SELECT payload,revision FROM warehouse_state WHERE id=1');
+  if (!current.rowCount) return 0;
+  let state = {};
+  try { state = JSON.parse(String(current.rows[0].payload || '{}')); } catch { return 0; }
+  if (!Array.isArray(state.reservations)) return 0;
+  let changed = 0;
+  const now = Date.now();
+  for (const reservation of state.reservations) {
+    if (!reservation?.active || String(reservation.source || '') !== market) continue;
+    const key = String(reservation.externalKey || '');
+    if (!currentKeys.has(key)) {
+      reservation.active = false;
+      reservation.updatedAt = now;
+      reservation.closedReason = 'wb-not-in-current-new-orders';
+      changed++;
+    }
+  }
+  if (!changed) return 0;
+  const revision = Number(current.rows[0].revision || 0) + 1;
+  await pool.query('UPDATE warehouse_state SET payload=$1,revision=$2,updated_at=$3 WHERE id=1', [JSON.stringify(state), revision, now]);
+  console.log(`WB ${market}: deactivated ${changed} stale warehouse reservations`);
+  return changed;
+}
+"""
+          new="""async function reconcileWarehouseReservations(market, rows) {
+  const currentKeys = new Set();
+  for (let i = 0; i < rows.length; i++) {
+    const order = normalizeOrder({ ...rows[i], market }, i);
+    if (!order) continue;
+    for (const line of order.lines) currentKeys.add(`${market}:${order.orderId}:${line.entryId}`);
+  }
+
+  // Serialize with normal warehouse PUTs. Without this lock a background WB
+  // reconcile could read an old snapshot and overwrite a user's newer edit.
+  return transaction(async client => {
+    await client.query('SELECT pg_advisory_xact_lock($1)', [730021]);
+    const current = await client.query('SELECT payload,revision FROM warehouse_state WHERE id=1 FOR UPDATE');
+    if (!current.rowCount) return 0;
+    let state = {};
+    try { state = JSON.parse(String(current.rows[0].payload || '{}')); } catch { return 0; }
+    if (!Array.isArray(state.reservations)) return 0;
+    let changed = 0;
+    const now = Date.now();
+    for (const reservation of state.reservations) {
+      if (!reservation?.active || String(reservation.source || '') !== market) continue;
+      const key = String(reservation.externalKey || '');
+      if (!currentKeys.has(key)) {
+        reservation.active = false;
+        reservation.updatedAt = now;
+        reservation.closedReason = 'wb-not-in-current-new-orders';
+        changed++;
+      }
+    }
+    if (!changed) return 0;
+    const revision = Number(current.rows[0].revision || 0) + 1;
+    await client.query('UPDATE warehouse_state SET payload=$1,revision=$2,updated_at=$3 WHERE id=1', [JSON.stringify(state), revision, now]);
+    console.log(`WB ${market}: deactivated ${changed} stale warehouse reservations`);
+    return changed;
+  });
+}
+"""
+          if old in s:
+              s=s.replace(old,new,1)
+          elif 'pg_advisory_xact_lock' not in s:
+              raise SystemExit('expected WB reconcile block not found; refusing to patch')
+          p.write_text(s)
+          PY
+      - name: Validate server patch
+        run: |
+          set -euo pipefail
+          node --check railway/src/wb-sync.js
+          git diff --check
+          grep -F "pg_advisory_xact_lock" railway/src/wb-sync.js
+          grep -F "FOR UPDATE" railway/src/wb-sync.js
+      - name: Commit hotfix
+        run: |
+          set -euo pipefail
+          git config user.name 'millioner-wb-lock-hotfix'
+          git config user.email 'actions@users.noreply.github.com'
+          git add railway/src/wb-sync.js
+          git commit -m 'Serialize WB reservation reconcile with warehouse saves'
+          git push origin HEAD:codex/railway-migration
