@@ -3,7 +3,9 @@
 
 const sleep=ms=>new Promise(resolve=>setTimeout(resolve,ms));
 const SERVER_MANAGED_CACHE_KEYS=['kaspiOrderFeed','wbOrderFeed','ozonOrderFeed','kaspiOrders','marketOrderState','marketplaceLiveSince'];
+const FAST_CACHE_KEY='milioner_server_snapshot_cache_v2';
 let reportPeriodUiPendingServerSave=false;
+let showingReadOnlyCache=false;
 
 function serverSnapshot(source){
   const input=source&&typeof source==='object'&&!Array.isArray(source)?source:{};
@@ -21,6 +23,18 @@ function serverSnapshot(source){
   return snapshot;
 }
 function snapshotText(source){return JSON.stringify(serverSnapshot(source));}
+function readFastCache(){try{return JSON.parse(localStorage.getItem(FAST_CACHE_KEY)||'null')}catch{return null}}
+function writeFastCache(source,revision,updatedAt){
+  try{
+    const snap=serverSnapshot(source);
+    if(!snap.products.length)return;
+    localStorage.setItem(FAST_CACHE_KEY,JSON.stringify({state:snap,revision:Number(revision||0),updatedAt:Number(updatedAt||Date.now())}));
+  }catch{}
+}
+function setReadOnlyCache(on){
+  showingReadOnlyCache=Boolean(on);
+  document.documentElement?.toggleAttribute('data-warehouse-readonly-cache',showingReadOnlyCache);
+}
 warehouseSnapshot=function(){return serverSnapshot(state)};
 applyWarehouseSnapshot=function(remote){
   state=serverSnapshot(remote);
@@ -46,8 +60,27 @@ applyWarehouseSnapshot=function(remote){
   });
   warehouseLastObservedSnapshot=normalizeWarehouseSnapshot(state);
 };
+
+// Safe instant start: show only a previously server-confirmed snapshot.
+// It is display-only until the current server revision has been fetched.
+const fastCached=readFastCache();
+if(fastCached?.state?.products?.length){
+  applyWarehouseSnapshot(fastCached.state);
+  warehouseRemoteRevision=0;
+  warehouseRemoteUpdatedAt=Number(fastCached.updatedAt||0);
+  warehouseLastCloudSnapshot=serverSnapshot(fastCached.state);
+  warehouseLastSyncedText=snapshotText(fastCached.state);
+  warehouseLocalDirty=false;
+  setReadOnlyCache(true);
+  try{render()}catch{}
+  cloudStatus('последние данные · подключаюсь…','warn');
+}
+
 saveLocalOnly=function(){};
-markWarehouseDirty=function(){warehouseLocalDirty=true;cloudStatus('есть несохранённые изменения','warn')};
+markWarehouseDirty=function(){
+  if(!warehouseRemoteReady||showingReadOnlyCache){warehouseLocalDirty=false;cloudStatus('только просмотр · подключаюсь…','warn');return false}
+  warehouseLocalDirty=true;cloudStatus('есть несохранённые изменения','warn');return true;
+};
 clearWarehouseDirty=function(){warehouseLocalDirty=false};
 async function fetchServer(meta=false,retries=3){
   let lastError=null;
@@ -65,7 +98,7 @@ async function fetchServer(meta=false,retries=3){
 }
 fetchWarehouseCloud=async function(){return fetchServer(false,3)};
 scheduleWarehouseSave=function(delay=350){
-  if(!warehouseRemoteReady)return;
+  if(!warehouseRemoteReady||showingReadOnlyCache)return;
   clearTimeout(warehouseSaveTimer);
   warehouseSaveTimer=setTimeout(()=>pushWarehouseToD1().catch(error=>{
     console.error('server warehouse save failed',error);cloudStatus('изменения не сохранены · повторяю','warn');
@@ -73,13 +106,13 @@ scheduleWarehouseSave=function(delay=350){
   }),delay);
 };
 save=function(){
-  if(!warehouseRemoteReady)return false;
+  if(!warehouseRemoteReady||showingReadOnlyCache){cloudStatus('только просмотр · подключаюсь…','warn');return false}
   stampChangedWarehouseEntities();warehouseLastObservedSnapshot=normalizeWarehouseSnapshot(state);
   if(snapshotText(state)!==warehouseLastSyncedText){state.settings=state.settings||{};state.settings.serverUpdatedAt=Date.now();markWarehouseDirty();scheduleWarehouseSave()}
   return true;
 };
 pushWarehouseToD1=async function(){
-  if(!warehouseRemoteReady||warehouseSaveInFlight||!warehouseLocalDirty)return false;
+  if(!warehouseRemoteReady||showingReadOnlyCache||warehouseSaveInFlight||!warehouseLocalDirty)return false;
   warehouseSaveInFlight=true;cloudStatus('сохраняю на сервер…','warn');
   try{
     const sent=serverSnapshot(state),sentText=JSON.stringify(sent),controller=new AbortController(),timer=setTimeout(()=>controller.abort(),45000);
@@ -89,11 +122,11 @@ pushWarehouseToD1=async function(){
     if(response.status===409){
       const remote=await fetchServer(false,3);warehouseRemoteRevision=Number(remote.revision||0);warehouseRemoteUpdatedAt=Number(remote.updatedAt||0);
       warehouseLastCloudSnapshot=serverSnapshot(remote.state);warehouseLastSyncedText=snapshotText(remote.state);applyWarehouseSnapshot(remote.state);
-      clearWarehouseDirty();render();cloudStatus('обновлено с сервера','ok');return false;
+      clearWarehouseDirty();setReadOnlyCache(false);writeFastCache(remote.state,warehouseRemoteRevision,warehouseRemoteUpdatedAt);render();cloudStatus('обновлено с сервера','ok');return false;
     }
     if(!response.ok||data.ok===false)throw new Error(data.error||('HTTP '+response.status));
     warehouseRemoteRevision=Number(data.revision||warehouseRemoteRevision);warehouseRemoteUpdatedAt=Number(data.updatedAt||Date.now());
-    warehouseLastCloudSnapshot=sent;warehouseLastSyncedText=sentText;
+    warehouseLastCloudSnapshot=sent;warehouseLastSyncedText=sentText;writeFastCache(sent,warehouseRemoteRevision,warehouseRemoteUpdatedAt);
     if(snapshotText(state)===sentText){clearWarehouseDirty();cloudStatus('сохранено на сервере','ok')}else{markWarehouseDirty();scheduleWarehouseSave(50)}
     return true;
   }finally{warehouseSaveInFlight=false}
@@ -103,23 +136,24 @@ pullWarehouseFromD1=async function({force=false}={}){
   warehousePullInFlight=true;if(force)cloudStatus('проверяю сервер…','warn');
   try{
     const meta=await fetchServer(true,2),revision=Number(meta.revision||0);
-    if(!meta.exists){cloudStatus('серверная база недоступна','warn');return false}
-    if(revision<=warehouseRemoteRevision&&warehouseRemoteReady){cloudStatus('сервер подключён','ok');return true}
+    if(!meta.exists){cloudStatus('серверная база недоступна · показаны последние данные','warn');return false}
+    if(revision<=warehouseRemoteRevision&&warehouseRemoteReady){setReadOnlyCache(false);cloudStatus('сервер подключён','ok');return true}
     const remote=await fetchServer(false,3);warehouseRemoteRevision=Number(remote.revision||revision);warehouseRemoteUpdatedAt=Number(remote.updatedAt||0);
     warehouseRemoteReady=true;warehouseLastCloudSnapshot=serverSnapshot(remote.state);warehouseLastSyncedText=snapshotText(remote.state);
-    applyWarehouseSnapshot(remote.state);clearWarehouseDirty();render();cloudStatus('обновлено с сервера','ok');setTimeout(restoreOrderMarketUi,0);return true;
-  }catch(error){console.warn('server warehouse pull failed',error);cloudStatus('сервер временно недоступен','warn');return false}
+    applyWarehouseSnapshot(remote.state);clearWarehouseDirty();setReadOnlyCache(false);writeFastCache(remote.state,warehouseRemoteRevision,warehouseRemoteUpdatedAt);render();cloudStatus('обновлено с сервера','ok');setTimeout(restoreOrderMarketUi,0);return true;
+  }catch(error){console.warn('server warehouse pull failed',error);cloudStatus(fastCached?.state?'сервер недоступен · показаны последние данные':'сервер временно недоступен','warn');return false}
   finally{warehousePullInFlight=false}
 };
 bootstrapWarehouseD1=async function(){
-  warehouseRemoteReady=false;warehouseLocalDirty=false;cloudStatus('загружаю серверную базу…','warn');
+  warehouseRemoteReady=false;warehouseLocalDirty=false;cloudStatus(fastCached?.state?'последние данные · подключаюсь…':'загружаю серверную базу…','warn');
   try{
     const remote=await fetchServer(false,4);if(!remote.exists)throw new Error('Серверная база склада пуста — запись заблокирована до завершения миграции');
     warehouseRemoteRevision=Number(remote.revision||0);warehouseRemoteUpdatedAt=Number(remote.updatedAt||0);
     warehouseLastCloudSnapshot=serverSnapshot(remote.state);warehouseLastSyncedText=snapshotText(remote.state);applyWarehouseSnapshot(remote.state);
-    clearWarehouseDirty();warehouseRemoteReady=true;reportPeriodUiPendingServerSave=false;
+    clearWarehouseDirty();warehouseRemoteReady=true;setReadOnlyCache(false);reportPeriodUiPendingServerSave=false;
+    writeFastCache(remote.state,warehouseRemoteRevision,warehouseRemoteUpdatedAt);
     render();setTimeout(restoreOrderMarketUi,0);cloudStatus('сервер подключён','ok');return {mode:'server-authoritative',revision:warehouseRemoteRevision};
-  }catch(error){warehouseRemoteReady=false;clearWarehouseDirty();console.error('server bootstrap failed',error);cloudStatus('нет связи с сервером · изменения заблокированы','warn');return {mode:'server-unavailable',error:String(error?.message||error)}}
+  }catch(error){warehouseRemoteReady=false;clearWarehouseDirty();setReadOnlyCache(Boolean(fastCached?.state));console.error('server bootstrap failed',error);cloudStatus(fastCached?.state?'сервер недоступен · показаны последние данные':'нет связи с сервером · изменения заблокированы','warn');return {mode:'server-unavailable',error:String(error?.message||error)}}
 };
 startWarehouseCloudWatcher=function(){
   if(warehouseWatchStarted)return;warehouseWatchStarted=true;setInterval(()=>pullWarehouseFromD1(),5000);
@@ -278,7 +312,7 @@ function health(name){
   if(failed)return {cls:'bad',label:'ошибка',last,latest};if(age<=10*60*1000)return {cls:'',label:'есть связь',last,latest};if(age<=30*60*1000)return {cls:'warn',label:'задержка',last,latest};if(last)return {cls:'bad',label:'нет свежей связи',last,latest};return {cls:'off',label:'нет данных',last,latest};
 }
 function paint(name,dotId,timeId){const h=health(name),dot=document.getElementById(dotId),time=document.getElementById(timeId);if(dot){dot.className='dot'+(h.cls?' '+h.cls:'');dot.title=(name==='WB'?'WB1':name)+': '+h.label}if(time)time.textContent=fmt(h.last);return h}
-function compactCloudText(){const el=document.getElementById('cloudStatus');if(!el)return;const raw=String(el.textContent||'').trim().toLowerCase();let short='';if(/сохраня|отправля/.test(raw))short='сохранение…';else if(/подключ|сохранено|обновлено|сервер подключён/.test(raw))short='онлайн';else if(/загружа|проверя|подключение/.test(raw))short='…';else if(/ошиб|нет связи|недоступ/.test(raw))short='ошибка';if(short&&el.textContent!==short)el.textContent=short}
+function compactCloudText(){const el=document.getElementById('cloudStatus');if(!el)return;const raw=String(el.textContent||'').trim().toLowerCase();let short='';if(/сохраня|отправля/.test(raw))short='сохранение…';else if(/подключ|сохранено|обновлено|сервер подключён/.test(raw))short='онлайн';else if(/последние данные/.test(raw))short='кэш';else if(/только просмотр/.test(raw))short='только просмотр';else if(/загружа|проверя/.test(raw))short='…';else if(/ошиб|нет связи|недоступ/.test(raw))short='ошибка';if(short&&el.textContent!==short)el.textContent=short}
 function refresh(){if(!buildCompactStatus())return;paint('Kaspi','dotKaspi','lastSync');paint('WB','dotWB1','wb1Sync');paint('WB2','dotWB2','wb2Sync');compactCloudText()}
 async function details(name){
   const label=name==='WB2'?'WB2':'WB1',h=health(name);let extra='';
