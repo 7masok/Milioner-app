@@ -1,5 +1,10 @@
-// Load preserved Kaspi Ads logic, reservation compatibility, then current helpers.
+// Load the warehouse save guard first, then preserved Kaspi helpers.
 (function(){
+  const saveGuard=document.createElement('script');
+  saveGuard.src='./save-conflict-v1.js?v=20260820-2353';
+  saveGuard.async=false;
+  document.head.appendChild(saveGuard);
+
   const ads=document.createElement('script');
   ads.src='./kaspi-ads-v2-original.js?v=20260820-low-stock-alerts';
   ads.async=false;
