@@ -1,4 +1,4 @@
-import crypto from 'node:crypto';
+                                                                                                                                                                                                                                                                                                                                                                                                                                        import crypto from 'node:crypto';
 import express from 'express';
 import { pool, transaction } from './db.js';
 import { asyncRoute, requireTrustedOrigin, requireWritesEnabled } from './http.js';
@@ -22,6 +22,43 @@ function cleanState(input) {
   result.settings = state.settings && typeof state.settings === 'object' && !Array.isArray(state.settings) ? state.settings : {};
   for (const key of DERIVED_CACHE_KEYS) delete result[key];
   return result;
+}
+
+// A browser can hold an older or partially loaded view of the warehouse.  It
+// must never be able to erase an in-progress shipment merely because that
+// shipment is absent from its snapshot.  Completed purchases are historical
+// data and can still be managed by normal application flows; the statuses
+// below are the live supply pipeline and are deliberately fail-safe.
+const OPEN_PURCHASE_STATUSES = new Set(['to_forwarder', 'to_me', 'at_warehouse']);
+
+function purchaseIdentity(purchase) {
+  const id = String(purchase?.id || '').trim();
+  if (id) return `id:${id}`;
+  return [
+    'fallback',
+    String(purchase?.shipmentId || '').trim(),
+    String(purchase?.productId || '').trim(),
+    String(purchase?.batch || '').trim(),
+    String(purchase?.orderedAt || purchase?.date || '').trim(),
+    String(purchase?.qty || '').trim()
+  ].join('|');
+}
+
+function preserveOpenPurchases(currentState, incomingState) {
+  const existing = Array.isArray(currentState?.purchases) ? currentState.purchases : [];
+  const incoming = Array.isArray(incomingState?.purchases) ? incomingState.purchases : [];
+  const merged = new Map();
+  for (const purchase of incoming) merged.set(purchaseIdentity(purchase), purchase);
+
+  let protectedCount = 0;
+  for (const purchase of existing) {
+    if (!OPEN_PURCHASE_STATUSES.has(String(purchase?.status || ''))) continue;
+    const key = purchaseIdentity(purchase);
+    if (merged.has(key)) continue;
+    merged.set(key, purchase);
+    protectedCount += 1;
+  }
+  return { purchases: [...merged.values()], protectedCount };
 }
 
 async function repairProductLinks(client, products) {
@@ -55,8 +92,8 @@ async function mirrorProducts(client, products) {
       Math.max(0, Number(product?.cost || 0) || 0), Number(product?.totalProfit || 0) || 0,
       Number(product?.createdAt || now) || now, now
     ]);
-    // Do not delete existing product_links here. WB/Kaspi may have historical or
-    // manually linked aliases that are not representable by one field on product.
+    // Keep marketplace aliases: one product may have more than one historical
+    // SKU, while the browser model exposes only one field per marketplace.
     for (const [market, field] of [['Kaspi', 'kaspi'], ['WB', 'wb'], ['WB2', 'wb2'], ['Ozon', 'ozon']]) {
       const sku = String(product?.[field] || '').trim();
       if (!sku) continue;
@@ -75,11 +112,7 @@ warehouseRouter.get('/warehouse-state', requireTrustedOrigin, asyncRoute(async (
   if (!result.rowCount) return res.json({ ok: true, exists: false, revision: 0, updatedAt: null, state: metaOnly ? undefined : null });
   const row = result.rows[0];
   const state = metaOnly ? undefined : parsePayload(row.payload);
-  if (!metaOnly) {
-    // Self-heal normalized marketplace links after migration or a partial sync.
-    // The warehouse snapshot remains authoritative for product -> marketplace SKU mapping.
-    await repairProductLinks(pool, state.products);
-  }
+  if (!metaOnly) await repairProductLinks(pool, state.products);
   res.setHeader('ETag', `"${row.revision}"`);
   res.setHeader('X-Warehouse-Revision', String(row.revision));
   return res.json({
@@ -94,14 +127,22 @@ warehouseRouter.get('/warehouse-state', requireTrustedOrigin, asyncRoute(async (
 warehouseRouter.put('/warehouse-state', requireTrustedOrigin, requireWritesEnabled, asyncRoute(async (req, res) => {
   const baseRevision = Number(req.body?.baseRevision || 0);
   const state = cleanState(req.body?.state);
-  const raw = JSON.stringify(state);
-  if (Buffer.byteLength(raw, 'utf8') > 1_500_000) return res.status(413).json({ ok: false, error: 'Warehouse snapshot is too large' });
 
   const result = await transaction(async client => {
     await client.query('SELECT pg_advisory_xact_lock($1)', [730021]);
-    const current = await client.query('SELECT revision FROM warehouse_state WHERE id=1 FOR UPDATE');
+    const current = await client.query('SELECT payload,revision FROM warehouse_state WHERE id=1 FOR UPDATE');
     const currentRevision = Number(current.rows[0]?.revision || 0);
     if (current.rowCount && baseRevision !== currentRevision) return { conflict: true, revision: currentRevision };
+
+    const preserved = preserveOpenPurchases(parsePayload(current.rows[0]?.payload), state);
+    state.purchases = preserved.purchases;
+    const raw = JSON.stringify(state);
+    if (Buffer.byteLength(raw, 'utf8') > 1_500_000) {
+      const error = new Error('Warehouse snapshot is too large');
+      error.status = 413;
+      throw error;
+    }
+
     const revision = currentRevision + 1;
     const updatedAt = Date.now();
     await client.query(`INSERT INTO warehouse_state(id,payload,revision,updated_at) VALUES(1,$1,$2,$3)
@@ -110,12 +151,12 @@ warehouseRouter.put('/warehouse-state', requireTrustedOrigin, requireWritesEnabl
     await mirrorProducts(client, state.products);
     const sha = crypto.createHash('sha256').update(raw).digest('hex').toUpperCase();
     await client.query('INSERT INTO warehouse_audit(revision,updated_at,payload_sha256,source) VALUES($1,$2,$3,$4)',
-      [revision, updatedAt, sha, 'api']);
-    return { revision, updatedAt };
+      [revision, updatedAt, sha, preserved.protectedCount ? 'api-protected-purchases' : 'api']);
+    return { revision, updatedAt, purchasesProtected: preserved.protectedCount };
   });
   if (result.conflict) return res.status(409).json({ ok: false, error: 'revision-conflict', revision: result.revision });
   res.setHeader('ETag', `"${result.revision}"`);
-  return res.json({ ok: true, ...result, products: state.products.length });
+  return res.json({ ok: true, ...result, products: state.products.length, purchases: state.purchases.length });
 }));
 
 warehouseRouter.post('/warehouse-state-beacon', (_req, res) => res.status(204).end());
