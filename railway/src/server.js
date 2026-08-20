@@ -10,6 +10,7 @@ import { reportsRouter } from './reports.js';
 import { kaspiLiveReportRouter } from './kaspi-live-report.js';
 import { stockRouter, kaspiFeedHandler } from './stock.js';
 import { startKaspiSyncLoop, syncKaspiOrders } from './kaspi-sync.js';
+import { startKaspiReservationRefreshLoop } from './kaspi-reservation-refresh.js';
 import { startWbSyncLoop, syncWbOrders, importWbPayload } from './wb-sync.js';
 
 assertRuntimeConfig();
@@ -106,6 +107,7 @@ app.use((error, _req, res, _next) => {
 const server = app.listen(config.port, '0.0.0.0', () => {
   console.log(`millioner Railway API listening on ${config.port}`);
   startKaspiSyncLoop();
+  startKaspiReservationRefreshLoop();
   startWbSyncLoop();
 });
 
