@@ -56,12 +56,10 @@ function normalizeLine(order, line, index) {
     src.nmId ?? order?.nmId ?? ''
   ).trim();
   const qty = Math.max(1, n(src.quantity ?? src.qty ?? order?.quantity ?? order?.qty ?? 1, 1));
-
   const marketplacePrice = src.convertedFinalPrice ?? order?.convertedFinalPrice ?? src.finalPrice ?? order?.finalPrice;
   const legacyPrice = src.unitPrice ?? src.priceWithDisc ?? src.finishedPrice ?? order?.unitPrice ?? order?.priceWithDisc ?? order?.finishedPrice;
   const unitPrice = marketplacePrice != null ? money100(marketplacePrice, 0) : n(legacyPrice ?? src.price ?? order?.price ?? 0, 0);
   const explicitTotal = n(src.totalPrice ?? order?.totalPrice ?? 0, 0);
-
   return {
     entryId: String(src.id ?? order?.id ?? src.entryId ?? src.srid ?? order?.entryId ?? order?.srid ?? `${order?.orderId || order?.orderUid || 'wb'}-${index}`),
     sku,
@@ -113,7 +111,6 @@ async function fetchJson(url, headers = {}, market = 'WB') {
     error.retryAt = retryAt;
     throw error;
   }
-
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
   try {
@@ -121,7 +118,6 @@ async function fetchJson(url, headers = {}, market = 'WB') {
     const text = await response.text();
     let data = {};
     try { data = text ? JSON.parse(text) : {}; } catch {}
-
     if (response.status === 429) {
       const next = retryAtFromHeader(response.headers.get('x-ratelimit-retry') || response.headers.get('retry-after'));
       retryAtByMarket.set(market, next);
@@ -132,14 +128,12 @@ async function fetchJson(url, headers = {}, market = 'WB') {
       error.retryAt = next;
       throw error;
     }
-
     if (!response.ok) {
       const detail = data?.detail || data?.error || data?.message || text || response.statusText;
       const error = new Error(`WB ${market} ${response.status}: ${String(detail).slice(0, 700)}`);
       error.status = response.status;
       throw error;
     }
-
     retryAtByMarket.delete(market);
     return data;
   } catch (error) {
@@ -159,10 +153,7 @@ async function fetchMarketplaceAccount(token, market) {
 async function upsertOrder(order) {
   const now = Date.now();
   for (const line of order.lines) {
-    await pool.query(
-      'DELETE FROM marketplace_order_lines WHERE market=$1 AND entry_id=$2 AND order_id<>$3',
-      [order.market, line.entryId, order.orderId]
-    );
+    await pool.query('DELETE FROM marketplace_order_lines WHERE market=$1 AND entry_id=$2 AND order_id<>$3', [order.market, line.entryId, order.orderId]);
     await pool.query(`INSERT INTO marketplace_order_lines
       (market,order_id,code,entry_id,status,state,creation_date,sku,product_name,qty,unit_price,total_price,seller_delivery_cost,marketplace_fee,fee_source,raw_json,first_seen_at,updated_at)
       VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,0,0,'',$13,$14,$14)
@@ -185,6 +176,37 @@ async function cleanRecentLegacyStatisticsRows(market) {
   if (result.rowCount) console.log(`WB ${market}: removed ${result.rowCount} recent legacy statistics rows`);
 }
 
+async function reconcileWarehouseReservations(market, rows) {
+  const currentKeys = new Set();
+  for (let i = 0; i < rows.length; i++) {
+    const order = normalizeOrder({ ...rows[i], market }, i);
+    if (!order) continue;
+    for (const line of order.lines) currentKeys.add(`${market}:${order.orderId}:${line.entryId}`);
+  }
+  const current = await pool.query('SELECT payload,revision FROM warehouse_state WHERE id=1');
+  if (!current.rowCount) return 0;
+  let state = {};
+  try { state = JSON.parse(String(current.rows[0].payload || '{}')); } catch { return 0; }
+  if (!Array.isArray(state.reservations)) return 0;
+  let changed = 0;
+  const now = Date.now();
+  for (const reservation of state.reservations) {
+    if (!reservation?.active || String(reservation.source || '') !== market) continue;
+    const key = String(reservation.externalKey || '');
+    if (!currentKeys.has(key)) {
+      reservation.active = false;
+      reservation.updatedAt = now;
+      reservation.closedReason = 'wb-not-in-current-new-orders';
+      changed++;
+    }
+  }
+  if (!changed) return 0;
+  const revision = Number(current.rows[0].revision || 0) + 1;
+  await pool.query('UPDATE warehouse_state SET payload=$1,revision=$2,updated_at=$3 WHERE id=1', [JSON.stringify(state), revision, now]);
+  console.log(`WB ${market}: deactivated ${changed} stale warehouse reservations`);
+  return changed;
+}
+
 async function createRun(market) {
   const r = await pool.query("INSERT INTO sync_runs(market,started_at,ok,items,error) VALUES($1,$2,0,0,'') RETURNING id", [market, Date.now()]);
   return r.rows[0].id;
@@ -202,7 +224,10 @@ async function persistAccountRows(rows, market, source) {
       count += Math.max(1, order.lines.length);
       newestOrderAt = Math.max(newestOrderAt, Number(order.creationDate) || 0);
     }
-    if (source.startsWith('Wildberries Marketplace API')) await cleanRecentLegacyStatisticsRows(market);
+    if (source.startsWith('Wildberries Marketplace API')) {
+      await cleanRecentLegacyStatisticsRows(market);
+      await reconcileWarehouseReservations(market, rows);
+    }
     const finishedAt = Date.now();
     await pool.query("UPDATE sync_runs SET finished_at=$1,ok=1,items=$2,error='' WHERE id=$3", [finishedAt, count, runId]);
     console.log(`WB realtime sync OK ${market}: ${count} items, newest=${newestOrderAt || 0}`);
@@ -243,12 +268,10 @@ export async function syncWbOrders({ days = 2 } = {}) {
       { token: String(config.wbToken || '').trim(), market: 'WB' },
       { token: String(config.wbToken2 || '').trim(), market: 'WB2' }
     ].filter(x => x.token);
-
     if (!accounts.length) {
       const payload = await fetchWorker(days);
       return importWbPayload(payload);
     }
-
     const results = [];
     let firstError = null;
     for (const account of accounts) {
@@ -261,7 +284,6 @@ export async function syncWbOrders({ days = 2 } = {}) {
         results.push({ ok: false, market: account.market, error: String(error?.message || error) });
       }
     }
-
     if (results.some(x => x.ok)) return { ok: true, results };
     const wrapped = new Error(String(firstError?.message || 'WB sync failed').slice(0, 1000));
     wrapped.status = Number(firstError?.status) || 502;
