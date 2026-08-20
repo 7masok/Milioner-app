@@ -1,4 +1,4 @@
-# rerun: global active reservation summary
+# rerun: exact UI reserve contributors
 name: Temporary reservation diagnostic
 on:
   push:
