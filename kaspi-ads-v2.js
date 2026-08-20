@@ -21,7 +21,7 @@
   document.head.appendChild(reservationCompat);
 
   const extra=document.createElement('script');
-  extra.src='./stock-alerts-rescue-v1.js?v=20260820-1732';
+  extra.src='./stock-alerts-rescue-v1.js?v=20260821-0140';
   extra.async=false;
   document.head.appendChild(extra);
 
