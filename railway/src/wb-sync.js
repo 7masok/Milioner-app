@@ -1,5 +1,6 @@
 import { pool } from './db.js';
 import { config } from './config.js';
+import { reconcileWbReservations } from './reservation-reconcile.js';
 
 const WB_API = 'https://marketplace-api.wildberries.ru';
 const SYNC_MS = 10 * 60 * 1000;
@@ -68,7 +69,7 @@ async function fetchOrders(market, token) {
       orderId, code: String(order?.id ?? order?.orderUid ?? orderId), entryId: orderId,
       status: String(status?.supplierStatus || 'new'), state: String(status?.wbStatus || order?.deliveryType || 'fbs'),
       creationDate: timestamp(order?.createdAt), sku: String(order?.article ?? order?.nmId ?? order?.skus?.[0] ?? '').trim(),
-      productName: '', qty: 1, unitPrice: price, totalPrice: price, raw: { order, status }
+      productName: String(order?.article || order?.subject || order?.nmId || ''), qty: 1, unitPrice: price, totalPrice: price, raw: { order, status }
     };
   });
 }
@@ -114,9 +115,15 @@ export async function syncWbOrders(market, { force = false } = {}) {
     try {
       const rows = await fetchOrders(market, token);
       await upsert(market, rows);
+      let reservationReconcile = null;
+      try {
+        reservationReconcile = await reconcileWbReservations(market, now);
+      } catch (error) {
+        console.error(`WB reservation reconciliation failed (${market})`, error);
+      }
       const finishedAt = Date.now();
       await pool.query("UPDATE sync_runs SET finished_at=$1,ok=1,items=$2,error='' WHERE id=$3", [finishedAt, rows.length, runId]);
-      return { ok: true, market, items: rows.length, finishedAt, nextSyncAt: finishedAt + SYNC_MS };
+      return { ok: true, market, items: rows.length, reservationReconcile, finishedAt, nextSyncAt: finishedAt + SYNC_MS };
     } catch (error) {
       const message = String(error?.message || error).slice(0, 2000);
       await pool.query('UPDATE sync_runs SET finished_at=$1,ok=0,error=$2 WHERE id=$3', [Date.now(), message, runId]).catch(() => {});
