@@ -32,13 +32,17 @@ function parseReservationOrderId(market, key) {
 
 async function fetchStatusBatch(market, ids) {
   const token = tokenFor(market);
+  const exactIds = ids.map(x => String(x).trim()).filter(x => /^\d+$/.test(x));
+  if (!exactIds.length) return [];
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
   try {
     const response = await fetch(WB_STATUS_URL, {
       method: 'POST',
       headers: { Authorization: token, Accept: 'application/json', 'Content-Type': 'application/json' },
-      body: JSON.stringify({ orders: ids }),
+      // Build the JSON numeric tokens manually so 64-bit WB order IDs are not
+      // rounded by JavaScript Number before they reach the API.
+      body: `{"orders":[${exactIds.join(',')}]}`,
       cache: 'no-store',
       signal: controller.signal
     });
@@ -55,10 +59,10 @@ async function fetchStatusBatch(market, ids) {
 async function fetchStatuses(market, orderIds) {
   const token = tokenFor(market);
   if (!token || !orderIds.length) return [];
-  const numeric = [...new Set(orderIds.map(x => Number(x)).filter(Number.isFinite))];
+  const exact = [...new Set(orderIds.map(x => String(x).trim()).filter(x => /^\d+$/.test(x)))];
   const out = [];
-  for (let i = 0; i < numeric.length; i += STATUS_BATCH_SIZE) {
-    const rows = await fetchStatusBatch(market, numeric.slice(i, i + STATUS_BATCH_SIZE));
+  for (let i = 0; i < exact.length; i += STATUS_BATCH_SIZE) {
+    const rows = await fetchStatusBatch(market, exact.slice(i, i + STATUS_BATCH_SIZE));
     out.push(...rows);
   }
   return out;
