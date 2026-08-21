@@ -124,10 +124,25 @@ reportsRouter.get('/market-status', asyncRoute(async (_req, res) => {
       pool.query('SELECT MAX(finished_at) AS "lastSuccessAt" FROM sync_runs WHERE market=$1 AND ok=1', [selected]),
       pool.query('SELECT COUNT(*)::bigint AS n FROM marketplace_order_lines WHERE market=$1', [selected])
     ]);
-    result.push({ market: selected, configured: selected !== 'Ozon', latest: latest.rows[0] || null,
-      lastSuccessAt: Number(success.rows[0]?.lastSuccessAt || 0) || null, orderLines: Number(count.rows[0]?.n || 0) });
+    const configured = selected === 'Kaspi' ? true : selected === 'WB' ? Boolean(process.env.WB_TOKEN) : selected === 'WB2' ? Boolean(process.env.WB_TOKEN_2) : false;
+    const lastAttempt = Number(latest.rows[0]?.started_at || 0);
+    result.push({ market: selected, configured, latest: latest.rows[0] || null,
+      lastSuccessAt: Number(success.rows[0]?.lastSuccessAt || 0) || null, orderLines: Number(count.rows[0]?.n || 0),
+      nextSyncAt: (selected === 'WB' || selected === 'WB2') && lastAttempt ? lastAttempt + 10 * 60 * 1000 : null });
   }
   res.json({ ok: true, serverTime: Date.now(), markets: result });
+}));
+
+reportsRouter.get('/wb-sync-status', asyncRoute(async (_req, res) => {
+  const latest = await Promise.all(['WB', 'WB2'].map(async market => {
+    const result = await pool.query('SELECT * FROM sync_runs WHERE market=$1 ORDER BY id DESC LIMIT 1', [market]);
+    return { market, ...(result.rows[0] || { ok: 0, error: `${market === 'WB2' ? 'WB_TOKEN_2' : 'WB_TOKEN'} is not configured` }) };
+  }));
+  const newestOrders = await Promise.all(['WB', 'WB2'].map(async market => {
+    const result = await pool.query('SELECT MAX(creation_date) AS newest_order_at FROM marketplace_order_lines WHERE market=$1', [market]);
+    return { market, newest_order_at: Number(result.rows[0]?.newest_order_at || 0) || null };
+  }));
+  res.json({ ok: true, latest, newestOrders });
 }));
 
 reportsRouter.get('/kaspi-report-orders', asyncRoute(async (req, res) => {
@@ -263,4 +278,3 @@ reportsRouter.get('/wb-realized-status', asyncRoute(async (req, res) => {
     currency: 'KZT', priceComplete: true, payoutEstimated: true, statusTracked: true, coverageComplete: true,
     initializedAt: Number(status.initialized_at || 0), lastSyncAt: Number(status.last_sync_at || 0), recoveryTag: String(status.recovery_tag || ''), source: 'PostgreSQL WB status tracker' });
 }));
-
