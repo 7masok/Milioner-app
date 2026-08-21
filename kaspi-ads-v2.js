@@ -10,6 +10,11 @@
   purchaseDelete.async=false;
   document.head.appendChild(purchaseDelete);
 
+  const purchasePlanIgnore=document.createElement('script');
+  purchasePlanIgnore.src='./purchase-plan-ignore-v1.js?v=20260821-1037';
+  purchasePlanIgnore.async=false;
+  document.head.appendChild(purchasePlanIgnore);
+
   const ads=document.createElement('script');
   ads.src='./kaspi-ads-v2-original.js?v=20260820-low-stock-alerts';
   ads.async=false;
