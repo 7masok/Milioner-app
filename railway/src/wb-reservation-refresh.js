@@ -5,7 +5,7 @@ const WB_STATUS_URL = 'https://marketplace-api.wildberries.ru/api/v3/orders/stat
 const FETCH_TIMEOUT_MS = 20_000;
 const START_DELAY_MS = 5_000;
 const LOOP_INTERVAL_MS = 60_000;
-const STATUS_BATCH_SIZE = 100;
+const STATUS_BATCH_SIZE = 50;
 let refreshInFlight = null;
 
 function tokenFor(market) {
@@ -40,8 +40,6 @@ async function fetchStatusBatch(market, ids) {
     const response = await fetch(WB_STATUS_URL, {
       method: 'POST',
       headers: { Authorization: token, Accept: 'application/json', 'Content-Type': 'application/json' },
-      // Build the JSON numeric tokens manually so 64-bit WB order IDs are not
-      // rounded by JavaScript Number before they reach the API.
       body: `{"orders":[${exactIds.join(',')}]}`,
       cache: 'no-store',
       signal: controller.signal
@@ -49,10 +47,30 @@ async function fetchStatusBatch(market, ids) {
     const text = await response.text();
     let data = {};
     try { data = text ? JSON.parse(text) : {}; } catch {}
-    if (!response.ok) throw new Error(`WB ${market} statuses HTTP ${response.status}: ${String(data?.detail || data?.message || text || '').slice(0, 500)}`);
+    if (!response.ok) {
+      const e = new Error(`WB ${market} statuses HTTP ${response.status}: ${String(data?.detail || data?.message || text || '').slice(0, 500)}`);
+      e.status = response.status;
+      throw e;
+    }
     return Array.isArray(data?.orders) ? data.orders : [];
   } finally {
     clearTimeout(timer);
+  }
+}
+
+async function fetchBatchResilient(market, ids) {
+  if (!ids.length) return [];
+  try {
+    return await fetchStatusBatch(market, ids);
+  } catch (error) {
+    if (ids.length === 1) {
+      console.warn(`WB ${market} status skipped invalid id=${ids[0]}: ${String(error?.message || error)}`);
+      return [];
+    }
+    const mid = Math.ceil(ids.length / 2);
+    const left = await fetchBatchResilient(market, ids.slice(0, mid));
+    const right = await fetchBatchResilient(market, ids.slice(mid));
+    return [...left, ...right];
   }
 }
 
@@ -62,8 +80,7 @@ async function fetchStatuses(market, orderIds) {
   const exact = [...new Set(orderIds.map(x => String(x).trim()).filter(x => /^\d+$/.test(x)))];
   const out = [];
   for (let i = 0; i < exact.length; i += STATUS_BATCH_SIZE) {
-    const rows = await fetchStatusBatch(market, exact.slice(i, i + STATUS_BATCH_SIZE));
-    out.push(...rows);
+    out.push(...await fetchBatchResilient(market, exact.slice(i, i + STATUS_BATCH_SIZE)));
   }
   return out;
 }
