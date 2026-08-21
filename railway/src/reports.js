@@ -30,6 +30,46 @@ function kaspiBounds(days, from, to) {
   return { start: since, end: until };
 }
 
+function groupLiveKaspiOrders(rows) {
+  const byOrder = new Map();
+  for (const row of rows) {
+    const id = String(row.orderId || '');
+    if (!id) continue;
+    let order = byOrder.get(id);
+    if (!order) {
+      order = {
+        id, code: String(row.code || ''), status: String(row.status || ''), state: String(row.state || ''),
+        creationDate: Number(row.creationDate || 0), completionDate: Number(row.creationDate || 0),
+        approvedByBankDate: null, totalPrice: 0, deliveryCostForSeller: 0, entryCount: 0, lines: []
+      };
+      byOrder.set(id, order);
+    }
+    const qty = Math.max(0, Number(row.qty || 0));
+    const total = Math.max(0, Number(row.totalPrice || 0));
+    order.totalPrice += total;
+    order.deliveryCostForSeller += Math.max(0, Number(row.sellerDeliveryCost || 0));
+    order.entryCount += row.entryId === '__pending__' ? 0 : 1;
+    if (row.entryId !== '__pending__') {
+      order.lines.push({
+        entryId: String(row.entryId || ''), merchantCode: String(row.sku || ''),
+        productName: String(row.productName || ''), quantity: qty,
+        basePrice: qty ? total / qty : 0, totalPrice: total
+      });
+    }
+  }
+  return [...byOrder.values()];
+}
+
+function parseCachedKaspiOrders(rows) {
+  return rows.map(row => {
+    let lines = [], entryCount = 0;
+    try { const parsed = JSON.parse(row.linesJson || '[]'); if (Array.isArray(parsed)) lines = parsed; } catch {}
+    try { entryCount = Math.max(0, Number(JSON.parse(row.rawJson || '{}')?.entryCount) || 0); } catch {}
+    const { linesJson, rawJson, ...order } = row;
+    return { ...order, entryCount, lines };
+  });
+}
+
 reportsRouter.get('/orders', asyncRoute(async (req, res) => {
   const selected = market(req.query.market);
   const limit = Math.max(1, Math.min(5000, Number(req.query.limit || 1000) || 1000));
@@ -71,7 +111,12 @@ reportsRouter.get('/market-status', asyncRoute(async (_req, res) => {
 
 reportsRouter.get('/kaspi-report-orders', asyncRoute(async (req, res) => {
   const bounds = kaspiBounds(Number(req.query.days || 1), req.query.from, req.query.to);
-  const [ordersResult, returnsResult, cacheResult, coverageResult] = await Promise.all([
+  const [liveResult, cachedResult, returnsResult, latestSyncResult, coverageResult] = await Promise.all([
+    pool.query(`SELECT order_id AS "orderId",code,entry_id AS "entryId",status,state,creation_date AS "creationDate",
+      sku,product_name AS "productName",qty,total_price AS "totalPrice",seller_delivery_cost AS "sellerDeliveryCost"
+      FROM marketplace_order_lines
+      WHERE market='Kaspi' AND creation_date >= $1 AND creation_date < $2
+      ORDER BY creation_date,order_id,entry_id`, [bounds.start, bounds.end]),
     pool.query(`SELECT order_id AS id,code,status,state,creation_date AS "creationDate",completion_date AS "completionDate",
       approved_by_bank_date AS "approvedByBankDate",total_price AS "totalPrice",delivery_cost_for_seller AS "deliveryCostForSeller",
       lines_json AS "linesJson",raw_json AS "rawJson" FROM kaspi_report_orders
@@ -79,20 +124,21 @@ reportsRouter.get('/kaspi-report-orders', asyncRoute(async (req, res) => {
     pool.query(`SELECT order_id AS id,code,amount,return_date AS "returnDate",original_completion_date AS "originalCompletionDate",
       detected_at AS "detectedAt",date_source AS "dateSource" FROM kaspi_report_returns
       WHERE return_date >= $1 AND return_date < $2 ORDER BY return_date`, [bounds.start, bounds.end]),
-    pool.query('SELECT last_refresh_at AS "lastRefreshAt",last_items AS "lastItems",last_error AS "lastError" FROM kaspi_report_cache_state WHERE id=1'),
-    pool.query('SELECT MIN(completion_date) AS "coverageFrom",MAX(completion_date) AS "coverageTo" FROM kaspi_report_orders WHERE completion_date>0')
+    pool.query(`SELECT finished_at AS "lastRefreshAt",items AS "lastItems",error AS "lastError"
+      FROM sync_runs WHERE market='Kaspi' ORDER BY id DESC LIMIT 1`),
+    pool.query(`SELECT MIN(creation_date) AS "coverageFrom",MAX(creation_date) AS "coverageTo"
+      FROM marketplace_order_lines WHERE market='Kaspi' AND creation_date>0`)
   ]);
-  const orders = ordersResult.rows.map(row => {
-    let lines = [], entryCount = 0;
-    try { const parsed = JSON.parse(row.linesJson || '[]'); if (Array.isArray(parsed)) lines = parsed; } catch {}
-    try { entryCount = Math.max(0, Number(JSON.parse(row.rawJson || '{}')?.entryCount) || 0); } catch {}
-    const { linesJson, rawJson, ...order } = row;
-    return { ...order, entryCount, lines };
-  });
-  const cache = cacheResult.rows[0] || {};
+  // PostgreSQL marketplace lines are the live source. The older report cache
+  // remains only as a history fallback and is overridden order-by-order by
+  // current synchronized data.
+  const ordersById = new Map(parseCachedKaspiOrders(cachedResult.rows).map(order => [String(order.id), order]));
+  for (const order of groupLiveKaspiOrders(liveResult.rows)) ordersById.set(String(order.id), order);
+  const orders = [...ordersById.values()].sort((a, b) => Number(a.completionDate || a.creationDate) - Number(b.completionDate || b.creationDate));
+  const cache = latestSyncResult.rows[0] || {};
   const coverage = coverageResult.rows[0] || {};
   res.json({ ok: true, days: Number(req.query.days || 1), from: req.query.from ? Number(req.query.from) : null,
-    to: req.query.to ? Number(req.query.to) : null, fetchedAt: Date.now(), source: 'PostgreSQL migrated Kaspi cache',
+    to: req.query.to ? Number(req.query.to) : null, fetchedAt: Date.now(), source: 'PostgreSQL synchronized Kaspi orders',
     historyComplete: Number(coverage.coverageFrom || 0) <= bounds.start, coverageFrom: Number(coverage.coverageFrom || 0) || null,
     coverageTo: Number(coverage.coverageTo || 0) || null, lastRefreshAt: Number(cache.lastRefreshAt || 0) || null,
     warnings: cache.lastError ? [String(cache.lastError)] : [], orders, returns: returnsResult.rows });
