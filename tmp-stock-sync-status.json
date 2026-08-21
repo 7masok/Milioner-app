@@ -1,4 +1,12 @@
 {
+  "health": {
+    "ok": true,
+    "service": "millioner-railway-api",
+    "postgres": true,
+    "writesEnabled": true,
+    "marketSyncEnabled": false,
+    "migrationsReady": true
+  },
   "status": {
     "ok": true,
     "enabled": false,
@@ -55,7 +63,7 @@
   },
   "preview": {
     "ok": false,
-    "serverTime": 1787312981176,
+    "serverTime": 1787313254037,
     "results": {
       "WB": {
         "ok": false,
@@ -63,13 +71,11 @@
         "ready": false,
         "reason": "partial-mapping-safety",
         "linked": 140,
-        "mapped": 136,
-        "missing": 4,
+        "mapped": 138,
+        "missing": 2,
         "missingSkus": [
-          "Балерина красная",
           "Кольцо трансформер",
-          "Хулиганы черный",
-          "Робот Витя серый"
+          "Хулиганы черный"
         ]
       },
       "WB2": {
