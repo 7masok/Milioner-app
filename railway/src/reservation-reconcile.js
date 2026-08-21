@@ -2,6 +2,7 @@ import { pool, transaction } from './db.js';
 
 const START_DELAY_MS = 8_000;
 const LOOP_INTERVAL_MS = 30_000;
+const FRESH_ROW_MS = 15 * 60_000;
 let inFlight = null;
 
 function lifecycle(market, status, state = '') {
@@ -46,8 +47,11 @@ export async function reconcileMarketplaceReservations() {
     warehouse.reservations = Array.isArray(warehouse.reservations) ? warehouse.reservations : [];
     warehouse.sales = Array.isArray(warehouse.sales) ? warehouse.sales : [];
 
-    const rows = await client.query(`SELECT market,order_id AS "orderId",entry_id AS "entryId",status,state,sku,qty
-      FROM marketplace_order_lines WHERE market IN ('Kaspi','WB','WB2')`);
+    const now = Date.now();
+    const cutoff = now - FRESH_ROW_MS;
+    const rows = await client.query(`SELECT market,order_id AS "orderId",entry_id AS "entryId",status,state,sku,qty,updated_at AS "updatedAt"
+      FROM marketplace_order_lines
+      WHERE market IN ('Kaspi','WB','WB2') AND updated_at >= $1`, [cutoff]);
     const links = await client.query(`SELECT market,sku,product_id AS "productId" FROM product_links
       WHERE market IN ('Kaspi','WB','WB2')`);
 
@@ -74,8 +78,8 @@ export async function reconcileMarketplaceReservations() {
     }
 
     let changed = 0, activeQty = 0, activeLines = 0, created = 0, closed = 0, updated = 0, unmatched = 0;
-    const now = Date.now();
     const activeKeys = new Set();
+    const byMarket = { Kaspi: { qty: 0, lines: 0 }, WB: { qty: 0, lines: 0 }, WB2: { qty: 0, lines: 0 } };
 
     for (const row of rows.rows) {
       const market = String(row.market || '');
@@ -96,6 +100,7 @@ export async function reconcileMarketplaceReservations() {
         activeKeys.add(`${market}|${key}`);
         activeQty += qty;
         activeLines++;
+        if (byMarket[market]) { byMarket[market].qty += qty; byMarket[market].lines++; }
         if (!existing) {
           const r = { id: rid(), productId, qty, active: true, source: market, externalKey: key, stage: st, date: now, updatedAt: now };
           warehouse.reservations.push(r);
@@ -118,6 +123,20 @@ export async function reconcileMarketplaceReservations() {
       }
     }
 
+    // Auto-reservations are disposable cache derived from freshly refreshed marketplace rows.
+    // If such a row has not been refreshed recently, do not keep it blocking stock forever.
+    for (const r of warehouse.reservations) {
+      if (!r?.active || !String(r.id || '').startsWith('auto-')) continue;
+      const src = String(r.source || ''), key = String(r.externalKey || '');
+      if (!['Kaspi','WB','WB2'].includes(src) || !key) continue;
+      const canonical = `${src}|${key.startsWith(src + ':') ? key : (src === 'Kaspi' ? src + ':' + key : key)}`;
+      if (activeKeys.has(canonical)) continue;
+      r.active = false;
+      r.updatedAt = now;
+      r.closedReason = 'market-row-not-fresh';
+      closed++; changed++;
+    }
+
     // Collapse accidental duplicate active reservations for the same marketplace order line.
     const seen = new Set();
     for (const r of warehouse.reservations) {
@@ -136,7 +155,7 @@ export async function reconcileMarketplaceReservations() {
       const revision = Number(current.rows[0].revision || 0) + 1;
       await client.query('UPDATE warehouse_state SET payload=$1,revision=$2,updated_at=$3 WHERE id=1', [JSON.stringify(warehouse), revision, now]);
     }
-    const summary = { changed, created, updated, closed, activeQty, activeLines, unmatched };
+    const summary = { changed, created, updated, closed, activeQty, activeLines, unmatched, byMarket, freshRows: rows.rowCount };
     console.log(`Marketplace reservation reconcile: ${JSON.stringify(summary)}`);
     return summary;
   });
