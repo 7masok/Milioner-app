@@ -2,7 +2,7 @@ import { pool, transaction } from './db.js';
 
 const START_DELAY_MS = 8_000;
 const LOOP_INTERVAL_MS = 30_000;
-const FRESH_ROW_MS = 15 * 60_000;
+const ACTIVE_LOOKBACK_MS = 3 * 24 * 60 * 60_000;
 let inFlight = null;
 
 function lifecycle(market, status, state = '') {
@@ -48,10 +48,10 @@ export async function reconcileMarketplaceReservations() {
     warehouse.sales = Array.isArray(warehouse.sales) ? warehouse.sales : [];
 
     const now = Date.now();
-    const cutoff = now - FRESH_ROW_MS;
-    const rows = await client.query(`SELECT market,order_id AS "orderId",entry_id AS "entryId",status,state,sku,qty,updated_at AS "updatedAt"
+    const cutoff = now - ACTIVE_LOOKBACK_MS;
+    const rows = await client.query(`SELECT market,order_id AS "orderId",entry_id AS "entryId",status,state,sku,qty,creation_date AS "creationDate"
       FROM marketplace_order_lines
-      WHERE market IN ('Kaspi','WB','WB2') AND updated_at >= $1`, [cutoff]);
+      WHERE market IN ('Kaspi','WB','WB2') AND creation_date >= $1`, [cutoff]);
     const links = await client.query(`SELECT market,sku,product_id AS "productId" FROM product_links
       WHERE market IN ('Kaspi','WB','WB2')`);
 
@@ -90,11 +90,11 @@ export async function reconcileMarketplaceReservations() {
       const st = lifecycle(market, row.status, row.state);
       const sku = String(row.sku || '').trim();
       const productId = linkMap.get(`${market}|${sku}`) || skuMaps[market]?.get(sku) || '';
-      if (!productId) { if (st === 'new') unmatched += qty; continue; }
+      if (!productId) { if (st === 'new' || st === 'transfer') unmatched += qty; continue; }
 
       const existing = byScoped.get(`${market}|${key}`) || (market === 'Kaspi' ? kaspiLegacy.get(keyLegacy) : null);
       const saleExists = sold.has(key) || (market === 'Kaspi' && sold.has(keyLegacy));
-      const shouldReserve = st === 'new' && !saleExists;
+      const shouldReserve = (st === 'new' || st === 'transfer') && !saleExists;
 
       if (shouldReserve) {
         activeKeys.add(`${market}|${key}`);
@@ -118,7 +118,7 @@ export async function reconcileMarketplaceReservations() {
       } else if (existing?.active) {
         existing.active = false;
         existing.updatedAt = now;
-        existing.closedReason = st === 'cancelled' ? 'market-explicit-cancel' : st === 'delivery' ? 'market-explicit-handoff' : st === 'transfer' ? 'market-explicit-transfer' : 'market-sale-exists';
+        existing.closedReason = st === 'cancelled' ? 'market-explicit-cancel' : st === 'delivery' ? 'market-explicit-handoff' : 'market-sale-exists';
         closed++; changed++;
       }
     }
@@ -131,7 +131,7 @@ export async function reconcileMarketplaceReservations() {
       if (activeKeys.has(canonical)) continue;
       r.active = false;
       r.updatedAt = now;
-      r.closedReason = 'market-row-not-fresh';
+      r.closedReason = 'market-row-outside-active-window';
       closed++; changed++;
     }
 
@@ -152,7 +152,7 @@ export async function reconcileMarketplaceReservations() {
       const revision = Number(current.rows[0].revision || 0) + 1;
       await client.query('UPDATE warehouse_state SET payload=$1,revision=$2,updated_at=$3 WHERE id=1', [JSON.stringify(warehouse), revision, now]);
     }
-    const summary = { changed, created, updated, closed, activeQty, activeLines, unmatched, byMarket, freshRows: rows.rowCount };
+    const summary = { changed, created, updated, closed, activeQty, activeLines, unmatched, byMarket, recentRows: rows.rowCount };
     console.log(`Marketplace reservation reconcile: ${JSON.stringify(summary)}`);
     return summary;
   });
