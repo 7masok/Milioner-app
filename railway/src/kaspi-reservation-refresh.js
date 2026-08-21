@@ -3,39 +3,39 @@ import { pool } from './db.js';
 
 const KASPI_API = 'https://kaspi.kz/shop/api/v2';
 const FETCH_TIMEOUT_MS = 15_000;
-const STALE_ROW_MS = 7 * 60 * 1000;
-const START_DELAY_MS = 5_000;
-const LOOP_INTERVAL_MS = 5 * 60 * 1000;
-const MAX_ORDERS_PER_RUN = 200;
-const BETWEEN_REQUESTS_MS = 120;
+const START_DELAY_MS = 4_000;
+const LOOP_INTERVAL_MS = 60_000;
+const EXACT_INTERVAL_MS = 5 * 60_000;
+const LOOKBACK_DAYS = 3;
+const EXACT_LOOKBACK_DAYS = 14;
+const PAGE_SIZE = 100;
+const MAX_PAGES = 4;
+const EXACT_LIMIT = 60;
+const BETWEEN_REQUESTS_MS = 100;
+const SYNC_STATES = ['NEW', 'DELIVERY', 'KASPI_DELIVERY', 'ARCHIVE'];
 let refreshInFlight = null;
+let lastExactAt = 0;
 
 function sleep(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
 
-function parseWarehouse(raw) {
-  try {
-    const value = JSON.parse(String(raw || '{}'));
-    return value && typeof value === 'object' ? value : {};
-  } catch {
-    return {};
-  }
+function n(value, fallback = 0) {
+  const x = Number(value);
+  return Number.isFinite(x) ? x : fallback;
 }
 
-function parseReservationKey(value) {
-  let key = String(value || '').trim();
-  if (key.startsWith('Kaspi:')) key = key.slice('Kaspi:'.length);
-  const split = key.indexOf(':');
-  if (split <= 0 || split >= key.length - 1) return null;
-  return { orderId: key.slice(0, split), entryId: key.slice(split + 1) };
+function timestamp(value) {
+  if (value == null || value === '') return 0;
+  const numeric = Number(value);
+  if (Number.isFinite(numeric) && numeric > 0) return numeric < 1e12 ? numeric * 1000 : numeric;
+  const parsed = Date.parse(String(value));
+  return Number.isFinite(parsed) ? parsed : 0;
 }
 
-function terminalKaspiStatus(status, state = '') {
+function finalKaspiStatus(status) {
   const u = String(status || '').toUpperCase();
-  const st = String(state || '').toUpperCase();
-  return ['CANCELLED', 'CANCELLING', 'RETURNED', 'KASPI_DELIVERY_RETURN_REQUESTED', 'COMPLETED'].includes(u)
-    || st === 'KASPI_DELIVERY_TRANSIT';
+  return ['CANCELLED', 'CANCELLING', 'RETURNED', 'KASPI_DELIVERY_RETURN_REQUESTED', 'COMPLETED'].includes(u);
 }
 
 function kaspiHeaders() {
@@ -48,159 +48,203 @@ function kaspiHeaders() {
   };
 }
 
-async function fetchExactOrderByCode(code) {
+async function fetchJson(url) {
   const headers = kaspiHeaders();
-  if (!headers || !code) return null;
-  const query = new URLSearchParams();
-  query.set('page[number]', '0');
-  query.set('page[size]', '20');
-  query.set('filter[orders][code]', String(code));
+  if (!headers) throw new Error('KASPI_TOKEN is not configured');
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
   try {
-    const response = await fetch(`${KASPI_API}/orders?${query.toString()}`, {
-      headers,
-      cache: 'no-store',
-      signal: controller.signal
-    });
+    const response = await fetch(url, { headers, cache: 'no-store', signal: controller.signal });
     const text = await response.text();
     let data = {};
     try { data = text ? JSON.parse(text) : {}; } catch {}
-    if (!response.ok) throw new Error(`Kaspi exact-order HTTP ${response.status}`);
-    const exact = (Array.isArray(data?.data) ? data.data : []).filter(order =>
-      String(order?.attributes?.code ?? order?.code ?? '').trim() === String(code).trim()
-    );
-    return exact.length === 1 ? exact[0] : null;
+    if (!response.ok) throw new Error(`Kaspi order header HTTP ${response.status}`);
+    return data;
   } finally {
     clearTimeout(timer);
   }
 }
 
-async function reservationCandidates() {
-  const snapshot = await pool.query('SELECT payload FROM warehouse_state WHERE id=1');
-  if (!snapshot.rowCount) return [];
-  const state = parseWarehouse(snapshot.rows[0].payload);
-  const unique = new Map();
-  for (const reservation of Array.isArray(state.reservations) ? state.reservations : []) {
-    if (!reservation?.active || String(reservation.source || '') !== 'Kaspi') continue;
-    const parsed = parseReservationKey(reservation.externalKey);
-    if (!parsed) continue;
-    unique.set(`${parsed.orderId}\u0000${parsed.entryId}`, parsed);
-    if (unique.size >= MAX_ORDERS_PER_RUN) break;
-  }
-  return [...unique.values()];
+function headerFromOrder(raw) {
+  const attrs = raw?.attributes || raw || {};
+  const orderId = String(raw?.id ?? attrs.id ?? '').trim();
+  const code = String(attrs.code ?? raw?.code ?? orderId).trim();
+  const status = String(attrs.status ?? raw?.status ?? '').trim();
+  const sourceState = String(attrs.state ?? raw?.state ?? '').trim();
+  const courierTransmissionDate = timestamp(attrs.courierTransmissionDate ?? raw?.courierTransmissionDate);
+
+  // Kaspi exposes courierTransmissionDate as the actual courier hand-off time.
+  // The existing warehouse lifecycle already treats KASPI_DELIVERY_TRANSIT as
+  // delivered-to-carrier, so derive that state only from this explicit fact.
+  // Cancellation/return/completion always has priority over the hand-off marker.
+  const state = !finalKaspiStatus(status) && courierTransmissionDate > 0
+    ? 'KASPI_DELIVERY_TRANSIT'
+    : sourceState;
+
+  return {
+    orderId,
+    code,
+    status,
+    state,
+    sourceState,
+    courierTransmissionDate,
+    rawJson: JSON.stringify(raw || {})
+  };
 }
 
-async function staleActiveOrderCandidates() {
-  const cutoff = Date.now() - STALE_ROW_MS;
-  const result = await pool.query(`SELECT order_id AS "orderId", code,
-      MAX(updated_at) AS "updatedAt",
-      MAX(status) AS status,
-      MAX(state) AS state
+async function fetchStatePage(state, page) {
+  const end = Date.now();
+  const start = end - LOOKBACK_DAYS * 86_400_000;
+  const query = new URLSearchParams();
+  query.set('page[number]', String(page));
+  query.set('page[size]', String(PAGE_SIZE));
+  query.set('filter[orders][creationDate][$ge]', String(start));
+  query.set('filter[orders][creationDate][$le]', String(end));
+  query.set('filter[orders][state]', state);
+  const data = await fetchJson(`${KASPI_API}/orders?${query.toString()}`);
+  return {
+    orders: Array.isArray(data?.data) ? data.data : [],
+    pageCount: Math.max(1, n(data?.meta?.pageCount ?? data?.meta?.totalPages ?? 1, 1))
+  };
+}
+
+async function applyHeader(header) {
+  if (!header.orderId || !header.status) return { touched: 0, changed: 0 };
+  const before = await pool.query(`SELECT status,state FROM marketplace_order_lines
+    WHERE market='Kaspi' AND order_id=$1 LIMIT 1`, [header.orderId]);
+  if (!before.rowCount) return { touched: 0, changed: 0 };
+  const previous = before.rows[0] || {};
+  const changed = String(previous.status || '') !== header.status || String(previous.state || '') !== header.state;
+  const now = Date.now();
+  const result = await pool.query(`UPDATE marketplace_order_lines
+    SET code=CASE WHEN $1<>'' THEN $1 ELSE code END,
+        status=$2,
+        state=$3,
+        raw_json=$4,
+        updated_at=$5
+    WHERE market='Kaspi' AND order_id=$6`,
+  [header.code, header.status, header.state, header.rawJson, now, header.orderId]);
+  return { touched: result.rowCount || 0, changed: changed ? (result.rowCount || 0) : 0 };
+}
+
+async function broadHeaderRefresh() {
+  const seen = new Set();
+  let fetched = 0, touched = 0, changed = 0, handedOff = 0;
+
+  for (const state of SYNC_STATES) {
+    let pageCount = 1;
+    for (let page = 0; page < Math.min(MAX_PAGES, pageCount); page++) {
+      const result = await fetchStatePage(state, page);
+      pageCount = Math.max(1, Math.min(MAX_PAGES, result.pageCount));
+      for (const raw of result.orders) {
+        const header = headerFromOrder(raw);
+        if (!header.orderId || seen.has(header.orderId)) continue;
+        seen.add(header.orderId);
+        fetched++;
+        const update = await applyHeader(header);
+        touched += update.touched;
+        changed += update.changed;
+        if (header.state === 'KASPI_DELIVERY_TRANSIT') handedOff += update.touched;
+      }
+      if (!result.orders.length) break;
+    }
+  }
+
+  return { seen, fetched, touched, changed, handedOff };
+}
+
+async function fetchExactOrderByCode(code) {
+  if (!code) return null;
+  const query = new URLSearchParams();
+  query.set('page[number]', '0');
+  query.set('page[size]', '20');
+  query.set('filter[orders][code]', String(code));
+  const data = await fetchJson(`${KASPI_API}/orders?${query.toString()}`);
+  const exact = (Array.isArray(data?.data) ? data.data : []).filter(order =>
+    String(order?.attributes?.code ?? order?.code ?? '').trim() === String(code).trim()
+  );
+  return exact.length === 1 ? exact[0] : null;
+}
+
+async function exactCandidates(seen) {
+  const cutoff = Date.now() - EXACT_LOOKBACK_DAYS * 86_400_000;
+  const result = await pool.query(`SELECT DISTINCT ON (order_id)
+      order_id AS "orderId", code, status, state, updated_at AS "updatedAt"
     FROM marketplace_order_lines
-    WHERE market='Kaspi' AND updated_at < $1 AND COALESCE(code,'') <> ''
-    GROUP BY order_id, code
-    ORDER BY MAX(updated_at) ASC
-    LIMIT $2`, [cutoff, MAX_ORDERS_PER_RUN * 2]);
+    WHERE market='Kaspi' AND creation_date >= $1 AND COALESCE(code,'') <> ''
+    ORDER BY order_id, updated_at ASC`, [cutoff]);
+
   return result.rows
-    .filter(row => !terminalKaspiStatus(row.status, row.state))
-    .slice(0, MAX_ORDERS_PER_RUN)
-    .map(row => ({ orderId: String(row.orderId), code: String(row.code) }));
+    .filter(row => !seen.has(String(row.orderId)))
+    .filter(row => !finalKaspiStatus(row.status))
+    .sort((a, b) => Number(a.updatedAt || 0) - Number(b.updatedAt || 0))
+    .slice(0, EXACT_LIMIT);
 }
 
-async function candidateOrders() {
-  const unique = new Map();
+async function exactFallbackRefresh(seen) {
+  const candidates = await exactCandidates(seen);
+  let checked = 0, touched = 0, changed = 0;
 
-  // Primary source: every stale, apparently-active Kaspi order in PostgreSQL.
-  // This catches orders that disappeared from the normal feed even if their
-  // warehouse reservation was already removed or corrupted.
-  for (const row of await staleActiveOrderCandidates()) {
-    unique.set(String(row.orderId), row);
-    if (unique.size >= MAX_ORDERS_PER_RUN) return [...unique.values()];
+  for (const stored of candidates) {
+    let live = null;
+    try { live = await fetchExactOrderByCode(stored.code); }
+    catch (error) {
+      console.warn('Kaspi exact order header refresh failed', String(error?.message || error));
+      await sleep(BETWEEN_REQUESTS_MS);
+      continue;
+    }
+    checked++;
+    if (!live) {
+      // Absence is never interpreted as cancellation.
+      await sleep(BETWEEN_REQUESTS_MS);
+      continue;
+    }
+    const header = headerFromOrder(live);
+    if (!header.orderId || header.orderId !== String(stored.orderId) || header.code !== String(stored.code)) {
+      await sleep(BETWEEN_REQUESTS_MS);
+      continue;
+    }
+    const update = await applyHeader(header);
+    touched += update.touched;
+    changed += update.changed;
+    await sleep(BETWEEN_REQUESTS_MS);
   }
 
-  // Secondary source: active reservations, retained for compatibility with old
-  // snapshots where the matching order row may have unusual timestamps.
-  for (const ref of await reservationCandidates()) {
-    if (unique.has(String(ref.orderId))) continue;
-    const result = await pool.query(`SELECT order_id AS "orderId",code,status,state,updated_at AS "updatedAt"
-      FROM marketplace_order_lines
-      WHERE market='Kaspi' AND order_id=$1 AND entry_id=$2
-      LIMIT 1`, [ref.orderId, ref.entryId]);
-    const row = result.rows[0];
-    if (!row?.code || terminalKaspiStatus(row.status, row.state)) continue;
-    if (Number(row.updatedAt || 0) >= Date.now() - STALE_ROW_MS) continue;
-    unique.set(String(row.orderId), { orderId: String(row.orderId), code: String(row.code) });
-    if (unique.size >= MAX_ORDERS_PER_RUN) break;
-  }
-  return [...unique.values()];
+  return { checked, touched, changed };
 }
 
 export async function refreshStaleKaspiReservationOrders() {
   if (refreshInFlight) return refreshInFlight;
   refreshInFlight = (async () => {
-    if (!String(config.kaspiToken || '').trim()) return { checked: 0, touched: 0, changed: 0 };
-    const candidates = await candidateOrders();
-    let checked = 0, touched = 0, changed = 0, terminal = 0;
-
-    for (const stored of candidates) {
-      let live = null;
-      try { live = await fetchExactOrderByCode(stored.code); }
-      catch (error) {
-        console.warn('Kaspi exact stale-order refresh failed', String(error?.message || error));
-        await sleep(BETWEEN_REQUESTS_MS);
-        continue;
-      }
-      checked++;
-      if (!live) {
-        // No exact, unique answer means no mutation. Never infer cancellation
-        // merely because an order disappeared from the broad sync response.
-        await sleep(BETWEEN_REQUESTS_MS);
-        continue;
-      }
-
-      const liveId = String(live?.id || '').trim();
-      const liveCode = String(live?.attributes?.code ?? live?.code ?? '').trim();
-      if (!liveId || liveId !== String(stored.orderId) || liveCode !== String(stored.code)) {
-        await sleep(BETWEEN_REQUESTS_MS);
-        continue;
-      }
-
-      const status = String(live?.attributes?.status ?? live?.status ?? '').trim();
-      const state = String(live?.attributes?.state ?? live?.state ?? '').trim();
-      if (!status) {
-        await sleep(BETWEEN_REQUESTS_MS);
-        continue;
-      }
-
-      const before = await pool.query(`SELECT status,state FROM marketplace_order_lines
-        WHERE market='Kaspi' AND order_id=$1 AND code=$2 LIMIT 1`, [stored.orderId, stored.code]);
-      const previous = before.rows[0] || {};
-      const isChanged = status !== String(previous.status || '') || state !== String(previous.state || '');
-      const now = Date.now();
-      const result = await pool.query(`UPDATE marketplace_order_lines
-        SET status=$1,state=$2,updated_at=$3
-        WHERE market='Kaspi' AND order_id=$4 AND code=$5`,
-      [status, state, now, stored.orderId, stored.code]);
-      if (result.rowCount) {
-        touched += result.rowCount;
-        if (isChanged) changed += result.rowCount;
-        if (terminalKaspiStatus(status, state)) terminal += result.rowCount;
-      }
-      await sleep(BETWEEN_REQUESTS_MS);
+    if (!String(config.kaspiToken || '').trim()) {
+      return { fetched: 0, touched: 0, changed: 0, exactChecked: 0 };
     }
 
-    if (checked || touched) {
-      console.log(`Kaspi exact stale-order refresh: checked=${checked} touched=${touched} changed=${changed} terminal=${terminal}`);
+    const broad = await broadHeaderRefresh();
+    let exact = { checked: 0, touched: 0, changed: 0 };
+    if (!lastExactAt || Date.now() - lastExactAt >= EXACT_INTERVAL_MS) {
+      lastExactAt = Date.now();
+      exact = await exactFallbackRefresh(broad.seen);
     }
-    return { checked, touched, changed, terminal };
+
+    const summary = {
+      fetched: broad.fetched,
+      touched: broad.touched + exact.touched,
+      changed: broad.changed + exact.changed,
+      handedOff: broad.handedOff,
+      exactChecked: exact.checked
+    };
+    console.log(`Kaspi order-header refresh: fetched=${summary.fetched} touched=${summary.touched} changed=${summary.changed} handedOff=${summary.handedOff} exact=${summary.exactChecked}`);
+    return summary;
   })();
-  try { return await refreshInFlight; } finally { refreshInFlight = null; }
+
+  try { return await refreshInFlight; }
+  finally { refreshInFlight = null; }
 }
 
 export function startKaspiReservationRefreshLoop() {
   const run = () => refreshStaleKaspiReservationOrders().catch(error =>
-    console.error('Kaspi exact stale-order refresh loop failed', String(error?.message || error))
+    console.error('Kaspi order-header refresh loop failed', String(error?.message || error))
   );
   setTimeout(run, START_DELAY_MS).unref();
   const timer = setInterval(run, LOOP_INTERVAL_MS);
