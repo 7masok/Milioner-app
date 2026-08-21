@@ -9,7 +9,10 @@ export const config = Object.freeze({
   databaseUrl: String(process.env.DATABASE_URL || ''),
   corsOrigin: String(process.env.CORS_ORIGIN || 'https://7masok.github.io').replace(/\/$/, ''),
   writesEnabled: bool('WAREHOUSE_WRITES_ENABLED', false),
-  marketSyncEnabled: bool('MARKET_SYNC_ENABLED', false),
+  // Stock synchronization is part of the live Railway runtime now. During the
+  // migration this default was false and silently left WB/WB2 stocks stale when
+  // MARKET_SYNC_ENABLED was not explicitly created in Railway.
+  marketSyncEnabled: bool('MARKET_SYNC_ENABLED', true),
   adminToken: String(process.env.APP_ADMIN_TOKEN || ''),
   kaspiToken: String(process.env.KASPI_TOKEN || ''),
   kaspiWorkerUrl: String(process.env.KASPI_WORKER_URL || '').replace(/\/$/, ''),
