@@ -30,6 +30,21 @@ function kaspiBounds(days, from, to) {
   return { start: since, end: until };
 }
 
+function timestamp(value, fallback = 0) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric) || numeric <= 0) return Number(fallback) || 0;
+  return numeric < 1e12 ? numeric * 1000 : numeric;
+}
+
+function kaspiRawAttributes(value) {
+  try {
+    const parsed = JSON.parse(String(value || ''));
+    return parsed?.attributes && typeof parsed.attributes === 'object' ? parsed.attributes : parsed || {};
+  } catch {
+    return {};
+  }
+}
+
 function groupLiveKaspiOrders(rows) {
   const byOrder = new Map();
   for (const row of rows) {
@@ -37,10 +52,16 @@ function groupLiveKaspiOrders(rows) {
     if (!id) continue;
     let order = byOrder.get(id);
     if (!order) {
+      const attributes = kaspiRawAttributes(row.rawJson);
+      const creationDate = Number(row.creationDate || 0);
       order = {
         id, code: String(row.code || ''), status: String(row.status || ''), state: String(row.state || ''),
-        creationDate: Number(row.creationDate || 0), completionDate: Number(row.creationDate || 0),
-        approvedByBankDate: null, totalPrice: 0, deliveryCostForSeller: 0, entryCount: 0, lines: []
+        creationDate,
+        // Kaspi Pay groups sales by the settlement/completion date. An archived
+        // order can therefore be created days earlier than the sale shown in Pay.
+        completionDate: timestamp(attributes.completionDate, creationDate),
+        approvedByBankDate: timestamp(attributes.approvedByBankDate, 0) || null,
+        totalPrice: 0, deliveryCostForSeller: 0, entryCount: 0, lines: []
       };
       byOrder.set(id, order);
     }
@@ -113,10 +134,11 @@ reportsRouter.get('/kaspi-report-orders', asyncRoute(async (req, res) => {
   const bounds = kaspiBounds(Number(req.query.days || 1), req.query.from, req.query.to);
   const [liveResult, cachedResult, returnsResult, latestSyncResult, coverageResult] = await Promise.all([
     pool.query(`SELECT order_id AS "orderId",code,entry_id AS "entryId",status,state,creation_date AS "creationDate",
-      sku,product_name AS "productName",qty,total_price AS "totalPrice",seller_delivery_cost AS "sellerDeliveryCost"
+      sku,product_name AS "productName",qty,total_price AS "totalPrice",seller_delivery_cost AS "sellerDeliveryCost",
+      raw_json AS "rawJson"
       FROM marketplace_order_lines
-      WHERE market='Kaspi' AND creation_date >= $1 AND creation_date < $2
-      ORDER BY creation_date,order_id,entry_id`, [bounds.start, bounds.end]),
+      WHERE market='Kaspi' AND UPPER(status)='COMPLETED'
+      ORDER BY creation_date,order_id,entry_id`),
     pool.query(`SELECT order_id AS id,code,status,state,creation_date AS "creationDate",completion_date AS "completionDate",
       approved_by_bank_date AS "approvedByBankDate",total_price AS "totalPrice",delivery_cost_for_seller AS "deliveryCostForSeller",
       lines_json AS "linesJson",raw_json AS "rawJson" FROM kaspi_report_orders
@@ -133,12 +155,16 @@ reportsRouter.get('/kaspi-report-orders', asyncRoute(async (req, res) => {
   // remains only as a history fallback and is overridden order-by-order by
   // current synchronized data.
   const ordersById = new Map(parseCachedKaspiOrders(cachedResult.rows).map(order => [String(order.id), order]));
-  for (const order of groupLiveKaspiOrders(liveResult.rows)) ordersById.set(String(order.id), order);
+  for (const order of groupLiveKaspiOrders(liveResult.rows)) {
+    if (Number(order.completionDate) >= bounds.start && Number(order.completionDate) < bounds.end) {
+      ordersById.set(String(order.id), order);
+    }
+  }
   const orders = [...ordersById.values()].sort((a, b) => Number(a.completionDate || a.creationDate) - Number(b.completionDate || b.creationDate));
   const cache = latestSyncResult.rows[0] || {};
   const coverage = coverageResult.rows[0] || {};
   res.json({ ok: true, days: Number(req.query.days || 1), from: req.query.from ? Number(req.query.from) : null,
-    to: req.query.to ? Number(req.query.to) : null, fetchedAt: Date.now(), source: 'PostgreSQL synchronized Kaspi orders',
+    to: req.query.to ? Number(req.query.to) : null, fetchedAt: Date.now(), source: 'PostgreSQL completed Kaspi orders by completion date',
     historyComplete: Number(coverage.coverageFrom || 0) <= bounds.start, coverageFrom: Number(coverage.coverageFrom || 0) || null,
     coverageTo: Number(coverage.coverageTo || 0) || null, lastRefreshAt: Number(cache.lastRefreshAt || 0) || null,
     warnings: cache.lastError ? [String(cache.lastError)] : [], orders, returns: returnsResult.rows });
