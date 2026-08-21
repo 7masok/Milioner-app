@@ -15,6 +15,11 @@
   purchasePlanIgnore.async=false;
   document.head.appendChild(purchasePlanIgnore);
 
+  const kaspiStatusCompat=document.createElement('script');
+  kaspiStatusCompat.src='./kaspi-status-compat-v1.js?v=20260821-1540';
+  kaspiStatusCompat.async=false;
+  document.head.appendChild(kaspiStatusCompat);
+
   const ads=document.createElement('script');
   ads.src='./kaspi-ads-v2-original.js?v=20260820-low-stock-alerts';
   ads.async=false;
