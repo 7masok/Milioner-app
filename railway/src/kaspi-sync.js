@@ -7,7 +7,13 @@ const SYNC_INTERVAL_MS = 5 * 60 * 1000;
 const FETCH_TIMEOUT_MS = 20_000;
 const STALE_RUN_MS = 3 * 60 * 1000;
 const MAX_BATCHES = 3;
-const MAX_DIRECT_ORDERS = 120;
+const MAX_DIRECT_ORDERS = 240;
+// Kaspi Pay includes every sale, not only Kaspi Delivery. Keep every order
+// state in the Railway collector so pickup and seller-delivery sales do not
+// disappear from the warehouse report.
+const DIRECT_ORDER_STATES = Object.freeze([
+  'NEW', 'SIGN_REQUIRED', 'PICKUP', 'DELIVERY', 'KASPI_DELIVERY', 'ARCHIVE'
+]);
 let syncInFlight = null;
 
 function configuredWorkerBase() {
@@ -155,20 +161,28 @@ async function fetchDirect(days = 2) {
   const token = String(config.kaspiToken || '').trim();
   if (!token) throw new Error('KASPI_TOKEN is not configured on Railway');
   const byId = new Map();
-  for (const state of ['KASPI_DELIVERY', 'ARCHIVE']) {
+  const failedStates = [];
+  for (const state of DIRECT_ORDER_STATES) {
     let pageCount = 1;
-    for (let page = 0; page < Math.min(MAX_BATCHES, pageCount); page++) {
-      const result = await directOrderPage({ days, state, page });
-      pageCount = Math.max(1, Math.min(MAX_BATCHES, result.pageCount));
-      for (const raw of result.orders) {
-        const id = String(raw?.id || '');
-        if (id) byId.set(id, raw);
-        if (byId.size >= MAX_DIRECT_ORDERS) break;
+    try {
+      for (let page = 0; page < Math.min(MAX_BATCHES, pageCount); page++) {
+        const result = await directOrderPage({ days, state, page });
+        pageCount = Math.max(1, Math.min(MAX_BATCHES, result.pageCount));
+        for (const raw of result.orders) {
+          const id = String(raw?.id || '');
+          if (id) byId.set(id, raw);
+          if (byId.size >= MAX_DIRECT_ORDERS) break;
+        }
+        if (!result.orders.length || byId.size >= MAX_DIRECT_ORDERS) break;
       }
-      if (!result.orders.length || byId.size >= MAX_DIRECT_ORDERS) break;
+    } catch (error) {
+      // One unavailable state must not make us fall back to the old
+      // Cloudflare-only delivery feed and silently lose the other states.
+      failedStates.push(`${state}: ${String(error?.message || error)}`);
     }
     if (byId.size >= MAX_DIRECT_ORDERS) break;
   }
+  if (!byId.size) throw new Error(`Kaspi API returned no orders${failedStates.length ? `; ${failedStates.join(' | ')}` : ''}`);
   const productCache = new Map();
   const orders = [];
   for (const raw of byId.values()) {
@@ -176,7 +190,7 @@ async function fetchDirect(days = 2) {
     try { lines = await directOrderLines(raw, productCache); } catch {}
     orders.push({ ...raw, lines });
   }
-  return { orders, meta: { pageCount: 1 }, upstream: 'Kaspi API direct via Railway' };
+  return { orders, meta: { pageCount: 1, failedStates }, upstream: 'Kaspi API direct via Railway' };
 }
 
 async function fetchFromWorker(base, batch, days) {
@@ -254,6 +268,9 @@ export async function syncKaspiOrders({ days = 2 } = {}) {
         upstream = payload.upstream;
       }
       if (!payload.orders.length) throw new Error(`Kaspi returned no orders${directError ? `; direct=${directError}` : ''}`);
+      if (payload.meta?.failedStates?.length) {
+        console.warn('Kaspi sync skipped unavailable state filters:', payload.meta.failedStates.join(' | '));
+      }
       for (const raw of payload.orders) {
         const order = normalizeOrder(raw);
         if (!order) continue;
