@@ -72,12 +72,14 @@ function headerFromOrder(raw) {
   const status = String(attrs.status ?? raw?.status ?? '').trim();
   const sourceState = String(attrs.state ?? raw?.state ?? '').trim();
   const courierTransmissionDate = timestamp(attrs.courierTransmissionDate ?? raw?.courierTransmissionDate);
+  const deliveryCostForSeller = n(attrs.deliveryCostForSeller ?? raw?.deliveryCostForSeller, 0);
 
-  // Kaspi exposes courierTransmissionDate as the actual courier hand-off time.
-  // The existing warehouse lifecycle already treats KASPI_DELIVERY_TRANSIT as
-  // delivered-to-carrier, so derive that state only from this explicit fact.
-  // Cancellation/return/completion always has priority over the hand-off marker.
-  const state = !finalKaspiStatus(status) && courierTransmissionDate > 0
+  // Kaspi's order lists do not always expose courierTransmissionDate. In the
+  // Kaspi Delivery feed deliveryCostForSeller becomes positive after the parcel
+  // has actually been handed to Kaspi/courier, so keep it as the proven fallback.
+  // Final cancellation/return/completion statuses always have priority.
+  const handedOff = courierTransmissionDate > 0 || deliveryCostForSeller > 0;
+  const state = !finalKaspiStatus(status) && handedOff
     ? 'KASPI_DELIVERY_TRANSIT'
     : sourceState;
 
@@ -88,6 +90,7 @@ function headerFromOrder(raw) {
     state,
     sourceState,
     courierTransmissionDate,
+    deliveryCostForSeller,
     rawJson: JSON.stringify(raw || {})
   };
 }
