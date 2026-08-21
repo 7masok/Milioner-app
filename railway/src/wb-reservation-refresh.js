@@ -52,14 +52,17 @@ async function fetchStatuses(market, orderIds) {
   }
 }
 
-async function activeReservationOrderIds(market) {
+async function reservationOrderIds(market) {
   const row = await pool.query('SELECT payload FROM warehouse_state WHERE id=1');
   if (!row.rowCount) return [];
   let state = {};
   try { state = JSON.parse(String(row.rows[0].payload || '{}')); } catch { return []; }
   const ids = new Set();
   for (const r of Array.isArray(state.reservations) ? state.reservations : []) {
-    if (!r?.active || String(r.source || '') !== market) continue;
+    if (String(r?.source || '') !== market) continue;
+    const reason = String(r?.closedReason || '');
+    const needsCheck = r?.active || ['wb-not-in-current-new-orders','market-row-not-fresh','duplicate-reservation'].includes(reason);
+    if (!needsCheck) continue;
     const id = parseReservationOrderId(market, r.externalKey);
     if (id) ids.add(id);
   }
@@ -67,7 +70,7 @@ async function activeReservationOrderIds(market) {
 }
 
 async function applyStatuses(market, statuses) {
-  if (!statuses.length) return { checked: 0, closed: 0, changedLines: 0 };
+  if (!statuses.length) return { checked: 0, closed: 0, reopened: 0, changedLines: 0 };
   const byId = new Map();
   let changedLines = 0;
   for (const row of statuses) {
@@ -84,32 +87,49 @@ async function applyStatuses(market, statuses) {
     changedLines += q.rowCount || 0;
   }
 
-  const closed = await transaction(async client => {
+  const result = await transaction(async client => {
     await client.query('SELECT pg_advisory_xact_lock($1)', [730021]);
     const current = await client.query('SELECT payload,revision FROM warehouse_state WHERE id=1 FOR UPDATE');
-    if (!current.rowCount) return 0;
+    if (!current.rowCount) return { closed: 0, reopened: 0 };
     let state = {};
-    try { state = JSON.parse(String(current.rows[0].payload || '{}')); } catch { return 0; }
-    if (!Array.isArray(state.reservations)) return 0;
-    let count = 0;
+    try { state = JSON.parse(String(current.rows[0].payload || '{}')); } catch { return { closed: 0, reopened: 0 }; }
+    if (!Array.isArray(state.reservations)) return { closed: 0, reopened: 0 };
+    let closed = 0, reopened = 0, changed = 0;
     const now = Date.now();
     for (const r of state.reservations) {
-      if (!r?.active || String(r.source || '') !== market) continue;
+      if (String(r?.source || '') !== market) continue;
       const orderId = parseReservationOrderId(market, r.externalKey);
       const live = byId.get(orderId);
-      if (!live || !['delivery','cancelled'].includes(live.stage)) continue;
-      r.active = false;
-      r.updatedAt = now;
-      r.closedReason = live.stage === 'delivery' ? 'wb-explicit-handoff' : 'wb-explicit-cancel';
-      count++;
+      if (!live) continue;
+
+      // Reserve means exactly: WB still shows this as a NEW order. Once it moves
+      // to transfer/delivery/cancel, it must no longer block physical stock.
+      if (live.stage === 'new') {
+        if (!r.active) {
+          r.active = true;
+          r.stage = 'new';
+          r.updatedAt = now;
+          delete r.closedReason;
+          reopened++; changed++;
+        } else if (String(r.stage || '') !== 'new') {
+          r.stage = 'new';
+          r.updatedAt = now;
+          changed++;
+        }
+      } else if (r.active) {
+        r.active = false;
+        r.updatedAt = now;
+        r.closedReason = live.stage === 'cancelled' ? 'wb-explicit-cancel' : live.stage === 'delivery' ? 'wb-explicit-handoff' : 'wb-explicit-transfer';
+        closed++; changed++;
+      }
     }
-    if (!count) return 0;
+    if (!changed) return { closed, reopened };
     const revision = Number(current.rows[0].revision || 0) + 1;
     await client.query('UPDATE warehouse_state SET payload=$1,revision=$2,updated_at=$3 WHERE id=1', [JSON.stringify(state), revision, now]);
-    return count;
+    return { closed, reopened };
   });
 
-  return { checked: byId.size, closed, changedLines };
+  return { checked: byId.size, closed: result.closed, reopened: result.reopened, changedLines };
 }
 
 export async function refreshWbReservationStatuses() {
@@ -117,16 +137,16 @@ export async function refreshWbReservationStatuses() {
   refreshInFlight = (async () => {
     const summary = {};
     for (const market of ['WB','WB2']) {
-      const ids = await activeReservationOrderIds(market);
+      const ids = await reservationOrderIds(market);
       if (!ids.length || !tokenFor(market)) {
-        summary[market] = { checked: 0, closed: 0, changedLines: 0 };
+        summary[market] = { checked: 0, closed: 0, reopened: 0, changedLines: 0 };
         continue;
       }
       try {
         const statuses = await fetchStatuses(market, ids);
         summary[market] = await applyStatuses(market, statuses);
       } catch (error) {
-        summary[market] = { checked: 0, closed: 0, changedLines: 0, error: String(error?.message || error) };
+        summary[market] = { checked: 0, closed: 0, reopened: 0, changedLines: 0, error: String(error?.message || error) };
       }
     }
     console.log(`WB reservation-status refresh: ${JSON.stringify(summary)}`);
