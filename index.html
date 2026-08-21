@@ -648,7 +648,8 @@ async function loadSharedOrderCache({silent=true}={}){
     if(kdResult.status==='fulfilled'){
       k=normalizeServerFeed(kdResult.value.orders,'Kaspi');
       state.kaspiOrderFeed=mergeOrderFeeds(state.kaspiOrderFeed,k);
-      if(k.length)applyMarketplaceTransitions('Kaspi',state.kaspiOrderFeed);
+      // Marketplace cache is read-only in the browser. Authoritative warehouse
+      // changes are performed on Railway, never from a device-local refresh.
     }else warnings.push('Kaspi: '+String(kdResult.reason?.message||kdResult.reason));
     if(w1Result.status==='fulfilled'){
       w1=normalizeServerFeed(w1Result.value.orders,'WB');
