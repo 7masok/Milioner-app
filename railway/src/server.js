@@ -15,6 +15,7 @@ import { startKaspiSyncLoop, syncKaspiOrders } from './kaspi-sync.js';
 import { startKaspiReservationRefreshLoop } from './kaspi-reservation-refresh.js';
 import { startWbSyncLoop, syncWbOrders, importWbPayload } from './wb-sync.js';
 import { startWbReservationRefreshLoop } from './wb-reservation-refresh.js';
+import { startMarketplaceReservationReconcileLoop } from './reservation-reconcile.js';
 
 assertRuntimeConfig();
 const app = express();
@@ -113,6 +114,7 @@ const server = app.listen(config.port, '0.0.0.0', () => {
   startKaspiReservationRefreshLoop();
   startWbSyncLoop();
   startWbReservationRefreshLoop();
+  startMarketplaceReservationReconcileLoop();
   // Recover missing technical WB SKU->chrtId links before the first stock pass.
   repairAllWbStockMappings().catch(error => console.error('WB stock mapping repair failed', String(error?.message || error)));
   startWbStockSyncLoop();
