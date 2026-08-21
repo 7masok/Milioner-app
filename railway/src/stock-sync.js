@@ -69,7 +69,6 @@ export function computeSharedAvailableStocks(warehouse, orderRows) {
     if (!reservation?.active || !reservation?.productId || !(Number(reservation.qty) > 0)) continue;
     const key = String(reservation.externalKey || '');
     const currentStage = key ? stageByKey.get(key) : null;
-    // Cancelled or already handed-off orders must no longer reserve free marketplace stock.
     if (currentStage && !['new', 'transfer'].includes(currentStage)) continue;
     addQty(direct, reservation.productId, reservation.qty);
     if (key) reservationKeys.add(key);
@@ -98,7 +97,6 @@ export function computeSharedAvailableStocks(warehouse, orderRows) {
     if (stage !== 'delivery' || hasReservation) continue;
     if (soldKeys.has(scoped) || (market === 'Kaspi' && soldKeys.has(legacy))) continue;
 
-    // Protect the short race between marketplace hand-off and the browser writing the sale.
     const liveSince = Number(warehouse.marketplaceLiveSince?.[market] || 0);
     const previous = warehouse.marketOrderState?.[market]?.[legacy] || warehouse.marketOrderState?.[market]?.[scoped] || null;
     const wasActive = Boolean(previous?.active || ['new', 'transfer'].includes(String(previous?.stage || '')));
@@ -117,14 +115,11 @@ export function computeSharedAvailableStocks(warehouse, orderRows) {
   }
 
   const available = new Map();
-  // First calculate physical/simple products after all direct and bundle commitments.
   for (const product of warehouse.products || []) {
     if (isBundleProduct(product)) continue;
     const pid = String(product.id);
-    const amount = Math.max(0, Math.floor((Number(product.stock) || 0) - (Number(committed.get(pid)) || 0)));
-    available.set(pid, amount);
+    available.set(pid, Math.max(0, Math.floor((Number(product.stock) || 0) - (Number(committed.get(pid)) || 0))));
   }
-  // Bundles share the same component stock, so their sellable quantity is the limiting component.
   for (const product of warehouse.products || []) {
     if (!isBundleProduct(product)) continue;
     const parts = bundleParts(product);
@@ -250,14 +245,16 @@ export async function previewWbStockMarket(market = 'WB', { verifyActual = true 
   if (!warehouse.products.length) return { ok: false, market, ready: false, reason: 'warehouse-empty-safety' };
   const linked = linkedProducts(warehouse, market);
   if (!linked.length) return { ok: true, market, ready: false, reason: 'no-linked-products', linked: 0 };
+
   const mapped = await mappedLinks(market, linked);
+  const usable = mapped.filter(x => x.chrtId);
   const missing = mapped.filter(x => !x.chrtId);
   const warehouseId = await resolveWarehouseId(market);
-  if (!warehouseId) return { ok: false, market, ready: false, reason: 'warehouse-not-ready', linked: linked.length, mapped: mapped.length - missing.length, missing: missing.length };
-  if (missing.length) return { ok: false, market, ready: false, reason: 'partial-mapping-safety', linked: linked.length, mapped: mapped.length - missing.length, missing: missing.length, missingSkus: missing.slice(0, 20).map(x => x.sku) };
+  if (!warehouseId) return { ok: false, market, ready: false, reason: 'warehouse-not-ready', linked: linked.length, mapped: usable.length, missing: missing.length };
+  if (!usable.length) return { ok: false, market, ready: false, reason: 'no-mapped-products', linked: linked.length, mapped: 0, missing: missing.length };
 
   const amounts = computeSharedAvailableStocks(warehouse, await orderRows());
-  const items = mapped.map(x => ({ chrtId: x.chrtId, amount: Math.max(0, Math.floor(Number(amounts.get(String(x.product.id))) || 0)), sku: x.sku, productId: String(x.product.id), name: String(x.product.name || '') }));
+  const items = usable.map(x => ({ chrtId: x.chrtId, amount: Math.max(0, Math.floor(Number(amounts.get(String(x.product.id))) || 0)), sku: x.sku, productId: String(x.product.id), name: String(x.product.name || '') }));
   const hash = payloadHash(items);
   const previous = await latestState(market);
   let drift = null;
@@ -270,14 +267,29 @@ export async function previewWbStockMarket(market = 'WB', { verifyActual = true 
       drift = { count: null, error: String(error?.message || error) };
     }
   }
-  return { ok: true, market, ready: true, warehouseId, linked: linked.length, mapped: mapped.length, missing: 0, items: items.length, hash, previous, drift, sample: items.slice(0, 20).map(({ chrtId, ...rest }) => rest) };
+  return {
+    ok: true,
+    market,
+    ready: true,
+    partial: missing.length > 0,
+    warehouseId,
+    linked: linked.length,
+    mapped: usable.length,
+    missing: missing.length,
+    missingSkus: missing.map(x => x.sku),
+    items: items.length,
+    hash,
+    previous,
+    drift,
+    sample: items.slice(0, 20).map(({ chrtId, ...rest }) => rest)
+  };
 }
 
 export async function syncWbStockMarket(market = 'WB', { force = false } = {}) {
   const preview = await previewWbStockMarket(market, { verifyActual: true });
   if (!preview.ok || !preview.ready) return { ...preview, sent: false, skipped: true };
   if (!force && preview.drift && preview.drift.count === 0) {
-    return { ok: true, market, sent: false, skipped: true, verified: true, reason: 'unchanged', warehouseId: preview.warehouseId, items: preview.items, lastSentAt: Number(preview.previous?.lastSentAt || 0) };
+    return { ok: true, market, sent: false, skipped: true, verified: true, reason: 'unchanged', partial: preview.partial, missing: preview.missing, missingSkus: preview.missingSkus, warehouseId: preview.warehouseId, items: preview.items, lastSentAt: Number(preview.previous?.lastSentAt || 0) };
   }
   if (preview.drift && preview.drift.count == null) {
     return { ok: false, market, sent: false, skipped: true, reason: 'verify-failed-safety', error: preview.drift.error || 'WB stock verification failed' };
@@ -286,15 +298,17 @@ export async function syncWbStockMarket(market = 'WB', { force = false } = {}) {
   const warehouse = await loadWarehouse();
   const linked = linkedProducts(warehouse, market);
   const mapped = await mappedLinks(market, linked);
-  if (mapped.some(x => !x.chrtId) || mapped.length !== linked.length) return { ok: false, market, sent: false, skipped: true, reason: 'partial-mapping-safety' };
+  const usable = mapped.filter(x => x.chrtId);
+  const missing = mapped.filter(x => !x.chrtId);
+  if (!usable.length) return { ok: false, market, sent: false, skipped: true, reason: 'no-mapped-products' };
   const amounts = computeSharedAvailableStocks(warehouse, await orderRows());
-  const items = mapped.map(x => ({ chrtId: x.chrtId, amount: Math.max(0, Math.floor(Number(amounts.get(String(x.product.id))) || 0)) }));
+  const items = usable.map(x => ({ chrtId: x.chrtId, amount: Math.max(0, Math.floor(Number(amounts.get(String(x.product.id))) || 0)) }));
   const hash = payloadHash(items);
   const token = tokenFor(market);
   const warehouseId = preview.warehouseId;
   const startedAt = Date.now();
   const run = await pool.query(`INSERT INTO stock_sync_runs(market,mode,started_at,warehouse_id,linked,mapped,missing,items)
-    VALUES($1,'sync',$2,$3,$4,$5,0,$6) RETURNING id`, [market, startedAt, warehouseId, linked.length, mapped.length, items.length]);
+    VALUES($1,'sync',$2,$3,$4,$5,$6,$7) RETURNING id`, [market, startedAt, warehouseId, linked.length, usable.length, missing.length, items.length]);
   const runId = run.rows[0]?.id;
   try {
     const headers = { Accept: 'application/json', 'Content-Type': 'application/json', Authorization: token };
@@ -312,7 +326,7 @@ export async function syncWbStockMarket(market = 'WB', { force = false } = {}) {
       last_sent_at=excluded.last_sent_at,last_items=excluded.last_items,last_error='',updated_at=excluded.updated_at`,
     [market, warehouseId, hash, now, items.length]);
     if (runId) await pool.query('UPDATE stock_sync_runs SET finished_at=$1,ok=1 WHERE id=$2', [now, runId]);
-    return { ok: true, market, sent: true, warehouseId, items: items.length, sentAt: now, repaired: Number(preview.drift?.count || 0) };
+    return { ok: true, market, sent: true, partial: missing.length > 0, missing: missing.length, missingSkus: missing.map(x => x.sku), warehouseId, items: items.length, sentAt: now, repaired: Number(preview.drift?.count || 0) };
   } catch (error) {
     const message = String(error?.message || error).slice(0, 2000);
     const now = Date.now();
@@ -326,7 +340,7 @@ export async function syncWbStockMarket(market = 'WB', { force = false } = {}) {
 }
 
 export async function syncAllWbStocks({ force = false } = {}) {
-  if (!config.marketSyncEnabled) return { ok: false, error: 'market-sync-disabled-during-migration', results: {} };
+  if (!config.marketSyncEnabled) return { ok: false, error: 'market-sync-disabled', results: {} };
   const results = {};
   for (const market of ['WB', 'WB2']) {
     try { results[market] = await syncWbStockMarket(market, { force }); }
