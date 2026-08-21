@@ -5,7 +5,8 @@ const WB_STATUS_URL = 'https://marketplace-api.wildberries.ru/api/v3/orders/stat
 const FETCH_TIMEOUT_MS = 20_000;
 const START_DELAY_MS = 5_000;
 const LOOP_INTERVAL_MS = 60_000;
-const STATUS_BATCH_SIZE = 50;
+const STATUS_BATCH_SIZE = 100;
+const MAX_INT64 = 9223372036854775807n;
 let refreshInFlight = null;
 
 function tokenFor(market) {
@@ -30,9 +31,15 @@ function parseReservationOrderId(market, key) {
   return pos > 0 ? rest.slice(0, pos) : '';
 }
 
+function validInt64Id(value) {
+  const s = String(value || '').trim();
+  if (!/^\d+$/.test(s)) return false;
+  try { return BigInt(s) <= MAX_INT64; } catch { return false; }
+}
+
 async function fetchStatusBatch(market, ids) {
   const token = tokenFor(market);
-  const exactIds = ids.map(x => String(x).trim()).filter(x => /^\d+$/.test(x));
+  const exactIds = ids.map(x => String(x).trim()).filter(validInt64Id);
   if (!exactIds.length) return [];
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
@@ -47,42 +54,18 @@ async function fetchStatusBatch(market, ids) {
     const text = await response.text();
     let data = {};
     try { data = text ? JSON.parse(text) : {}; } catch {}
-    if (!response.ok) {
-      const e = new Error(`WB ${market} statuses HTTP ${response.status}: ${String(data?.detail || data?.message || text || '').slice(0, 500)}`);
-      e.status = response.status;
-      throw e;
-    }
+    if (!response.ok) throw new Error(`WB ${market} statuses HTTP ${response.status}: ${String(data?.detail || data?.message || text || '').slice(0, 500)}`);
     return Array.isArray(data?.orders) ? data.orders : [];
   } finally {
     clearTimeout(timer);
   }
 }
 
-async function fetchBatchResilient(market, ids) {
-  if (!ids.length) return [];
-  try {
-    return await fetchStatusBatch(market, ids);
-  } catch (error) {
-    if (ids.length === 1) {
-      console.warn(`WB ${market} status skipped invalid id=${ids[0]}: ${String(error?.message || error)}`);
-      return [];
-    }
-    const mid = Math.ceil(ids.length / 2);
-    const left = await fetchBatchResilient(market, ids.slice(0, mid));
-    const right = await fetchBatchResilient(market, ids.slice(mid));
-    return [...left, ...right];
-  }
-}
-
 async function fetchStatuses(market, orderIds) {
   const token = tokenFor(market);
   if (!token || !orderIds.length) return [];
-  const exact = [...new Set(orderIds.map(x => String(x).trim()).filter(x => /^\d+$/.test(x)))];
-  const out = [];
-  for (let i = 0; i < exact.length; i += STATUS_BATCH_SIZE) {
-    out.push(...await fetchBatchResilient(market, exact.slice(i, i + STATUS_BATCH_SIZE)));
-  }
-  return out;
+  const exact = [...new Set(orderIds.map(x => String(x).trim()).filter(validInt64Id))].slice(0, STATUS_BATCH_SIZE);
+  return fetchStatusBatch(market, exact);
 }
 
 async function reservationOrderIds(market) {
@@ -94,12 +77,12 @@ async function reservationOrderIds(market) {
   for (const r of Array.isArray(state.reservations) ? state.reservations : []) {
     if (String(r?.source || '') !== market) continue;
     const reason = String(r?.closedReason || '');
-    const needsCheck = r?.active || ['wb-not-in-current-new-orders','market-row-not-fresh','duplicate-reservation'].includes(reason);
+    const needsCheck = r?.active || ['wb-not-in-current-new-orders','market-row-outside-active-window','duplicate-reservation'].includes(reason);
     if (!needsCheck) continue;
     const id = parseReservationOrderId(market, r.externalKey);
-    if (id) ids.add(id);
+    if (validInt64Id(id)) ids.add(id);
   }
-  return [...ids].slice(0, 1000);
+  return [...ids].slice(0, STATUS_BATCH_SIZE);
 }
 
 async function applyStatuses(market, statuses) {
@@ -134,22 +117,22 @@ async function applyStatuses(market, statuses) {
       const orderId = parseReservationOrderId(market, r.externalKey);
       const live = byId.get(orderId);
       if (!live) continue;
-      if (live.stage === 'new') {
+      if (live.stage === 'new' || live.stage === 'transfer') {
         if (!r.active) {
           r.active = true;
-          r.stage = 'new';
+          r.stage = live.stage;
           r.updatedAt = now;
           delete r.closedReason;
           reopened++; changed++;
-        } else if (String(r.stage || '') !== 'new') {
-          r.stage = 'new';
+        } else if (String(r.stage || '') !== live.stage) {
+          r.stage = live.stage;
           r.updatedAt = now;
           changed++;
         }
       } else if (r.active) {
         r.active = false;
         r.updatedAt = now;
-        r.closedReason = live.stage === 'cancelled' ? 'wb-explicit-cancel' : live.stage === 'delivery' ? 'wb-explicit-handoff' : 'wb-explicit-transfer';
+        r.closedReason = live.stage === 'cancelled' ? 'wb-explicit-cancel' : 'wb-explicit-handoff';
         closed++; changed++;
       }
     }
