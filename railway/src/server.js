@@ -8,6 +8,7 @@ import { ordersRouter } from './orders.js';
 import { reportsRouter } from './reports.js';
 import { stockRouter, kaspiFeedHandler } from './stock.js';
 import { startKaspiSyncLoop, syncKaspiOrders } from './kaspi-sync.js';
+import { startWbSyncLoop, syncWbOrders } from './wb-sync.js';
 
 assertRuntimeConfig();
 const app = express();
@@ -50,6 +51,19 @@ app.post('/api/kaspi-sync-now', requireTrustedOrigin, async (req, res, next) => 
   catch (error) { next(error); }
 });
 
+app.post('/api/wb-sync-now', requireTrustedOrigin, async (req, res, next) => {
+  try {
+    const requested = Array.isArray(req.body?.markets) ? req.body.markets : ['WB', 'WB2'];
+    const markets = [...new Set(requested.map(value => String(value || '').toUpperCase() === 'WB1' ? 'WB' : String(value || '').toUpperCase()).filter(value => ['WB', 'WB2'].includes(value)))];
+    const results = {};
+    for (const market of markets.length ? markets : ['WB', 'WB2']) {
+      try { results[market] = await syncWbOrders(market); }
+      catch (error) { results[market] = { ok: false, market, error: String(error?.message || error) }; }
+    }
+    res.json({ ok: Object.values(results).some(result => result?.ok), results });
+  } catch (error) { next(error); }
+});
+
 app.use('/api', warehouseRouter);
 app.use('/api', ordersRouter);
 app.use('/api', reportsRouter);
@@ -66,6 +80,7 @@ app.use((error, _req, res, _next) => {
 const server = app.listen(config.port, '0.0.0.0', () => {
   console.log(`millioner Railway API listening on ${config.port}`);
   startKaspiSyncLoop();
+  startWbSyncLoop();
 });
 
 async function shutdown(signal) {
