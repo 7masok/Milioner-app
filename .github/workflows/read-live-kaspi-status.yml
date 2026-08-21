@@ -1,0 +1,41 @@
+name: One-time live Kaspi status check
+
+on:
+  push:
+    paths:
+      - '.github/workflows/read-live-kaspi-status.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+      - name: Read live order statuses
+        run: |
+          sleep 70
+          curl --fail --silent --show-error --max-time 30 \
+            -H 'Origin: https://7masok.github.io' \
+            -H 'Accept: application/json' \
+            'https://milioner-app-staging.up.railway.app/api/orders?market=Kaspi&limit=1000' > /tmp/orders.json
+          python3 - <<'PY'
+          import json
+          codes={'1043406029','1043422834','1043483836','1043323210'}
+          data=json.load(open('/tmp/orders.json'))
+          out=[]
+          for x in data.get('orders',[]):
+              if str(x.get('code')) in codes:
+                  out.append({k:x.get(k) for k in ('code','orderId','status','state','qty','productName','sku')})
+          with open('tmp-kaspi-status-check.json','w') as f:
+              json.dump(out,f,ensure_ascii=False,indent=2)
+          PY
+          rm .github/workflows/read-live-kaspi-status.yml
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add tmp-kaspi-status-check.json .github/workflows/read-live-kaspi-status.yml
+          git commit -m 'Capture one-time live Kaspi status check'
+          git push
