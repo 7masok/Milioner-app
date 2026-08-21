@@ -6,17 +6,13 @@ if(typeof purchaseRecommendations!=='function'||typeof renderPurchasePlan!=='fun
 const SETTINGS_KEY='purchasePlanIgnored';
 const originalPurchaseRecommendations=purchaseRecommendations;
 const originalRenderPurchasePlan=renderPurchasePlan;
+let lastVisibleRecommendations=[];
 
 function ignoredMap(){
   state.settings||={};
   const raw=state.settings[SETTINGS_KEY];
   if(!raw||typeof raw!=='object'||Array.isArray(raw))state.settings[SETTINGS_KEY]={};
   return state.settings[SETTINGS_KEY];
-}
-function isIgnored(productId){return Boolean(ignoredMap()[String(productId)]?.hidden)}
-function rawRecommendations(){
-  const rows=originalPurchaseRecommendations();
-  return Array.isArray(rows)?rows:[];
 }
 function ignoredEntries(){
   const map=ignoredMap();
@@ -31,14 +27,18 @@ function ignoredEntries(){
 }
 
 purchaseRecommendations=function(){
-  return rawRecommendations().filter(x=>!isIgnored(x?.productId));
+  const rows=originalPurchaseRecommendations();
+  const all=Array.isArray(rows)?rows:[];
+  const ignored=ignoredMap();
+  lastVisibleRecommendations=all.filter(x=>!ignored[String(x?.productId)]?.hidden);
+  return lastVisibleRecommendations;
 };
 
 window.ignorePurchasePlanProduct=function(encodedProductId){
   const productId=decodeURIComponent(String(encodedProductId||''));
-  const row=rawRecommendations().find(x=>String(x?.productId)===String(productId));
   let p=null;
   try{p=typeof prod==='function'?prod(productId):null}catch{}
+  const row=lastVisibleRecommendations.find(x=>String(x?.productId)===String(productId));
   const name=String(p?.name||row?.product?.name||'этот товар');
   if(!confirm(`Больше не предлагать «${name}» к закупке?\n\nТовар останется в складе. Остатки, продажи и история не изменятся. Вернуть его можно через «Скрытые из закупки».`))return;
   const map=ignoredMap();
@@ -75,7 +75,9 @@ function decoratePurchasePlan(){
   const root=document.getElementById('purchasePlan');
   if(!root)return;
 
-  const visible=purchaseRecommendations();
+  // originalRenderPurchasePlan() has already calculated these rows. Reuse them
+  // instead of running the expensive purchase recommendation calculation twice.
+  const visible=lastVisibleRecommendations;
   const lines=[...root.querySelectorAll('.purchase-plan .purchase-lines > .purchase-line')];
   lines.forEach((line,index)=>{
     const row=visible[index];
@@ -118,6 +120,11 @@ renderPurchasePlan=function(){
   return result;
 };
 
-// Redraw once after this late-loaded module wraps the purchase plan functions.
-setTimeout(()=>{try{renderPurchasePlan()}catch(e){console.warn('purchase plan ignore render failed',e)}},0);
+// Do not recalculate the expensive plan on every page startup. Only redraw if
+// the purchase tab was already active when this late-loaded module arrived.
+setTimeout(()=>{
+  try{
+    if(document.getElementById('purchases')?.classList.contains('active'))renderPurchasePlan();
+  }catch(e){console.warn('purchase plan ignore render failed',e)}
+},0);
 })();
