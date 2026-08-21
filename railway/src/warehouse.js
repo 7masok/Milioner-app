@@ -24,17 +24,24 @@ function cleanState(input) {
   return result;
 }
 
+function marketplaceSkus(product, field) {
+  const primary = String(product?.[field] || '').trim();
+  const rawAliases = product?.[`${field}Aliases`];
+  const aliases = Array.isArray(rawAliases) ? rawAliases : String(rawAliases || '').split(/[;,\n]/);
+  return [...new Set([primary, ...aliases].map(value => String(value || '').trim()).filter(Boolean))];
+}
+
 async function repairProductLinks(client, products) {
   const now = Date.now();
   for (const product of products || []) {
     const id = String(product?.id || '').trim();
     if (!id) continue;
     for (const [market, field] of [['Kaspi', 'kaspi'], ['WB', 'wb'], ['WB2', 'wb2'], ['Ozon', 'ozon']]) {
-      const sku = String(product?.[field] || '').trim();
-      if (!sku) continue;
-      await client.query(`INSERT INTO product_links(product_id,market,sku,created_at,updated_at)
-        VALUES($1,$2,$3,$4,$4) ON CONFLICT(market,sku) DO UPDATE SET product_id=excluded.product_id,updated_at=excluded.updated_at`,
-      [id, market, sku, now]);
+      for (const sku of marketplaceSkus(product, field)) {
+        await client.query(`INSERT INTO product_links(product_id,market,sku,created_at,updated_at)
+          VALUES($1,$2,$3,$4,$4) ON CONFLICT(market,sku) DO UPDATE SET product_id=excluded.product_id,updated_at=excluded.updated_at`,
+        [id, market, sku, now]);
+      }
     }
   }
 }
@@ -57,11 +64,11 @@ async function mirrorProducts(client, products) {
     ]);
     await client.query('DELETE FROM product_links WHERE product_id=$1', [id]);
     for (const [market, field] of [['Kaspi', 'kaspi'], ['WB', 'wb'], ['WB2', 'wb2'], ['Ozon', 'ozon']]) {
-      const sku = String(product?.[field] || '').trim();
-      if (!sku) continue;
-      await client.query(`INSERT INTO product_links(product_id,market,sku,created_at,updated_at)
-        VALUES($1,$2,$3,$4,$4) ON CONFLICT(market,sku) DO UPDATE SET product_id=excluded.product_id,updated_at=excluded.updated_at`,
-      [id, market, sku, now]);
+      for (const sku of marketplaceSkus(product, field)) {
+        await client.query(`INSERT INTO product_links(product_id,market,sku,created_at,updated_at)
+          VALUES($1,$2,$3,$4,$4) ON CONFLICT(market,sku) DO UPDATE SET product_id=excluded.product_id,updated_at=excluded.updated_at`,
+        [id, market, sku, now]);
+      }
     }
   }
   if (ids.length) await client.query('DELETE FROM products WHERE NOT (id = ANY($1::text[]))', [ids]);

@@ -627,6 +627,7 @@ function mergeOrderFeeds(local,remote){const map=new Map();for(const o of(local|
 function applyMarketplaceTransitions(market,feed){state.marketOrderState||={};state.marketplaceLiveSince||={};state.reservations||=[];const bucket=state.marketOrderState[market]||(market==='Kaspi'?{...(state.kaspiOrders||{})}:{});state.marketOrderState[market]=bucket;if(!state.marketplaceLiveSince[market])state.marketplaceLiveSince[market]=Date.now();const liveSince=Number(state.marketplaceLiveSince[market])||Date.now();let reservedCount=0,soldCount=0,cancelledCount=0;for(const o of(feed||[])){if(!o?.productId)continue;const p=prod(o.productId);if(!p)continue;const qty=Math.max(0,Number(o.qty)||0);if(!qty)continue;const legacy=String(o.orderId)+':'+String(o.entryId),scoped=market+':'+legacy,prev=bucket[legacy]||bucket[scoped]||null,stage=marketplaceLifecycleStage(market,o.status,o.state),active=stage==='new'||stage==='transfer';const existingSale=state.sales.find(x=>x.externalKey===scoped||(market==='Kaspi'&&x.externalKey===legacy));const existingReservation=state.reservations.find(x=>x.active&&x.source===market&&(x.externalKey===scoped||(market==='Kaspi'&&x.externalKey===legacy)));const apiFeeTotal=Math.max(0,Number(o.marketplaceFee)||0)+Math.max(0,Number(o.sellerDeliveryCost)||0),apiFeePerUnit=qty?apiFeeTotal/qty:0;if(existingSale&&Number(o.unitPrice)>0)existingSale.price=Number(o.unitPrice);if(existingSale&&market==='Kaspi'&&apiFeeTotal>0){existingSale.fee=apiFeePerUnit;existingSale.feeSource=o.feeSource||'Kaspi API'}if(active&&!existingSale){if(existingReservation){const changed=String(existingReservation.productId||'')!==String(p.id)||Number(existingReservation.qty||0)!==qty||String(existingReservation.stage||'')!==stage;if(changed){existingReservation.productId=p.id;existingReservation.qty=qty;existingReservation.stage=stage;existingReservation.updatedAt=Date.now()}}else{state.reservations.push({id:id(),productId:p.id,qty,active:true,source:market,externalKey:scoped,stage,date:Date.now(),updatedAt:Date.now()});reservedCount+=qty}}else if(stage==='delivery'){if(existingReservation)existingReservation.active=false;if(!existingSale&&(prev?.active||['new','transfer'].includes(String(prev?.stage||''))||marketplaceSaleTimestamp(market,o)>=liveSince)){const consumed=consumeSellableProduct(p,qty,market+' '+(o.code||''));state.sales.push({id:id(),productId:p.id,qty,price:Number(o.unitPrice)||0,cost:consumed.unitCost,fee:apiFeePerUnit,feeSource:o.feeSource||'',channel:market,date:marketplaceSaleTimestamp(market,o),externalKey:scoped,fifoLots:consumed.lots,stockShortage:consumed.shortage});if(isBundleProduct(p))p.cost=productDisplayCost(p);soldCount+=qty}}else if(stage==='cancelled'){if(existingReservation){existingReservation.active=false;cancelledCount+=Number(existingReservation.qty)||0}}bucket[legacy]={status:o.status,state:o.state,active,stage,qty,sku:o.sku,updatedAt:Date.now()}}if(market==='Kaspi')state.kaspiOrders=bucket;return {reserved:reservedCount,sold:soldCount,cancelled:cancelledCount}}
 async function apiJson(url){const r=await fetch(url,{cache:'no-store'});let data;try{data=await r.json()}catch(e){throw new Error('Сервер вернул не JSON (HTTP '+r.status+')')}if(!r.ok||data?.ok===false)throw new Error(data?.error||('HTTP '+r.status));return data}
 async function loadSharedOrderCache({silent=true}={}){
+  const warehouseBefore=JSON.stringify(warehouseSnapshot());
   const statusPromise=apiJson(MILLIONER_API+'/api/market-status').then(status=>{
     state.settings.serverMarketStatus={};
     for(const x of(status.markets||[]))state.settings.serverMarketStatus[x.market]=x;
@@ -652,15 +653,17 @@ async function loadSharedOrderCache({silent=true}={}){
     if(w1Result.status==='fulfilled'){
       w1=normalizeServerFeed(w1Result.value.orders,'WB');
       state.wbOrderFeed=mergeOrderFeeds(state.wbOrderFeed,w1);
-      if(w1.length)applyMarketplaceTransitions('WB',state.wbOrderFeed.filter(o=>String(o.market||'WB')==='WB'));
+      // WB 1 reservations are reconciled on Railway after a confirmed server sync.
+      // The browser only reads this cache, so it cannot create phantom reserves.
     }else warnings.push('WB 1: '+String(w1Result.reason?.message||w1Result.reason));
     if(w2Result.status==='fulfilled'){
       w2=normalizeServerFeed(w2Result.value.orders,'WB2');
       state.wbOrderFeed=mergeOrderFeeds(state.wbOrderFeed,w2);
-      if(w2.length)applyMarketplaceTransitions('WB2',state.wbOrderFeed.filter(o=>String(o.market||'WB')==='WB2'));
+      // WB 2 follows the same server-authoritative path when its token is configured.
     }else warnings.push('WB 2: '+String(w2Result.reason?.message||w2Result.reason));
-    // Marketplace transitions change reservations/sales/stock, so this must go through cloud save.
-    save();render();
+    // Feed cache is local-only. Save the warehouse only when a real warehouse
+    // transition changed it, preventing a read-only refresh from overwriting data.
+    if(JSON.stringify(warehouseSnapshot())!==warehouseBefore)save();else saveLocalOnly();render();
     if(warnings.length)console.warn('Shared cache partial update',warnings.join('; '));
     const allFailed=kdResult.status==='rejected'&&w1Result.status==='rejected'&&w2Result.status==='rejected';
     if(allFailed)throw kdResult.reason||w1Result.reason||w2Result.reason;
