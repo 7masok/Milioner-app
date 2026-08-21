@@ -5,6 +5,7 @@ const WB_STATUS_URL = 'https://marketplace-api.wildberries.ru/api/v3/orders/stat
 const FETCH_TIMEOUT_MS = 20_000;
 const START_DELAY_MS = 5_000;
 const LOOP_INTERVAL_MS = 60_000;
+const STATUS_BATCH_SIZE = 100;
 let refreshInFlight = null;
 
 function tokenFor(market) {
@@ -29,16 +30,15 @@ function parseReservationOrderId(market, key) {
   return pos > 0 ? rest.slice(0, pos) : '';
 }
 
-async function fetchStatuses(market, orderIds) {
+async function fetchStatusBatch(market, ids) {
   const token = tokenFor(market);
-  if (!token || !orderIds.length) return [];
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
   try {
     const response = await fetch(WB_STATUS_URL, {
       method: 'POST',
       headers: { Authorization: token, Accept: 'application/json', 'Content-Type': 'application/json' },
-      body: JSON.stringify({ orders: orderIds.map(x => Number(x)).filter(Number.isFinite) }),
+      body: JSON.stringify({ orders: ids }),
       cache: 'no-store',
       signal: controller.signal
     });
@@ -50,6 +50,18 @@ async function fetchStatuses(market, orderIds) {
   } finally {
     clearTimeout(timer);
   }
+}
+
+async function fetchStatuses(market, orderIds) {
+  const token = tokenFor(market);
+  if (!token || !orderIds.length) return [];
+  const numeric = [...new Set(orderIds.map(x => Number(x)).filter(Number.isFinite))];
+  const out = [];
+  for (let i = 0; i < numeric.length; i += STATUS_BATCH_SIZE) {
+    const rows = await fetchStatusBatch(market, numeric.slice(i, i + STATUS_BATCH_SIZE));
+    out.push(...rows);
+  }
+  return out;
 }
 
 async function reservationOrderIds(market) {
@@ -101,9 +113,6 @@ async function applyStatuses(market, statuses) {
       const orderId = parseReservationOrderId(market, r.externalKey);
       const live = byId.get(orderId);
       if (!live) continue;
-
-      // Reserve means exactly: WB still shows this as a NEW order. Once it moves
-      // to transfer/delivery/cancel, it must no longer block physical stock.
       if (live.stage === 'new') {
         if (!r.active) {
           r.active = true;
