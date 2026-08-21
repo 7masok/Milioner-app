@@ -3,6 +3,7 @@ import express from 'express';
 import { config } from './config.js';
 import { pool } from './db.js';
 import { asyncRoute, requireTrustedOrigin, requireWritesEnabled } from './http.js';
+import { computeSharedAvailableStocks, previewWbStockMarket, syncWbStockMarket } from './stock-sync.js';
 
 export const stockRouter = express.Router();
 
@@ -59,8 +60,25 @@ function templateInfo(xml) {
 
 async function warehouse() {
   const result = await pool.query('SELECT payload FROM warehouse_state WHERE id=1');
-  if (!result.rowCount) return { products: [], reservations: [] };
-  try { return JSON.parse(result.rows[0].payload || '{}'); } catch { return { products: [], reservations: [] }; }
+  if (!result.rowCount) return { products: [], reservations: [], sales: [] };
+  try {
+    const state = JSON.parse(result.rows[0].payload || '{}');
+    state.products = Array.isArray(state.products) ? state.products : [];
+    state.reservations = Array.isArray(state.reservations) ? state.reservations : [];
+    state.sales = Array.isArray(state.sales) ? state.sales : [];
+    state.marketplaceLiveSince = state.marketplaceLiveSince && typeof state.marketplaceLiveSince === 'object' ? state.marketplaceLiveSince : {};
+    state.marketOrderState = state.marketOrderState && typeof state.marketOrderState === 'object' ? state.marketOrderState : {};
+    return state;
+  } catch {
+    return { products: [], reservations: [], sales: [] };
+  }
+}
+
+async function marketplaceOrderRows() {
+  const result = await pool.query(`SELECT market,order_id AS "orderId",entry_id AS "entryId",status,state,
+    creation_date AS "creationDate",sku,qty
+    FROM marketplace_order_lines WHERE market IN ('Kaspi','WB','WB2')`);
+  return result.rows;
 }
 
 async function templateRow() {
@@ -123,14 +141,30 @@ stockRouter.get('/stock-sync-status', asyncRoute(async (_req, res) => {
   const rows = [];
   for (const selected of ['WB', 'WB2']) {
     const latest = await pool.query('SELECT * FROM stock_sync_runs WHERE market=$1 ORDER BY id DESC LIMIT 1', [selected]);
-    rows.push({ market: selected, latest: latest.rows[0] || null });
+    const state = await pool.query(`SELECT warehouse_id AS "warehouseId",last_sent_at AS "lastSentAt",last_items AS "lastItems",
+      last_error AS "lastError",updated_at AS "updatedAt" FROM wb_stock_state WHERE market=$1`, [selected]);
+    rows.push({ market: selected, latest: latest.rows[0] || null, state: state.rows[0] || null });
   }
-  res.json({ ok: true, markets: rows });
+  res.json({ ok: true, enabled: config.marketSyncEnabled, markets: rows });
 }));
 
-stockRouter.post('/stock-sync-now', requireTrustedOrigin, requireWritesEnabled, asyncRoute(async (_req, res) => {
+stockRouter.get('/stock-sync-preview', requireTrustedOrigin, asyncRoute(async (_req, res) => {
+  const results = {};
+  for (const market of ['WB', 'WB2']) results[market] = await previewWbStockMarket(market, { verifyActual: true });
+  res.json({ ok: Object.values(results).every(x => x?.ok !== false), serverTime: Date.now(), results });
+}));
+
+stockRouter.post('/stock-sync-now', requireTrustedOrigin, requireWritesEnabled, asyncRoute(async (req, res) => {
   if (!config.marketSyncEnabled) return res.status(503).json({ ok: false, error: 'market-sync-disabled-during-migration' });
-  return res.status(501).json({ ok: false, error: 'wb-stock-sync-port-not-enabled' });
+  const requested = Array.isArray(req.body?.markets) ? req.body.markets.filter(x => ['WB', 'WB2'].includes(String(x))) : ['WB', 'WB2'];
+  const markets = [...new Set(requested.length ? requested : ['WB', 'WB2'])];
+  const results = {};
+  for (const market of markets) {
+    try { results[market] = await syncWbStockMarket(market, { force: req.body?.force === true }); }
+    catch (error) { results[market] = { ok: false, market, error: String(error?.message || error) }; }
+  }
+  const ok = markets.every(market => results[market]?.ok !== false);
+  res.status(ok ? 200 : 502).json({ ok, serverTime: Date.now(), results });
 }));
 
 export const kaspiFeedHandler = asyncRoute(async (req, res) => {
@@ -142,15 +176,14 @@ export const kaspiFeedHandler = asyncRoute(async (req, res) => {
   const primaryStoreId = String(row.primaryStoreId || '') || (info.storeIds.length === 1 ? info.storeIds[0] : '');
   if (!primaryStoreId) throw httpError('Primary Kaspi store is not selected.', 409);
   const managed = new Map((state.products || []).map(product => [String(product?.kaspi || '').trim(), product]).filter(([sku]) => sku));
-  const reserved = new Map();
-  for (const item of state.reservations || []) if (item?.active) reserved.set(String(item.productId), (reserved.get(String(item.productId)) || 0) + Math.max(0, Number(item.qty) || 0));
+  const amounts = computeSharedAvailableStocks(state, await marketplaceOrderRows());
   let matched = 0;
   const offerRe = /(<offer\b[^>]*\bsku\s*=\s*(["'])([^"']+)\2[^>]*>)([\s\S]*?)(<\/offer>)/gi;
   const xml = row.rawXml.replace(offerRe, (whole, open, _quote, encodedSku, body, close) => {
     const product = managed.get(xmlDecode(encodedSku).trim());
     if (!product) return whole;
     matched++;
-    const amount = Math.max(0, Math.floor((Number(product.stock) || 0) - (reserved.get(String(product.id)) || 0)));
+    const amount = Math.max(0, Math.floor(Number(amounts.get(String(product.id))) || 0));
     let foundPrimary = false;
     const updated = body.replace(/<availability\b[^>]*\/?>/gi, tag => {
       const storeId = xmlAttr(tag, 'storeId');
@@ -169,4 +202,3 @@ export const kaspiFeedHandler = asyncRoute(async (req, res) => {
   [Date.now(), String(req.headers['user-agent'] || '').slice(0, 300)]);
   res.type('application/xml').send(xml);
 });
-
