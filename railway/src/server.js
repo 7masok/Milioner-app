@@ -9,6 +9,7 @@ import { ordersRouter } from './orders.js';
 import { reportsRouter } from './reports.js';
 import { kaspiLiveReportRouter } from './kaspi-live-report.js';
 import { stockRouter, kaspiFeedHandler } from './stock.js';
+import { startWbStockSyncLoop } from './stock-sync.js';
 import { startKaspiSyncLoop, syncKaspiOrders } from './kaspi-sync.js';
 import { startKaspiReservationRefreshLoop } from './kaspi-reservation-refresh.js';
 import { startWbSyncLoop, syncWbOrders, importWbPayload } from './wb-sync.js';
@@ -27,7 +28,7 @@ app.get('/health', async (_req, res, next) => {
     const db = await pool.query('SELECT 1 AS ok');
     const migrations = await pool.query("SELECT to_regclass('public.schema_migrations') AS name");
     res.json({ ok: db.rows[0]?.ok === 1, service: 'millioner-railway-api', postgres: true,
-      writesEnabled: config.writesEnabled, marketSyncEnabled: true, migrationsReady: Boolean(migrations.rows[0]?.name) });
+      writesEnabled: config.writesEnabled, marketSyncEnabled: config.marketSyncEnabled, migrationsReady: Boolean(migrations.rows[0]?.name) });
   } catch (error) { next(error); }
 });
 
@@ -109,6 +110,7 @@ const server = app.listen(config.port, '0.0.0.0', () => {
   startKaspiSyncLoop();
   startKaspiReservationRefreshLoop();
   startWbSyncLoop();
+  startWbStockSyncLoop();
 });
 
 async function shutdown(signal) {
