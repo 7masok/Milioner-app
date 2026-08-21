@@ -16,7 +16,7 @@
   document.head.appendChild(purchasePlanIgnore);
 
   const kaspiStatusCompat=document.createElement('script');
-  kaspiStatusCompat.src='./kaspi-status-compat-v1.js?v=20260821-1540';
+  kaspiStatusCompat.src='./kaspi-status-compat-v1.js?v=20260821-1635';
   kaspiStatusCompat.async=false;
   document.head.appendChild(kaspiStatusCompat);
 
