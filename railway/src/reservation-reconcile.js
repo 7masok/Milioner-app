@@ -90,11 +90,11 @@ export async function reconcileMarketplaceReservations() {
       const st = lifecycle(market, row.status, row.state);
       const sku = String(row.sku || '').trim();
       const productId = linkMap.get(`${market}|${sku}`) || skuMaps[market]?.get(sku) || '';
-      if (!productId) { if (st === 'new' || st === 'transfer') unmatched += qty; continue; }
+      if (!productId) { if (st === 'new') unmatched += qty; continue; }
 
       const existing = byScoped.get(`${market}|${key}`) || (market === 'Kaspi' ? kaspiLegacy.get(keyLegacy) : null);
       const saleExists = sold.has(key) || (market === 'Kaspi' && sold.has(keyLegacy));
-      const shouldReserve = (st === 'new' || st === 'transfer') && !saleExists;
+      const shouldReserve = st === 'new' && !saleExists;
 
       if (shouldReserve) {
         activeKeys.add(`${market}|${key}`);
@@ -118,13 +118,11 @@ export async function reconcileMarketplaceReservations() {
       } else if (existing?.active) {
         existing.active = false;
         existing.updatedAt = now;
-        existing.closedReason = st === 'cancelled' ? 'market-explicit-cancel' : st === 'delivery' ? 'market-explicit-handoff' : 'market-sale-exists';
+        existing.closedReason = st === 'cancelled' ? 'market-explicit-cancel' : st === 'delivery' ? 'market-explicit-handoff' : st === 'transfer' ? 'market-explicit-transfer' : 'market-sale-exists';
         closed++; changed++;
       }
     }
 
-    // Auto-reservations are disposable cache derived from freshly refreshed marketplace rows.
-    // If such a row has not been refreshed recently, do not keep it blocking stock forever.
     for (const r of warehouse.reservations) {
       if (!r?.active || !String(r.id || '').startsWith('auto-')) continue;
       const src = String(r.source || ''), key = String(r.externalKey || '');
@@ -137,7 +135,6 @@ export async function reconcileMarketplaceReservations() {
       closed++; changed++;
     }
 
-    // Collapse accidental duplicate active reservations for the same marketplace order line.
     const seen = new Set();
     for (const r of warehouse.reservations) {
       if (!r?.active) continue;
