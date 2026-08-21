@@ -10,6 +10,7 @@ import { reportsRouter } from './reports.js';
 import { kaspiLiveReportRouter } from './kaspi-live-report.js';
 import { stockRouter, kaspiFeedHandler } from './stock.js';
 import { startWbStockSyncLoop } from './stock-sync.js';
+import { repairAllWbStockMappings } from './wb-stock-mapping.js';
 import { startKaspiSyncLoop, syncKaspiOrders } from './kaspi-sync.js';
 import { startKaspiReservationRefreshLoop } from './kaspi-reservation-refresh.js';
 import { startWbSyncLoop, syncWbOrders, importWbPayload } from './wb-sync.js';
@@ -110,6 +111,8 @@ const server = app.listen(config.port, '0.0.0.0', () => {
   startKaspiSyncLoop();
   startKaspiReservationRefreshLoop();
   startWbSyncLoop();
+  // Recover missing technical WB SKU->chrtId links before the first stock pass.
+  repairAllWbStockMappings().catch(error => console.error('WB stock mapping repair failed', String(error?.message || error)));
   startWbStockSyncLoop();
 });
 
