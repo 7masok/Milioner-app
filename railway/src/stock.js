@@ -37,91 +37,65 @@ function setXmlAttr(tag, name, value) {
 function makeAvailability(storeId, available, stockCount) {
   return `<availability storeId="${esc(storeId)}" available="${available ? 'yes' : 'no'}" stockCount="${Math.max(0, Math.floor(stockCount))}"/>`;
 }
+
+function parsePayload(value){try{const x=typeof value==='string'?JSON.parse(value):value;return x&&typeof x==='object'?x:{}}catch{return {}}}
+function isBundle(product){return String(product?.kind||'simple')==='bundle'&&Array.isArray(product?.components)&&product.components.length>0}
+function bundleParts(product){return isBundle(product)?product.components.map(x=>({productId:String(x?.productId||''),qty:Math.max(1,Math.floor(n(x?.qty,1))||1)})).filter(x=>x.productId):[]}
+/* Kaspi receives only stock that remains free after every active order, including bundles. */
+function warehouseAvailability(snapshot){
+  const products=Array.isArray(snapshot?.products)?snapshot.products:[],reservations=(Array.isArray(snapshot?.reservations)?snapshot.reservations:[]).filter(x=>x?.active),byId=new Map(products.map(x=>[String(x?.id||''),x]).filter(([id])=>id));
+  function unitsInside(productId,targetId,seen=new Set()){const id=String(productId||'');if(!id||seen.has(id))return 0;if(id===targetId)return 1;const p=byId.get(id);if(!p||!isBundle(p))return 0;const next=new Set(seen);next.add(id);return bundleParts(p).reduce((sum,part)=>sum+part.qty*unitsInside(part.productId,targetId,next),0)}
+  const reserved=new Map();
+  for(const p of products){if(isBundle(p))continue;const id=String(p?.id||'');reserved.set(id,reservations.reduce((sum,row)=>sum+Math.max(0,n(row?.qty,0))*unitsInside(row?.productId,id),0))}
+  const cache=new Map();
+  function available(productId,seen=new Set()){const id=String(productId||'');if(!id||seen.has(id))return 0;if(cache.has(id))return cache.get(id);const p=byId.get(id);if(!p)return 0;const next=new Set(seen);next.add(id);const qty=isBundle(p)?Math.max(0,Math.floor(Math.min(...bundleParts(p).map(part=>available(part.productId,next)/part.qty)))):Math.max(0,Math.floor(n(p.stock,0)-n(reserved.get(id),0)));cache.set(id,qty);return qty}
+  return {products:byId,available};
+}
+function templateInfo(rawXml){
+  const offers=new Map(),storeIds=new Set(),offerRe=/<offer\b[^>]*\bsku\s*=\s*(["'])([^"']+)\1[^>]*>[\s\S]*?<\/offer>/gi;let match;
+  while((match=offerRe.exec(String(rawXml||'')))){const whole=match[0],sku=xmlDecode(match[2]).trim();if(!sku||offers.has(sku))continue;const stores=new Set(),availabilityRe=/<availability\b[^>]*\bstoreId\s*=\s*(["'])([^"']+)\1[^>]*\/?>/gi;let availability;while((availability=availabilityRe.exec(whole))){const storeId=xmlDecode(availability[2]).trim();if(storeId){stores.add(storeId);storeIds.add(storeId)}}offers.set(sku,{stores})}
+  return {offers,storeIds:[...storeIds]};
+}
+async function warehouseKaspiRows(){
+  const [links,stateResult]=await Promise.all([pool.query(`SELECT pl.sku,pl.product_id AS "productId",p.stock AS "dbStock",p.name FROM product_links pl JOIN products p ON p.id=pl.product_id WHERE pl.market='Kaspi' AND TRIM(pl.sku)<>'' ORDER BY pl.sku`),pool.query('SELECT payload FROM warehouse_state WHERE id=1')]);
+  const availability=warehouseAvailability(parsePayload(stateResult.rows[0]?.payload));
+  return links.rows.map(row=>{const productId=String(row.productId||''),known=availability.products.has(productId);return {sku:String(row.sku||'').trim(),productId,name:String(row.name||''),stock:known?availability.available(productId):Math.max(0,Math.floor(n(row.dbStock,0)))}}).filter(row=>row.sku);
+}
+function feedUrl(req){const host=String(req.get('x-forwarded-host')||req.get('host')||'').split(',')[0].trim(),protocol=String(req.get('x-forwarded-proto')||req.protocol||'https').split(',')[0].trim()||'https';return host?`${protocol}://${host}/kaspi/price-list.xml`:''}
+async function kaspiStockFeedStatus(req){
+  const [template,rows,access]=await Promise.all([liveTemplate(),warehouseKaspiRows(),pool.query('SELECT last_fetched_at AS "lastFetchedAt",fetch_count AS "fetchCount" FROM kaspi_price_feed_access WHERE id=1').catch(()=>({rows:[]}))]);
+  const rawXml=String(template?.rawXml||''),info=templateInfo(rawXml),primaryStoreId=String(template?.primaryStoreId||'').trim()||info.storeIds[0]||'',missingSkus=rows.filter(row=>!info.offers.has(row.sku)).map(row=>row.sku),missingPrimaryStore=primaryStoreId?rows.filter(row=>info.offers.has(row.sku)&&!info.offers.get(row.sku).stores.has(primaryStoreId)).map(row=>row.sku):[],configured=Boolean(rawXml),ready=configured&&Boolean(primaryStoreId);
+  return {ok:true,configured,ready,primaryStoreId,storeIds:info.storeIds,offerCount:info.offers.size,linked:rows.length,matched:rows.length-missingSkus.length,missingSkus,missingPrimaryStore,lastFetchedAt:Number(access.rows[0]?.lastFetchedAt||0),fetchCount:Number(access.rows[0]?.fetchCount||0),feedUrl:ready?feedUrl(req):'',error:configured&&!primaryStoreId?'В XML не найден склад Kaspi (availability storeId).':''};
+}
+
 async function liveTemplate() {
   const row = await pool.query('SELECT raw_xml AS "rawXml", primary_store_id AS "primaryStoreId" FROM kaspi_price_template WHERE id=1');
   return row.rows[0] || null;
 }
 async function liveKaspiXml() {
-  const template = await liveTemplate();
-  const stockRows = await pool.query(`
-    SELECT pl.sku, p.stock
-    FROM product_links pl
-    JOIN products p ON p.id = pl.product_id
-    WHERE pl.market='Kaspi' AND TRIM(pl.sku)<>''
-  `);
-  const stocks = new Map(stockRows.rows.map(row => [String(row.sku || '').trim(), Math.max(0, Math.floor(n(row.stock, 0)))]));
-
-  if (!template?.rawXml) {
-    const offers = [...stocks.entries()]
-      .filter(([, stock]) => stock > 0)
-      .map(([sku, stock]) => `    <offer sku="${esc(sku)}"><stockCount>${stock}</stockCount></offer>`)
-      .join('\n');
-    return `<?xml version="1.0" encoding="UTF-8"?>\n<kaspi_catalog date="${new Date().toISOString()}">\n  <offers>\n${offers}\n  </offers>\n</kaspi_catalog>`;
-  }
-
-  const raw = String(template.rawXml);
-  const offerSkus = new Set();
-  const allStoreIds = new Set();
-  const offerRe = /<offer\b[^>]*\bsku\s*=\s*(["'])([^"']+)\1[^>]*>[\s\S]*?<\/offer>/gi;
-  let probe;
-  while ((probe = offerRe.exec(raw))) {
-    const sku = xmlDecode(probe[2]).trim();
-    if (!sku) continue;
-    offerSkus.add(sku);
-    const aRe = /<availability\b[^>]*\bstoreId\s*=\s*(["'])([^"']+)\1[^>]*\/?>/gi;
-    let a;
-    while ((a = aRe.exec(probe[0]))) allStoreIds.add(xmlDecode(a[2]).trim());
-  }
-  const primaryStoreId = String(template.primaryStoreId || '').trim() || [...allStoreIds][0] || '';
-  if (!primaryStoreId) throw new Error('Kaspi primary store is not configured');
-
-  const xml = raw.replace(offerRe, (whole, _quote, encodedSku, body) => {
-    const sku = xmlDecode(encodedSku).trim();
-    if (!offerSkus.has(sku)) return whole;
-    const stock = stocks.get(sku) || 0;
-    if (stock <= 0) return '';
-
-    let foundPrimary = false;
-    let hasAvailability = false;
-    const updatedBody = body.replace(/<availability\b[^>]*\/?>/gi, tag => {
-      const storeId = xmlAttr(tag, 'storeId');
-      if (!storeId) return tag;
-      hasAvailability = true;
-      if (storeId === primaryStoreId) {
-        foundPrimary = true;
-        return setXmlAttr(setXmlAttr(tag, 'available', 'yes'), 'stockCount', String(stock));
-      }
-      return setXmlAttr(setXmlAttr(tag, 'available', 'no'), 'stockCount', '0');
-    });
-
-    const withPrimary = foundPrimary
-      ? updatedBody
-      : `${updatedBody}${makeAvailability(primaryStoreId, true, stock)}`;
-    return `${whole.slice(0, whole.indexOf(body))}${withPrimary}</offer>`;
+  const [template,rows]=await Promise.all([liveTemplate(),warehouseKaspiRows()]),stocks=new Map(rows.map(row=>[row.sku,row.stock]));
+  if(!template?.rawXml){const offers=rows.map(row=>`    <offer sku="${esc(row.sku)}"><stockCount>${row.stock}</stockCount></offer>`).join('\n');return `<?xml version="1.0" encoding="UTF-8"?>\n<kaspi_catalog date="${new Date().toISOString()}">\n  <offers>\n${offers}\n  </offers>\n</kaspi_catalog>`;}
+  const raw=String(template.rawXml),info=templateInfo(raw),primaryStoreId=String(template.primaryStoreId||'').trim()||info.storeIds[0]||'';
+  if(!primaryStoreId)throw new Error('Kaspi primary store is not configured');
+  const offerRe=/<offer\b[^>]*\bsku\s*=\s*(["'])([^"']+)\1[^>]*>[\s\S]*?<\/offer>/gi;
+  return raw.replace(offerRe,(whole,_quote,encodedSku)=>{
+    const sku=xmlDecode(encodedSku).trim();if(!stocks.has(sku))return whole;
+    const stock=Math.max(0,stocks.get(sku)||0),openingEnd=whole.indexOf('>');if(openingEnd<0)return whole;
+    const opening=whole.slice(0,openingEnd+1),body=whole.slice(openingEnd+1,-'</offer>'.length);let foundPrimary=false;
+    const updated=body.replace(/<availability\b[^>]*\/?>/gi,tag=>{const storeId=xmlAttr(tag,'storeId');if(!storeId)return tag;if(storeId===primaryStoreId){foundPrimary=true;return setXmlAttr(setXmlAttr(tag,'available',stock>0?'yes':'no'),'stockCount',String(stock))}return setXmlAttr(setXmlAttr(tag,'available','no'),'stockCount','0')});
+    return `${opening}${foundPrimary?updated:updated+makeAvailability(primaryStoreId,stock>0,stock)}</offer>`;
   });
-
-  // Ensure only managed, positive-stock offers from the current warehouse remain.
-  return xml;
 }
 
-export async function kaspiFeedRows() {
-  const result = await pool.query(`
-    SELECT pl.sku,p.stock,p.name
-    FROM product_links pl
-    JOIN products p ON p.id=pl.product_id
-    WHERE pl.market='Kaspi' AND TRIM(pl.sku)<>'' AND COALESCE(p.stock,0)>0
-    ORDER BY pl.sku
-  `);
-  return result.rows.map(row => ({ sku:String(row.sku||'').trim(), stock:Math.max(0,Math.floor(n(row.stock,0))), name:String(row.name||'') }));
-}
+export async function kaspiFeedRows(){return warehouseKaspiRows()}
 
-export const kaspiFeedHandler = asyncRoute(async (_req, res) => {
+
+export const kaspiFeedHandler = asyncRoute(async (req,res) => {
   try {
-    const xml = await liveKaspiXml();
-    res.type('application/xml').set('Cache-Control', 'no-store, max-age=0').send(xml);
-  } catch (error) {
-    res.status(502).json({ ok:false, error:String(error?.message || error) });
-  }
+    const xml=await liveKaspiXml();
+    await pool.query(`INSERT INTO kaspi_price_feed_access(id,last_fetched_at,fetch_count,last_user_agent) VALUES(1,$1,1,$2) ON CONFLICT(id) DO UPDATE SET last_fetched_at=EXCLUDED.last_fetched_at,fetch_count=kaspi_price_feed_access.fetch_count+1,last_user_agent=EXCLUDED.last_user_agent`,[Date.now(),String(req.get('user-agent')||'').slice(0,500)]).catch(()=>{});
+    res.type('application/xml').set('Cache-Control','no-store, max-age=0').send(xml);
+  } catch(error){res.status(502).json({ok:false,error:String(error?.message||error)})}
 });
 
 stockRouter.get('/stock-sync-status', requireTrustedOrigin, asyncRoute(async (_req, res) => {
@@ -136,17 +110,17 @@ stockRouter.get('/stock-sync-status', requireTrustedOrigin, asyncRoute(async (_r
   res.json({ ok:true, market:'Kaspi', ...result.rows[0] });
 }));
 
-stockRouter.get('/kaspi-live-stock-status', asyncRoute(async (_req, res) => {
-  const result = await pool.query(`
-    SELECT COUNT(*)::int AS linked,
-           COUNT(*) FILTER (WHERE COALESCE(p.stock,0)>0)::int AS positive_stock,
-           COUNT(*) FILTER (WHERE COALESCE(p.stock,0)<=0)::int AS zero_stock,
-           MAX(p.updated_at) AS last_product_update
-    FROM product_links pl
-    JOIN products p ON p.id=pl.product_id
-    WHERE pl.market='Kaspi'
-  `);
-  res.json({ ok:true, source:'Railway PostgreSQL products', ...result.rows[0] });
+stockRouter.get('/kaspi-live-stock-status',asyncRoute(async (_req,res)=>{const rows=await warehouseKaspiRows();res.json({ok:true,source:'Railway warehouse state minus active reservations',linked:rows.length,positive_stock:rows.filter(row=>row.stock>0).length,zero_stock:rows.filter(row=>row.stock<=0).length})}));
+stockRouter.get('/kaspi-stock-feed-status',requireTrustedOrigin,asyncRoute(async (req,res)=>{res.json(await kaspiStockFeedStatus(req))}));
+stockRouter.put('/kaspi-price-template',requireTrustedOrigin,asyncRoute(async (req,res)=>{
+  const existing=await liveTemplate(),hasXml=typeof req.body?.xml==='string',rawXml=hasXml?String(req.body.xml||'').trim():String(existing?.rawXml||'');
+  if(!rawXml){const error=new Error('Выберите полный XML-прайс Kaspi.');error.status=400;throw error}
+  if(Buffer.byteLength(rawXml,'utf8')>6_000_000){const error=new Error('XML больше 6 МБ.');error.status=413;throw error}
+  const info=templateInfo(rawXml);if(!info.offers.size){const error=new Error('В XML не найдено ни одного offer с Kaspi SKU.');error.status=400;throw error}
+  const requestedPrimary=String(req.body?.primaryStoreId||'').trim(),primaryStoreId=requestedPrimary||String(existing?.primaryStoreId||'').trim()||info.storeIds[0]||'';
+  if(requestedPrimary&&info.storeIds.length&&!info.storeIds.includes(requestedPrimary)){const error=new Error('Выбранный склад отсутствует в XML Kaspi.');error.status=400;throw error}
+  await pool.query(`INSERT INTO kaspi_price_template(id,raw_xml,feed_key,primary_store_id,offer_count,store_ids,merchant_id,updated_at) VALUES(1,$1,'',$2,$3,$4,'',$5) ON CONFLICT(id) DO UPDATE SET raw_xml=EXCLUDED.raw_xml,primary_store_id=EXCLUDED.primary_store_id,offer_count=EXCLUDED.offer_count,store_ids=EXCLUDED.store_ids,updated_at=EXCLUDED.updated_at`,[rawXml,primaryStoreId,info.offers.size,JSON.stringify(info.storeIds),Date.now()]);
+  res.json(await kaspiStockFeedStatus(req));
 }));
 
 export { liveKaspiXml };
