@@ -13,10 +13,14 @@ function normalizeSku(value) {
   return String(value ?? '').trim();
 }
 
-// IMPORTANT: Kaspi stock is derived from the current warehouse product stock,
-// not from orders/reservations and not from an old warehouse snapshot.
-// The feed is read directly from the normalized products table, which is
-// refreshed whenever /warehouse-state is written.
+// Kaspi uses the XML price-list itself to decide which seller offers remain
+// on sale. A zero-stock product must NOT be sent as an <offer>: Kaspi's own
+// guidance says products omitted from the latest price-list are moved to
+// "Сняты с продажи". Sending stockCount=0 keeps the SKU in the price-list
+// and can cause a manually removed product to reappear.
+//
+// Positive stock is still derived from the current normalized warehouse
+// product stock, not from orders/reservations or an old warehouse snapshot.
 export async function kaspiFeedRows() {
   const result = await pool.query(`
     SELECT pl.sku,
@@ -26,6 +30,7 @@ export async function kaspiFeedRows() {
     JOIN products p ON p.id = pl.product_id
     WHERE pl.market = 'Kaspi'
       AND TRIM(pl.sku) <> ''
+      AND COALESCE(p.stock, 0) > 0
     ORDER BY pl.sku
   `);
   return result.rows.map(row => ({
