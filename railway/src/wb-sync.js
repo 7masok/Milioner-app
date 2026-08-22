@@ -135,18 +135,18 @@ export async function syncWbOrders(market, { force = false } = {}) {
 }
 
 export function startWbSyncLoop() {
-  const run = async () => {
+  const run = async (force = false) => {
     await Promise.all(
       ['WB', 'WB2'].map(async (market) => {
         try {
-          await syncWbOrders(market);
+          await syncWbOrders(market, { force });
         } catch (error) {
           console.error(`WB background sync failed (${market})`, error);
         }
       })
     );
   };
-  void run();
+  void run(true);
   const timer = setInterval(run, SYNC_MS);
   timer.unref();
   return timer;
