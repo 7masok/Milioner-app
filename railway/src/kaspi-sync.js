@@ -1,6 +1,8 @@
 import { config } from './config.js';
 import { pool } from './db.js';
 import { credentialFor } from './connections.js';
+import { kaspiOrderIsActive } from './kaspi-status.js';
+import { reconcileKaspiReservations } from './reservation-reconcile.js';
 
 const DEFAULT_KASPI_WORKER = 'https://fragrant-shadow-72ed.7masok.workers.dev';
 const KASPI_API = 'https://kaspi.kz/shop/api/v2';
@@ -9,6 +11,9 @@ const FETCH_TIMEOUT_MS = 20_000;
 const STALE_RUN_MS = 3 * 60 * 1000;
 const MAX_BATCHES = 3;
 const MAX_DIRECT_ORDERS = 240;
+const ACTIVE_LOOKBACK_DAYS = 14;
+const MAX_ACTIVE_PAGES_PER_STATE = 30;
+const ACTIVE_CANDIDATE_STATES = Object.freeze(['KASPI_DELIVERY', 'NEW', 'SIGN_REQUIRED', 'PICKUP']);
 // Kaspi Pay includes every sale, not only Kaspi Delivery. Keep every order
 // state in the Railway collector so pickup and seller-delivery sales do not
 // disappear from the warehouse report.
@@ -205,6 +210,34 @@ async function fetchDirect(days = 2) {
   return { orders, meta: { pageCount: 1, failedStates }, upstream: 'Kaspi API direct via Railway' };
 }
 
+async function fetchAuthoritativeActiveOrders(days = ACTIVE_LOOKBACK_DAYS) {
+  const byId = new Map();
+  const productCache = new Map();
+  for (const state of ACTIVE_CANDIDATE_STATES) {
+    let pageCount = 1;
+    for (let page = 0; page < pageCount; page++) {
+      const result = await directOrderPage({ days, state, page });
+      if (result.pageCount > MAX_ACTIVE_PAGES_PER_STATE) {
+        throw new Error(`Kaspi active ${state} has ${result.pageCount} pages; safe limit is ${MAX_ACTIVE_PAGES_PER_STATE}`);
+      }
+      pageCount = result.pageCount;
+      for (const raw of result.orders) {
+        const probe = normalizeOrder(raw);
+        if (!probe || !kaspiOrderIsActive(probe.status, probe.state)) continue;
+        byId.set(String(probe.orderId), raw);
+      }
+    }
+  }
+
+  const orders = [];
+  for (const raw of byId.values()) {
+    const lines = await directOrderLines(raw, productCache);
+    if (!lines.length) throw new Error(`Kaspi active order ${String(raw?.id || '')} has no entries`);
+    orders.push({ ...raw, lines });
+  }
+  return orders;
+}
+
 async function fetchFromWorker(base, batch, days) {
   const q = new URLSearchParams({ days: String(days), batch: String(batch), size: '100' });
   const data = await fetchJson(`${base}/kaspi/sync?${q.toString()}`, { headers: { Accept: 'application/json' } }, 'Kaspi Worker');
@@ -258,6 +291,14 @@ export async function syncKaspiOrders({ days = 2 } = {}) {
     let items = 0;
     let upstream = '';
     try {
+      let authoritativeActiveOrders = null;
+      try {
+        authoritativeActiveOrders = await fetchAuthoritativeActiveOrders();
+      } catch (error) {
+        // Never close reservations from a partial marketplace response. The
+        // previous safe snapshot remains in use until a complete read works.
+        console.warn('Kaspi authoritative active-order fetch skipped:', String(error?.message || error));
+      }
       let payload = null;
       let directError = '';
       try {
@@ -283,15 +324,35 @@ export async function syncKaspiOrders({ days = 2 } = {}) {
       if (payload.meta?.failedStates?.length) {
         console.warn('Kaspi sync skipped unavailable state filters:', payload.meta.failedStates.join(' | '));
       }
+      const mergedOrders = new Map();
       for (const raw of payload.orders) {
+        const id = String(raw?.id || raw?.attributes?.id || '');
+        if (id) mergedOrders.set(id, raw);
+      }
+      for (const raw of authoritativeActiveOrders || []) {
+        const id = String(raw?.id || raw?.attributes?.id || '');
+        if (id) mergedOrders.set(id, raw);
+      }
+      for (const raw of mergedOrders.values()) {
         const order = normalizeOrder(raw);
         if (!order) continue;
         await upsertOrder(order);
         items += order.lines.filter(line => line.entryId !== '__pending__').length || 1;
       }
+      let reservationReconcile = null;
+      if (authoritativeActiveOrders) {
+        const activeEntries = authoritativeActiveOrders.flatMap(raw => {
+          const order = normalizeOrder(raw);
+          if (!order || !kaspiOrderIsActive(order.status, order.state)) return [];
+          return order.lines
+            .filter(line => line.entryId !== '__pending__' && Number(line.qty) > 0)
+            .map(line => ({ orderId: order.orderId, entryId: line.entryId }));
+        });
+        reservationReconcile = await reconcileKaspiReservations(activeEntries);
+      }
       const finishedAt = Date.now();
       await pool.query("UPDATE sync_runs SET finished_at=$1,ok=1,items=$2,error='' WHERE id=$3", [finishedAt, items, runId]);
-      return { ok: true, items, finishedAt, upstream };
+      return { ok: true, items, finishedAt, upstream, reservationReconcile };
     } catch (error) {
       const message = String(error?.message || error).slice(0, 1000);
       await pool.query('UPDATE sync_runs SET finished_at=$1,ok=0,items=$2,error=$3 WHERE id=$4', [Date.now(), items, message, runId]).catch(() => {});
@@ -311,3 +372,4 @@ export function startKaspiSyncLoop() {
   timer.unref();
   return timer;
 }
+
