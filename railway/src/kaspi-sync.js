@@ -1,5 +1,6 @@
 import { config } from './config.js';
 import { pool } from './db.js';
+import { credentialFor } from './connections.js';
 
 const DEFAULT_KASPI_WORKER = 'https://fragrant-shadow-72ed.7masok.workers.dev';
 const KASPI_API = 'https://kaspi.kz/shop/api/v2';
@@ -95,8 +96,8 @@ async function fetchJson(url, options = {}, label = 'request') {
   }
 }
 
-function kaspiHeaders() {
-  const token = String(config.kaspiToken || '').trim();
+async function kaspiHeaders() {
+  const token = await credentialFor('Kaspi', config.kaspiToken);
   if (!token) throw new Error('KASPI_TOKEN is not configured on Railway');
   return {
     Accept: 'application/vnd.api+json',
@@ -114,7 +115,7 @@ async function directOrderPage({ days, state, page }) {
   q.set('filter[orders][creationDate][$ge]', String(start));
   q.set('filter[orders][creationDate][$le]', String(end));
   if (state) q.set('filter[orders][state]', state);
-  const data = await fetchJson(`${KASPI_API}/orders?${q.toString()}`, { headers: kaspiHeaders() }, 'Kaspi orders');
+  const data = await fetchJson(`${KASPI_API}/orders?${q.toString()}`, { headers: await kaspiHeaders() }, 'Kaspi orders');
   return {
     orders: Array.isArray(data?.data) ? data.data : [],
     pageCount: Math.max(1, n(data?.meta?.pageCount ?? data?.meta?.totalPages ?? 1, 1))
@@ -124,7 +125,7 @@ async function directOrderPage({ days, state, page }) {
 async function directOrderLines(order, productCache) {
   const orderId = String(order?.id || '').trim();
   if (!orderId) return [];
-  const entries = await fetchJson(`${KASPI_API}/orders/${encodeURIComponent(orderId)}/entries`, { headers: kaspiHeaders() }, 'Kaspi order entries');
+  const entries = await fetchJson(`${KASPI_API}/orders/${encodeURIComponent(orderId)}/entries`, { headers: await kaspiHeaders() }, 'Kaspi order entries');
   const lines = [];
   for (const entry of Array.isArray(entries?.data) ? entries.data : []) {
     const attrs = entry?.attributes || {};
@@ -133,7 +134,7 @@ async function directOrderLines(order, productCache) {
     if (masterProductId && product === undefined) product = null;
     if (masterProductId && !productCache.has(masterProductId)) {
       try {
-        const data = await fetchJson(`${KASPI_API}/masterproducts/${encodeURIComponent(masterProductId)}/merchantProduct`, { headers: kaspiHeaders() }, 'Kaspi merchant product');
+        const data = await fetchJson(`${KASPI_API}/masterproducts/${encodeURIComponent(masterProductId)}/merchantProduct`, { headers: await kaspiHeaders() }, 'Kaspi merchant product');
         product = {
           code: String(data?.data?.attributes?.code || '').trim(),
           name: String(data?.data?.attributes?.name || '').trim()
@@ -158,7 +159,7 @@ async function directOrderLines(order, productCache) {
 }
 
 async function fetchDirect(days = 2) {
-  const token = String(config.kaspiToken || '').trim();
+  const token = await credentialFor('Kaspi', config.kaspiToken);
   if (!token) throw new Error('KASPI_TOKEN is not configured on Railway');
   const byId = new Map();
   const failedStates = [];

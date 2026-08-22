@@ -1,6 +1,7 @@
 import { pool } from './db.js';
 import { config } from './config.js';
 import { reconcileWbReservations } from './reservation-reconcile.js';
+import { credentialFor } from './connections.js';
 
 const WB_API = 'https://marketplace-api.wildberries.ru';
 const SYNC_MS = 10 * 60 * 1000;
@@ -8,8 +9,9 @@ const TIMEOUT_MS = 25_000;
 const LOOKBACK_DAYS = 14;
 const inFlight = new Map();
 
-function tokenFor(market) {
-  return String(market === 'WB2' ? config.wbToken2 : config.wbToken || '').trim();
+async function tokenFor(market) {
+  const fallback = market === 'WB2' ? config.wbToken2 : config.wbToken;
+  return credentialFor(market, fallback);
 }
 
 function timestamp(value) {
@@ -106,7 +108,7 @@ export async function syncWbOrders(market, { force = false } = {}) {
   if (!['WB', 'WB2'].includes(market)) throw new Error('Unsupported WB market');
   if (inFlight.has(market)) return inFlight.get(market);
   const task = (async () => {
-    const token = tokenFor(market);
+    const token = await tokenFor(market);
     if (!token) return { ok: false, market, skipped: true, error: `${market === 'WB2' ? 'WB_TOKEN_2' : 'WB_TOKEN'} is not configured` };
     const prior = await pool.query('SELECT * FROM sync_runs WHERE market=$1 ORDER BY id DESC LIMIT 1', [market]);
     const previous = prior.rows[0], now = Date.now();

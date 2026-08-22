@@ -9,6 +9,8 @@ import { reportsRouter } from './reports.js';
 import { stockRouter, kaspiFeedHandler } from './stock.js';
 import { startKaspiSyncLoop, syncKaspiOrders } from './kaspi-sync.js';
 import { startWbSyncLoop, syncWbOrders } from './wb-sync.js';
+import { authConfig, login, requireAppSession } from './auth.js';
+import { connectionsRouter } from './connections.js';
 
 assertRuntimeConfig();
 const app = express();
@@ -18,6 +20,11 @@ app.use(helmet({ crossOriginResourcePolicy: false }));
 app.use(exactCors);
 app.use(noStore);
 app.use(express.json({ limit: '7mb', strict: true }));
+
+app.get('/api/auth/config', requireTrustedOrigin, authConfig);
+app.post('/api/auth/login', requireTrustedOrigin, login);
+app.get('/api/auth/session', requireTrustedOrigin, requireAppSession, (_req,res) => res.json({ ok:true }));
+app.use('/api', requireAppSession);
 
 app.get('/health', async (_req, res, next) => {
   try {
@@ -64,6 +71,7 @@ app.post('/api/wb-sync-now', requireTrustedOrigin, async (req, res, next) => {
   } catch (error) { next(error); }
 });
 
+app.use('/api', connectionsRouter);
 app.use('/api', warehouseRouter);
 app.use('/api', ordersRouter);
 app.use('/api', reportsRouter);
