@@ -112,17 +112,18 @@ ordersRouter.get('/orders', asyncRoute(async (req, res) => {
     if (row.productId) return row;
     const fallback = safeNameFallback(row, products.rows);
     if (!fallback) return row;
-    if (row.market === 'Kaspi' && row.sku) inferredLinks.set(String(row.sku), String(fallback.product.id));
+    if (['Kaspi','WB','WB2'].includes(row.market) && row.sku) inferredLinks.set(`${row.market}\u0000${String(row.sku)}`, String(fallback.product.id));
     return { ...row, productId: fallback.product.id, productName: fallback.product.name, linkSource: 'name-safe-fallback' };
   });
 
   // Persist only unique, high-confidence Kaspi title matches so the next load is
   // resolved by SKU and does not depend on title matching again.
   const now = Date.now();
-  for (const [sku, productId] of inferredLinks) {
+  for (const [key, productId] of inferredLinks) {
+    const [linkMarket,sku]=key.split('\u0000');
     await pool.query(`INSERT INTO product_links(product_id,market,sku,created_at,updated_at)
-      VALUES($1,'Kaspi',$2,$3,$3)
-      ON CONFLICT(market,sku) DO NOTHING`, [productId, sku, now]);
+      VALUES($1,$2,$3,$4,$4)
+      ON CONFLICT(market,sku) DO NOTHING`, [productId, linkMarket, sku, now]);
   }
 
   res.json({ ok: true, orders: out });
