@@ -64,9 +64,9 @@ async function mirrorProducts(client, products) {
     ]);
     for (const [market, field] of [['Kaspi', 'kaspi'], ['WB', 'wb'], ['WB2', 'wb2'], ['Ozon', 'ozon']]) {
       const skus = marketplaceSkus(product, field);
-      // A stale device snapshot may omit one marketplace field. Never erase a
-      // valid server-side link merely because that field arrived empty.
-      if (skus.length) await client.query('DELETE FROM product_links WHERE product_id=$1 AND market=$2 AND NOT (sku = ANY($3::text[]))', [id, market, skus]);
+      // Marketplace identifiers are an append-only server ledger. A barcode or
+      // article that was linked once must survive edits and stale device
+      // snapshots; only deleting the product itself removes its links.
       for (const sku of skus) {
         await client.query(`INSERT INTO product_links(product_id,market,sku,created_at,updated_at)
           VALUES($1,$2,$3,$4,$4) ON CONFLICT(market,sku) DO UPDATE SET product_id=excluded.product_id,updated_at=excluded.updated_at`,
