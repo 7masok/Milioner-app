@@ -12,10 +12,8 @@ export const config = Object.freeze({
   marketSyncEnabled: bool('MARKET_SYNC_ENABLED', false),
   adminToken: String(process.env.APP_ADMIN_TOKEN || ''),
   kaspiToken: String(process.env.KASPI_TOKEN || ''),
-  kaspiWorkerUrl: String(process.env.KASPI_WORKER_URL || '').replace(/\/$/, ''),
   wbToken: String(process.env.WB_TOKEN || ''),
   wbToken2: String(process.env.WB2_TOKEN || process.env.WB_TOKEN_2 || ''),
-  wbWorkerUrl: String(process.env.WB_WORKER_URL || '').replace(/\/$/, ''),
   wbWarehouseId: String(process.env.WB_WAREHOUSE_ID || ''),
   wbWarehouseId2: String(process.env.WB_WAREHOUSE_ID_2 || '')
 });
@@ -24,3 +22,4 @@ export function assertRuntimeConfig() {
   if (!config.databaseUrl) throw new Error('DATABASE_URL is required');
   if (!/^https:\/\//i.test(config.corsOrigin)) throw new Error('CORS_ORIGIN must be an HTTPS origin');
 }
+
