@@ -4,7 +4,6 @@ import { credentialFor } from './connections.js';
 import { kaspiOrderIsActive } from './kaspi-status.js';
 import { reconcileKaspiReservations } from './reservation-reconcile.js';
 
-const DEFAULT_KASPI_WORKER = 'https://fragrant-shadow-72ed.7masok.workers.dev';
 const KASPI_API = 'https://kaspi.kz/shop/api/v2';
 const SYNC_INTERVAL_MS = 5 * 60 * 1000;
 const FETCH_TIMEOUT_MS = 20_000;
@@ -23,14 +22,6 @@ const DIRECT_ORDER_STATES = Object.freeze([
   'KASPI_DELIVERY', 'NEW', 'SIGN_REQUIRED', 'PICKUP', 'DELIVERY', 'ARCHIVE'
 ]);
 let syncInFlight = null;
-
-function configuredWorkerBase() {
-  return String(config.kaspiWorkerUrl || '').trim().replace(/\/$/, '');
-}
-
-function workerCandidates() {
-  return [...new Set([configuredWorkerBase(), DEFAULT_KASPI_WORKER].filter(Boolean))];
-}
 
 function n(value, fallback = 0) {
   const x = Number(value);
@@ -194,7 +185,7 @@ async function fetchDirect(days = 2) {
       }
     } catch (error) {
       // One unavailable state must not make us fall back to the old
-      // Cloudflare-only delivery feed and silently lose the other states.
+      // A delivery-only feed would silently lose orders from the other states.
       failedStates.push(`${state}: ${String(error?.message || error)}`);
     }
     if (byId.size >= MAX_DIRECT_ORDERS) break;
@@ -264,22 +255,6 @@ async function updateObservedKaspiStates(observed) {
   }
 }
 
-async function fetchFromWorker(base, batch, days) {
-  const q = new URLSearchParams({ days: String(days), batch: String(batch), size: '100' });
-  const data = await fetchJson(`${base}/kaspi/sync?${q.toString()}`, { headers: { Accept: 'application/json' } }, 'Kaspi Worker');
-  const orders = Array.isArray(data?.orders) ? data.orders : Array.isArray(data?.data) ? data.data : [];
-  return { orders, meta: data?.meta || {}, upstream: base };
-}
-
-async function fetchWorkerBatch(batch, days = 2) {
-  const errors = [];
-  for (const base of workerCandidates()) {
-    try { return await fetchFromWorker(base, batch, days); }
-    catch (error) { errors.push(`${base}: ${String(error?.message || error)}`); }
-  }
-  throw new Error(errors.join(' | ') || 'Kaspi Worker is unavailable');
-}
-
 async function upsertOrder(order) {
   const now = Date.now();
   for (const line of order.lines) {
@@ -336,20 +311,13 @@ export async function syncKaspiOrders({ days = 2 } = {}) {
         directError = String(error?.message || error);
       }
       if (!payload || !payload.orders.length) {
-        const pages = [];
-        let pageCount = 1;
-        for (let batch = 0; batch < Math.min(MAX_BATCHES, pageCount); batch++) {
-          const page = await fetchWorkerBatch(batch, days);
-          pages.push(...page.orders);
-          upstream = page.upstream || upstream;
-          pageCount = Math.max(1, Math.min(MAX_BATCHES, n(page.meta?.pageCount ?? page.meta?.totalPages ?? 1, 1)));
-          if (!page.orders.length) break;
+        if (authoritativeActiveOrders) {
+          payload = { orders: authoritativeActiveOrders, upstream: 'Kaspi API direct active set', meta: {} };
+        } else {
+          throw new Error(`Kaspi direct API returned no orders${directError ? `; ${directError}` : ''}`);
         }
-        payload = { orders: pages, upstream: upstream || 'Cloudflare Kaspi Worker' };
-      } else {
-        upstream = payload.upstream;
       }
-      if (!payload.orders.length) throw new Error(`Kaspi returned no orders${directError ? `; direct=${directError}` : ''}`);
+      upstream = payload.upstream || 'Kaspi API direct via Railway';
       if (payload.meta?.failedStates?.length) {
         console.warn('Kaspi sync skipped unavailable state filters:', payload.meta.failedStates.join(' | '));
       }
@@ -368,8 +336,7 @@ export async function syncKaspiOrders({ days = 2 } = {}) {
         await upsertOrder(order);
         items += order.lines.filter(line => line.entryId !== '__pending__').length || 1;
       }
-      // The legacy Worker may contain an older status for the same order.
-      // Apply the direct Kaspi observation last so stale cache data can never
+      // Apply the complete direct observation last so no older cached row can
       // turn a transmitted parcel back into a new order.
       if (authoritativeObservedOrders) await updateObservedKaspiStates(authoritativeObservedOrders);
       let reservationReconcile = null;
