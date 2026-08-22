@@ -13,12 +13,33 @@ function sameText(left, right) {
   return String(left ?? '') === String(right ?? '');
 }
 
+// WB FBS reservation is only valid while the order is explicitly in work.
+// Unknown/missing statuses must NEVER create a reservation: treating them as
+// active was the source of phantom reserves after incomplete status responses.
 function wbOrderIsActive(status, state) {
-  const supplier = String(status || '').toUpperCase();
-  const wb = String(state || '').toUpperCase();
-  if (['CANCEL', 'CANCELLED'].includes(supplier)) return false;
-  if (['CANCELED', 'CANCELLED', 'CANCELED_BY_CLIENT', 'DECLINED_BY_CLIENT', 'DEFECT'].includes(wb)) return false;
-  if (['SORTED', 'ACCEPTED_BY_CARRIER', 'SENT_TO_CARRIER', 'READY_FOR_PICKUP', 'SOLD'].includes(wb)) return false;
+  const supplier = String(status || '').trim().toLowerCase();
+  const wb = String(state || '').trim().toLowerCase();
+
+  const activeSupplier = new Set(['new', 'confirm', 'complete']);
+  const terminalSupplier = new Set(['cancel']);
+  const activeWb = new Set(['waiting']);
+  const terminalWb = new Set([
+    'sorted',
+    'sold',
+    'canceled',
+    'cancelled',
+    'canceled_by_client',
+    'cancelled_by_client',
+    'declined_by_client',
+    'defect',
+    'ready_for_pickup',
+    'canceled_by_missed_call',
+    'cancelled_by_missed_call'
+  ]);
+
+  if (terminalSupplier.has(supplier) || terminalWb.has(wb)) return false;
+  if (!activeSupplier.has(supplier)) return false;
+  if (!activeWb.has(wb)) return false;
   return true;
 }
 
