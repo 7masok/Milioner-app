@@ -353,7 +353,6 @@ export async function syncKaspiOrders({ days = 2 } = {}) {
       if (payload.meta?.failedStates?.length) {
         console.warn('Kaspi sync skipped unavailable state filters:', payload.meta.failedStates.join(' | '));
       }
-      if (authoritativeObservedOrders) await updateObservedKaspiStates(authoritativeObservedOrders);
       const mergedOrders = new Map();
       for (const raw of payload.orders) {
         const id = String(raw?.id || raw?.attributes?.id || '');
@@ -369,6 +368,10 @@ export async function syncKaspiOrders({ days = 2 } = {}) {
         await upsertOrder(order);
         items += order.lines.filter(line => line.entryId !== '__pending__').length || 1;
       }
+      // The legacy Worker may contain an older status for the same order.
+      // Apply the direct Kaspi observation last so stale cache data can never
+      // turn a transmitted parcel back into a new order.
+      if (authoritativeObservedOrders) await updateObservedKaspiStates(authoritativeObservedOrders);
       let reservationReconcile = null;
       if (authoritativeActiveOrders) {
         const activeEntries = authoritativeActiveOrders.flatMap(raw => {
