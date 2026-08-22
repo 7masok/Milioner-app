@@ -23,6 +23,7 @@ app.use(express.json({ limit: '7mb', strict: true }));
 
 app.get('/api/auth/config', requireTrustedOrigin, authConfig);
 app.post('/api/auth/login', requireTrustedOrigin, login);
+app.get('/api/auth/session', requireTrustedOrigin, requireAppSession, (_req,res) => res.json({ ok:true }));
 app.use('/api', requireAppSession);
 
 app.get('/health', async (_req, res, next) => {
