@@ -70,15 +70,17 @@ async function fetchOrders(market, token) {
     const barcode = String(order?.skus?.[0] || '').trim();
     const article = String(order?.article || '').trim();
     const size = String(order?.techSize || '').trim();
+    const normalizedSize = size.toUpperCase().replace(/\s+/g, ' ');
+    const hasVariantSize = Boolean(size) && !['0', '00', 'ONE SIZE', 'ONESIZE', 'БЕЗ РАЗМЕРА'].includes(normalizedSize);
     return {
       orderId, code: String(order?.id ?? order?.orderUid ?? orderId), entryId: orderId,
       // Missing status is deliberately kept empty. The reservation reconciler
       // requires explicit WB statuses and must not turn a failed/missing status
       // lookup into a phantom active reservation.
       status: String(status?.supplierStatus || '').trim(), state: String(status?.wbStatus || '').trim(),
-      creationDate: timestamp(order?.createdAt), sku: barcode || article || String(order?.nmId || '').trim(),
+      creationDate: timestamp(order?.createdAt), sku: hasVariantSize ? (barcode || article || String(order?.nmId || '').trim()) : (article || String(order?.nmId || '').trim() || barcode),
       productName: [article || String(order?.subject || order?.nmId || ''), size ? `размер ${size}` : ''].filter(Boolean).join(' · '),
-      qty: 1, unitPrice: price, totalPrice: price, raw: { order, status, identity: { barcode, article, nmId: String(order?.nmId || ''), chrtId: Number(order?.chrtId || 0), size } }
+      qty: 1, unitPrice: price, totalPrice: price, raw: { order, status, identity: { barcode, article, nmId: String(order?.nmId || ''), chrtId: Number(order?.chrtId || 0), size, hasVariantSize } }
     };
   });
 }
