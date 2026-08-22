@@ -100,6 +100,27 @@ warehouseRouter.get('/warehouse-state', requireTrustedOrigin, asyncRoute(async (
   });
 }));
 
+warehouseRouter.get('/warehouse-backups', requireTrustedOrigin, asyncRoute(async (_req, res) => {
+  const result = await pool.query(`SELECT id,label,revision,created_at AS "createdAt"
+    FROM warehouse_backups ORDER BY created_at DESC LIMIT 50`);
+  return res.json({ ok: true, backups: result.rows.map(row => ({ ...row, revision: Number(row.revision || 0), createdAt: Number(row.createdAt || 0) })) });
+}));
+
+warehouseRouter.post('/warehouse-backups', requireTrustedOrigin, requireWritesEnabled, asyncRoute(async (req, res) => {
+  const label = String(req.body?.label || 'manual').trim().slice(0, 160) || 'manual';
+  const result = await transaction(async client => {
+    await client.query('SELECT pg_advisory_xact_lock($1)', [730021]);
+    const current = await client.query('SELECT payload,revision FROM warehouse_state WHERE id=1 FOR SHARE');
+    if (!current.rowCount) return null;
+    const createdAt = Date.now();
+    const inserted = await client.query(`INSERT INTO warehouse_backups(label,payload,revision,created_at)
+      VALUES($1,$2,$3,$4) RETURNING id`, [label, current.rows[0].payload, current.rows[0].revision, createdAt]);
+    return { id: String(inserted.rows[0].id), revision: Number(current.rows[0].revision || 0), createdAt, label };
+  });
+  if (!result) return res.status(409).json({ ok: false, error: 'warehouse-state-is-empty' });
+  return res.status(201).json({ ok: true, backup: result });
+}));
+
 warehouseRouter.put('/warehouse-state', requireTrustedOrigin, requireWritesEnabled, asyncRoute(async (req, res) => {
   const baseRevision = Number(req.body?.baseRevision || 0);
   const state = cleanState(req.body?.state);
