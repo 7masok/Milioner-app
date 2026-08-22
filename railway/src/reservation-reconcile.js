@@ -134,3 +134,108 @@ export async function reconcileWbReservations(market, _syncedSince) {
     return { changed: true, market, activeOrders: expected.size, unlinked, created, closed, revision, safetyBackup: needsSafetyBackup };
   });
 }
+
+// Kaspi reservations are rebuilt from a complete, freshly fetched set of
+// orders that have not yet been transmitted to delivery. This prevents old
+// browser-created reservations from accumulating forever when an order leaves
+// the packing queue or disappears from the short marketplace cache.
+export async function reconcileKaspiReservations(activeEntries) {
+  const activeKeys = new Set((activeEntries || []).map(row => orderKey('Kaspi', row.orderId, row.entryId)));
+
+  return transaction(async client => {
+    await client.query('SELECT pg_advisory_xact_lock($1)', [730021]);
+    const stored = await client.query('SELECT payload,revision FROM warehouse_state WHERE id=1 FOR UPDATE');
+    if (!stored.rowCount) return { changed: false, market: 'Kaspi', reason: 'warehouse-not-initialized' };
+
+    const orderRows = await client.query(`SELECT o.order_id,o.entry_id,o.status,o.state,o.creation_date,o.updated_at,o.qty,l.product_id
+      FROM marketplace_order_lines o
+      LEFT JOIN product_links l ON l.market=o.market AND l.sku=o.sku
+      WHERE o.market='Kaspi'
+      ORDER BY o.creation_date,o.order_id,o.entry_id`);
+
+    const state = parsePayload(stored.rows[0].payload);
+    const current = Array.isArray(state.reservations) ? state.reservations : [];
+    const expected = new Map();
+    let unlinked = 0;
+
+    for (const row of orderRows.rows) {
+      const key = orderKey('Kaspi', row.order_id, row.entry_id);
+      if (!activeKeys.has(key)) continue;
+      const qty = Math.max(0, Number(row.qty) || 0);
+      if (!row.product_id || qty === 0) {
+        unlinked++;
+        continue;
+      }
+      const reservation = stableReservation('Kaspi', row, row.product_id);
+      expected.set(key, reservation);
+    }
+
+    const next = [];
+    const seenCurrent = new Set();
+    let created = 0;
+    let closed = 0;
+    const now = Date.now();
+
+    for (const previous of current) {
+      if (!sameText(previous?.source, 'Kaspi')) {
+        next.push(previous);
+        continue;
+      }
+      const rawKey = String(previous?.externalKey || '');
+      const key = rawKey.startsWith('Kaspi:') ? rawKey : `Kaspi:${rawKey}`;
+      const replacement = expected.get(key);
+      if (replacement) {
+        const normalized = {
+          ...previous,
+          productId: replacement.productId,
+          qty: replacement.qty,
+          active: true,
+          source: 'Kaspi',
+          externalKey: replacement.externalKey,
+          stage: 'new',
+          date: Number(previous.date) || replacement.date,
+          updatedAt: previous.productId === replacement.productId && Number(previous.qty) === replacement.qty &&
+            previous.active === true && sameText(previous.stage, 'new') && rawKey === replacement.externalKey
+            ? Number(previous.updatedAt) || replacement.updatedAt
+            : now
+        };
+        next.push(normalized);
+        seenCurrent.add(key);
+      } else if (previous?.active === true) {
+        next.push({ ...previous, active: false, stage: 'reconciled', closedAt: now, closeReason: 'not-active-in-full-kaspi-sync', updatedAt: now });
+        closed++;
+      } else {
+        next.push(previous);
+      }
+    }
+
+    for (const [key, replacement] of expected) {
+      if (seenCurrent.has(key)) continue;
+      next.push(replacement);
+      created++;
+    }
+
+    const before = JSON.stringify(current);
+    const after = JSON.stringify(next);
+    state.settings = state.settings && typeof state.settings === 'object' ? state.settings : {};
+    const needsSafetyBackup = !state.settings.kaspiReservationAuthoritativeV1;
+    if (before === after && !needsSafetyBackup) {
+      return { changed: false, market: 'Kaspi', activeLines: expected.size, unlinked, created: 0, closed: 0, revision: Number(stored.rows[0].revision || 0) };
+    }
+
+    if (needsSafetyBackup) {
+      const backup = await client.query(`INSERT INTO warehouse_backups(label,payload,revision,created_at)
+        VALUES($1,$2,$3,$4) RETURNING id`, ['before-kaspi-authoritative-reserve-v1', stored.rows[0].payload, stored.rows[0].revision, now]);
+      state.settings.kaspiReservationAuthoritativeV1 = { at: now, backupId: String(backup.rows[0].id), revision: Number(stored.rows[0].revision || 0) };
+    }
+    state.reservations = next;
+    const raw = JSON.stringify(state);
+    const revision = Number(stored.rows[0].revision || 0) + 1;
+    await client.query('UPDATE warehouse_state SET payload=$1,revision=$2,updated_at=$3 WHERE id=1', [raw, revision, now]);
+    const sha = crypto.createHash('sha256').update(raw).digest('hex').toUpperCase();
+    await client.query('INSERT INTO warehouse_audit(revision,updated_at,payload_sha256,source) VALUES($1,$2,$3,$4)',
+      [revision, now, sha, 'kaspi-reservation-reconcile-full']);
+    return { changed: true, market: 'Kaspi', activeLines: expected.size, unlinked, created, closed, revision, safetyBackup: needsSafetyBackup };
+  });
+}
+
