@@ -17,10 +17,8 @@ DATABASE_URL=${{Postgres.DATABASE_URL}}
 CORS_ORIGIN=https://7masok.github.io
 APP_ADMIN_TOKEN=<random secret>
 KASPI_TOKEN=<secret>
-KASPI_WORKER_URL=<temporary upstream during connector migration>
 WB_TOKEN=<secret>
 WB_TOKEN_2=<secret>
-WB_WORKER_URL=<temporary upstream during connector migration>
 WB_WAREHOUSE_ID=<secret/config>
 WB_WAREHOUSE_ID_2=<secret/config>
 WAREHOUSE_WRITES_ENABLED=false
@@ -48,4 +46,5 @@ Do not commit `.env`, database URLs, API tokens, feed keys, or marketplace crede
 ## Server authority
 
 The browser always loads `warehouse_state` from PostgreSQL. Browser `localStorage` is not read as business data and is never uploaded. A revision conflict reloads the newer server state instead of merging an unknown local snapshot.
+
 
