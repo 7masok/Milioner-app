@@ -2,17 +2,16 @@
   "name": "millioner-railway-api",
   "private": true,
   "type": "module",
-  "engines": { "node": ">=22" },
+  "engines": {
+    "node": ">=22"
+  },
   "scripts": {
     "start": "node scripts/migrate.mjs && node src/server.js",
-    "db:migrate": "node scripts/migrate.mjs",
-    "db:import:d1": "node scripts/import-d1.mjs",
-    "db:verify": "node scripts/verify-migration.mjs"
+    "db:migrate": "node scripts/migrate.mjs"
   },
   "dependencies": {
     "express": "^5.1.0",
     "helmet": "^8.1.0",
-    "pg": "^8.16.3",
-    "sql.js": "^1.13.0"
+    "pg": "^8.16.3"
   }
 }

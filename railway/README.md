@@ -1,54 +1,42 @@
 # Railway application
 
-Railway serves both the warehouse interface and the API from one origin. The
-GitHub Pages address remains available as a temporary rollback frontend and
-uses the same Railway API and PostgreSQL database.
+This is the only active application service for Склад.
 
-The production cutover is deliberately split into reversible stages. Cloudflare D1 remains unchanged until the Railway service, data import, row checks, and cross-device checks all pass.
+## Architecture
 
-## Services
+```text
+Browser → Railway API → Railway PostgreSQL
+Railway → Kaspi and Wildberries APIs
+```
 
-- `millioner-api`: this repository, started with `npm start`.
-- `Postgres`: Railway PostgreSQL service.
-- GitHub Pages: the existing static frontend. Its API URL is changed only during the final cutover.
+The browser reads and saves business data through the Railway API. PostgreSQL is
+the single source of truth for products, purchases, movements, settings,
+reservations, and history.
 
 ## Railway variables
 
-Add these in Railway Variables. Use a reference variable for `DATABASE_URL`:
+Configure these in Railway Variables:
 
 ```text
 DATABASE_URL=${{Postgres.DATABASE_URL}}
-CORS_ORIGIN=https://7masok.github.io
+CORS_ORIGIN=https://milioner-app-staging.up.railway.app
 APP_ADMIN_TOKEN=<random secret>
 KASPI_TOKEN=<secret>
 WB_TOKEN=<secret>
 WB_TOKEN_2=<secret>
 WB_WAREHOUSE_ID=<secret/config>
 WB_WAREHOUSE_ID_2=<secret/config>
-WAREHOUSE_WRITES_ENABLED=false
-MARKET_SYNC_ENABLED=false
+WAREHOUSE_WRITES_ENABLED=true
+MARKET_SYNC_ENABLED=true
 ```
 
-Do not commit `.env`, database URLs, API tokens, feed keys, or marketplace credentials.
+Do not commit `.env`, database URLs, API tokens, feed keys, or marketplace
+credentials.
 
-## Safe import sequence
+## Running
 
-1. Keep `WAREHOUSE_WRITES_ENABLED=false` and `MARKET_SYNC_ENABLED=false`.
-2. Run migrations: `npm run db:migrate`.
-3. Inspect the D1 export without touching PostgreSQL:
-   `npm run db:import:d1 -- /secure/path/millioner-db-full.sql`.
-4. Import only into an empty target database:
-   `npm run db:import:d1 -- /secure/path/millioner-db-full.sql --apply`.
-   The importer aborts if any of the 24 target tables already contains rows.
-5. Compare every table count and deterministic row checksum:
-   `npm run db:verify -- /secure/path/millioner-db-full.sql`.
-6. Test all read endpoints while writes remain disabled.
-7. Take a final D1 delta/full export immediately before cutover and repeat import/verification in a fresh Postgres service if D1 changed.
-8. Enable writes on Railway, point the frontend to the Railway URL, and test phone/computer edits.
-9. Keep D1 and the old Worker untouched for rollback.
+```sh
+npm start
+```
 
-## Server authority
-
-The browser always loads `warehouse_state` from PostgreSQL. Browser `localStorage` is not read as business data and is never uploaded. A revision conflict reloads the newer server state instead of merging an unknown local snapshot.
-
-
+The startup command applies PostgreSQL migrations and starts the API.

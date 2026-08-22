@@ -30,7 +30,6 @@ const frontendFiles = Object.freeze([
   'kaspi-ads-v2-original.js',
   'reservation-compat-v1.js',
   'stock-alerts-rescue-v1.js',
-  'cloudflare-purchase-rescue-v1.js'
 ]);
 app.set('trust proxy', 1);
 app.disable('x-powered-by');
@@ -113,9 +112,9 @@ app.post('/api/wb-sync-now', requireTrustedOrigin, async (req, res, next) => {
 });
 
 
-// Compatibility route for the former Cloudflare client call.  Railway already
-// keeps order data server-side; do not turn an ordinary warehouse save into an
-// unverified external stock write.
+// Compatibility route for older browser builds. Railway keeps order data
+// server-side; an ordinary warehouse save must not trigger an unverified
+// external stock write.
 app.post('/api/stock-sync-now', requireTrustedOrigin, (req, res) => {
   const requested = Array.isArray(req.body?.markets) ? req.body.markets : ['WB', 'WB2'];
   const markets = [...new Set(requested.map(value => String(value || '').toUpperCase() === 'WB1' ? 'WB' : String(value || '').toUpperCase()).filter(value => ['WB', 'WB2'].includes(value)))];

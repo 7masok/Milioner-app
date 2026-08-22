@@ -3,7 +3,7 @@
 
 if(typeof normalizeWarehouseSnapshot!=='function'||typeof mergeWarehouseSnapshots!=='function')return;
 
-pushWarehouseToD1=async function(){
+pushWarehouseToServer=async function(){
   if(!warehouseRemoteReady||warehouseSaveInFlight||!warehouseLocalDirty)return false;
   warehouseSaveInFlight=true;
   cloudStatus('сохраняю…','warn');

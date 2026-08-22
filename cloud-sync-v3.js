@@ -100,7 +100,7 @@ fetchWarehouseCloud=async function(){return fetchServer(false,3)};
 scheduleWarehouseSave=function(delay=350){
   if(!warehouseRemoteReady||showingReadOnlyCache)return;
   clearTimeout(warehouseSaveTimer);
-  warehouseSaveTimer=setTimeout(()=>pushWarehouseToD1().catch(error=>{
+  warehouseSaveTimer=setTimeout(()=>pushWarehouseToServer().catch(error=>{
     console.error('server warehouse save failed',error);cloudStatus('изменения не сохранены · повторяю','warn');
     if(warehouseLocalDirty)setTimeout(()=>scheduleWarehouseSave(0),3000);
   }),delay);
@@ -111,7 +111,7 @@ save=function(){
   if(snapshotText(state)!==warehouseLastSyncedText){state.settings=state.settings||{};state.settings.serverUpdatedAt=Date.now();markWarehouseDirty();scheduleWarehouseSave()}
   return true;
 };
-pushWarehouseToD1=async function(){
+pushWarehouseToServer=async function(){
   if(!warehouseRemoteReady||showingReadOnlyCache||warehouseSaveInFlight||!warehouseLocalDirty)return false;
   warehouseSaveInFlight=true;cloudStatus('сохраняю на сервер…','warn');
   try{
@@ -131,7 +131,7 @@ pushWarehouseToD1=async function(){
     return true;
   }finally{warehouseSaveInFlight=false}
 };
-pullWarehouseFromD1=async function({force=false}={}){
+pullWarehouseFromServer=async function({force=false}={}){
   if(warehousePullInFlight||warehouseSaveInFlight||warehouseLocalDirty)return false;
   warehousePullInFlight=true;if(force)cloudStatus('проверяю сервер…','warn');
   try{
@@ -144,7 +144,7 @@ pullWarehouseFromD1=async function({force=false}={}){
   }catch(error){console.warn('server warehouse pull failed',error);cloudStatus(fastCached?.state?'сервер недоступен · показаны последние данные':'сервер временно недоступен','warn');return false}
   finally{warehousePullInFlight=false}
 };
-bootstrapWarehouseD1=async function(){
+bootstrapWarehouseFromServer=async function(){
   warehouseRemoteReady=false;warehouseLocalDirty=false;cloudStatus(fastCached?.state?'последние данные · подключаюсь…':'загружаю серверную базу…','warn');
   try{
     const remote=await fetchServer(false,4);if(!remote.exists)throw new Error('Серверная база склада пуста — запись заблокирована до завершения миграции');
@@ -155,10 +155,10 @@ bootstrapWarehouseD1=async function(){
     render();setTimeout(restoreOrderMarketUi,0);cloudStatus('сервер подключён','ok');return {mode:'server-authoritative',revision:warehouseRemoteRevision};
   }catch(error){warehouseRemoteReady=false;clearWarehouseDirty();setReadOnlyCache(Boolean(fastCached?.state));console.error('server bootstrap failed',error);cloudStatus(fastCached?.state?'сервер недоступен · показаны последние данные':'нет связи с сервером · изменения заблокированы','warn');return {mode:'server-unavailable',error:String(error?.message||error)}}
 };
-startWarehouseCloudWatcher=function(){
-  if(warehouseWatchStarted)return;warehouseWatchStarted=true;setInterval(()=>pullWarehouseFromD1(),5000);
-  document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='visible')pullWarehouseFromD1({force:true})});
-  window.addEventListener('focus',()=>pullWarehouseFromD1({force:true}));window.addEventListener('online',()=>pullWarehouseFromD1({force:true}));
+startWarehouseServerWatcher=function(){
+  if(warehouseWatchStarted)return;warehouseWatchStarted=true;setInterval(()=>pullWarehouseFromServer(),5000);
+  document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='visible')pullWarehouseFromServer({force:true})});
+  window.addEventListener('focus',()=>pullWarehouseFromServer({force:true}));window.addEventListener('online',()=>pullWarehouseFromServer({force:true}));
 };
 
 const ORDER_PERIOD_UI_KEY='milioner_order_period_ui_v1';
@@ -324,4 +324,3 @@ if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',
 window.addEventListener('load',()=>{bind();setTimeout(refresh,300);setTimeout(refresh,1200)});
 setInterval(refresh,15000);
 })();
-
