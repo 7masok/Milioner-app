@@ -1,5 +1,6 @@
 import crypto from 'node:crypto';
 import { transaction } from './db.js';
+import { wbOrderIsActive } from './wb-status.js';
 
 function parsePayload(raw) {
   try { return JSON.parse(String(raw || '{}')); } catch { return {}; }
@@ -11,36 +12,6 @@ function orderKey(market, orderId, entryId) {
 
 function sameText(left, right) {
   return String(left ?? '') === String(right ?? '');
-}
-
-// WB FBS reservation is only valid while the order is explicitly in work.
-// Unknown/missing statuses must NEVER create a reservation: treating them as
-// active was the source of phantom reserves after incomplete status responses.
-function wbOrderIsActive(status, state) {
-  const supplier = String(status || '').trim().toLowerCase();
-  const wb = String(state || '').trim().toLowerCase();
-
-  const activeSupplier = new Set(['new', 'confirm', 'complete']);
-  const terminalSupplier = new Set(['cancel']);
-  const activeWb = new Set(['waiting']);
-  const terminalWb = new Set([
-    'sorted',
-    'sold',
-    'canceled',
-    'cancelled',
-    'canceled_by_client',
-    'cancelled_by_client',
-    'declined_by_client',
-    'defect',
-    'ready_for_pickup',
-    'canceled_by_missed_call',
-    'cancelled_by_missed_call'
-  ]);
-
-  if (terminalSupplier.has(supplier) || terminalWb.has(wb)) return false;
-  if (!activeSupplier.has(supplier)) return false;
-  if (!activeWb.has(wb)) return false;
-  return true;
 }
 
 function stableReservation(market, row, productId) {
@@ -142,10 +113,17 @@ export async function reconcileWbReservations(market, _syncedSince) {
 
     const before = JSON.stringify(current);
     const after = JSON.stringify(next);
-    if (before === after) {
+    state.settings = state.settings && typeof state.settings === 'object' ? state.settings : {};
+    const needsSafetyBackup = !state.settings.wbReservationCompleteFixV1;
+    if (before === after && !needsSafetyBackup) {
       return { changed: false, market, activeOrders: expected.size, unlinked, created: 0, closed: 0, revision: Number(stored.rows[0].revision || 0) };
     }
 
+    if (needsSafetyBackup) {
+      const backup = await client.query(`INSERT INTO warehouse_backups(label,payload,revision,created_at)
+        VALUES($1,$2,$3,$4) RETURNING id`, ['before-wb-reservation-complete-fix-v1', stored.rows[0].payload, stored.rows[0].revision, now]);
+      state.settings.wbReservationCompleteFixV1 = { at: now, market, backupId: String(backup.rows[0].id), revision: Number(stored.rows[0].revision || 0) };
+    }
     state.reservations = next;
     const raw = JSON.stringify(state);
     const revision = Number(stored.rows[0].revision || 0) + 1;
@@ -153,6 +131,6 @@ export async function reconcileWbReservations(market, _syncedSince) {
     const sha = crypto.createHash('sha256').update(raw).digest('hex').toUpperCase();
     await client.query('INSERT INTO warehouse_audit(revision,updated_at,payload_sha256,source) VALUES($1,$2,$3,$4)',
       [revision, now, sha, `${market.toLowerCase()}-reservation-reconcile-full`]);
-    return { changed: true, market, activeOrders: expected.size, unlinked, created, closed, revision };
+    return { changed: true, market, activeOrders: expected.size, unlinked, created, closed, revision, safetyBackup: needsSafetyBackup };
   });
 }
