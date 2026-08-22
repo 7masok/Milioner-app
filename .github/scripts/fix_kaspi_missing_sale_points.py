@@ -21,31 +21,6 @@ if old not in s:
     raise SystemExit('Kaspi build block marker not found')
 s = s.replace(old, new, 1)
 
-old2 = """      if (storeId === primaryStoreId) {
-        foundPrimary = true;
-        next = setKaspiXmlAttr(next, 'available', amount > 0 ? 'yes' : 'no');
-        next = setKaspiXmlAttr(next, 'stockCount', String(amount));
-        return next;
-      }
-"""
-new2 = """      if (storeId === primaryStoreId) {
-        foundPrimary = true;
-        next = setKaspiXmlAttr(next, 'available', amount > 0 ? 'yes' : 'no');
-        next = setKaspiXmlAttr(next, 'stockCount', String(amount));
-        return next;
-      }
-"""
-if old2 not in s:
-    raise SystemExit('Kaspi availability marker not found')
-
-old3 = """    return next;
-      }
-      return tag;
-    });
-    if (!foundPrimary) return whole;
-    return open + updatedBody + close;
-"""
-# The source has a compact callback; locate the exact tail by a less brittle replacement.
 old3 = """      return tag;
     });
     if (!foundPrimary) return whole;
@@ -78,9 +53,6 @@ new3 = """      return tag;
 if old3 not in s:
     raise SystemExit('Kaspi XML callback tail marker not found')
 s = s.replace(old3, new3, 1)
-
-# The old final safety check would reject exactly the products this patch repairs.
 s = s.replace("  if (missingPrimary.length) throw kaspiStockHttpError('Selected Kaspi store is missing for linked SKU: ' + missingPrimary.slice(0,12).join(', '), 409);\n", "", 1)
-
 p.write_text(s, encoding='utf-8')
 print('Kaspi missing sale points patched')
