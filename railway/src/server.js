@@ -43,9 +43,8 @@ app.get('/api/kaspi-sync-status', requireTrustedOrigin, async (_req, res, next) 
     const count = await pool.query("SELECT COUNT(*)::bigint AS n FROM marketplace_order_lines WHERE market='Kaspi'");
     res.json({
       ok: true,
-      architecture: 'GitHub Pages -> Railway API -> PostgreSQL; Kaspi sync: Railway -> Kaspi API direct; Cloudflare Worker fallback only',
+      architecture: 'GitHub Pages -> Railway API -> PostgreSQL; marketplace sync: Railway -> marketplace APIs direct',
       directTokenConfigured: Boolean(String(config.kaspiToken || '').trim()),
-      fallbackWorkerConfigured: Boolean(String(config.kaspiWorkerUrl || '').trim()),
       latest: latest.rows[0] || null,
       lastSuccessAt: Number(success.rows[0]?.last_success_at || 0) || null,
       orderLines: Number(count.rows[0]?.n || 0),
@@ -80,7 +79,7 @@ app.use('/api', ordersRouter);
 app.use('/api', reportsRouter);
 app.use('/api', stockRouter);
 // Keep every legacy path used by Kaspi automatic feeds, but serve the XML
-// from the live Railway warehouse source instead of the old Cloudflare snapshot.
+// from the live Railway warehouse source instead of a stale migration snapshot.
 app.get('/kaspi/price-list.xml', kaspiFeedHandler);
 app.get('/kaspi/pricelist.xml', kaspiFeedHandler);
 app.get('/kaspi/live-price-list.xml', kaspiFeedHandler);
@@ -109,3 +108,4 @@ async function shutdown(signal) {
 
 process.on('SIGTERM', () => shutdown('SIGTERM'));
 process.on('SIGINT', () => shutdown('SIGINT'));
+
