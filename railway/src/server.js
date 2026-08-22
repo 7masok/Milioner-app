@@ -11,6 +11,7 @@ import { startKaspiSyncLoop, syncKaspiOrders } from './kaspi-sync.js';
 import { startWbSyncLoop, syncWbOrders } from './wb-sync.js';
 import { authConfig, login, requireAppSession } from './auth.js';
 import { configuredWbConnectionIds, connectionsRouter } from './connections.js';
+import { wbVariantsRouter } from './wb-variants.js';
 
 assertRuntimeConfig();
 const app = express();
@@ -73,6 +74,7 @@ app.post('/api/wb-sync-now', requireTrustedOrigin, async (req, res, next) => {
 });
 
 app.use('/api', connectionsRouter);
+app.use('/api', wbVariantsRouter);
 app.use('/api', warehouseRouter);
 app.use('/api', ordersRouter);
 app.use('/api', reportsRouter);
