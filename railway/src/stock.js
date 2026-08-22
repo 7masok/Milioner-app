@@ -48,7 +48,7 @@ function warehouseAvailability(snapshot){
   const reserved=new Map();
   for(const p of products){if(isBundle(p))continue;const id=String(p?.id||'');reserved.set(id,reservations.reduce((sum,row)=>sum+Math.max(0,n(row?.qty,0))*unitsInside(row?.productId,id),0))}
   const cache=new Map();
-  function available(productId,seen=new Set()){const id=String(productId||'');if(!id||seen.has(id))return 0;if(cache.has(id))return cache.get(id);const p=byId.get(id);if(!p)return 0;const next=new Set(seen);next.add(id);const qty=isBundle(p)?Math.max(0,Math.floor(Math.min(...bundleParts(p).map(part=>available(part.productId,next)/part.qty)))):Math.max(0,Math.floor(n(p.stock,0)-n(reserved.get(id),0)));cache.set(id,qty);return qty}
+  function available(productId,seen=new Set()){const id=String(productId||'');if(!id||seen.has(id))return 0;if(cache.has(id))return cache.get(id);const p=byId.get(id);if(!p)return 0;const next=new Set(seen);next.add(id);const parts=bundleParts(p),qty=isBundle(p)?(parts.length?Math.max(0,Math.floor(Math.min(...parts.map(part=>available(part.productId,next)/part.qty)))):0):Math.max(0,Math.floor(n(p.stock,0)-n(reserved.get(id),0)));cache.set(id,qty);return qty}
   return {products:byId,available};
 }
 function templateInfo(rawXml){
