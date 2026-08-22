@@ -112,6 +112,16 @@ app.post('/api/wb-sync-now', requireTrustedOrigin, async (req, res, next) => {
   } catch (error) { next(error); }
 });
 
+
+// Compatibility route for the former Cloudflare client call.  Railway already
+// keeps order data server-side; do not turn an ordinary warehouse save into an
+// unverified external stock write.
+app.post('/api/stock-sync-now', requireTrustedOrigin, (req, res) => {
+  const requested = Array.isArray(req.body?.markets) ? req.body.markets : ['WB', 'WB2'];
+  const markets = [...new Set(requested.map(value => String(value || '').toUpperCase() === 'WB1' ? 'WB' : String(value || '').toUpperCase()).filter(value => ['WB', 'WB2'].includes(value)))];
+  res.json({ ok: true, results: Object.fromEntries((markets.length ? markets : ['WB', 'WB2']).map(market => [market, { ok: true, market, skipped: true, reason: 'server-stock-feed' }])) });
+});
+
 app.use('/api', connectionsRouter);
 app.use('/api', wbVariantsRouter);
 app.use('/api', warehouseRouter);
@@ -148,4 +158,3 @@ async function shutdown(signal) {
 
 process.on('SIGTERM', () => shutdown('SIGTERM'));
 process.on('SIGINT', () => shutdown('SIGINT'));
-
