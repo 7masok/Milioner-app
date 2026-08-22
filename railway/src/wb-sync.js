@@ -67,14 +67,18 @@ async function fetchOrders(market, token) {
     const status = statuses.get(Number(order?.id)) || {};
     const price = (Number(order?.convertedFinalPrice ?? order?.finalPrice ?? order?.convertedPrice ?? order?.price ?? 0) || 0) / 100;
     const orderId = String(order?.id ?? order?.orderUid ?? `wb-${index}`);
+    const barcode = String(order?.skus?.[0] || '').trim();
+    const article = String(order?.article || '').trim();
+    const size = String(order?.techSize || '').trim();
     return {
       orderId, code: String(order?.id ?? order?.orderUid ?? orderId), entryId: orderId,
       // Missing status is deliberately kept empty. The reservation reconciler
       // requires explicit WB statuses and must not turn a failed/missing status
       // lookup into a phantom active reservation.
       status: String(status?.supplierStatus || '').trim(), state: String(status?.wbStatus || '').trim(),
-      creationDate: timestamp(order?.createdAt), sku: String(order?.article ?? order?.nmId ?? order?.skus?.[0] ?? '').trim(),
-      productName: String(order?.article || order?.subject || order?.nmId || ''), qty: 1, unitPrice: price, totalPrice: price, raw: { order, status }
+      creationDate: timestamp(order?.createdAt), sku: barcode || article || String(order?.nmId || '').trim(),
+      productName: [article || String(order?.subject || order?.nmId || ''), size ? `размер ${size}` : ''].filter(Boolean).join(' · '),
+      qty: 1, unitPrice: price, totalPrice: price, raw: { order, status, identity: { barcode, article, nmId: String(order?.nmId || ''), chrtId: Number(order?.chrtId || 0), size } }
     };
   });
 }
