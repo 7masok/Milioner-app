@@ -1,13 +1,14 @@
 {
   "$schema": "../../node_modules/wrangler/config-schema.json",
   "name": "millioner-api",
-  "main": "src/fixed.js",
+  "main": "src/live.js",
   "compatibility_date": "2026-08-09",
   "compatibility_flags": ["global_fetch_strictly_public"],
   "vars": {
     "CORS_ORIGIN": "https://7masok.github.io",
     "KASPI_WORKER_URL": "https://fragrant-shadow-72ed.7masok.workers.dev",
-    "WB_WORKER_URL": "https://wb-sync.7masok.workers.dev"
+    "WB_WORKER_URL": "https://wb-sync.7masok.workers.dev",
+    "RAILWAY_STOCK_FEED_URL": "https://milioner-app-staging.up.railway.app/kaspi/live-price-list.xml"
   },
   "triggers": {
     "crons": ["*/5 * * * *"]
