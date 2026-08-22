@@ -17,22 +17,22 @@ function signature(value) {
 export function createSessionToken() {
   const expiresAt = Date.now() + SESSION_TTL_MS;
   const nonce = crypto.randomBytes(16).toString('base64url');
-  const body = \`\${expiresAt}.\${nonce}\`;
-  return { token: \`\${body}.\${signature(body)}\`, expiresAt };
+  const body = String(expiresAt) + '.' + nonce;
+  return { token: body + '.' + signature(body), expiresAt };
 }
 
 export function verifySessionToken(token) {
   if (!config.adminToken) return false;
   const parts = String(token || '').split('.');
   if (parts.length !== 3) return false;
-  const [expiresAt, nonce, provided] = parts;
+  const expiresAt = parts[0], nonce = parts[1], provided = parts[2];
   const expiry = Number(expiresAt);
   if (!Number.isFinite(expiry) || expiry <= Date.now() || expiry > Date.now() + SESSION_TTL_MS + 60_000) return false;
-  return safeEqual(provided, signature(\`\${expiresAt}.\${nonce}\`));
+  return safeEqual(provided, signature(String(expiresAt) + '.' + nonce));
 }
 
 function bearer(req) {
-  return String(req.headers.authorization || '').replace(/^Bearer\\s+/i, '').trim();
+  return String(req.headers.authorization || '').replace(new RegExp('^Bearer\\s+', 'i'), '').trim();
 }
 
 export function requireAppSession(req, res, next) {
