@@ -149,6 +149,24 @@ const ACTIVE_VIEW_KEY=KEY+'_active_view_device';
 const KASPI_WORKER='https://fragrant-shadow-72ed.7masok.workers.dev';
 const WB_WORKER='https://wb-sync.7masok.workers.dev';
 const MILLIONER_API=String(window.MILLIONER_API_URL||'https://milioner-app-staging.up.railway.app').replace(/\/$/,'');
+
+const APP_SESSION_KEY=KEY+'_owner_session';
+const nativeFetch=window.fetch.bind(window);
+let ownerSessionToken=sessionStorage.getItem(APP_SESSION_KEY)||'';
+let ownerAuthEnabled=false;
+let appRuntimeStarted=false;
+window.fetch=async function(input,options={}){
+  const url=typeof input==='string'?input:String(input?.url||'');
+  const next={...options,headers:{...(options.headers||{})}};
+  if(url.startsWith(MILLIONER_API)&&ownerSessionToken&&!url.includes('/api/auth/login')&&!url.includes('/api/auth/config'))next.headers.Authorization='Bearer '+ownerSessionToken;
+  const response=await nativeFetch(input,next);
+  if(response.status===401&&url.startsWith(MILLIONER_API)&&!url.includes('/api/auth/login')){ownerSessionToken='';sessionStorage.removeItem(APP_SESSION_KEY);setOwnerAuthMode('locked','Сеанс закончился. Войдите снова.')}
+  return response;
+};
+function setOwnerAuthMode(mode,error=''){document.body.classList.remove('auth-pending','auth-locked','auth-ready');document.body.classList.add('auth-'+mode);const box=document.getElementById('ownerLoginError');if(box)box.textContent=error;const logout=document.getElementById('ownerLogoutBtn');if(logout)logout.style.display=ownerAuthEnabled?'block':'none';if(mode==='locked')setTimeout(()=>document.getElementById('ownerPassword')?.focus(),50)}
+async function initOwnerAuth(){try{const configResponse=await nativeFetch(MILLIONER_API+'/api/auth/config',{cache:'no-store'}),info=await configResponse.json();ownerAuthEnabled=Boolean(info?.enabled);if(!ownerAuthEnabled){setOwnerAuthMode('ready');startAppRuntime();return}if(ownerSessionToken){const check=await nativeFetch(MILLIONER_API+'/api/auth/session',{cache:'no-store',headers:{Authorization:'Bearer '+ownerSessionToken}});if(check.ok){setOwnerAuthMode('ready');startAppRuntime();return}}ownerSessionToken='';sessionStorage.removeItem(APP_SESSION_KEY);setOwnerAuthMode('locked')}catch(e){setOwnerAuthMode('locked','Сервер временно недоступен. Обновите страницу.')}}
+async function ownerLogin(event){event.preventDefault();const input=document.getElementById('ownerPassword'),button=document.getElementById('ownerLoginButton'),error=document.getElementById('ownerLoginError'),password=String(input?.value||'');if(!password)return;if(button){button.disabled=true;button.textContent='Проверяю…'}if(error)error.textContent='';try{const response=await nativeFetch(MILLIONER_API+'/api/auth/login',{method:'POST',cache:'no-store',headers:{'Content-Type':'application/json'},body:JSON.stringify({password})}),data=await response.json().catch(()=>({}));if(!response.ok)throw new Error(data?.error==='wrong-password'?'Неверный пароль':data?.error||('HTTP '+response.status));ownerSessionToken=String(data.token||'');sessionStorage.setItem(APP_SESSION_KEY,ownerSessionToken);if(input)input.value='';setOwnerAuthMode('ready');startAppRuntime()}catch(e){if(error)error.textContent=String(e.message||e)}finally{if(button){button.disabled=false;button.textContent='Войти'}}}
+function ownerLogout(){ownerSessionToken='';sessionStorage.removeItem(APP_SESSION_KEY);setOwnerAuthMode('locked')}
 // PostgreSQL through the server API is authoritative. Old localStorage data is
 // kept only as an emergency pre-migration backup and is never loaded as live data.
 let state={products:[],movements:[],sales:[],purchases:[],reservations:[],settings:{autoBackup:true,lastSync:null}};
@@ -764,8 +782,8 @@ function openView(view,remember=true){
   if(remember){localStorage.setItem(ACTIVE_VIEW_KEY,view);state.settings.activeView=view;saveLocalOnly()}
   render();
 }
-document.querySelectorAll('nav button').forEach(b=>b.onclick=()=>{openView(b.dataset.view,true);if(b.dataset.view==='settings'||b.dataset.view==='reports')loadSharedOrderCache({silent:true})});document.querySelectorAll('[data-period]').forEach(b=>b.onclick=()=>{selectedPeriodPreset=Number(b.dataset.period);if(selectedPeriodPreset===0){let d=prompt('Количество дней для своего периода',String(state.settings.selectedPeriod||14));selectedPeriod=Math.max(1,+d||1)}else selectedPeriod=selectedPeriodPreset;state.settings.selectedPeriodPreset=selectedPeriodPreset;state.settings.selectedPeriod=selectedPeriod;save();render()});document.getElementById('autoBackup').onchange=e=>{state.settings.autoBackup=e.target.checked;save();if(e.target.checked)maybeAutoGoogleBackup()};const startupView=localStorage.getItem(ACTIVE_VIEW_KEY)||'home';openView(startupView,false);// First paint the verified PostgreSQL snapshot. Marketplace orders are fetched only afterwards from the server cache.
-setTimeout(()=>bootstrapWarehouseD1().finally(()=>{startWarehouseCloudWatcher();requestAnimationFrame(()=>setTimeout(()=>loadSharedOrderCache({silent:true}),150));}),0);setTimeout(()=>maybeAutoGoogleBackup(),2500);setInterval(()=>loadSharedOrderCache({silent:true}),600000);setInterval(()=>maybeAutoGoogleBackup(),60*60*1000);
+document.querySelectorAll('nav button').forEach(b=>b.onclick=()=>{openView(b.dataset.view,true);if(b.dataset.view==='settings'||b.dataset.view==='reports')loadSharedOrderCache({silent:true})});document.querySelectorAll('[data-period]').forEach(b=>b.onclick=()=>{selectedPeriodPreset=Number(b.dataset.period);if(selectedPeriodPreset===0){let d=prompt('Количество дней для своего периода',String(state.settings.selectedPeriod||14));selectedPeriod=Math.max(1,+d||1)}else selectedPeriod=selectedPeriodPreset;state.settings.selectedPeriodPreset=selectedPeriodPreset;state.settings.selectedPeriod=selectedPeriod;save();render()});document.getElementById('autoBackup').onchange=e=>{state.settings.autoBackup=e.target.checked;save();if(e.target.checked)maybeAutoGoogleBackup()};function startAppRuntime(){if(appRuntimeStarted)return;appRuntimeStarted=true;const startupView=localStorage.getItem(ACTIVE_VIEW_KEY)||'home';openView(startupView,false);setTimeout(()=>bootstrapWarehouseD1().finally(()=>{startWarehouseCloudWatcher();requestAnimationFrame(()=>setTimeout(()=>loadSharedOrderCache({silent:true}),150));}),0);setTimeout(()=>maybeAutoGoogleBackup(),2500);setInterval(()=>loadSharedOrderCache({silent:true}),600000);setInterval(()=>maybeAutoGoogleBackup(),60*60*1000)}
+initOwnerAuth();
 
 function enhanceArrivalProductSearch(){}
 </script>
