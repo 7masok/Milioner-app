@@ -31,7 +31,7 @@ function templateInfo(xml) {
   if (!stores.size) throw httpError('В XML не найдены склады availability storeId.');
   return { raw, merchantId, offerSkus, storeIds: [...stores], skuStores };
 }
-async function warehouse() { const result = await pool.query('SELECT payload FROM warehouse_state WHERE id=1'); if (!result.rowCount) return { products: [], reservations: [] }; try { return JSON.parse(result.rows[0].payload || '{}'); } catch { return { products: [], reservations: [] }; } }
+async function warehouse() { const result = await pool.query('SELECT payload,revision,updated_at FROM warehouse_state WHERE id=1'); if (!result.rowCount) return { products: [], reservations: [], revision: 0 }; try { const state = JSON.parse(result.rows[0].payload || '{}'); return { ...state, revision: Number(result.rows[0].revision || 0), updatedAt: Number(result.rows[0].updated_at || 0) }; } catch { return { products: [], reservations: [], revision: 0 }; } }
 async function templateRow() { const result = await pool.query(`SELECT raw_xml AS "rawXml",feed_key AS "feedKey",primary_store_id AS "primaryStoreId", offer_count AS "offerCount",store_ids AS "storeIds",merchant_id AS "merchantId",updated_at AS "updatedAt" FROM kaspi_price_template WHERE id=1`); return result.rows[0] || null; }
 function feedUrl(req, key) { if (!key) return ''; const protocol = String(req.headers['x-forwarded-proto'] || req.protocol || 'https').split(',')[0]; return `${protocol}://${req.get('host')}/kaspi/price-list.xml?key=${encodeURIComponent(key)}`; }
 async function status(req) {
@@ -39,7 +39,7 @@ async function status(req) {
   const accessFields = access.rows[0] || { lastFetchedAt: 0, fetchCount: 0, lastFetchUserAgent: '' };
   if (!row?.rawXml) return { configured: false, ready: false, feedUrl: '', offerCount: 0, storeIds: [], primaryStoreId: '', linked: 0, matched: 0, missingSkus: [], missingPrimaryStore: [], ...accessFields };
   const info = templateInfo(row.rawXml); const linked = (state.products || []).map(product => ({ sku: String(product?.kaspi || '').trim(), product })).filter(item => item.sku); const matched = linked.filter(item => info.offerSkus.has(item.sku)); const missingSkus = linked.filter(item => !info.offerSkus.has(item.sku)).map(item => item.sku); const primaryStoreId = String(row.primaryStoreId || '') || (info.storeIds.length === 1 ? info.storeIds[0] : ''); const missingPrimaryStore = primaryStoreId ? matched.filter(item => !info.skuStores.get(item.sku)?.has(primaryStoreId)).map(item => item.sku) : [];
-  return { configured: true, ready: Boolean(primaryStoreId && matched.length), feedUrl: feedUrl(req, row.feedKey), merchantId: info.merchantId, offerCount: info.offerSkus.size, storeIds: info.storeIds, primaryStoreId, linked: linked.length, matched: matched.length, missingSkus, missingPrimaryStore, updatedAt: Number(row.updatedAt || 0), ...accessFields };
+  return { configured: true, ready: Boolean(primaryStoreId && matched.length), feedUrl: feedUrl(req, row.feedKey), merchantId: info.merchantId, offerCount: info.offerSkus.size, storeIds: info.storeIds, primaryStoreId, linked: linked.length, matched: matched.length, missingSkus, missingPrimaryStore, warehouseRevision: state.revision, warehouseUpdatedAt: state.updatedAt, updatedAt: Number(row.updatedAt || 0), ...accessFields };
 }
 stockRouter.get('/kaspi-stock-feed-status', asyncRoute(async (req, res) => res.json({ ok: true, ...(await status(req)) })));
 stockRouter.put('/kaspi-price-template', requireTrustedOrigin, requireWritesEnabled, asyncRoute(async (req, res) => {
@@ -62,7 +62,6 @@ export const kaspiFeedHandler = asyncRoute(async (req, res) => {
     let foundPrimary = false; let hasAnyAvailability = false;
     const updated = body.replace(/<availability\b[^>]*\/?>/gi, tag => { const storeId = xmlAttr(tag, 'storeId'); if (!storeId) return tag; hasAnyAvailability = true; if (storeId === primaryStoreId) { foundPrimary = true; return setXmlAttr(setXmlAttr(tag, 'available', amount > 0 ? 'yes' : 'no'), 'stockCount', String(amount)); } return info.storeIds.length > 1 ? setXmlAttr(setXmlAttr(tag, 'available', 'no'), 'stockCount', '0') : tag; });
     if (foundPrimary) return open + updated + close;
-    // Kaspi removes an offer when it has no point of sale. Always create the primary point.
     const availability = makeAvailability(primaryStoreId, amount > 0, amount);
     return open + (hasAnyAvailability ? updated + availability : body + availability) + close;
   });
