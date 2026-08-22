@@ -116,7 +116,9 @@ body:has(#home.active) .fab{bottom:138px;background:#0b9b54}
 const KEY='sklad_mvp_v2';
 const REPORT_PERIOD_UI_KEY=KEY+'_report_period_ui';
 const ACTIVE_VIEW_KEY=KEY+'_active_view_device';
-const MILLIONER_API=String(window.MILLIONER_API_URL||'https://milioner-app-staging.up.railway.app').replace(/\/$/,'');
+const RAILWAY_API_FALLBACK='https://milioner-app-staging.up.railway.app';
+const DEFAULT_API_ORIGIN=location.protocol==='file:'||location.hostname==='7masok.github.io'?RAILWAY_API_FALLBACK:location.origin;
+const MILLIONER_API=String(window.MILLIONER_API_URL||DEFAULT_API_ORIGIN).replace(/\/$/,'');
 
 const APP_SESSION_KEY=KEY+'_owner_session';
 const nativeFetch=window.fetch.bind(window);

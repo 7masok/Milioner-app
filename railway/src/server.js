@@ -1,5 +1,7 @@
 import express from 'express';
 import helmet from 'helmet';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { config, assertRuntimeConfig } from './config.js';
 import { pool } from './db.js';
 import { exactCors, noStore, requireTrustedOrigin } from './http.js';
@@ -15,12 +17,46 @@ import { wbVariantsRouter } from './wb-variants.js';
 
 assertRuntimeConfig();
 const app = express();
+const repositoryRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
+const frontendFiles = Object.freeze([
+  'cloud-sync-v3.js',
+  'wb-variants-v1.js',
+  'kaspi-report-v2.js',
+  'kaspi-ads-v2.js',
+  'save-conflict-v1.js',
+  'purchase-delete-v1.js',
+  'purchase-plan-ignore-v1.js',
+  'kaspi-status-compat-v1.js',
+  'kaspi-ads-v2-original.js',
+  'reservation-compat-v1.js',
+  'stock-alerts-rescue-v1.js',
+  'cloudflare-purchase-rescue-v1.js'
+]);
 app.set('trust proxy', 1);
 app.disable('x-powered-by');
-app.use(helmet({ crossOriginResourcePolicy: false }));
+app.use(helmet({
+  crossOriginResourcePolicy: false,
+  crossOriginOpenerPolicy: { policy: 'same-origin-allow-popups' },
+  contentSecurityPolicy: {
+    directives: {
+      defaultSrc: ["'self'"],
+      scriptSrc: ["'self'", "'unsafe-inline'", 'https://accounts.google.com', 'https://cdn.jsdelivr.net'],
+      styleSrc: ["'self'", "'unsafe-inline'"],
+      imgSrc: ["'self'", 'data:', 'blob:', 'https:'],
+      connectSrc: ["'self'", 'https://accounts.google.com', 'https://oauth2.googleapis.com', 'https://www.googleapis.com'],
+      frameSrc: ['https://accounts.google.com'],
+      objectSrc: ["'none'"]
+    }
+  }
+}));
 app.use(exactCors);
 app.use(noStore);
 app.use(express.json({ limit: '7mb', strict: true }));
+
+app.get(['/', '/index.html'], (_req, res) => res.sendFile(path.join(repositoryRoot, 'index.html')));
+for (const file of frontendFiles) {
+  app.get(`/${file}`, (_req, res) => res.sendFile(path.join(repositoryRoot, file)));
+}
 
 app.get('/api/auth/config', requireTrustedOrigin, authConfig);
 app.post('/api/auth/login', requireTrustedOrigin, login);

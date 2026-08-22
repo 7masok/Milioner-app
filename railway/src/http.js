@@ -18,8 +18,21 @@ export function exactCors(req, res, next) {
   next();
 }
 
+function sameServiceOrigin(req) {
+  const forwardedProto = String(req.headers['x-forwarded-proto'] || '').split(',')[0].trim();
+  const protocol = forwardedProto || req.protocol || 'https';
+  const forwardedHost = String(req.headers['x-forwarded-host'] || '').split(',')[0].trim();
+  const host = forwardedHost || String(req.headers.host || '').trim();
+  return host ? `${protocol}://${host}`.replace(/\/$/, '') : '';
+}
+
 export function requireTrustedOrigin(req, res, next) {
-  if (String(req.headers.origin || '') !== config.corsOrigin) {
+  const origin = String(req.headers.origin || '').replace(/\/$/, '');
+  const self = sameServiceOrigin(req);
+  const referer = String(req.headers.referer || '');
+  const fetchSite = String(req.headers['sec-fetch-site'] || '').toLowerCase();
+  const sameOriginNavigation = !origin && (fetchSite === 'same-origin' || (self && referer.startsWith(self + '/')));
+  if (origin !== config.corsOrigin && origin !== self && !sameOriginNavigation) {
     return res.status(403).json({ ok: false, error: 'Forbidden origin' });
   }
   next();
@@ -47,4 +60,5 @@ export function noStore(_req, res, next) {
   res.setHeader('Cache-Control', 'no-store, max-age=0');
   next();
 }
+
 

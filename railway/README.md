@@ -1,4 +1,8 @@
-# Railway/PostgreSQL migration
+# Railway application
+
+Railway serves both the warehouse interface and the API from one origin. The
+GitHub Pages address remains available as a temporary rollback frontend and
+uses the same Railway API and PostgreSQL database.
 
 The production cutover is deliberately split into reversible stages. Cloudflare D1 remains unchanged until the Railway service, data import, row checks, and cross-device checks all pass.
 

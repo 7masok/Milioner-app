@@ -1,0 +1,17 @@
+{
+  "name": "millioner-app",
+  "private": true,
+  "type": "module",
+  "engines": { "node": ">=22" },
+  "scripts": {
+    "start": "npm --prefix railway start",
+    "test": "node --test railway/test/*.test.mjs"
+  },
+  "dependencies": {
+    "express": "^5.1.0",
+    "helmet": "^8.1.0",
+    "pg": "^8.16.3",
+    "sql.js": "^1.13.0"
+  }
+}
+
