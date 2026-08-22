@@ -31,7 +31,7 @@
   document.head.appendChild(reservationCompat);
 
   const extra=document.createElement('script');
-  extra.src='./stock-alerts-rescue-v1.js?v=20260822-bell';
+  extra.src='./stock-alerts-rescue-v1.js?v=20260822-bell2';
   extra.async=false;
   document.head.appendChild(extra);
 
