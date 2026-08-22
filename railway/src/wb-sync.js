@@ -146,7 +146,7 @@ export function startWbSyncLoop() {
       })
     );
   };
-  setTimeout(run, 6_000).unref();
+  void run();
   const timer = setInterval(run, SYNC_MS);
   timer.unref();
   return timer;
