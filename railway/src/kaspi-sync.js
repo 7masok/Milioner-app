@@ -212,6 +212,7 @@ async function fetchDirect(days = 2) {
 
 async function fetchAuthoritativeActiveOrders(days = ACTIVE_LOOKBACK_DAYS) {
   const byId = new Map();
+  const observed = new Map();
   const productCache = new Map();
   for (const state of ACTIVE_CANDIDATE_STATES) {
     let pageCount = 1;
@@ -223,8 +224,13 @@ async function fetchAuthoritativeActiveOrders(days = ACTIVE_LOOKBACK_DAYS) {
       pageCount = result.pageCount;
       for (const raw of result.orders) {
         const probe = normalizeOrder(raw);
-        if (!probe || !kaspiOrderIsActive(probe.status, probe.state)) continue;
-        byId.set(String(probe.orderId), raw);
+        if (!probe) continue;
+        observed.set(String(probe.orderId), {
+          orderId: String(probe.orderId),
+          status: String(probe.status || ''),
+          state: String(probe.state || '')
+        });
+        if (kaspiOrderIsActive(probe.status, probe.state)) byId.set(String(probe.orderId), raw);
       }
     }
   }
@@ -235,7 +241,27 @@ async function fetchAuthoritativeActiveOrders(days = ACTIVE_LOOKBACK_DAYS) {
     if (!lines.length) throw new Error(`Kaspi active order ${String(raw?.id || '')} has no entries`);
     orders.push({ ...raw, lines });
   }
-  return orders;
+  return { orders, observed: [...observed.values()] };
+}
+
+async function updateObservedKaspiStates(observed) {
+  if (!observed?.length) return;
+  const now = Date.now();
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    for (const row of observed) {
+      await client.query(`UPDATE marketplace_order_lines
+        SET status=$1,state=$2,updated_at=$3
+        WHERE market='Kaspi' AND order_id=$4`, [row.status, row.state, now, row.orderId]);
+    }
+    await client.query('COMMIT');
+  } catch (error) {
+    await client.query('ROLLBACK').catch(() => {});
+    throw error;
+  } finally {
+    client.release();
+  }
 }
 
 async function fetchFromWorker(base, batch, days) {
@@ -292,8 +318,11 @@ export async function syncKaspiOrders({ days = 2 } = {}) {
     let upstream = '';
     try {
       let authoritativeActiveOrders = null;
+      let authoritativeObservedOrders = null;
       try {
-        authoritativeActiveOrders = await fetchAuthoritativeActiveOrders();
+        const authoritative = await fetchAuthoritativeActiveOrders();
+        authoritativeActiveOrders = authoritative.orders;
+        authoritativeObservedOrders = authoritative.observed;
       } catch (error) {
         // Never close reservations from a partial marketplace response. The
         // previous safe snapshot remains in use until a complete read works.
@@ -324,6 +353,7 @@ export async function syncKaspiOrders({ days = 2 } = {}) {
       if (payload.meta?.failedStates?.length) {
         console.warn('Kaspi sync skipped unavailable state filters:', payload.meta.failedStates.join(' | '));
       }
+      if (authoritativeObservedOrders) await updateObservedKaspiStates(authoritativeObservedOrders);
       const mergedOrders = new Map();
       for (const raw of payload.orders) {
         const id = String(raw?.id || raw?.attributes?.id || '');
