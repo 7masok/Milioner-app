@@ -90,14 +90,16 @@ function templateInfo(rawXml){
 }
 async function warehouseKaspiRows(){
   const [links,stateResult]=await Promise.all([pool.query(`SELECT pl.sku,pl.product_id AS "productId",p.stock AS "dbStock",p.name FROM product_links pl JOIN products p ON p.id=pl.product_id WHERE pl.market='Kaspi' AND TRIM(pl.sku)<>'' ORDER BY pl.sku`),pool.query('SELECT payload FROM warehouse_state WHERE id=1')]);
-  const availability=warehouseAvailability(parsePayload(stateResult.rows[0]?.payload));
-  return links.rows.map(row=>{const productId=String(row.productId||''),known=availability.products.has(productId);return {sku:String(row.sku||'').trim(),productId,name:String(row.name||''),stock:known?availability.available(productId):Math.max(0,Math.floor(n(row.dbStock,0)))}}).filter(row=>row.sku);
+  const snapshot=parsePayload(stateResult.rows[0]?.payload),availability=warehouseAvailability(snapshot),combined=new Map();
+  for(const row of links.rows){const sku=String(row.sku||'').trim(),productId=String(row.productId||'');if(sku)combined.set(sku,{sku,productId,name:String(row.name||''),stock:availability.products.has(productId)?availability.available(productId):Math.max(0,Math.floor(n(row.dbStock,0)))})}
+  for(const product of(Array.isArray(snapshot.products)?snapshot.products:[])){const sku=String(product?.kaspi||'').trim(),productId=String(product?.id||'');if(!sku||combined.has(sku))continue;combined.set(sku,{sku,productId,name:String(product?.name||''),stock:availability.available(productId)})}
+  return [...combined.values()].sort((a,b)=>a.sku.localeCompare(b.sku));
 }
 function feedUrl(req){const host=String(req.get('x-forwarded-host')||req.get('host')||'').split(',')[0].trim(),protocol=String(req.get('x-forwarded-proto')||req.protocol||'https').split(',')[0].trim()||'https';return host?`${protocol}://${host}/kaspi/price-list.xml`:''}
 async function kaspiStockFeedStatus(req){
   const [template,rows,access]=await Promise.all([liveTemplate(),warehouseKaspiRows(),pool.query('SELECT last_fetched_at AS "lastFetchedAt",fetch_count AS "fetchCount" FROM kaspi_price_feed_access WHERE id=1').catch(()=>({rows:[]}))]);
-  const rawXml=String(template?.rawXml||''),info=templateInfo(rawXml),primaryStoreId=String(template?.primaryStoreId||'').trim()||info.storeIds[0]||'',missingSkus=rows.filter(row=>!info.offers.has(row.sku)).map(row=>row.sku),missingPrimaryStore=primaryStoreId?rows.filter(row=>info.offers.has(row.sku)&&!info.offers.get(row.sku).stores.has(primaryStoreId)).map(row=>row.sku):[],configured=Boolean(rawXml),ready=configured&&Boolean(primaryStoreId);
-  return {ok:true,configured,ready,primaryStoreId,storeIds:info.storeIds,offerCount:info.offers.size,linked:rows.length,matched:rows.length-missingSkus.length,missingSkus,missingPrimaryStore,lastFetchedAt:Number(access.rows[0]?.lastFetchedAt||0),fetchCount:Number(access.rows[0]?.fetchCount||0),feedUrl:ready?feedUrl(req):'',error:configured&&!primaryStoreId?'В XML не найден склад Kaspi (availability storeId).':''};
+  const rawXml=String(template?.rawXml||''),info=templateInfo(rawXml),primaryStoreId=String(template?.primaryStoreId||'').trim()||info.storeIds[0]||'',recoverable=KASPI_RECOVERY_OFFERS.filter(x=>rows.some(row=>row.sku===x.sku)&&!info.offers.has(x.sku)),effective=new Set([...info.offers.keys(),...recoverable.map(x=>x.sku)]),missingSkus=rows.filter(row=>!effective.has(row.sku)).map(row=>row.sku),missingPrimaryStore=primaryStoreId?rows.filter(row=>info.offers.has(row.sku)&&!info.offers.get(row.sku).stores.has(primaryStoreId)).map(row=>row.sku):[],configured=Boolean(rawXml),ready=configured&&Boolean(primaryStoreId);
+  return {ok:true,configured,ready,primaryStoreId,storeIds:info.storeIds,templateOfferCount:info.offers.size,offerCount:effective.size,recoveredOffers:recoverable.length,linked:rows.length,matched:rows.length-missingSkus.length,missingSkus,missingPrimaryStore,lastFetchedAt:Number(access.rows[0]?.lastFetchedAt||0),fetchCount:Number(access.rows[0]?.fetchCount||0),feedUrl:ready?feedUrl(req):'',error:configured&&!primaryStoreId?'В XML не найден склад Kaspi (availability storeId).':''};
 }
 
 async function liveTemplate() {
