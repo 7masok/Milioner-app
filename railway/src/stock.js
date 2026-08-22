@@ -37,6 +37,7 @@ function setXmlAttr(tag, name, value) {
 function makeAvailability(storeId, available, stockCount) {
   return `<availability storeId="${esc(storeId)}" available="${available ? 'yes' : 'no'}" stockCount="${Math.max(0, Math.floor(stockCount))}"/>`;
 }
+function normalizeProductName(value){return String(value||'').toLowerCase().replace(/ё/g,'е').replace(/[^a-zа-я0-9]+/gi,' ').trim().replace(/\s+/g,' ')}
 
 /* One-time recovery for offers that were archived when the first Railway template contained only 92 items. */
 const KASPI_RECOVERY_OFFERS = [
@@ -93,6 +94,7 @@ async function warehouseKaspiRows(){
   const snapshot=parsePayload(stateResult.rows[0]?.payload),availability=warehouseAvailability(snapshot),combined=new Map();
   for(const row of links.rows){const sku=String(row.sku||'').trim(),productId=String(row.productId||'');if(sku)combined.set(sku,{sku,productId,name:String(row.name||''),stock:availability.products.has(productId)?availability.available(productId):Math.max(0,Math.floor(n(row.dbStock,0)))})}
   for(const product of(Array.isArray(snapshot.products)?snapshot.products:[])){const sku=String(product?.kaspi||'').trim(),productId=String(product?.id||'');if(!sku||combined.has(sku))continue;combined.set(sku,{sku,productId,name:String(product?.name||''),stock:availability.available(productId)})}
+  for(const recovery of KASPI_RECOVERY_OFFERS){if(combined.has(recovery.sku))continue;const product=(Array.isArray(snapshot.products)?snapshot.products:[]).find(x=>normalizeProductName(x?.name)===normalizeProductName(recovery.model));if(!product)continue;const productId=String(product.id||'');combined.set(recovery.sku,{sku:recovery.sku,productId,name:String(product.name||recovery.model),stock:availability.available(productId)})}
   return [...combined.values()].sort((a,b)=>a.sku.localeCompare(b.sku));
 }
 function feedUrl(req){const host=String(req.get('x-forwarded-host')||req.get('host')||'').split(',')[0].trim(),protocol=String(req.get('x-forwarded-proto')||req.protocol||'https').split(',')[0].trim()||'https';return host?`${protocol}://${host}/kaspi/price-list.xml`:''}
