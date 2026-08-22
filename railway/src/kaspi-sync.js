@@ -13,7 +13,9 @@ const MAX_DIRECT_ORDERS = 240;
 // state in the Railway collector so pickup and seller-delivery sales do not
 // disappear from the warehouse report.
 const DIRECT_ORDER_STATES = Object.freeze([
-  'NEW', 'SIGN_REQUIRED', 'PICKUP', 'DELIVERY', 'KASPI_DELIVERY', 'ARCHIVE'
+  // Active Kaspi Delivery orders must be refreshed before the global safety
+  // cap is reached; otherwise transmitted orders keep their old packing state.
+  'KASPI_DELIVERY', 'NEW', 'SIGN_REQUIRED', 'PICKUP', 'DELIVERY', 'ARCHIVE'
 ]);
 let syncInFlight = null;
 
