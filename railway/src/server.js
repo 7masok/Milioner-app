@@ -66,7 +66,7 @@ app.post('/api/wb-sync-now', requireTrustedOrigin, async (req, res, next) => {
     const markets = [...new Set(requested.map(value => String(value || '').toUpperCase() === 'WB1' ? 'WB' : String(value || '').toUpperCase()).filter(value => available.includes(value)))];
     const results = {};
     for (const market of markets.length ? markets : available) {
-      try { results[market] = await syncWbOrders(market); }
+      try { results[market] = await syncWbOrders(market, { force: true }); }
       catch (error) { results[market] = { ok: false, market, error: String(error?.message || error) }; }
     }
     res.json({ ok: Object.values(results).some(result => result?.ok), results });
