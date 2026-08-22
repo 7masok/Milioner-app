@@ -1,7 +1,7 @@
 import { pool } from './db.js';
 import { config } from './config.js';
 import { reconcileWbReservations } from './reservation-reconcile.js';
-import { credentialFor } from './connections.js';
+import { configuredWbConnectionIds, credentialFor } from './connections.js';
 
 const WB_API = 'https://marketplace-api.wildberries.ru';
 const SYNC_MS = 10 * 60 * 1000;
@@ -105,7 +105,7 @@ async function upsert(market, rows) {
 }
 
 export async function syncWbOrders(market, { force = false } = {}) {
-  if (!['WB', 'WB2'].includes(market)) throw new Error('Unsupported WB market');
+  if (!/^WB(?:[2-9]\d*|1\d+)?$/.test(market)) throw new Error('Unsupported WB market');
   if (inFlight.has(market)) return inFlight.get(market);
   const task = (async () => {
     const token = await tokenFor(market);
@@ -142,7 +142,7 @@ export async function syncWbOrders(market, { force = false } = {}) {
 export function startWbSyncLoop() {
   const run = async (force = false) => {
     await Promise.all(
-      ['WB', 'WB2'].map(async (market) => {
+      (await configuredWbConnectionIds()).map(async (market) => {
         try {
           await syncWbOrders(market, { force });
         } catch (error) {
