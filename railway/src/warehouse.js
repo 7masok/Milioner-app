@@ -62,9 +62,12 @@ async function mirrorProducts(client, products) {
       Math.max(0, Number(product?.cost || 0) || 0), Number(product?.totalProfit || 0) || 0,
       Number(product?.createdAt || now) || now, now
     ]);
-    await client.query('DELETE FROM product_links WHERE product_id=$1', [id]);
     for (const [market, field] of [['Kaspi', 'kaspi'], ['WB', 'wb'], ['WB2', 'wb2'], ['Ozon', 'ozon']]) {
-      for (const sku of marketplaceSkus(product, field)) {
+      const skus = marketplaceSkus(product, field);
+      // A stale device snapshot may omit one marketplace field. Never erase a
+      // valid server-side link merely because that field arrived empty.
+      if (skus.length) await client.query('DELETE FROM product_links WHERE product_id=$1 AND market=$2 AND NOT (sku = ANY($3::text[]))', [id, market, skus]);
+      for (const sku of skus) {
         await client.query(`INSERT INTO product_links(product_id,market,sku,created_at,updated_at)
           VALUES($1,$2,$3,$4,$4) ON CONFLICT(market,sku) DO UPDATE SET product_id=excluded.product_id,updated_at=excluded.updated_at`,
         [id, market, sku, now]);
