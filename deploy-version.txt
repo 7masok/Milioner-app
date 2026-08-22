@@ -1,1 +1,2 @@
 Kaspi Pay finance import 2026-08-13
+stock-display-fix
