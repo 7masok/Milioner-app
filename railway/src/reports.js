@@ -218,7 +218,11 @@ reportsRouter.get('/wb-finance-products', asyncRoute(async (req, res) => {
     SUM(f.delivery_service) AS delivery,SUM(f.paid_storage) AS storage,SUM(f.paid_acceptance) AS acceptance,
     SUM(f.deduction) AS deduction,SUM(f.penalty) AS penalty,SUM(f.additional_payment) AS "additionalPayment",
     SUM(f.rebill_logistic_cost) AS rebill FROM wb_finance_rows f
-    LEFT JOIN product_links l ON l.market=f.market AND (l.sku=f.vendor_code OR l.sku=f.nm_id)
+    LEFT JOIN LATERAL (
+      SELECT pl.product_id FROM product_links pl
+      WHERE pl.market=f.market AND pl.sku IN (f.vendor_code,f.nm_id)
+      ORDER BY CASE WHEN pl.sku=f.vendor_code THEN 0 ELSE 1 END LIMIT 1
+    ) l ON TRUE
     WHERE f.market=$1 AND f.rr_date >= $2 AND f.rr_date < $3
     GROUP BY f.vendor_code,f.nm_id,l.product_id ORDER BY SUM(f.for_pay) DESC`, [selected, since, until]);
   const products = result.rows.map(row => {
@@ -248,7 +252,11 @@ reportsRouter.get('/wb-sales-live', asyncRoute(async (req, res) => {
     SUM(CASE WHEN r.is_return=1 THEN -1 ELSE 1 END) AS qty,
     SUM(CASE WHEN r.is_return=1 THEN -r.finished_price ELSE r.finished_price END) AS "buyoutSum",
     SUM(CASE WHEN r.is_return=1 THEN -r.for_pay ELSE r.for_pay END) AS "forPay"
-    FROM wb_sales_live_rows r LEFT JOIN product_links l ON l.market=r.market AND (l.sku=r.vendor_code OR l.sku=r.nm_id)
+    FROM wb_sales_live_rows r LEFT JOIN LATERAL (
+      SELECT pl.product_id FROM product_links pl
+      WHERE pl.market=r.market AND pl.sku IN (r.barcode,r.vendor_code,r.nm_id)
+      ORDER BY CASE WHEN pl.sku=r.barcode THEN 0 WHEN pl.sku=r.vendor_code THEN 1 ELSE 2 END LIMIT 1
+    ) l ON TRUE
     WHERE r.market=$1 AND r.sale_date >= $2 AND r.sale_date < $3 GROUP BY r.vendor_code,r.nm_id,l.product_id`, [selected, since, until]);
   const products = result.rows.map(row => ({ ...row, title: row.vendorCode || row.nmId, priceLinked: Number(row.buyoutSum || 0) !== 0 }));
   res.json({ ok: true, available: true, market: selected, days, range: { since, until, timezone: 'Asia/Almaty' },
