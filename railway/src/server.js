@@ -68,7 +68,10 @@ app.use('/api', warehouseRouter);
 app.use('/api', ordersRouter);
 app.use('/api', reportsRouter);
 app.use('/api', stockRouter);
+// Keep the exact legacy path used by the active Kaspi automatic feed, but serve
+// it from the live Railway warehouse source instead of the old Cloudflare snapshot.
 app.get('/kaspi/price-list.xml', kaspiFeedHandler);
+app.get('/kaspi/pricelist.xml', kaspiFeedHandler);
 
 app.use((req, res) => res.status(404).json({ ok: false, error: 'Not found', path: req.path }));
 app.use((error, _req, res, _next) => {
