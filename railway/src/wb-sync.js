@@ -136,10 +136,15 @@ export async function syncWbOrders(market, { force = false } = {}) {
 
 export function startWbSyncLoop() {
   const run = async () => {
-    for (const market of ['WB', 'WB2']) {
-      try { await syncWbOrders(market); }
-      catch (error) { console.error(`WB background sync failed (${market})`, error); }
-    }
+    await Promise.all(
+      ['WB', 'WB2'].map(async (market) => {
+        try {
+          await syncWbOrders(market);
+        } catch (error) {
+          console.error(`WB background sync failed (${market})`, error);
+        }
+      })
+    );
   };
   setTimeout(run, 6_000).unref();
   const timer = setInterval(run, SYNC_MS);
