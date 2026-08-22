@@ -67,7 +67,10 @@ async function fetchOrders(market, token) {
     const orderId = String(order?.id ?? order?.orderUid ?? `wb-${index}`);
     return {
       orderId, code: String(order?.id ?? order?.orderUid ?? orderId), entryId: orderId,
-      status: String(status?.supplierStatus || 'new'), state: String(status?.wbStatus || order?.deliveryType || 'fbs'),
+      // Missing status is deliberately kept empty. The reservation reconciler
+      // requires explicit WB statuses and must not turn a failed/missing status
+      // lookup into a phantom active reservation.
+      status: String(status?.supplierStatus || '').trim(), state: String(status?.wbStatus || '').trim(),
       creationDate: timestamp(order?.createdAt), sku: String(order?.article ?? order?.nmId ?? order?.skus?.[0] ?? '').trim(),
       productName: String(order?.article || order?.subject || order?.nmId || ''), qty: 1, unitPrice: price, totalPrice: price, raw: { order, status }
     };
