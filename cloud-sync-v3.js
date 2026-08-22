@@ -178,13 +178,13 @@ function rememberOrderMarketUi(next={}){
 }
 document.addEventListener('click',event=>{
   const marketBtn=event.target?.closest?.('[data-market]');
-  if(marketBtn){const market=String(marketBtn.dataset.market||'');if(['Kaspi','WB','Ozon'].includes(market))rememberOrderMarketUi({market})}
+  if(marketBtn){const market=String(marketBtn.dataset.market||'');if(['all','Kaspi','WB','Ozon'].includes(market))rememberOrderMarketUi({market})}
   const wbBtn=event.target?.closest?.('[data-wb-account]');
   if(wbBtn){const wbAccount=String(wbBtn.dataset.wbAccount||'');if(['all','WB','WB2'].includes(wbAccount))rememberOrderMarketUi({market:'WB',wbAccount})}
 },true);
 function restoreOrderMarketUi(){
   const saved=readOrderMarketUi();
-  if(!['Kaspi','WB','Ozon'].includes(saved.market))return;
+  if(!['all','Kaspi','WB','Ozon'].includes(saved.market))return;
   const marketBtn=document.querySelector(`[data-market="${saved.market}"]`);
   if(marketBtn&&!marketBtn.classList.contains('active'))marketBtn.click();
   if(saved.market==='WB'&&['all','WB','WB2'].includes(saved.wbAccount)){
@@ -324,3 +324,4 @@ if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',
 window.addEventListener('load',()=>{bind();setTimeout(refresh,300);setTimeout(refresh,1200)});
 setInterval(refresh,15000);
 })();
+
