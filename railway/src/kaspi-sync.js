@@ -64,7 +64,16 @@ function normalizeOrder(raw) {
   if (!orderId) return null;
   const code = String(attrs.code ?? raw?.code ?? orderId);
   const status = String(attrs.status ?? raw?.status ?? '');
-  const state = String(attrs.state ?? raw?.state ?? '');
+  const sourceState = String(attrs.state ?? raw?.state ?? '');
+  const kaspiDelivery = attrs.kaspiDelivery || raw?.kaspiDelivery || {};
+  const courierTransmissionDate = n(
+    kaspiDelivery?.courierTransmissionDate ?? attrs.courierTransmissionDate ?? raw?.courierTransmissionDate ?? 0,
+    0
+  );
+  const assembled = Boolean(attrs.assembled ?? raw?.assembled ?? false);
+  const state = sourceState === 'KASPI_DELIVERY'
+    ? (courierTransmissionDate > 0 ? 'KASPI_DELIVERY_TRANSIT' : assembled ? 'KASPI_DELIVERY_ASSEMBLED' : sourceState)
+    : sourceState;
   const creationDate = ts(attrs.creationDate ?? attrs.createdAt ?? raw?.creationDate ?? raw?.createdAt);
   let lines = Array.isArray(raw?.lines) ? raw.lines : Array.isArray(attrs.lines) ? attrs.lines : [];
   if (!lines.length && Array.isArray(raw?.entries)) lines = raw.entries;
@@ -75,7 +84,7 @@ function normalizeOrder(raw) {
       unitPrice: 0, totalPrice: n(attrs.totalPrice ?? raw?.totalPrice ?? 0, 0)
     });
   }
-  return { orderId, code, status, state, creationDate, lines: normalized, raw };
+  return { orderId, code, status, state, creationDate, courierTransmissionDate, lines: normalized, raw };
 }
 
 async function fetchJson(url, options = {}, label = 'request') {
