@@ -62,7 +62,7 @@ function stableReservation(market, row, productId) {
 // table, so an old sync cannot leave phantom reservations behind. Inventory,
 // purchases and sales are deliberately untouched here.
 export async function reconcileWbReservations(market, _syncedSince) {
-  if (!['WB', 'WB2'].includes(market)) throw new Error('Unsupported WB market');
+  if (!/^WB(?:[2-9]\d*|1\d+)?$/.test(market)) throw new Error('Unsupported WB market');
 
   return transaction(async client => {
     await client.query('SELECT pg_advisory_xact_lock($1)', [730021]);
