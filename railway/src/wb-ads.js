@@ -12,7 +12,7 @@ export const wbAdsRouter=express.Router();
 
 function market(value){const m=String(value||'WB').toUpperCase();return m==='WB1'?'WB':m}
 function allowed(m){return /^WB(?:[2-9]\d*|1\d+)?$/.test(m)}
-function localDate(){return new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Qyzylorda',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date())}
+function localDate(){const parts=new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Qyzylorda',year:'numeric',month:'2-digit',day:'2-digit'}).formatToParts(new Date()),value=type=>parts.find(part=>part.type===type)?.value||'';return value('year')+'-'+value('month')+'-'+value('day')}
 async function tokenFor(market){return credentialFor(market,market==='WB2'?config.wbToken2:config.wbToken)}
 async function request(url,token,{method='GET',body}={}){const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),20000);try{const res=await fetch(url,{method,headers:{Accept:'application/json',Authorization:token,...(body?{'Content-Type':'application/json'}:{})},body:body?JSON.stringify(body):undefined,signal:controller.signal});const text=await res.text();let data={};try{data=text?JSON.parse(text):{}}catch{}if(!res.ok)throw new Error(data?.message||data?.error||data?.detail||('WB API HTTP '+res.status));return data}finally{clearTimeout(timer)}}
 function campaignId(row){return Number(row?.advertId??row?.id??row?.advert_id??0)}
