@@ -11,6 +11,7 @@ import { reportsRouter } from './reports.js';
 import { stockRouter, kaspiFeedHandler } from './stock.js';
 import { startKaspiSyncLoop, syncKaspiOrders } from './kaspi-sync.js';
 import { startWbSyncLoop, syncWbOrders } from './wb-sync.js';
+import { syncWbStockMarket } from './wb-stock-sync.js';
 import { authConfig, login, requireAppSession } from './auth.js';
 import { configuredWbConnectionIds, connectionsRouter } from './connections.js';
 import { wbVariantsRouter } from './wb-variants.js';
@@ -113,13 +114,20 @@ app.post('/api/wb-sync-now', requireTrustedOrigin, async (req, res, next) => {
 });
 
 
-// Compatibility route for older browser builds. Railway keeps order data
-// server-side; an ordinary warehouse save must not trigger an unverified
-// external stock write.
-app.post('/api/stock-sync-now', requireTrustedOrigin, (req, res) => {
-  const requested = Array.isArray(req.body?.markets) ? req.body.markets : ['WB', 'WB2'];
-  const markets = [...new Set(requested.map(value => String(value || '').toUpperCase() === 'WB1' ? 'WB' : String(value || '').toUpperCase()).filter(value => ['WB', 'WB2'].includes(value)))];
-  res.json({ ok: true, results: Object.fromEntries((markets.length ? markets : ['WB', 'WB2']).map(market => [market, { ok: true, market, skipped: true, reason: 'server-stock-feed' }])) });
+// The warehouse is the only source of truth. A stock update is allowed only
+// after every linked article has a unique WB characteristic mapping; otherwise
+// the function returns diagnostics and writes nothing to WB.
+app.post('/api/stock-sync-now', requireTrustedOrigin, async (req, res, next) => {
+  try {
+    const requested = Array.isArray(req.body?.markets) ? req.body.markets : ['WB', 'WB2'];
+    const markets = [...new Set(requested.map(value => String(value || '').toUpperCase() === 'WB1' ? 'WB' : String(value || '').toUpperCase()).filter(value => ['WB', 'WB2'].includes(value)))];
+    const results = {};
+    for (const market of markets.length ? markets : ['WB', 'WB2']) {
+      try { results[market] = await syncWbStockMarket(market, { write: true }); }
+      catch (error) { results[market] = { ok: false, market, error: String(error?.message || error) }; }
+    }
+    res.json({ ok: Object.values(results).some(result => result?.ok), results });
+  } catch (error) { next(error); }
 });
 
 app.use('/api', connectionsRouter);
