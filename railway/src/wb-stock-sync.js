@@ -75,25 +75,38 @@ export async function syncWbStockMarket(market,{write=true}={}){
   if(!token)return {ok:false,market:id,skipped:true,reason:'token-not-configured'};
   const stateRow=await pool.query('SELECT payload FROM warehouse_state WHERE id=1');
   const state=parse(stateRow.rows[0]?.payload),availability=sharedAvailable(state),field=id==='WB2'?'wb2':'wb';
-  const linked=[...availability.products.values()].filter(product=>String(product?.[field]||'').trim());
+  // Variant-group rows are display-only parents. Their children carry the real
+  // WB barcode and characteristic ID, so never send the parent as a stock item.
+  const linked=[...availability.products.values()].filter(product=>String(product?.[field]||'').trim()&&String(product?.kind||'')!=='variant-group');
   if(linked.length<20)return {ok:false,market:id,skipped:true,reason:'warehouse-safety-gate',linked:linked.length};
-  const cards=await catalog(token),byCode=new Map(cards.map(card=>[String(card.vendorCode).trim(),card]));
-  const duplicate=new Set(),seen=new Set();
-  for(const product of linked){const sku=String(product[field]).trim();if(seen.has(sku))duplicate.add(sku);seen.add(sku)}
-  const unresolved=[],items=[];
-  for(const product of linked){
-    const sku=String(product[field]).trim(),card=byCode.get(sku);
-    if(!card){unresolved.push({sku,name:String(product?.name||''),reason:'article-not-found'});continue}
-    if(card.sizes.length!==1){unresolved.push({sku,name:String(product?.name||''),reason:'multiple-sizes'});continue}
-    if(duplicate.has(sku)){unresolved.push({sku,name:String(product?.name||''),reason:'duplicate-link'});continue}
-    items.push({chrtId:Number(card.sizes[0].chrtId),amount:availability.amount(product.id),sku,name:String(product?.name||'')});
+  const cards=await catalog(token),byCode=new Map(cards.map(card=>[String(card.vendorCode).trim(),card])),byChrt=new Map(),byBarcode=new Map();
+  for(const card of cards)for(const size of card.sizes){
+    byChrt.set(Number(size.chrtId),{card,size});
+    for(const barcode of size.barcodes||[])if(!byBarcode.has(String(barcode).trim()))byBarcode.set(String(barcode).trim(),{card,size});
   }
-  if(unresolved.length)return {ok:false,market:id,skipped:true,reason:'mapping-incomplete',linked:linked.length,mapped:items.length,unresolved:unresolved.slice(0,50)};
-  if(!items.length||!items.some(item=>item.amount>0))return {ok:false,market:id,skipped:true,reason:'zero-payload-safety',linked:linked.length};
+  const unresolved=[],candidates=[];
+  for(const product of linked){
+    const sku=String(product[field]).trim(),aliases=[sku,...(Array.isArray(product?.[field+'Aliases'])?product[field+'Aliases']:[])].map(value=>String(value||'').trim()).filter(Boolean);
+    const variant=product?.wbVariant&&String(product.wbVariant.market||'').toUpperCase()===id?product.wbVariant:null;
+    let hit=variant?.chrtId?byChrt.get(Number(variant.chrtId)):null;
+    if(!hit){
+      const single=aliases.map(value=>byCode.get(value)).find(card=>card?.sizes?.length===1);
+      hit=single?{card:single,size:single.sizes[0]}:aliases.map(value=>byBarcode.get(value)).find(Boolean);
+    }
+    if(!hit){unresolved.push({sku,name:String(product?.name||''),reason:'article-or-barcode-not-found'});continue}
+    candidates.push({chrtId:Number(hit.size.chrtId),amount:availability.amount(product.id),sku,name:String(product?.name||'')});
+  }
+  const duplicates=new Set(),seenChrt=new Set();
+  for(const item of candidates){if(seenChrt.has(item.chrtId))duplicates.add(item.chrtId);seenChrt.add(item.chrtId)}
+  const items=candidates.filter(item=>!duplicates.has(item.chrtId));
+  for(const item of candidates)if(duplicates.has(item.chrtId))unresolved.push({sku:item.sku,name:item.name,reason:'duplicate-characteristic'});
+  // Exact matches are safe to update even when unrelated legacy rows remain
+  // unlinked. Unresolved rows are deliberately left untouched.
+  if(!items.length||!items.some(item=>item.amount>0))return {ok:false,market:id,skipped:true,reason:'zero-payload-safety',linked:linked.length,unresolved:unresolved.slice(0,50)};
   const warehouse=await warehouseId(token,id);
   if(!warehouse)return {ok:false,market:id,skipped:true,reason:'warehouse-not-unique',linked:linked.length};
   const actual=await readStocks(token,warehouse,items.map(item=>item.chrtId));
   const changed=items.filter(item=>(actual.get(item.chrtId)||0)!==item.amount);
   if(write&&changed.length)await writeStocks(token,warehouse,changed.map(item=>({chrtId:item.chrtId,amount:item.amount})));
-  return {ok:true,market:id,warehouseId:warehouse,linked:linked.length,mapped:items.length,changed:changed.length,sent:write&&changed.length>0,items:items.slice(0,100)};
+  return {ok:true,market:id,warehouseId:warehouse,linked:linked.length,mapped:items.length,unresolved:unresolved.slice(0,50),changed:changed.length,sent:write&&changed.length>0,items:items.slice(0,100)};
 }
