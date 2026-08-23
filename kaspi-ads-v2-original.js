@@ -4,6 +4,23 @@
   state.kaspiAdExpenses = Array.isArray(state.kaspiAdExpenses) ? state.kaspiAdExpenses : [];
   const DAY_MS = 86400000;
 
+  function localDateRange(fromDate, toDate) {
+    const from = orderDayStart(fromDate);
+    const to = orderDayStart(toDate || fromDate);
+    if (from === null || to === null) return [];
+    const start = Math.min(from, to);
+    const end = Math.max(from, to);
+    const dates = [];
+    for (let ts = start; ts <= end; ts += DAY_MS) {
+      const date = new Date(ts);
+      const year = date.getFullYear();
+      const month = String(date.getMonth() + 1).padStart(2, '0');
+      const day = String(date.getDate()).padStart(2, '0');
+      dates.push(`${year}-${month}-${day}`);
+    }
+    return dates;
+  }
+
   function sourceKeyOf(batch) {
     const raw = batch?.sourceKey || batch?.campaignName || batch?.source || kaspiAdsSourceKey(batch?.fileName || '');
     return kaspiAdsNameKey(raw || 'kaspi marketing');
@@ -15,7 +32,7 @@
   }
 
   function batchDates(batch) {
-    const set = new Set(kaspiAdsDateRange(batch?.fromDate || '', batch?.toDate || batch?.fromDate || ''));
+    const set = new Set(localDateRange(batch?.fromDate || '', batch?.toDate || batch?.fromDate || ''));
     for (const line of batch?.lines || []) {
       const date = kaspiAdsIsoDate(line?.date);
       if (date) set.add(date);
