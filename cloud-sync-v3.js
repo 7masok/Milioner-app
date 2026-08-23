@@ -265,8 +265,10 @@ window.syncNow=async function(){
       syncRequest('/api/kaspi-sync-now',{days:2},'Kaspi'),
       syncRequest('/api/wb-sync-now',{days:2},'WB')
     ]);
+    const stockResult=await syncRequest('/api/stock-sync-now',{markets:['WB','WB2']},'WB остатки').catch(error=>({ok:false,error:String(error?.message||error)}));
     await window.loadSharedOrderCache?.({silent:false});showMarketSyncTimes();restoreOrderMarketUi();
     const failed=results.filter(x=>x.status==='rejected');if(failed.length)console.warn('market sync partial failure',failed);
+    if(stockResult?.ok===false)console.warn('WB stock sync skipped',stockResult);
     cloudStatus('сервер подключён','ok');
   }catch(e){await window.loadSharedOrderCache?.({silent:true}).catch(()=>{});showMarketSyncTimes();cloudStatus('сервер подключён · ошибка синхронизации','warn')}
   finally{if(btn){btn.disabled=false;btn.textContent=old||'↻'}}
