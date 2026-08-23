@@ -12,6 +12,9 @@ const MAX_BATCHES = 3;
 const MAX_DIRECT_ORDERS = 240;
 const ACTIVE_LOOKBACK_DAYS = 14;
 const MAX_ACTIVE_PAGES_PER_STATE = 30;
+const PENDING_COMPOSITION_LOOKBACK_DAYS = 30;
+const PENDING_COMPOSITION_RETRY_MS = 6 * 60 * 60 * 1000;
+const MAX_PENDING_COMPOSITION_ORDERS = 25;
 const ACTIVE_CANDIDATE_STATES = Object.freeze(['KASPI_DELIVERY', 'NEW', 'SIGN_REQUIRED', 'PICKUP']);
 // Kaspi Pay includes every sale, not only Kaspi Delivery. Keep every order
 // state in the Railway collector so pickup and seller-delivery sales do not
@@ -275,6 +278,62 @@ async function upsertOrder(order) {
   }
 }
 
+async function backfillPendingKaspiCompositions() {
+  const now = Date.now();
+  const oldestAllowed = now - PENDING_COMPOSITION_LOOKBACK_DAYS * 86_400_000;
+  const retryBefore = now - PENDING_COMPOSITION_RETRY_MS;
+  const pending = await pool.query(`WITH candidates AS (
+      SELECT DISTINCT ON (order_id)
+        order_id AS "orderId", code, status, state, creation_date AS "creationDate",
+        raw_json AS "rawJson", updated_at AS "updatedAt"
+      FROM marketplace_order_lines
+      WHERE market='Kaspi' AND entry_id='__pending__'
+        AND creation_date >= $1 AND updated_at <= $2
+      ORDER BY order_id, updated_at ASC
+    )
+    SELECT * FROM candidates ORDER BY "updatedAt" ASC LIMIT $3`,
+    [oldestAllowed, retryBefore, MAX_PENDING_COMPOSITION_ORDERS]);
+  const productCache = new Map();
+  let recovered = 0;
+  let failed = 0;
+  for (const row of pending.rows) {
+    try {
+      const sourceLines = await directOrderLines({ id: row.orderId }, productCache);
+      if (!sourceLines.length) {
+        failed++;
+        await pool.query(`UPDATE marketplace_order_lines SET updated_at=$1
+          WHERE market='Kaspi' AND order_id=$2 AND entry_id='__pending__'`, [Date.now(), row.orderId]);
+        continue;
+      }
+      let raw = {};
+      try { raw = JSON.parse(row.rawJson || '{}'); } catch {}
+      await upsertOrder({
+        orderId: String(row.orderId),
+        code: String(row.code || row.orderId),
+        status: String(row.status || ''),
+        state: String(row.state || ''),
+        creationDate: Number(row.creationDate) || Date.now(),
+        raw,
+        lines: sourceLines.map((line, index) => ({
+          entryId: String(line.id || `${row.orderId}-recovered-${index}`),
+          sku: String(line.merchantCode || ''),
+          productName: String(line.productName || ''),
+          qty: Math.max(1, n(line.quantity, 1)),
+          unitPrice: n(line.basePrice, 0),
+          totalPrice: n(line.totalPrice, n(line.basePrice, 0) * Math.max(1, n(line.quantity, 1)))
+        }))
+      });
+      recovered += sourceLines.length;
+    } catch (error) {
+      failed++;
+      await pool.query(`UPDATE marketplace_order_lines SET updated_at=$1
+        WHERE market='Kaspi' AND order_id=$2 AND entry_id='__pending__'`, [Date.now(), row.orderId]).catch(() => {});
+      console.warn('Kaspi pending composition retry failed for', String(row.orderId), String(error?.message || error));
+    }
+  }
+  return { checked: pending.rows.length, recovered, failed };
+}
+
 async function closeStaleRuns() {
   const cutoff = Date.now() - STALE_RUN_MS;
   await pool.query(`UPDATE sync_runs
@@ -336,6 +395,10 @@ export async function syncKaspiOrders({ days = 2 } = {}) {
         await upsertOrder(order);
         items += order.lines.filter(line => line.entryId !== '__pending__').length || 1;
       }
+      // Retry only recent incomplete historical orders. This is deliberately bounded
+      // so ordinary synchronization never turns into a full archive download.
+      const compositionBackfill = await backfillPendingKaspiCompositions();
+      items += compositionBackfill.recovered;
       // Apply the complete direct observation last so no older cached row can
       // turn a transmitted parcel back into a new order.
       if (authoritativeObservedOrders) await updateObservedKaspiStates(authoritativeObservedOrders);
@@ -352,7 +415,7 @@ export async function syncKaspiOrders({ days = 2 } = {}) {
       }
       const finishedAt = Date.now();
       await pool.query("UPDATE sync_runs SET finished_at=$1,ok=1,items=$2,error='' WHERE id=$3", [finishedAt, items, runId]);
-      return { ok: true, items, finishedAt, upstream, reservationReconcile };
+      return { ok: true, items, finishedAt, upstream, reservationReconcile, compositionBackfill };
     } catch (error) {
       const message = String(error?.message || error).slice(0, 1000);
       await pool.query('UPDATE sync_runs SET finished_at=$1,ok=0,items=$2,error=$3 WHERE id=$4', [Date.now(), items, message, runId]).catch(() => {});
