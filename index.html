@@ -48,6 +48,9 @@ body:has(#home.active) .fab{bottom:138px;background:#0b9b54}
 
 /* Compact order cards on the home screen; all order details remain visible. */
 .product-sort-toolbar{display:grid;grid-template-columns:minmax(0,1fr) 48px;gap:7px}.product-sort-toolbar .select{width:100%!important;min-width:0}.product-sort-direction{width:48px;height:42px;border:1px solid var(--line);background:#fff;border-radius:12px;font-size:24px;line-height:1;cursor:pointer}.product-sort-direction:active{transform:scale(.96);background:#f3f5f7}#home .order-list{gap:6px}#home .order-list>.item{padding:10px 11px;border-radius:15px}#home .order-head{gap:8px;align-items:center}#home .order-head .name{font-size:14px;line-height:1.16}#home .order-head .muted{margin-top:2px;font-size:10px;line-height:1.25}#home .order-line{margin-top:6px!important;padding-top:0;gap:8px}#home .order-line b{font-size:13px;line-height:1.2}#home .order-line .right{min-width:56px}#home .order-line .right b{font-size:14px}#home .order-line .right .muted{font-size:11px;margin-top:2px}#home .order-sku{font-size:10px;line-height:1.2;margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:calc(100vw - 156px)}#home .order-meta{margin-top:5px;gap:4px}#home .badge{padding:3px 6px;border-radius:8px;font-size:10px}
+
+/* Important search fields: track, product and order. */
+#home .order-search,#products #q,#purchases #purchaseSearch{border:2px solid #dc2626;background-color:#fff7f7;box-shadow:0 0 0 3px #fee2e2;color:#7f1d1d}#home .order-search::placeholder,#products #q::placeholder,#purchases #purchaseSearch::placeholder{color:#b91c1c;opacity:1}#home .order-search:focus,#products #q:focus,#purchases #purchaseSearch:focus{outline:none;border-color:#b91c1c;box-shadow:0 0 0 4px #fecaca}
 </style>
 </head>
 <body class="auth-pending">
