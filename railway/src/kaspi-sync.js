@@ -282,17 +282,16 @@ async function backfillPendingKaspiCompositions() {
   const now = Date.now();
   const oldestAllowed = now - PENDING_COMPOSITION_LOOKBACK_DAYS * 86_400_000;
   const retryBefore = now - PENDING_COMPOSITION_RETRY_MS;
-  const pending = await pool.query(`WITH candidates AS (
-      SELECT DISTINCT ON (order_id)
-        order_id AS "orderId", code, status, state, creation_date AS "creationDate",
-        raw_json AS "rawJson", updated_at AS "updatedAt"
-      FROM marketplace_order_lines
-      WHERE market='Kaspi' AND entry_id='__pending__'
-        AND creation_date >= $1 AND updated_at <= $2
-      ORDER BY order_id, updated_at ASC
-    )
-    SELECT * FROM candidates ORDER BY "updatedAt" ASC LIMIT $3`,
-    [oldestAllowed, retryBefore, MAX_PENDING_COMPOSITION_ORDERS]);
+  // Historical Kaspi reports are stored separately from current marketplace
+  // lines. Repair that exact cache, not an unlimited marketplace archive.
+  const pending = await pool.query(`SELECT order_id AS "orderId", code, status, state,
+      creation_date AS "creationDate", raw_json AS "rawJson", updated_at AS "updatedAt"
+    FROM kaspi_report_orders
+    WHERE completion_date >= $1
+      AND (lines_json IS NULL OR BTRIM(lines_json) IN ('', '[]'))
+      AND updated_at <= $2
+    ORDER BY updated_at ASC
+    LIMIT $3`, [oldestAllowed, retryBefore, MAX_PENDING_COMPOSITION_ORDERS]);
   const productCache = new Map();
   let recovered = 0;
   let failed = 0;
@@ -301,8 +300,8 @@ async function backfillPendingKaspiCompositions() {
       const sourceLines = await directOrderLines({ id: row.orderId }, productCache);
       if (!sourceLines.length) {
         failed++;
-        await pool.query(`UPDATE marketplace_order_lines SET updated_at=$1
-          WHERE market='Kaspi' AND order_id=$2 AND entry_id='__pending__'`, [Date.now(), row.orderId]);
+        await pool.query(`UPDATE kaspi_report_orders SET updated_at=$1 WHERE order_id=$2`,
+          [Date.now(), row.orderId]);
         continue;
       }
       let raw = {};
@@ -323,11 +322,13 @@ async function backfillPendingKaspiCompositions() {
           totalPrice: n(line.totalPrice, n(line.basePrice, 0) * Math.max(1, n(line.quantity, 1)))
         }))
       });
+      await pool.query(`UPDATE kaspi_report_orders SET lines_json=$1, updated_at=$2 WHERE order_id=$3`,
+        [JSON.stringify(sourceLines), Date.now(), row.orderId]);
       recovered += sourceLines.length;
     } catch (error) {
       failed++;
-      await pool.query(`UPDATE marketplace_order_lines SET updated_at=$1
-        WHERE market='Kaspi' AND order_id=$2 AND entry_id='__pending__'`, [Date.now(), row.orderId]).catch(() => {});
+      await pool.query(`UPDATE kaspi_report_orders SET updated_at=$1 WHERE order_id=$2`,
+        [Date.now(), row.orderId]).catch(() => {});
       console.warn('Kaspi pending composition retry failed for', String(row.orderId), String(error?.message || error));
     }
   }
