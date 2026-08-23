@@ -1,0 +1,28 @@
+import express from 'express';
+import { pool } from './db.js';
+import { config } from './config.js';
+import { credentialFor } from './connections.js';
+import { asyncRoute } from './http.js';
+
+const API='https://advert-api.wildberries.ru';
+const CHECK_MS=5*60*1000;
+const inFlight=new Map();
+
+export const wbAdsRouter=express.Router();
+
+function market(value){const m=String(value||'WB').toUpperCase();return m==='WB1'?'WB':m}
+function allowed(m){return /^WB(?:[2-9]\d*|1\d+)?$/.test(m)}
+function localDate(){return new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Qyzylorda',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date())}
+async function tokenFor(market){return credentialFor(market,market==='WB2'?config.wbToken2:config.wbToken)}
+async function request(url,token,{method='GET',body}={}){const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),20000);try{const res=await fetch(url,{method,headers:{Accept:'application/json',Authorization:token,...(body?{'Content-Type':'application/json'}:{})},body:body?JSON.stringify(body):undefined,signal:controller.signal});const text=await res.text();let data={};try{data=text?JSON.parse(text):{}}catch{}if(!res.ok)throw new Error(data?.message||data?.error||data?.detail||('WB API HTTP '+res.status));return data}finally{clearTimeout(timer)}}
+function campaignId(row){return Number(row?.advertId??row?.id??row?.advert_id??0)}
+function campaignRows(data){return Array.isArray(data)?data:Array.isArray(data?.adverts)?data.adverts:Array.isArray(data?.items)?data.items:Array.isArray(data?.data)?data.data:[]}
+function active(row){const s=Number(row?.status??row?.statusId??row?.status_id);return s===9||String(row?.status||'').toUpperCase()==='ACTIVE'}
+function spend(row,day){const stats=Array.isArray(row?.stats)?row.stats:Array.isArray(row?.dailyStats)?row.dailyStats:Array.isArray(row?.days)?row.days:[];return stats.filter(x=>!x?.date||String(x.date).slice(0,10)===day).reduce((sum,x)=>sum+Math.max(0,Number(x?.sum??x?.spend??x?.expenses??x?.cost??0)||0),0)}
+async function campaigns(market){if(!allowed(market))throw new Error('Неверный кабинет WB');const token=await tokenFor(market);if(!token)throw new Error((market==='WB2'?'WB_TOKEN_2':'WB_TOKEN')+' не настроен');const list=campaignRows(await request(API+'/api/advert/v2/adverts?statuses=4,7,8,9,11',token));const ids=list.map(campaignId).filter(Boolean).slice(0,50),day=localDate();let stats=[];if(ids.length){try{stats=campaignRows(await request(API+'/adv/v3/fullstats?ids='+ids.join(',')+'&beginDate='+day+'&endDate='+day,token))}catch(error){console.warn('WB ads stats unavailable',String(error?.message||error))}}const byId=new Map(stats.map(row=>[campaignId(row),row]));return list.map(row=>({id:campaignId(row),name:String(row?.name||row?.advertName||('Кампания '+campaignId(row))),status:Number(row?.status??row?.statusId??0),paymentType:String(row?.payment_type||row?.paymentType||''),todaySpend:spend(byId.get(campaignId(row)),day),raw:row}))}
+async function rules(market){const result=await pool.query('SELECT campaign_id AS "campaignId",daily_limit AS "dailyLimit",enabled,last_checked_at AS "lastCheckedAt",last_action_at AS "lastActionAt",last_action_error AS "lastActionError" FROM wb_ad_limits WHERE market=$1',[market]);return new Map(result.rows.map(row=>[Number(row.campaignId),row]))}
+async function snapshot(market){const [rows,limits]=await Promise.all([campaigns(market),rules(market)]);return {market,day:localDate(),campaigns:rows.map(row=>({...row,rule:limits.get(row.id)||{dailyLimit:0,enabled:false}}))}}
+wbAdsRouter.get('/ads/campaigns',asyncRoute(async(req,res)=>res.json({ok:true,...await snapshot(market(req.query.market))})));
+wbAdsRouter.put('/ads/limits/:market/:campaignId',asyncRoute(async(req,res)=>{const m=market(req.params.market),id=Math.max(0,Number(req.params.campaignId)||0),limit=Math.max(0,Number(req.body?.dailyLimit)||0),enabled=Boolean(req.body?.enabled);if(!allowed(m)||!id)throw new Error('Неверная кампания');await pool.query(`INSERT INTO wb_ad_limits(market,campaign_id,daily_limit,enabled,updated_at) VALUES($1,$2,$3,$4,$5) ON CONFLICT(market,campaign_id) DO UPDATE SET daily_limit=excluded.daily_limit,enabled=excluded.enabled,updated_at=excluded.updated_at`,[m,id,limit,enabled,Date.now()]);res.json({ok:true,market:m,campaignId:id,dailyLimit:limit,enabled})}));
+async function enforce(market){if(inFlight.has(market))return inFlight.get(market);const work=(async()=>{const configured=await rules(market);const enabled=[...configured.values()].filter(row=>row.enabled&&Number(row.dailyLimit)>0);if(!enabled.length)return;const current=await campaigns(market),byId=new Map(current.map(row=>[row.id,row])),token=await tokenFor(market);for(const rule of enabled){const row=byId.get(Number(rule.campaignId));if(!row||!active(row)||Number(row.todaySpend)<Number(rule.dailyLimit))continue;try{await request(API+'/adv/v0/pause?id='+encodeURIComponent(row.id),token);await pool.query('UPDATE wb_ad_limits SET last_checked_at=$3,last_action_at=$3,last_action_error=\'\' WHERE market=$1 AND campaign_id=$2',[market,row.id,Date.now()])}catch(error){await pool.query('UPDATE wb_ad_limits SET last_checked_at=$3,last_action_error=$4 WHERE market=$1 AND campaign_id=$2',[market,row.id,Date.now(),String(error?.message||error).slice(0,500)])}}})();inFlight.set(market,work);try{return await work}finally{inFlight.delete(market)}} 
+export function startWbAdsLimitLoop(){const run=()=>Promise.all(['WB','WB2'].map(m=>enforce(m).catch(error=>console.error('WB ads limit check',m,error))));void run();const timer=setInterval(run,CHECK_MS);timer.unref();return timer}
