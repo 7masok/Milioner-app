@@ -254,9 +254,16 @@ window.syncNow=async function(){
   const btn=document.querySelector('header .btn'),old=btn?.textContent;if(btn){btn.disabled=true;btn.textContent='…'}
   try{
     cloudStatus('обновляю маркетплейсы…','warn');
+    const syncRequest=async(path,body,label)=>{
+      const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),35000);
+      try{
+        const r=await fetch(MILLIONER_API+path,{method:'POST',headers:{'Content-Type':'application/json',Accept:'application/json'},body:JSON.stringify(body),cache:'no-store',signal:controller.signal});
+        const d=await r.json().catch(()=>({}));if(!r.ok||d?.ok===false)throw new Error(d?.error||(label+' HTTP '+r.status));return d;
+      }finally{clearTimeout(timer)}
+    };
     const results=await Promise.allSettled([
-      fetch(MILLIONER_API+'/api/kaspi-sync-now',{method:'POST',headers:{'Content-Type':'application/json',Accept:'application/json'},body:JSON.stringify({days:2}),cache:'no-store'}).then(async r=>{const d=await r.json().catch(()=>({}));if(!r.ok||d?.ok===false)throw new Error(d?.error||('Kaspi HTTP '+r.status));return d}),
-      fetch(MILLIONER_API+'/api/wb-sync-now',{method:'POST',headers:{'Content-Type':'application/json',Accept:'application/json'},body:JSON.stringify({days:2}),cache:'no-store'}).then(async r=>{const d=await r.json().catch(()=>({}));if(!r.ok||d?.ok===false)throw new Error(d?.error||('WB HTTP '+r.status));return d})
+      syncRequest('/api/kaspi-sync-now',{days:2},'Kaspi'),
+      syncRequest('/api/wb-sync-now',{days:2},'WB')
     ]);
     await window.loadSharedOrderCache?.({silent:false});showMarketSyncTimes();restoreOrderMarketUi();
     const failed=results.filter(x=>x.status==='rejected');if(failed.length)console.warn('market sync partial failure',failed);
