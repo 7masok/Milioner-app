@@ -400,6 +400,7 @@ export async function syncKaspiOrders({ days = 2 } = {}) {
       // so ordinary synchronization never turns into a full archive download.
       const compositionBackfill = await backfillPendingKaspiCompositions();
       items += compositionBackfill.recovered;
+      console.log('Kaspi composition backfill:', JSON.stringify(compositionBackfill));
       // Apply the complete direct observation last so no older cached row can
       // turn a transmitted parcel back into a new order.
       if (authoritativeObservedOrders) await updateObservedKaspiStates(authoritativeObservedOrders);
