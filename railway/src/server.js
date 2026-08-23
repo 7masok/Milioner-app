@@ -110,7 +110,7 @@ app.post('/api/wb-sync-now', requireTrustedOrigin, async (req, res, next) => {
       catch (error) { results[market] = { ok: false, market, error: String(error?.message || error) }; }
     }
     const ok = Object.values(results).some(result => result?.ok);
-    console.log('WB stock sync:', JSON.stringify({ ok, results }));
+    console.log('WB order sync:', JSON.stringify({ ok, results }));
     res.json({ ok, results });
   } catch (error) { next(error); }
 });
@@ -128,7 +128,9 @@ app.post('/api/stock-sync-now', requireTrustedOrigin, async (req, res, next) => 
       try { results[market] = await syncWbStockMarket(market, { write: true }); }
       catch (error) { results[market] = { ok: false, market, error: String(error?.message || error) }; }
     }
-    res.json({ ok: Object.values(results).some(result => result?.ok), results });
+    const ok = Object.values(results).some(result => result?.ok);
+    console.log('WB stock sync:', JSON.stringify({ ok, results }));
+    res.json({ ok, results });
   } catch (error) { next(error); }
 });
 
