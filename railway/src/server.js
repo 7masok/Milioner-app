@@ -14,6 +14,7 @@ import { startWbSyncLoop, syncWbOrders } from './wb-sync.js';
 import { authConfig, login, requireAppSession } from './auth.js';
 import { configuredWbConnectionIds, connectionsRouter } from './connections.js';
 import { wbVariantsRouter } from './wb-variants.js';
+import { wbAdsRouter, startWbAdsLimitLoop } from './wb-ads.js';
 
 assertRuntimeConfig();
 const app = express();
@@ -123,6 +124,7 @@ app.post('/api/stock-sync-now', requireTrustedOrigin, (req, res) => {
 
 app.use('/api', connectionsRouter);
 app.use('/api', wbVariantsRouter);
+app.use('/api', wbAdsRouter);
 app.use('/api', warehouseRouter);
 app.use('/api', ordersRouter);
 app.use('/api', reportsRouter);
@@ -144,6 +146,7 @@ const server = app.listen(config.port, '0.0.0.0', () => {
   console.log(`millioner Railway API listening on ${config.port}`);
   startKaspiSyncLoop();
   startWbSyncLoop();
+  startWbAdsLimitLoop();
 });
 
 async function shutdown(signal) {
