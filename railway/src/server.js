@@ -109,7 +109,9 @@ app.post('/api/wb-sync-now', requireTrustedOrigin, async (req, res, next) => {
       try { results[market] = await syncWbOrders(market, { force: true }); }
       catch (error) { results[market] = { ok: false, market, error: String(error?.message || error) }; }
     }
-    res.json({ ok: Object.values(results).some(result => result?.ok), results });
+    const ok = Object.values(results).some(result => result?.ok);
+    console.log('WB stock sync:', JSON.stringify({ ok, results }));
+    res.json({ ok, results });
   } catch (error) { next(error); }
 });
 
