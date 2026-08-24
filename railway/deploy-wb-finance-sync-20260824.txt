@@ -1,0 +1,1 @@
+Deploy automatic WB finance synchronization for both accounts.
