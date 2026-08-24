@@ -20,6 +20,15 @@ function periodBounds(days = 1) {
   return { since: today - (count - 1) * 86_400_000, until: today + 86_400_000 };
 }
 
+function requestPeriodBounds(req) {
+  if (Number(req.query.days) === 0) {
+    const since = Number(req.query.from);
+    const until = Number(req.query.to);
+    if (Number.isFinite(since) && Number.isFinite(until) && since > 0 && until > since && until - since <= 366 * 86_400_000) return { since, until };
+  }
+  return periodBounds(Number(req.query.days || 1));
+}
+
 function dateKey(timestamp) {
   return new Date(timestamp + ALMATY_OFFSET).toISOString().slice(0, 10);
 }
@@ -189,7 +198,7 @@ reportsRouter.get('/wb-finance-summary', asyncRoute(async (req, res) => {
   const selected = market(req.query.market);
   if (!['WB', 'WB2'].includes(selected)) return res.status(400).json({ ok: false, error: 'market must be WB or WB2' });
   const days = Number(req.query.days || 1);
-  const { since, until } = periodBounds(days);
+  const { since, until } = requestPeriodBounds(req);
   const finance = await pool.query(`SELECT COALESCE(SUM(retail_amount),0) AS "retailAmount",COALESCE(SUM(for_pay),0) AS "forPay",
     COALESCE(SUM(acquiring_fee),0) AS acquiring,COALESCE(SUM(delivery_service),0) AS delivery,
     COALESCE(SUM(paid_storage),0) AS storage,COALESCE(SUM(paid_acceptance),0) AS acceptance,
@@ -211,7 +220,7 @@ reportsRouter.get('/wb-finance-products', asyncRoute(async (req, res) => {
   const selected = market(req.query.market);
   if (!['WB', 'WB2'].includes(selected)) return res.status(400).json({ ok: false, error: 'market must be WB or WB2' });
   const days = Number(req.query.days || 1);
-  const { since, until } = periodBounds(days);
+  const { since, until } = requestPeriodBounds(req);
   const result = await pool.query(`SELECT f.vendor_code AS "vendorCode",f.nm_id AS "nmId",MAX(f.title) AS title,l.product_id AS "productId",
     SUM(CASE WHEN trim(f.doc_type)='Продажа' THEN f.qty WHEN trim(f.doc_type)='Возврат' THEN -f.qty ELSE 0 END) AS qty,
     SUM(f.retail_amount) AS "retailAmount",SUM(f.for_pay) AS "forPay",SUM(f.acquiring_fee) AS acquiring,
