@@ -85,19 +85,9 @@ ordersRouter.get('/orders', asyncRoute(async (req, res) => {
       o.fee_source AS "feeSource",o.updated_at AS "updatedAt",resolved.product_id AS "productId",resolved.link_source AS "linkSource"
       FROM marketplace_order_lines o
       LEFT JOIN LATERAL (
-        SELECT pl.product_id,
-          CASE WHEN pl.sku=o.sku THEN 'sku-exact' ELSE 'kaspi-sku-alias' END AS link_source
+        SELECT pl.product_id,'sku-exact' AS link_source
         FROM product_links pl
-        WHERE pl.market=o.market AND (
-          pl.sku=o.sku OR (
-            o.market='Kaspi' AND EXISTS (
-              SELECT 1 FROM kaspi_sku_aliases a
-              WHERE (a.old_sku=o.sku AND a.seller_sku=pl.sku)
-                 OR (a.seller_sku=o.sku AND a.old_sku=pl.sku)
-            )
-          )
-        )
-        ORDER BY CASE WHEN pl.sku=o.sku THEN 0 ELSE 1 END
+        WHERE pl.market=o.market AND pl.sku=o.sku
         LIMIT 1
       ) resolved ON TRUE
       ${where} ORDER BY o.creation_date DESC LIMIT $${params.length}`, params),
