@@ -231,11 +231,12 @@ function campaignName(row, statRow, cards) {
   const titles = [...new Set(matched.map(card => card.title).filter(Boolean))];
   const vendorCodes = [...new Set(matched.map(card => card.vendorCode).filter(Boolean))];
   const apiName = String(row?.campaignName || row?.campaign_name || row?.name || row?.advertName || '').trim();
-  const title = titles.length === 1
+  const productLabel = titles.length === 1
     ? titles[0]
     : titles.length > 1
       ? titles.slice(0, 2).join(' + ') + (titles.length > 2 ? ' +' + (titles.length - 2) : '')
-      : apiName || ('Кампания ' + campaignId(row));
+      : '';
+  const title = apiName || productLabel || ('Кампания ' + campaignId(row));
   return { title, nmIds: allNmIds, productTitles: titles, vendorCodes };
 }
 
@@ -326,6 +327,19 @@ async function saveSnapshot(marketName, value) {
   return { ...value, updatedAt: now, lastError: '', nextAttemptAt: 0 };
 }
 
+async function setStoredCampaignStatus(marketName, campaignIdValue, status) {
+  const snapshot = await storedSnapshot(marketName);
+  if (!snapshot) return;
+  const campaigns = snapshot.campaigns.map(row => Number(row.id) === campaignIdValue
+    ? { ...row, status }
+    : row);
+  await saveSnapshot(marketName, {
+    market: marketName,
+    day: snapshot.day,
+    campaigns,
+  });
+}
+
 async function saveRefreshError(marketName, error) {
   const message = String(error?.message || error || 'Не удалось обновить рекламу').slice(0, 500);
   const retryAt = Math.max(Number(error?.retryAt || 0), Date.now() + (/429|cooldown|too many requests/i.test(message) ? RATE_LIMIT_TTL_MS : CHECK_MS));
@@ -398,6 +412,35 @@ wbAdsRouter.put('/promotion/limits/:market/:campaignId', asyncRoute(async (req, 
     [marketName, id, limit, enabled, Date.now()],
   );
   res.json({ ok: true, market: marketName, campaignId: id, dailyLimit: limit, enabled });
+}));
+
+wbAdsRouter.post('/promotion/actions/:market/:campaignId', asyncRoute(async (req, res) => {
+  const marketName = market(req.params.market);
+  const id = Math.max(0, Number(req.params.campaignId) || 0);
+  const action = String(req.body?.action || '').toLowerCase();
+  if (!allowed(marketName) || !id || !['pause', 'start'].includes(action)) {
+    const error = new Error('Неверная команда кампании');
+    error.status = 400;
+    throw error;
+  }
+
+  const snapshot = await storedSnapshot(marketName);
+  const campaign = snapshot?.campaigns.find(row => Number(row.id) === id);
+  const currentStatus = Number(campaign?.status || 0);
+  const canPause = action === 'pause' && currentStatus === 9;
+  const canStart = action === 'start' && [4, 11].includes(currentStatus);
+  if (!canPause && !canStart) {
+    const error = new Error('Статус кампании уже изменился. Обновите раздел рекламы.');
+    error.status = 409;
+    throw error;
+  }
+
+  const token = await tokenFor(marketName);
+  if (!token) throw new Error((marketName === 'WB2' ? 'WB_TOKEN_2' : 'WB_TOKEN') + ' не настроен');
+  await request(ADVERT_API + (action === 'pause' ? '/adv/v0/pause' : '/adv/v0/start') + '?id=' + encodeURIComponent(id), token);
+  const status = action === 'pause' ? 11 : 9;
+  await setStoredCampaignStatus(marketName, id, status);
+  res.json({ ok: true, market: marketName, campaignId: id, action, status });
 }));
 
 async function enforce(marketName, snapshot) {
