@@ -23,6 +23,7 @@ const requestQueues = new Map();
 const requestWindows = new Map();
 const catalogCache = new Map();
 const verifiedSnapshots = new Set();
+const retryTimers = new Map();
 const MANAGEABLE_CAMPAIGN_STATUSES = new Set([4, 9, 11]);
 
 export const wbAdsRouter = express.Router();
@@ -417,10 +418,7 @@ async function refreshMarket(marketName) {
   if (refreshInFlight.has(marketName)) return refreshInFlight.get(marketName);
   const work = (async () => {
     const previous = await storedSnapshot(marketName);
-    const remainingBackoff = Number(previous?.nextAttemptAt || 0) - Date.now();
-    // Ignore obsolete ten-minute cooldowns saved by older deployments. Current
-    // versions only persist the short retry period WB returns in rate-limit headers.
-    if (remainingBackoff > 0 && remainingBackoff <= RATE_LIMIT_TTL_MS) return previous;
+    if (previous?.nextAttemptAt > Date.now()) return previous;
     try {
       const campaigns = await fetchCampaigns(marketName);
       const saved = await saveSnapshot(marketName, { market: marketName, day: localDate(), campaigns });
@@ -542,15 +540,37 @@ async function enforce(marketName, snapshot) {
 }
 
 export function startWbAdsLimitLoop() {
+  const scheduleRetry = (marketName, retryAt) => {
+    const at = Number(retryAt || 0);
+    if (at <= Date.now()) return;
+    const current = retryTimers.get(marketName);
+    if (current?.at === at) return;
+    if (current?.timer) clearTimeout(current.timer);
+    const timer = setTimeout(async () => {
+      retryTimers.delete(marketName);
+      await runMarket(marketName);
+    }, Math.max(1000, at - Date.now() + 1000));
+    timer.unref();
+    retryTimers.set(marketName, { at, timer });
+    console.info('WB ads retry scheduled', marketName, new Date(at).toISOString());
+  };
+  const runMarket = async marketName => {
+    try {
+      const snapshot = await refreshMarket(marketName);
+      if (Number(snapshot?.nextAttemptAt || 0) > Date.now()) {
+        scheduleRetry(marketName, snapshot.nextAttemptAt);
+        return;
+      }
+      await enforce(marketName, snapshot);
+    } catch (error) {
+      console.error('WB ads refresh', marketName, error);
+      scheduleRetry(marketName, error?.retryAt);
+    }
+  };
   const run = async () => {
     // Cabinets run sequentially. If one is throttled, it cannot cause a burst on the other one.
     for (const marketName of ['WB', 'WB2']) {
-      try {
-        const snapshot = await refreshMarket(marketName);
-        await enforce(marketName, snapshot);
-      } catch (error) {
-        console.error('WB ads refresh', marketName, error);
-      }
+      await runMarket(marketName);
     }
   };
   const startupTimer = setTimeout(() => void run(), STARTUP_DELAY_MS);
