@@ -133,6 +133,28 @@ async function upsertFinance(market, rows) {
   finally { client.release(); }
 }
 
+async function syncFinanceReport(market, token) {
+  const client = await pool.connect(), lockName = `millioner:wb-finance:${market}`, cooldownMs = 90_000;
+  let locked = false;
+  try {
+    const lock = await client.query('SELECT pg_try_advisory_lock(hashtext($1)) AS locked', [lockName]);
+    locked = Boolean(lock.rows[0]?.locked);
+    if (!locked) return { financeItems: 0, financeError: '', financeSkipped: true, financeSkipReason: 'already-running' };
+    const latest = await client.query('SELECT started_at FROM wb_finance_sync_runs WHERE market=$1 ORDER BY id DESC LIMIT 1', [market]);
+    const lastStartedAt = Number(latest.rows[0]?.started_at || 0), now = Date.now();
+    if (lastStartedAt && now - lastStartedAt < cooldownMs) return { financeItems: 0, financeError: '', financeSkipped: true, financeSkipReason: 'cooldown', financeNextAt: lastStartedAt + cooldownMs };
+    let financeItems = 0, financeError = '', financeOk = 0;
+    try { const rows = await fetchFinanceRows(token); financeItems = rows.length; await upsertFinance(market, rows); financeOk = 1; }
+    catch (error) { financeError = String(error?.message || error).slice(0, 1000); console.error(`WB finance sync failed (${market})`, error); }
+    await client.query(`INSERT INTO wb_finance_sync_runs(market,started_at,finished_at,ok,finance_ok,promotion_ok,finance_items,ad_items,error)
+      VALUES($1,$2,$3,$4,$4,0,$5,0,$6)`, [market, now, Date.now(), financeOk, financeItems, financeError]);
+    return { financeItems, financeError, financeSkipped: false, financeNextAt: now + cooldownMs };
+  } finally {
+    if (locked) await client.query('SELECT pg_advisory_unlock(hashtext($1))', [lockName]).catch(() => {});
+    client.release();
+  }
+}
+
 async function upsert(market, rows) {
   if (!rows.length) return;
   const now = Date.now();
@@ -174,12 +196,7 @@ export async function syncWbOrders(market, { force = false } = {}) {
     try {
       const rows = await fetchOrders(market, token);
       await upsert(market, rows);
-      let financeItems = 0, financeError = '', financeOk = 0; const financeStartedAt = Date.now();
-      try { const financeRows = await fetchFinanceRows(token); financeItems = financeRows.length; await upsertFinance(market, financeRows); }
-      catch (error) { financeError = String(error?.message || error).slice(0, 1000); console.error(`WB finance sync failed (${market})`, error); }
-      if (!financeError) financeOk = 1;
-      await pool.query(`INSERT INTO wb_finance_sync_runs(market,started_at,finished_at,ok,finance_ok,promotion_ok,finance_items,ad_items,error)
-        VALUES($1,$2,$3,$4,$4,0,$5,0,$6)`, [market, financeStartedAt, Date.now(), financeOk, financeItems, financeError]).catch(error => console.error('WB finance sync status write failed', error));
+      const finance = await syncFinanceReport(market, token);
       let reservationReconcile = null;
       try {
         reservationReconcile = await reconcileWbReservations(market, now);
@@ -188,7 +205,7 @@ export async function syncWbOrders(market, { force = false } = {}) {
       }
       const finishedAt = Date.now();
       await pool.query("UPDATE sync_runs SET finished_at=$1,ok=1,items=$2,error='' WHERE id=$3", [finishedAt, rows.length, runId]);
-      return { ok: true, market, items: rows.length, financeItems, financeError, reservationReconcile, finishedAt, nextSyncAt: finishedAt + SYNC_MS };
+      return { ok: true, market, items: rows.length, ...finance, reservationReconcile, finishedAt, nextSyncAt: finishedAt + SYNC_MS };
     } catch (error) {
       const message = String(error?.message || error).slice(0, 2000);
       await pool.query('UPDATE sync_runs SET finished_at=$1,ok=0,error=$2 WHERE id=$3', [Date.now(), message, runId]).catch(() => {});
