@@ -241,13 +241,17 @@ function campaignName(row, statRow, cards) {
   const matched = allNmIds.map(id => cards.get(id)).filter(Boolean);
   const titles = [...new Set(matched.map(card => card.title).filter(Boolean))];
   const vendorCodes = [...new Set(matched.map(card => card.vendorCode).filter(Boolean))];
-  const apiName = String(row?.campaignName || row?.campaign_name || row?.name || row?.advertName || '').trim();
-  const productLabel = titles.length === 1
-    ? titles[0]
-    : titles.length > 1
-      ? titles.slice(0, 2).join(' + ') + (titles.length > 2 ? ' +' + (titles.length - 2) : '')
-      : '';
-  const title = apiName || productLabel || ('Кампания ' + campaignId(row));
+  const apiName = String(
+    row?.campaignName
+    || row?.campaign_name
+    || row?.name
+    || row?.advertName
+    || row?.advert_name
+    || '',
+  ).trim();
+  // A product title is not a campaign title. Keep products in productTitles and
+  // use a neutral ID fallback until WB returns the actual campaign name.
+  const title = apiName || ('Кампания ' + campaignId(row));
   return { title, nmIds: allNmIds, productTitles: titles, vendorCodes };
 }
 
@@ -256,10 +260,31 @@ async function fetchCampaigns(marketName) {
   const token = await tokenFor(marketName);
   if (!token) throw new Error((marketName === 'WB2' ? 'WB_TOKEN_2' : 'WB_TOKEN') + ' не настроен');
 
-  const list = campaignRows(await request(
-    ADVERT_API + '/api/advert/v2/adverts?statuses=4,9,11',
+  // First get authoritative campaign IDs and statuses, then request full details
+  // by ID. The grouped list does not contain campaign names; the detailed method does.
+  const groupedList = campaignRows(await request(
+    ADVERT_API + '/adv/v1/promotion/count',
     token,
-  ));
+  )).filter(row => MANAGEABLE_CAMPAIGN_STATUSES.has(Number(row?.status ?? row?.statusId ?? 0)));
+  const groupedById = new Map(groupedList.map(row => [campaignId(row), row]));
+  const campaignIds = [...groupedById.keys()].filter(Boolean);
+  const details = [];
+  for (let offset = 0; offset < campaignIds.length; offset += 50) {
+    details.push(...campaignRows(await request(
+      ADVERT_API + '/api/advert/v2/adverts?ids=' + campaignIds.slice(offset, offset + 50).join(','),
+      token,
+    )));
+  }
+  const detailsById = new Map(details.map(row => [campaignId(row), row]));
+  const list = campaignIds.map(id => {
+    const grouped = groupedById.get(id) || {};
+    const detail = detailsById.get(id) || {};
+    return {
+      ...grouped,
+      ...detail,
+      status: detail?.status ?? detail?.statusId ?? grouped?.status ?? grouped?.statusId,
+    };
+  });
   const day = localDate();
   const statIds = [...new Set(list
     .filter(row => MANAGEABLE_CAMPAIGN_STATUSES.has(Number(row?.status ?? row?.statusId ?? 0)))
