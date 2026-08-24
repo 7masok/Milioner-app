@@ -256,7 +256,7 @@ async function fetchCampaigns(marketName) {
   if (!token) throw new Error((marketName === 'WB2' ? 'WB_TOKEN_2' : 'WB_TOKEN') + ' не настроен');
 
   const list = campaignRows(await request(
-    ADVERT_API + '/api/advert/v2/adverts?statuses=4,7,8,9,11',
+    ADVERT_API + '/api/advert/v2/adverts?statuses=4,9,11',
     token,
   ));
   const day = localDate();
@@ -283,7 +283,7 @@ async function fetchCampaigns(marketName) {
   }
 
   const byId = new Map(stats.map(row => [campaignId(row), row]));
-  return list.map(row => {
+  const campaigns = list.map(row => {
     const statRow = byId.get(campaignId(row));
     const label = campaignName(row, statRow, cards);
     return {
@@ -302,6 +302,22 @@ async function fetchCampaigns(marketName) {
       vendorCodes: label.vendorCodes,
     };
   });
+  const unique = new Map();
+  for (const row of campaigns) {
+    const existing = unique.get(row.id);
+    if (!existing) {
+      unique.set(row.id, row);
+      continue;
+    }
+    unique.set(row.id, {
+      ...existing,
+      ...row,
+      nmIds: [...new Set([...(existing.nmIds || []), ...(row.nmIds || [])])],
+      productTitles: [...new Set([...(existing.productTitles || []), ...(row.productTitles || [])])],
+      vendorCodes: [...new Set([...(existing.vendorCodes || []), ...(row.vendorCodes || [])])],
+    });
+  }
+  return [...unique.values()];
 }
 
 async function rules(marketName) {
