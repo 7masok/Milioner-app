@@ -284,39 +284,29 @@ function campaignName(row, statRow, cards) {
   // A product title is not a campaign title. Keep products in productTitles and
   // use a neutral ID fallback until WB returns the actual campaign name.
   const title = apiName || ('Кампания ' + campaignId(row));
-  return { title, nmIds: allNmIds, productTitles: titles, vendorCodes };
+  return { title, apiName, nmIds: allNmIds, productTitles: titles, vendorCodes };
 }
 
-async function fetchCampaigns(marketName) {
+async function fetchCampaigns(marketName, previous) {
   if (!allowed(marketName)) throw new Error('Неверный кабинет WB');
   const token = await tokenFor(marketName);
   if (!token) throw new Error((marketName === 'WB2' ? 'WB_TOKEN_2' : 'WB_TOKEN') + ' не настроен');
 
-  // This detailed endpoint returns IDs, statuses and real campaign names in one
-  // call. Avoid a separate count request: it adds load but contains no names.
+  const previousRows = Array.isArray(previous?.campaigns) ? previous.campaigns : [];
+  const previousById = new Map(previousRows.map(row => [Number(row.id), row]));
+  const recoveryIds = [...new Set(previousRows
+    .filter(row => MANAGEABLE_CAMPAIGN_STATUSES.has(Number(row.status)) && row.nameSource !== 'wb')
+    .map(row => Number(row.id))
+    .filter(Boolean))];
+  // WB's seller-wide limiter can currently allow only one promotion request for
+  // a long interval. Recover names directly by known IDs instead of spending the
+  // allowed request on a name-less status list and immediately asking again.
   let list = campaignRows(await request(
-    ADVERT_API + '/api/advert/v2/adverts?statuses=4,9,11',
+    recoveryIds.length
+      ? ADVERT_API + '/api/advert/v2/adverts?ids=' + recoveryIds.slice(0, 50).join(',')
+      : ADVERT_API + '/api/advert/v2/adverts?statuses=4,9,11',
     token,
   )).filter(row => MANAGEABLE_CAMPAIGN_STATUSES.has(Number(row?.status ?? row?.statusId ?? 0)));
-  const idsMissingNames = [...new Set(list.filter(row => !campaignApiName(row)).map(campaignId).filter(Boolean))];
-  if (idsMissingNames.length) {
-    const details = [];
-    for (let offset = 0; offset < idsMissingNames.length; offset += 50) {
-      details.push(...campaignRows(await request(
-        ADVERT_API + '/api/advert/v2/adverts?ids=' + idsMissingNames.slice(offset, offset + 50).join(','),
-        token,
-      )));
-    }
-    const detailsById = new Map(details.map(row => [campaignId(row), row]));
-    list = list.map(row => {
-      const detail = detailsById.get(campaignId(row));
-      return detail ? {
-        ...row,
-        ...detail,
-        status: detail?.status ?? detail?.statusId ?? row?.status ?? row?.statusId,
-      } : row;
-    });
-  }
   const unresolvedNames = list.filter(row => !campaignApiName(row));
   if (unresolvedNames.length) {
     console.warn('WB ads campaign names missing', marketName, unresolvedNames.map(row => ({
@@ -330,13 +320,17 @@ async function fetchCampaigns(marketName) {
     .map(campaignId)
     .filter(Boolean))];
   const stats = [];
-
-  for (let offset = 0; offset < statIds.length; offset += 50) {
-    const ids = statIds.slice(offset, offset + 50);
-    stats.push(...campaignRows(await request(
-      ADVERT_API + '/adv/v3/fullstats?ids=' + ids.join(',') + '&beginDate=' + day + '&endDate=' + day,
-      token,
-    )));
+  try {
+    for (let offset = 0; offset < statIds.length; offset += 50) {
+      const ids = statIds.slice(offset, offset + 50);
+      stats.push(...campaignRows(await request(
+        ADVERT_API + '/adv/v3/fullstats?ids=' + ids.join(',') + '&beginDate=' + day + '&endDate=' + day,
+        token,
+      )));
+    }
+  } catch (error) {
+    // A statistics limit must not discard campaign names already received by ID.
+    console.warn('WB ads statistics unavailable', marketName, String(error?.message || error));
   }
 
   let cards = new Map();
@@ -349,22 +343,28 @@ async function fetchCampaigns(marketName) {
 
   const byId = new Map(stats.map(row => [campaignId(row), row]));
   const campaigns = list.map(row => {
-    const statRow = byId.get(campaignId(row));
+    const id = campaignId(row);
+    const prior = previousById.get(id);
+    const statRow = byId.get(id);
     const label = campaignName(row, statRow, cards);
+    const hasFreshStats = Boolean(statRow);
+    const hasFreshProducts = label.productTitles.length > 0;
+    const preservedName = prior?.nameSource === 'wb' ? String(prior.name || '') : '';
     return {
-      id: campaignId(row),
-      name: label.title,
+      id,
+      name: label.apiName || preservedName || label.title,
+      nameSource: label.apiName || preservedName ? 'wb' : 'missing',
       status: Number(row?.status ?? row?.statusId ?? 0),
       paymentType: String(row?.payment_type || row?.paymentType || ''),
-      todaySpend: spend(statRow, day),
-      orders: statMetric(statRow, day, ['orders']),
-      orderedItems: statMetric(statRow, day, ['shks', 'orders']),
-      orderRevenue: statMetric(statRow, day, ['sum_price', 'revenue']),
-      views: statMetric(statRow, day, ['views']),
-      clicks: statMetric(statRow, day, ['clicks']),
-      nmIds: label.nmIds,
-      productTitles: label.productTitles,
-      vendorCodes: label.vendorCodes,
+      todaySpend: hasFreshStats ? spend(statRow, day) : Number(prior?.todaySpend || 0),
+      orders: hasFreshStats ? statMetric(statRow, day, ['orders']) : Number(prior?.orders || 0),
+      orderedItems: hasFreshStats ? statMetric(statRow, day, ['shks', 'orders']) : Number(prior?.orderedItems || 0),
+      orderRevenue: hasFreshStats ? statMetric(statRow, day, ['sum_price', 'revenue']) : Number(prior?.orderRevenue || 0),
+      views: hasFreshStats ? statMetric(statRow, day, ['views']) : Number(prior?.views || 0),
+      clicks: hasFreshStats ? statMetric(statRow, day, ['clicks']) : Number(prior?.clicks || 0),
+      nmIds: label.nmIds.length ? label.nmIds : (prior?.nmIds || []),
+      productTitles: hasFreshProducts ? label.productTitles : (prior?.productTitles || []),
+      vendorCodes: label.vendorCodes.length ? label.vendorCodes : (prior?.vendorCodes || []),
     };
   });
   const unique = new Map();
@@ -453,7 +453,7 @@ async function refreshMarket(marketName) {
     const previous = await storedSnapshot(marketName);
     if (previous?.nextAttemptAt > Date.now()) return previous;
     try {
-      const campaigns = await fetchCampaigns(marketName);
+      const campaigns = await fetchCampaigns(marketName, previous);
       const saved = await saveSnapshot(marketName, { market: marketName, day: localDate(), campaigns });
       if (!verifiedSnapshots.has(marketName)) {
         verifiedSnapshots.add(marketName);
