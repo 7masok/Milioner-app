@@ -199,12 +199,13 @@ reportsRouter.get('/wb-finance-summary', asyncRoute(async (req, res) => {
   if (!['WB', 'WB2'].includes(selected)) return res.status(400).json({ ok: false, error: 'market must be WB or WB2' });
   const days = Number(req.query.days || 1);
   const { since, until } = requestPeriodBounds(req);
-  const finance = await pool.query(`SELECT COALESCE(SUM(retail_amount),0) AS "retailAmount",COALESCE(SUM(for_pay),0) AS "forPay",
+  const [finance, sync] = await Promise.all([pool.query(`SELECT COALESCE(SUM(retail_amount),0) AS "retailAmount",COALESCE(SUM(for_pay),0) AS "forPay",
     COALESCE(SUM(acquiring_fee),0) AS acquiring,COALESCE(SUM(delivery_service),0) AS delivery,
     COALESCE(SUM(paid_storage),0) AS storage,COALESCE(SUM(paid_acceptance),0) AS acceptance,
     COALESCE(SUM(deduction),0) AS deduction,COALESCE(SUM(penalty),0) AS penalty,
     COALESCE(SUM(additional_payment),0) AS "additionalPayment",COALESCE(SUM(rebill_logistic_cost),0) AS rebill
-    FROM wb_finance_rows WHERE market=$1 AND rr_date >= $2 AND rr_date < $3`, [selected, since, until]);
+    FROM wb_finance_rows WHERE market=$1 AND rr_date >= $2 AND rr_date < $3`, [selected, since, until]),
+    pool.query('SELECT finished_at AS "finishedAt",finance_ok AS "financeOk",finance_items AS "financeItems",error FROM wb_finance_sync_runs WHERE market=$1 ORDER BY id DESC LIMIT 1',[selected])]);
   const daysList = [];
   for (let time = since; time < until; time += 86_400_000) daysList.push(dateKey(time));
   const ads = daysList.length ? await pool.query(`SELECT COALESCE(SUM(amount),0) AS advertising,
@@ -212,7 +213,7 @@ reportsRouter.get('/wb-finance-summary', asyncRoute(async (req, res) => {
     FROM wb_ad_costs WHERE market=$1 AND day = ANY($2::text[])`, [selected, daysList]) : { rows: [{}] };
   const row = { ...finance.rows[0], ...ads.rows[0] };
   const wbCharges = Number(row.acquiring) + Number(row.delivery) + Number(row.storage) + Number(row.acceptance) + Number(row.deduction) + Number(row.penalty) + Number(row.rebill);
-  res.json({ ok: true, market: selected, days, range: { since, until, timezone: 'Asia/Almaty' }, ...row,
+  res.json({ ok: true, market: selected, days, range: { since, until, timezone: 'Asia/Almaty' }, sync: sync.rows[0] || null, ...row,
     wbCharges, netBeforeCost: Number(row.forPay) - wbCharges + Number(row.additionalPayment) - Number(row.accountAdvertising) });
 }));
 

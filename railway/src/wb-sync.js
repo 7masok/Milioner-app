@@ -174,9 +174,12 @@ export async function syncWbOrders(market, { force = false } = {}) {
     try {
       const rows = await fetchOrders(market, token);
       await upsert(market, rows);
-      let financeItems = 0, financeError = '';
+      let financeItems = 0, financeError = '', financeOk = 0; const financeStartedAt = Date.now();
       try { const financeRows = await fetchFinanceRows(token); financeItems = financeRows.length; await upsertFinance(market, financeRows); }
       catch (error) { financeError = String(error?.message || error).slice(0, 1000); console.error(`WB finance sync failed (${market})`, error); }
+      if (!financeError) financeOk = 1;
+      await pool.query(`INSERT INTO wb_finance_sync_runs(market,started_at,finished_at,ok,finance_ok,promotion_ok,finance_items,ad_items,error)
+        VALUES($1,$2,$3,$4,$4,0,$5,0,$6)`, [market, financeStartedAt, Date.now(), financeOk, financeItems, financeError]).catch(error => console.error('WB finance sync status write failed', error));
       let reservationReconcile = null;
       try {
         reservationReconcile = await reconcileWbReservations(market, now);
