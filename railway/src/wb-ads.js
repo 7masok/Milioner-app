@@ -423,6 +423,14 @@ async function saveSnapshot(marketName, value) {
   return { ...value, updatedAt: now, lastError: '', nextAttemptAt: 0 };
 }
 
+async function nameOverrides(marketName) {
+  const result = await pool.query(
+    'SELECT campaign_id AS "campaignId",display_name AS "displayName" FROM wb_ad_name_overrides WHERE market=$1',
+    [marketName],
+  );
+  return new Map(result.rows.map(row => [Number(row.campaignId), String(row.displayName || '').trim()]));
+}
+
 async function setStoredCampaignStatus(marketName, campaignIdValue, status) {
   const snapshot = await storedSnapshot(marketName);
   if (!snapshot) return;
@@ -474,7 +482,11 @@ async function refreshMarket(marketName) {
 }
 
 async function publicSnapshot(marketName) {
-  const [snapshot, configured] = await Promise.all([storedSnapshot(marketName), rules(marketName)]);
+  const [snapshot, configured, overrides] = await Promise.all([
+    storedSnapshot(marketName),
+    rules(marketName),
+    nameOverrides(marketName),
+  ]);
   const value = snapshot || {
     market: marketName,
     day: localDate(),
@@ -491,6 +503,7 @@ async function publicSnapshot(marketName) {
       .filter(row => MANAGEABLE_CAMPAIGN_STATUSES.has(Number(row.status)))
       .map(row => ({
         ...row,
+        name: overrides.get(Number(row.id)) || row.name,
         rule: configured.get(Number(row.id)) || { dailyLimit: 0, enabled: false },
       })),
   };
