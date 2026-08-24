@@ -18,6 +18,7 @@ const refreshInFlight = new Map();
 const requestQueues = new Map();
 const requestWindows = new Map();
 const catalogCache = new Map();
+const MANAGEABLE_CAMPAIGN_STATUSES = new Set([4, 9, 11]);
 
 export const wbAdsRouter = express.Router();
 
@@ -261,7 +262,7 @@ async function fetchCampaigns(marketName) {
   ));
   const day = localDate();
   const statIds = [...new Set(list
-    .filter(row => [7, 9, 11].includes(Number(row?.status ?? row?.statusId ?? 0)))
+    .filter(row => MANAGEABLE_CAMPAIGN_STATUSES.has(Number(row?.status ?? row?.statusId ?? 0)))
     .map(campaignId)
     .filter(Boolean))];
   const stats = [];
@@ -417,10 +418,12 @@ async function publicSnapshot(marketName) {
     ...value,
     cached: true,
     waitingForFirstSync: !value.updatedAt,
-    campaigns: value.campaigns.map(row => ({
-      ...row,
-      rule: configured.get(Number(row.id)) || { dailyLimit: 0, enabled: false },
-    })),
+    campaigns: value.campaigns
+      .filter(row => MANAGEABLE_CAMPAIGN_STATUSES.has(Number(row.status)))
+      .map(row => ({
+        ...row,
+        rule: configured.get(Number(row.id)) || { dailyLimit: 0, enabled: false },
+      })),
   };
 }
 
