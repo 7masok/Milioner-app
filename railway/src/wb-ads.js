@@ -195,6 +195,20 @@ function statMetric(row, day, fields) {
   return Math.max(0, Number(value) || 0);
 }
 
+function campaignApiName(row) {
+  return String(
+    row?.campaignName
+    || row?.campaign_name
+    || row?.name
+    || row?.advertName
+    || row?.advert_name
+    || row?.settings?.name
+    || row?.params?.name
+    || row?.advert?.name
+    || '',
+  ).trim();
+}
+
 function spend(row, day) {
   return statMetric(row, day, ['sum', 'spend', 'expenses', 'cost']);
 }
@@ -266,14 +280,7 @@ function campaignName(row, statRow, cards) {
   const matched = allNmIds.map(id => cards.get(id)).filter(Boolean);
   const titles = [...new Set(matched.map(card => card.title).filter(Boolean))];
   const vendorCodes = [...new Set(matched.map(card => card.vendorCode).filter(Boolean))];
-  const apiName = String(
-    row?.campaignName
-    || row?.campaign_name
-    || row?.name
-    || row?.advertName
-    || row?.advert_name
-    || '',
-  ).trim();
+  const apiName = campaignApiName(row);
   // A product title is not a campaign title. Keep products in productTitles and
   // use a neutral ID fallback until WB returns the actual campaign name.
   const title = apiName || ('Кампания ' + campaignId(row));
@@ -287,10 +294,36 @@ async function fetchCampaigns(marketName) {
 
   // This detailed endpoint returns IDs, statuses and real campaign names in one
   // call. Avoid a separate count request: it adds load but contains no names.
-  const list = campaignRows(await request(
+  let list = campaignRows(await request(
     ADVERT_API + '/api/advert/v2/adverts?statuses=4,9,11',
     token,
   )).filter(row => MANAGEABLE_CAMPAIGN_STATUSES.has(Number(row?.status ?? row?.statusId ?? 0)));
+  const idsMissingNames = [...new Set(list.filter(row => !campaignApiName(row)).map(campaignId).filter(Boolean))];
+  if (idsMissingNames.length) {
+    const details = [];
+    for (let offset = 0; offset < idsMissingNames.length; offset += 50) {
+      details.push(...campaignRows(await request(
+        ADVERT_API + '/api/advert/v2/adverts?ids=' + idsMissingNames.slice(offset, offset + 50).join(','),
+        token,
+      )));
+    }
+    const detailsById = new Map(details.map(row => [campaignId(row), row]));
+    list = list.map(row => {
+      const detail = detailsById.get(campaignId(row));
+      return detail ? {
+        ...row,
+        ...detail,
+        status: detail?.status ?? detail?.statusId ?? row?.status ?? row?.statusId,
+      } : row;
+    });
+  }
+  const unresolvedNames = list.filter(row => !campaignApiName(row));
+  if (unresolvedNames.length) {
+    console.warn('WB ads campaign names missing', marketName, unresolvedNames.map(row => ({
+      id: campaignId(row),
+      fields: Object.keys(row).sort(),
+    })));
+  }
   const day = localDate();
   const statIds = [...new Set(list
     .filter(row => MANAGEABLE_CAMPAIGN_STATUSES.has(Number(row?.status ?? row?.statusId ?? 0)))
