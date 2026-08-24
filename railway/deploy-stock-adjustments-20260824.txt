@@ -1,0 +1,1 @@
+Deploy stock-adjustment movement editing and keep service adjustments out of purchases.
