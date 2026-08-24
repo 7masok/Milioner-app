@@ -418,7 +418,7 @@ wbAdsRouter.post('/promotion/actions/:market/:campaignId', asyncRoute(async (req
   const marketName = market(req.params.market);
   const id = Math.max(0, Number(req.params.campaignId) || 0);
   const action = String(req.body?.action || '').toLowerCase();
-  if (!allowed(marketName) || !id || !['pause', 'start'].includes(action)) {
+  if (!allowed(marketName) || !id || !['pause', 'start', 'stop'].includes(action)) {
     const error = new Error('Неверная команда кампании');
     error.status = 400;
     throw error;
@@ -429,7 +429,8 @@ wbAdsRouter.post('/promotion/actions/:market/:campaignId', asyncRoute(async (req
   const currentStatus = Number(campaign?.status || 0);
   const canPause = action === 'pause' && currentStatus === 9;
   const canStart = action === 'start' && [4, 11].includes(currentStatus);
-  if (!canPause && !canStart) {
+  const canStop = action === 'stop' && [4, 9, 11].includes(currentStatus);
+  if (!canPause && !canStart && !canStop) {
     const error = new Error('Статус кампании уже изменился. Обновите раздел рекламы.');
     error.status = 409;
     throw error;
@@ -437,8 +438,9 @@ wbAdsRouter.post('/promotion/actions/:market/:campaignId', asyncRoute(async (req
 
   const token = await tokenFor(marketName);
   if (!token) throw new Error((marketName === 'WB2' ? 'WB_TOKEN_2' : 'WB_TOKEN') + ' не настроен');
-  await request(ADVERT_API + (action === 'pause' ? '/adv/v0/pause' : '/adv/v0/start') + '?id=' + encodeURIComponent(id), token);
-  const status = action === 'pause' ? 11 : 9;
+  const actionPath = action === 'pause' ? '/adv/v0/pause' : action === 'start' ? '/adv/v0/start' : '/adv/v0/stop';
+  await request(ADVERT_API + actionPath + '?id=' + encodeURIComponent(id), token);
+  const status = action === 'pause' ? 11 : action === 'start' ? 9 : 7;
   await setStoredCampaignStatus(marketName, id, status);
   res.json({ ok: true, market: marketName, campaignId: id, action, status });
 }));
