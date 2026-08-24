@@ -6,8 +6,11 @@ import { asyncRoute } from './http.js';
 
 const ADVERT_API = 'https://advert-api.wildberries.ru';
 const CONTENT_API = 'https://content-api.wildberries.ru';
-const CHECK_MS = 5 * 60 * 1000;
-const STARTUP_DELAY_MS = 60 * 1000;
+// WB order sync starts immediately and performs the heaviest import after a deploy.
+// Run promotion sync in the quiet half of the 10-minute cycle so both jobs do not
+// hit the seller-wide WB limiter at the same time.
+const CHECK_MS = 10 * 60 * 1000;
+const STARTUP_DELAY_MS = 6 * 60 * 1000;
 const RATE_LIMIT_TTL_MS = 10 * 60 * 1000;
 const GENERAL_REQUEST_INTERVAL_MS = 1000;
 const FULLSTATS_REQUEST_INTERVAL_MS = 21 * 1000;
@@ -18,6 +21,7 @@ const refreshInFlight = new Map();
 const requestQueues = new Map();
 const requestWindows = new Map();
 const catalogCache = new Map();
+const verifiedSnapshots = new Set();
 const MANAGEABLE_CAMPAIGN_STATUSES = new Set([4, 9, 11]);
 
 export const wbAdsRouter = express.Router();
@@ -260,31 +264,12 @@ async function fetchCampaigns(marketName) {
   const token = await tokenFor(marketName);
   if (!token) throw new Error((marketName === 'WB2' ? 'WB_TOKEN_2' : 'WB_TOKEN') + ' не настроен');
 
-  // First get authoritative campaign IDs and statuses, then request full details
-  // by ID. The grouped list does not contain campaign names; the detailed method does.
-  const groupedList = campaignRows(await request(
-    ADVERT_API + '/adv/v1/promotion/count',
+  // This detailed endpoint returns IDs, statuses and real campaign names in one
+  // call. Avoid a separate count request: it adds load but contains no names.
+  const list = campaignRows(await request(
+    ADVERT_API + '/api/advert/v2/adverts?statuses=4,9,11',
     token,
   )).filter(row => MANAGEABLE_CAMPAIGN_STATUSES.has(Number(row?.status ?? row?.statusId ?? 0)));
-  const groupedById = new Map(groupedList.map(row => [campaignId(row), row]));
-  const campaignIds = [...groupedById.keys()].filter(Boolean);
-  const details = [];
-  for (let offset = 0; offset < campaignIds.length; offset += 50) {
-    details.push(...campaignRows(await request(
-      ADVERT_API + '/api/advert/v2/adverts?ids=' + campaignIds.slice(offset, offset + 50).join(','),
-      token,
-    )));
-  }
-  const detailsById = new Map(details.map(row => [campaignId(row), row]));
-  const list = campaignIds.map(id => {
-    const grouped = groupedById.get(id) || {};
-    const detail = detailsById.get(id) || {};
-    return {
-      ...grouped,
-      ...detail,
-      status: detail?.status ?? detail?.statusId ?? grouped?.status ?? grouped?.statusId,
-    };
-  });
   const day = localDate();
   const statIds = [...new Set(list
     .filter(row => MANAGEABLE_CAMPAIGN_STATUSES.has(Number(row?.status ?? row?.statusId ?? 0)))
@@ -415,7 +400,12 @@ async function refreshMarket(marketName) {
     if (previous?.nextAttemptAt > Date.now()) return previous;
     try {
       const campaigns = await fetchCampaigns(marketName);
-      return await saveSnapshot(marketName, { market: marketName, day: localDate(), campaigns });
+      const saved = await saveSnapshot(marketName, { market: marketName, day: localDate(), campaigns });
+      if (!verifiedSnapshots.has(marketName)) {
+        verifiedSnapshots.add(marketName);
+        console.info('WB ads snapshot updated', marketName, campaigns.map(row => ({ id: row.id, name: row.name, status: row.status })));
+      }
+      return saved;
     } catch (error) {
       await saveRefreshError(marketName, error);
       throw error;
