@@ -150,7 +150,7 @@ function active(row) {
   return status === 9 || String(row?.status || '').toUpperCase() === 'ACTIVE';
 }
 
-function spend(row, day) {
+function statMetric(row, day, fields) {
   const stats = Array.isArray(row?.stats)
     ? row.stats
     : Array.isArray(row?.dailyStats)
@@ -158,9 +158,19 @@ function spend(row, day) {
       : Array.isArray(row?.days)
         ? row.days
         : [];
-  return stats
+  const dailyValue = stats
     .filter(item => !item?.date || String(item.date).slice(0, 10) === day)
-    .reduce((sum, item) => sum + Math.max(0, Number(item?.sum ?? item?.spend ?? item?.expenses ?? item?.cost ?? 0) || 0), 0);
+    .reduce((sum, item) => {
+      const value = fields.map(field => item?.[field]).find(candidate => Number.isFinite(Number(candidate)));
+      return sum + Math.max(0, Number(value) || 0);
+    }, 0);
+  if (stats.length) return dailyValue;
+  const value = fields.map(field => row?.[field]).find(candidate => Number.isFinite(Number(candidate)));
+  return Math.max(0, Number(value) || 0);
+}
+
+function spend(row, day) {
+  return statMetric(row, day, ['sum', 'spend', 'expenses', 'cost']);
 }
 
 function collectNmIds(value, output = new Set(), depth = 0) {
@@ -282,6 +292,11 @@ async function fetchCampaigns(marketName) {
       status: Number(row?.status ?? row?.statusId ?? 0),
       paymentType: String(row?.payment_type || row?.paymentType || ''),
       todaySpend: spend(statRow, day),
+      orders: statMetric(statRow, day, ['orders']),
+      orderedItems: statMetric(statRow, day, ['shks', 'orders']),
+      orderRevenue: statMetric(statRow, day, ['sum_price', 'revenue']),
+      views: statMetric(statRow, day, ['views']),
+      clicks: statMetric(statRow, day, ['clicks']),
       nmIds: label.nmIds,
       productTitles: label.productTitles,
       vendorCodes: label.vendorCodes,
