@@ -10,8 +10,9 @@ const CONTENT_API = 'https://content-api.wildberries.ru';
 // Run promotion sync in the quiet half of the 10-minute cycle so both jobs do not
 // hit the seller-wide WB limiter at the same time.
 const CHECK_MS = 10 * 60 * 1000;
-const STARTUP_DELAY_MS = 6 * 60 * 1000;
-const RATE_LIMIT_TTL_MS = 10 * 60 * 1000;
+const STARTUP_DELAY_MS = 2 * 60 * 1000;
+const RATE_LIMIT_TTL_MS = 60 * 1000;
+const MAX_AUTO_RETRY_MS = 2 * 60 * 1000;
 const GENERAL_REQUEST_INTERVAL_MS = 1000;
 const FULLSTATS_REQUEST_INTERVAL_MS = 21 * 1000;
 const CONTENT_REQUEST_INTERVAL_MS = 700;
@@ -55,12 +56,17 @@ function delay(ms) {
 }
 
 function retryAfterMs(response) {
-  const raw = String(response.headers.get('retry-after') || '').trim();
+  const raw = String(
+    response.headers.get('x-ratelimit-retry')
+    || response.headers.get('retry-after')
+    || response.headers.get('x-ratelimit-reset')
+    || '',
+  ).trim();
   if (!raw) return RATE_LIMIT_TTL_MS;
   const seconds = Number(raw);
-  if (Number.isFinite(seconds)) return Math.max(RATE_LIMIT_TTL_MS, seconds * 1000);
+  if (Number.isFinite(seconds)) return Math.max(1000, seconds * 1000 + 250);
   const date = Date.parse(raw);
-  return Number.isFinite(date) ? Math.max(RATE_LIMIT_TTL_MS, date - Date.now()) : RATE_LIMIT_TTL_MS;
+  return Number.isFinite(date) ? Math.max(1000, date - Date.now() + 250) : RATE_LIMIT_TTL_MS;
 }
 
 function requestInterval(url) {
@@ -89,38 +95,52 @@ async function request(url, token, { method = 'GET', body } = {}) {
     window.nextAt[limiter.key] = Date.now() + limiter.interval;
     requestWindows.set(queueKey, window);
 
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 20000);
-    try {
-      const response = await fetch(url, {
-        method,
-        headers: {
-          Accept: 'application/json',
-          Authorization: token,
-          ...(body ? { 'Content-Type': 'application/json' } : {}),
-        },
-        body: body ? JSON.stringify(body) : undefined,
-        signal: controller.signal,
-      });
-      const text = await response.text();
-      let data = {};
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 20000);
       try {
-        data = text ? JSON.parse(text) : {};
-      } catch {}
-      if (!response.ok) {
-        const error = new Error(data?.message || data?.error || data?.detail || ('WB API HTTP ' + response.status));
-        error.status = response.status;
-        if (response.status === 429) {
-          window.cooldownUntil = Math.max(window.cooldownUntil, Date.now() + retryAfterMs(response));
-          requestWindows.set(queueKey, window);
-          error.retryAt = window.cooldownUntil;
+        const response = await fetch(url, {
+          method,
+          headers: {
+            Accept: 'application/json',
+            Authorization: token,
+            ...(body ? { 'Content-Type': 'application/json' } : {}),
+          },
+          body: body ? JSON.stringify(body) : undefined,
+          signal: controller.signal,
+        });
+        const text = await response.text();
+        let data = {};
+        try {
+          data = text ? JSON.parse(text) : {};
+        } catch {}
+        if (!response.ok) {
+          const error = new Error(data?.message || data?.error || data?.detail || ('WB API HTTP ' + response.status));
+          error.status = response.status;
+          if (response.status === 429) {
+            const waitMs = retryAfterMs(response);
+            window.cooldownUntil = Date.now() + waitMs;
+            requestWindows.set(queueKey, window);
+            error.retryAt = window.cooldownUntil;
+            error.endpoint = new URL(url).pathname;
+            error.retryAfterMs = waitMs;
+            if (attempt === 0 && waitMs <= MAX_AUTO_RETRY_MS) {
+              await delay(waitMs);
+              window.cooldownUntil = 0;
+              requestWindows.set(queueKey, window);
+              continue;
+            }
+          }
+          throw error;
         }
-        throw error;
+        window.cooldownUntil = 0;
+        requestWindows.set(queueKey, window);
+        return data;
+      } finally {
+        clearTimeout(timer);
       }
-      return data;
-    } finally {
-      clearTimeout(timer);
     }
+    throw new Error('WB API retry failed');
   });
   requestQueues.set(queueKey, queued.catch(() => {}));
   return queued;
