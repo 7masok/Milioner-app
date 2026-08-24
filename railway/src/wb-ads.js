@@ -417,7 +417,10 @@ async function refreshMarket(marketName) {
   if (refreshInFlight.has(marketName)) return refreshInFlight.get(marketName);
   const work = (async () => {
     const previous = await storedSnapshot(marketName);
-    if (previous?.nextAttemptAt > Date.now()) return previous;
+    const remainingBackoff = Number(previous?.nextAttemptAt || 0) - Date.now();
+    // Ignore obsolete ten-minute cooldowns saved by older deployments. Current
+    // versions only persist the short retry period WB returns in rate-limit headers.
+    if (remainingBackoff > 0 && remainingBackoff <= RATE_LIMIT_TTL_MS) return previous;
     try {
       const campaigns = await fetchCampaigns(marketName);
       const saved = await saveSnapshot(marketName, { market: marketName, day: localDate(), campaigns });
