@@ -4,10 +4,20 @@ import { reconcileWbReservations } from './reservation-reconcile.js';
 import { configuredWbConnectionIds, credentialFor } from './connections.js';
 
 const WB_API = 'https://marketplace-api.wildberries.ru';
+const WB_FINANCE_API = 'https://finance-api.wildberries.ru';
 const SYNC_MS = 10 * 60 * 1000;
 const TIMEOUT_MS = 25_000;
 const LOOKBACK_DAYS = 14;
 const inFlight = new Map();
+
+function isoDate(time) {
+  return new Date(time).toISOString().slice(0, 10);
+}
+
+function value(row, ...keys) {
+  for (const key of keys) if (row?.[key] !== undefined && row?.[key] !== null) return row[key];
+  return '';
+}
 
 async function tokenFor(market) {
   const fallback = market === 'WB2' ? config.wbToken2 : config.wbToken;
@@ -85,6 +95,44 @@ async function fetchOrders(market, token) {
   });
 }
 
+async function fetchFinanceRows(token) {
+  const dateTo = isoDate(Date.now()), dateFrom = isoDate(Date.now() - 45 * 86_400_000);
+  const data = await requestJson(`${WB_FINANCE_API}/api/finance/v1/sales-reports/detailed`, {
+    method: 'POST', headers: { Accept: 'application/json', Authorization: token, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ dateFrom, dateTo, limit: 100000, rrdId: 0, period: 'weekly' })
+  }, 'WB Finance report');
+  return Array.isArray(data) ? data : Array.isArray(data?.data) ? data.data : [];
+}
+
+async function upsertFinance(market, rows) {
+  if (!rows.length) return;
+  const now = Date.now(), client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    for (const row of rows) {
+      const rrdId = String(value(row, 'rrdId', 'rrd_id') || '');
+      if (!rrdId) continue;
+      await client.query(`INSERT INTO wb_finance_rows
+        (market,rrd_id,report_id,rr_date,sale_date,vendor_code,nm_id,title,doc_type,operation,qty,retail_amount,for_pay,acquiring_fee,delivery_service,paid_storage,paid_acceptance,deduction,penalty,additional_payment,rebill_logistic_cost,raw_json,updated_at)
+        VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23)
+        ON CONFLICT(market,rrd_id) DO UPDATE SET report_id=excluded.report_id,rr_date=excluded.rr_date,sale_date=excluded.sale_date,vendor_code=excluded.vendor_code,nm_id=excluded.nm_id,title=excluded.title,doc_type=excluded.doc_type,operation=excluded.operation,qty=excluded.qty,retail_amount=excluded.retail_amount,for_pay=excluded.for_pay,acquiring_fee=excluded.acquiring_fee,delivery_service=excluded.delivery_service,paid_storage=excluded.paid_storage,paid_acceptance=excluded.paid_acceptance,deduction=excluded.deduction,penalty=excluded.penalty,additional_payment=excluded.additional_payment,rebill_logistic_cost=excluded.rebill_logistic_cost,raw_json=excluded.raw_json,updated_at=excluded.updated_at`, [
+        market, rrdId, String(value(row, 'reportId', 'realizationreport_id') || ''), timestamp(value(row, 'rrDt', 'rr_dt')),
+        timestamp(value(row, 'saleDt', 'sale_dt')), String(value(row, 'saName', 'vendorCode', 'sa_name') || ''),
+        String(value(row, 'nmId', 'nm_id') || ''), String(value(row, 'title', 'subjectName', 'subject_name') || ''),
+        String(value(row, 'docTypeName', 'doc_type_name') || ''), String(value(row, 'supplierOperName', 'supplier_oper_name') || ''),
+        Number(value(row, 'quantity', 'qty')) || 0, Number(value(row, 'retailAmount', 'retail_amount')) || 0,
+        Number(value(row, 'ppvzForPay', 'forPay', 'ppvz_for_pay')) || 0, Number(value(row, 'acquiringFee', 'acquiring_fee')) || 0,
+        Number(value(row, 'deliveryRub', 'delivery_rub')) || 0, Number(value(row, 'storageFee', 'storage', 'storage_fee')) || 0,
+        Number(value(row, 'acceptance', 'acceptanceFee', 'acceptance_fee')) || 0, Number(value(row, 'deduction')) || 0,
+        Number(value(row, 'penalty')) || 0, Number(value(row, 'additionalPayment', 'additional_payment')) || 0,
+        Number(value(row, 'rebillLogisticCost', 'rebill_logistic_cost')) || 0, JSON.stringify(row), now
+      ]);
+    }
+    await client.query('COMMIT');
+  } catch (error) { await client.query('ROLLBACK').catch(() => {}); throw error; }
+  finally { client.release(); }
+}
+
 async function upsert(market, rows) {
   if (!rows.length) return;
   const now = Date.now();
@@ -126,6 +174,9 @@ export async function syncWbOrders(market, { force = false } = {}) {
     try {
       const rows = await fetchOrders(market, token);
       await upsert(market, rows);
+      let financeItems = 0, financeError = '';
+      try { const financeRows = await fetchFinanceRows(token); financeItems = financeRows.length; await upsertFinance(market, financeRows); }
+      catch (error) { financeError = String(error?.message || error).slice(0, 1000); console.error(`WB finance sync failed (${market})`, error); }
       let reservationReconcile = null;
       try {
         reservationReconcile = await reconcileWbReservations(market, now);
@@ -134,7 +185,7 @@ export async function syncWbOrders(market, { force = false } = {}) {
       }
       const finishedAt = Date.now();
       await pool.query("UPDATE sync_runs SET finished_at=$1,ok=1,items=$2,error='' WHERE id=$3", [finishedAt, rows.length, runId]);
-      return { ok: true, market, items: rows.length, reservationReconcile, finishedAt, nextSyncAt: finishedAt + SYNC_MS };
+      return { ok: true, market, items: rows.length, financeItems, financeError, reservationReconcile, finishedAt, nextSyncAt: finishedAt + SYNC_MS };
     } catch (error) {
       const message = String(error?.message || error).slice(0, 2000);
       await pool.query('UPDATE sync_runs SET finished_at=$1,ok=0,error=$2 WHERE id=$3', [Date.now(), message, runId]).catch(() => {});
