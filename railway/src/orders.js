@@ -78,7 +78,7 @@ ordersRouter.get('/orders', asyncRoute(async (req, res) => {
   const params = [];
   const where = selected ? `WHERE o.market=$${params.push(selected)}` : '';
   params.push(limit);
-  const [rows, products] = await Promise.all([
+  const [rows, products, warehouse] = await Promise.all([
     pool.query(`SELECT o.market,o.order_id AS "orderId",o.code,o.entry_id AS "entryId",o.status,o.state,
       o.creation_date AS "creationDate",o.sku,o.product_name AS "productName",o.qty,o.unit_price AS "unitPrice",
       o.total_price AS "totalPrice",o.seller_delivery_cost AS "sellerDeliveryCost",o.marketplace_fee AS "marketplaceFee",
@@ -91,11 +91,22 @@ ordersRouter.get('/orders', asyncRoute(async (req, res) => {
         LIMIT 1
       ) resolved ON TRUE
       ${where} ORDER BY o.creation_date DESC LIMIT $${params.length}`, params),
-    pool.query('SELECT id,name FROM products')
+    pool.query('SELECT id,name FROM products'),
+    pool.query('SELECT payload FROM warehouse_state WHERE id=1')
   ]);
+  let stateProducts = [];
+  try { stateProducts = JSON.parse(String(warehouse.rows[0]?.payload || '{}')).products || []; } catch {}
+  const visibleLinks = new Map();
+  for (const product of stateProducts) {
+    for (const [linkMarket, field] of [['Kaspi','kaspi'],['WB','wb'],['WB2','wb2'],['Ozon','ozon']]) {
+      const values = [product?.[field], ...(Array.isArray(product?.[`${field}Aliases`]) ? product[`${field}Aliases`] : [])];
+      for (const value of values) if (String(value || '').trim()) visibleLinks.set(`${linkMarket}\u0000${String(value).trim()}`, String(product.id));
+    }
+  }
   const inferredLinks = new Map();
   const out = rows.rows.map(row => {
-    if (row.productId) return row;
+    if (row.productId && visibleLinks.get(`${row.market}\u0000${String(row.sku || '').trim()}`) === String(row.productId)) return row;
+    if (row.productId) row = { ...row, productId: null, linkSource: null };
     const fallback = safeNameFallback(row, products.rows);
     if (!fallback) return row;
     if (['Kaspi','WB','WB2'].includes(row.market) && row.sku) inferredLinks.set(`${row.market}\u0000${String(row.sku)}`, String(fallback.product.id));
