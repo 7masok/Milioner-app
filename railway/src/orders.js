@@ -66,14 +66,10 @@ function candidateScore(orderName, productName) {
 }
 
 function safeNameFallback(row, products) {
-  if (row.productId || !row.productName) return null;
-  const scored = products
-    .map(product => ({ product, score: candidateScore(row.productName, product.name) }))
-    .filter(item => item.score >= 0.94)
-    .sort((a, b) => b.score - a.score);
-  if (!scored.length) return null;
-  if (scored.length > 1 && scored[0].score - scored[1].score < 0.015) return null;
-  return scored[0];
+  // Never create a marketplace link silently from a similar title. A new SKU
+  // must be confirmed by the owner in "Нужно привязать" before it can reserve
+  // warehouse stock. Existing exact SKU links continue to resolve normally.
+  return null;
 }
 
 ordersRouter.get('/orders', asyncRoute(async (req, res) => {
