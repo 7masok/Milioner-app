@@ -1,0 +1,1 @@
+Deploy compact mobile WB product report table.
