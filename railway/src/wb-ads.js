@@ -379,12 +379,12 @@ async function publicSnapshot(marketName) {
   };
 }
 
-wbAdsRouter.get('/ads/campaigns', asyncRoute(async (req, res) => {
+wbAdsRouter.get('/promotion/campaigns', asyncRoute(async (req, res) => {
   // Important: this browser-facing route never calls WB. It only reads Railway/Postgres.
   res.json({ ok: true, ...await publicSnapshot(market(req.query.market)) });
 }));
 
-wbAdsRouter.put('/ads/limits/:market/:campaignId', asyncRoute(async (req, res) => {
+wbAdsRouter.put('/promotion/limits/:market/:campaignId', asyncRoute(async (req, res) => {
   const marketName = market(req.params.market);
   const id = Math.max(0, Number(req.params.campaignId) || 0);
   const limit = Math.max(0, Number(req.body?.dailyLimit) || 0);
