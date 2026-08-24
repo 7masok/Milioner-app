@@ -1,0 +1,1 @@
+Deploy actual workflow-stage labels for compact purchase cards and product rows.
