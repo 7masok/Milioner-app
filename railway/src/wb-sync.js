@@ -6,6 +6,11 @@ import { configuredWbConnectionIds, credentialFor } from './connections.js';
 const WB_API = 'https://marketplace-api.wildberries.ru';
 const WB_FINANCE_API = 'https://finance-api.wildberries.ru';
 const SYNC_MS = 10 * 60 * 1000;
+// The detailed finance report is historical and does not need to compete with
+// the time-sensitive advertising limiter every ten minutes. WB applies a
+// seller-wide global limiter, so polling this report too often can delay an ad
+// pause or next-day resume by almost an hour.
+const FINANCE_SYNC_MS = 6 * 60 * 60 * 1000;
 const TIMEOUT_MS = 25_000;
 const LOOKBACK_DAYS = 14;
 const inFlight = new Map();
@@ -134,7 +139,7 @@ async function upsertFinance(market, rows) {
 }
 
 async function syncFinanceReport(market, token) {
-  const client = await pool.connect(), lockName = `millioner:wb-finance:${market}`, cooldownMs = 90_000;
+  const client = await pool.connect(), lockName = `millioner:wb-finance:${market}`, cooldownMs = FINANCE_SYNC_MS;
   let locked = false;
   try {
     const lock = await client.query('SELECT pg_try_advisory_lock(hashtext($1)) AS locked', [lockName]);

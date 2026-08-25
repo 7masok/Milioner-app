@@ -7,9 +7,9 @@ import { asyncRoute } from './http.js';
 const ADVERT_API = 'https://advert-api.wildberries.ru';
 const CONTENT_API = 'https://content-api.wildberries.ru';
 // WB order sync starts immediately and performs the heaviest import after a deploy.
-// Run promotion sync in the quiet half of the 10-minute cycle so both jobs do not
+// Run promotion sync in the quiet half of the order-sync cycle so both jobs do not
 // hit the seller-wide WB limiter at the same time.
-const CHECK_MS = 10 * 60 * 1000;
+const CHECK_MS = 5 * 60 * 1000;
 const STARTUP_DELAY_MS = 2 * 60 * 1000;
 const RATE_LIMIT_TTL_MS = 60 * 1000;
 const MAX_AUTO_RETRY_MS = 2 * 60 * 1000;
@@ -315,6 +315,7 @@ async function fetchCampaigns(marketName, previous) {
     })));
   }
   const day = localDate();
+  const previousIsToday = String(previous?.day || '') === day;
   const statIds = [...new Set(list
     .filter(row => MANAGEABLE_CAMPAIGN_STATUSES.has(Number(row?.status ?? row?.statusId ?? 0)))
     .map(campaignId)
@@ -356,12 +357,15 @@ async function fetchCampaigns(marketName, previous) {
       nameSource: label.apiName || preservedName ? 'wb' : 'missing',
       status: Number(row?.status ?? row?.statusId ?? 0),
       paymentType: String(row?.payment_type || row?.paymentType || ''),
-      todaySpend: hasFreshStats ? spend(statRow, day) : Number(prior?.todaySpend || 0),
-      orders: hasFreshStats ? statMetric(statRow, day, ['orders']) : Number(prior?.orders || 0),
-      orderedItems: hasFreshStats ? statMetric(statRow, day, ['shks', 'orders']) : Number(prior?.orderedItems || 0),
-      orderRevenue: hasFreshStats ? statMetric(statRow, day, ['sum_price', 'revenue']) : Number(prior?.orderRevenue || 0),
-      views: hasFreshStats ? statMetric(statRow, day, ['views']) : Number(prior?.views || 0),
-      clicks: hasFreshStats ? statMetric(statRow, day, ['clicks']) : Number(prior?.clicks || 0),
+      // Never carry yesterday's totals into a new day when WB statistics are
+      // temporarily unavailable. Otherwise an auto-resumed campaign is paused
+      // again immediately using yesterday's spend.
+      todaySpend: hasFreshStats ? spend(statRow, day) : (previousIsToday ? Number(prior?.todaySpend || 0) : 0),
+      orders: hasFreshStats ? statMetric(statRow, day, ['orders']) : (previousIsToday ? Number(prior?.orders || 0) : 0),
+      orderedItems: hasFreshStats ? statMetric(statRow, day, ['shks', 'orders']) : (previousIsToday ? Number(prior?.orderedItems || 0) : 0),
+      orderRevenue: hasFreshStats ? statMetric(statRow, day, ['sum_price', 'revenue']) : (previousIsToday ? Number(prior?.orderRevenue || 0) : 0),
+      views: hasFreshStats ? statMetric(statRow, day, ['views']) : (previousIsToday ? Number(prior?.views || 0) : 0),
+      clicks: hasFreshStats ? statMetric(statRow, day, ['clicks']) : (previousIsToday ? Number(prior?.clicks || 0) : 0),
       nmIds: label.nmIds.length ? label.nmIds : (prior?.nmIds || []),
       productTitles: hasFreshProducts ? label.productTitles : (prior?.productTitles || []),
       vendorCodes: label.vendorCodes.length ? label.vendorCodes : (prior?.vendorCodes || []),
@@ -387,7 +391,7 @@ async function fetchCampaigns(marketName, previous) {
 
 async function rules(marketName) {
   const result = await pool.query(
-    'SELECT campaign_id AS "campaignId",daily_limit AS "dailyLimit",enabled,last_checked_at AS "lastCheckedAt",last_action_at AS "lastActionAt",last_action_error AS "lastActionError" FROM wb_ad_limits WHERE market=$1',
+    'SELECT campaign_id AS "campaignId",daily_limit AS "dailyLimit",enabled,last_checked_at AS "lastCheckedAt",last_action_at AS "lastActionAt",last_action_error AS "lastActionError",auto_paused AS "autoPaused",auto_paused_day AS "autoPausedDay",last_action_type AS "lastActionType" FROM wb_ad_limits WHERE market=$1',
     [marketName],
   );
   return new Map(result.rows.map(row => [Number(row.campaignId), row]));
@@ -524,7 +528,9 @@ wbAdsRouter.put('/promotion/limits/:market/:campaignId', asyncRoute(async (req, 
     `INSERT INTO wb_ad_limits(market,campaign_id,daily_limit,enabled,updated_at)
      VALUES($1,$2,$3,$4,$5)
      ON CONFLICT(market,campaign_id)
-     DO UPDATE SET daily_limit=excluded.daily_limit,enabled=excluded.enabled,updated_at=excluded.updated_at`,
+     DO UPDATE SET daily_limit=excluded.daily_limit,enabled=excluded.enabled,updated_at=excluded.updated_at,
+       auto_paused=CASE WHEN excluded.enabled THEN wb_ad_limits.auto_paused ELSE FALSE END,
+       auto_paused_day=CASE WHEN excluded.enabled THEN wb_ad_limits.auto_paused_day ELSE '' END`,
     [marketName, id, limit, enabled, Date.now()],
   );
   res.json({ ok: true, market: marketName, campaignId: id, dailyLimit: limit, enabled });
@@ -557,6 +563,10 @@ wbAdsRouter.post('/promotion/actions/:market/:campaignId', asyncRoute(async (req
   const actionPath = action === 'pause' ? '/adv/v0/pause' : action === 'start' ? '/adv/v0/start' : '/adv/v0/stop';
   await request(ADVERT_API + actionPath + '?id=' + encodeURIComponent(id), token);
   const status = action === 'pause' ? 11 : action === 'start' ? 9 : 7;
+  await pool.query(
+    "UPDATE wb_ad_limits SET auto_paused=FALSE,auto_paused_day='',last_action_type=$3,last_action_at=$4,last_action_error='' WHERE market=$1 AND campaign_id=$2",
+    [marketName, id, action, Date.now()],
+  );
   await setStoredCampaignStatus(marketName, id, status);
   res.json({ ok: true, market: marketName, campaignId: id, action, status });
 }));
@@ -567,15 +577,54 @@ async function enforce(marketName, snapshot) {
   if (!enabled.length) return;
   const byId = new Map((snapshot?.campaigns || []).map(row => [Number(row.id), row]));
   const token = await tokenFor(marketName);
+  const day = localDate();
   for (const rule of enabled) {
     const row = byId.get(Number(rule.campaignId));
-    if (!row || !active(row) || Number(row.todaySpend) < Number(rule.dailyLimit)) continue;
+    const now = Date.now();
+    await pool.query(
+      'UPDATE wb_ad_limits SET last_checked_at=$3 WHERE market=$1 AND campaign_id=$2',
+      [marketName, rule.campaignId, now],
+    );
+    if (!row) continue;
+
+    // Resume only campaigns paused by this limiter. A campaign paused manually
+    // in WB or in the app must remain paused.
+    if (rule.autoPaused && String(rule.autoPausedDay || '') !== day) {
+      if ([4, 11].includes(Number(row.status))) {
+        try {
+          await request(ADVERT_API + '/adv/v0/start?id=' + encodeURIComponent(row.id), token);
+          await pool.query(
+            "UPDATE wb_ad_limits SET auto_paused=FALSE,auto_paused_day='',last_action_at=$3,last_action_type='auto_start',last_action_error='' WHERE market=$1 AND campaign_id=$2",
+            [marketName, row.id, Date.now()],
+          );
+          await setStoredCampaignStatus(marketName, row.id, 9);
+          console.info('WB ads auto-resumed', marketName, row.id, day);
+        } catch (error) {
+          await pool.query(
+            'UPDATE wb_ad_limits SET last_action_error=$3 WHERE market=$1 AND campaign_id=$2',
+            [marketName, row.id, String(error?.message || error).slice(0, 500)],
+          );
+          throw error;
+        }
+        continue;
+      }
+      if (active(row)) {
+        await pool.query(
+          "UPDATE wb_ad_limits SET auto_paused=FALSE,auto_paused_day='',last_action_type='already_started',last_action_error='' WHERE market=$1 AND campaign_id=$2",
+          [marketName, row.id],
+        );
+      }
+    }
+
+    if (!active(row) || Number(row.todaySpend) < Number(rule.dailyLimit)) continue;
     try {
       await request(ADVERT_API + '/adv/v0/pause?id=' + encodeURIComponent(row.id), token);
       await pool.query(
-        "UPDATE wb_ad_limits SET last_checked_at=$3,last_action_at=$3,last_action_error='' WHERE market=$1 AND campaign_id=$2",
-        [marketName, row.id, Date.now()],
+        "UPDATE wb_ad_limits SET last_checked_at=$3,last_action_at=$3,last_action_error='',auto_paused=TRUE,auto_paused_day=$4,last_action_type='auto_pause' WHERE market=$1 AND campaign_id=$2",
+        [marketName, row.id, Date.now(), day],
       );
+      await setStoredCampaignStatus(marketName, row.id, 11);
+      console.info('WB ads auto-paused', marketName, row.id, Number(row.todaySpend), Number(rule.dailyLimit));
     } catch (error) {
       await pool.query(
         'UPDATE wb_ad_limits SET last_checked_at=$3,last_action_error=$4 WHERE market=$1 AND campaign_id=$2',
@@ -602,6 +651,10 @@ export function startWbAdsLimitLoop() {
   };
   const runMarket = async marketName => {
     try {
+      // Day-boundary actions must not depend on the browser being open.
+      // They are checked from the persisted Railway snapshot before refreshing WB.
+      const previous = await storedSnapshot(marketName);
+      await enforce(marketName, previous);
       const snapshot = await refreshMarket(marketName);
       if (Number(snapshot?.nextAttemptAt || 0) > Date.now()) {
         scheduleRetry(marketName, snapshot.nextAttemptAt);
