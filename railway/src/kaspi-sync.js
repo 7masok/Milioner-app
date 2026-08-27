@@ -3,6 +3,7 @@ import { pool } from './db.js';
 import { credentialFor } from './connections.js';
 import { kaspiOrderIsActive } from './kaspi-status.js';
 import { reconcileKaspiReservations } from './reservation-reconcile.js';
+import { reconcileMarketplaceSales } from './marketplace-sale-reconcile.js';
 
 const KASPI_API = 'https://kaspi.kz/shop/api/v2';
 const SYNC_INTERVAL_MS = 5 * 60 * 1000;
@@ -415,9 +416,10 @@ export async function syncKaspiOrders({ days = 2 } = {}) {
         });
         reservationReconcile = await reconcileKaspiReservations(activeEntries);
       }
+      const saleReconcile = await reconcileMarketplaceSales('Kaspi');
       const finishedAt = Date.now();
       await pool.query("UPDATE sync_runs SET finished_at=$1,ok=1,items=$2,error='' WHERE id=$3", [finishedAt, items, runId]);
-      return { ok: true, items, finishedAt, upstream, reservationReconcile, compositionBackfill };
+      return { ok: true, items, finishedAt, upstream, reservationReconcile, saleReconcile, compositionBackfill };
     } catch (error) {
       const message = String(error?.message || error).slice(0, 1000);
       await pool.query('UPDATE sync_runs SET finished_at=$1,ok=0,items=$2,error=$3 WHERE id=$4', [Date.now(), items, message, runId]).catch(() => {});
@@ -437,4 +439,5 @@ export function startKaspiSyncLoop() {
   timer.unref();
   return timer;
 }
+
 
