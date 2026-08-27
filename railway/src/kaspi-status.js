@@ -4,10 +4,11 @@ export function kaspiOrderIsActive(status, state) {
 
   if (['CANCELLED', 'CANCELLING', 'RETURNED', 'KASPI_DELIVERY_RETURN_REQUESTED'].includes(orderStatus)) return false;
   if (orderStatus === 'COMPLETED') return false;
-  if (['DELIVERY', 'KASPI_DELIVERY_TRANSIT', 'ARCHIVE'].includes(orderState)) return false;
+  if (['KASPI_DELIVERY_ASSEMBLED', 'DELIVERY', 'KASPI_DELIVERY_TRANSIT', 'ARCHIVE'].includes(orderState)) return false;
 
-  // Packing/assembly still belongs to the seller. Reserve is released only
-  // after Kaspi reports that the parcel was transmitted to delivery.
+  // Once assembly is confirmed the goods have left the warehouse shelf and
+  // are recorded as a sale by the server reconciler.
   return true;
 }
+
 
