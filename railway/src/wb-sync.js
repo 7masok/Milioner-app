@@ -1,16 +1,12 @@
 import { pool } from './db.js';
 import { config } from './config.js';
 import { reconcileWbReservations } from './reservation-reconcile.js';
+import { reconcileMarketplaceSales } from './marketplace-sale-reconcile.js';
 import { configuredWbConnectionIds, credentialFor } from './connections.js';
 
 const WB_API = 'https://marketplace-api.wildberries.ru';
 const WB_FINANCE_API = 'https://finance-api.wildberries.ru';
 const SYNC_MS = 10 * 60 * 1000;
-// The detailed finance report is historical and does not need to compete with
-// the time-sensitive advertising limiter every ten minutes. WB applies a
-// seller-wide global limiter, so polling this report too often can delay an ad
-// pause or next-day resume by almost an hour.
-const FINANCE_SYNC_MS = 6 * 60 * 60 * 1000;
 const TIMEOUT_MS = 25_000;
 const LOOKBACK_DAYS = 14;
 const inFlight = new Map();
@@ -139,7 +135,7 @@ async function upsertFinance(market, rows) {
 }
 
 async function syncFinanceReport(market, token) {
-  const client = await pool.connect(), lockName = `millioner:wb-finance:${market}`, cooldownMs = FINANCE_SYNC_MS;
+  const client = await pool.connect(), lockName = `millioner:wb-finance:${market}`, cooldownMs = 90_000;
   let locked = false;
   try {
     const lock = await client.query('SELECT pg_try_advisory_lock(hashtext($1)) AS locked', [lockName]);
@@ -208,9 +204,10 @@ export async function syncWbOrders(market, { force = false } = {}) {
       } catch (error) {
         console.error(`WB reservation reconciliation failed (${market})`, error);
       }
+      const saleReconcile = await reconcileMarketplaceSales(market);
       const finishedAt = Date.now();
       await pool.query("UPDATE sync_runs SET finished_at=$1,ok=1,items=$2,error='' WHERE id=$3", [finishedAt, rows.length, runId]);
-      return { ok: true, market, items: rows.length, ...finance, reservationReconcile, finishedAt, nextSyncAt: finishedAt + SYNC_MS };
+      return { ok: true, market, items: rows.length, ...finance, reservationReconcile, saleReconcile, finishedAt, nextSyncAt: finishedAt + SYNC_MS };
     } catch (error) {
       const message = String(error?.message || error).slice(0, 2000);
       await pool.query('UPDATE sync_runs SET finished_at=$1,ok=0,error=$2 WHERE id=$3', [Date.now(), message, runId]).catch(() => {});
@@ -238,3 +235,4 @@ export function startWbSyncLoop() {
   timer.unref();
   return timer;
 }
+
