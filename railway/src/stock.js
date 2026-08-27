@@ -38,21 +38,21 @@ function makeAvailability(storeId, available, stockCount) {
   return `<availability storeId="${esc(storeId)}" available="${available ? 'yes' : 'no'}" stockCount="${Math.max(0, Math.floor(stockCount))}"/>`;
 }
 function normalizeProductName(value){return String(value||'').toLowerCase().replace(/ё/g,'е').replace(/[^a-zа-я0-9]+/gi,' ').trim().replace(/\s+/g,' ')}
-function recoveryProduct(products,model){const target=normalizeProductName(model),matches=(products||[]).map(product=>({product,name:normalizeProductName(product?.name)})).filter(x=>x.name.length>=4&&(target.includes(x.name)||x.name.includes(target))).sort((a,b)=>b.name.length-a.name.length);if(!matches.length)return null;if(matches[1]&&matches[0].name.length===matches[1].name.length)return null;return matches[0].product}
+function recoveryProduct(products,model,hints=[]){const target=normalizeProductName(model),named=(products||[]).map(product=>({product,name:normalizeProductName(product?.name)})),matches=named.filter(x=>x.name.length>=4&&(target.includes(x.name)||x.name.includes(target))).sort((a,b)=>b.name.length-a.name.length);if(matches.length&&(!matches[1]||matches[0].name.length!==matches[1].name.length))return matches[0].product;for(const rawHint of hints){const hint=normalizeProductName(rawHint),hintMatches=named.filter(x=>hint&&x.name.includes(hint));if(hintMatches.length===1)return hintMatches[0].product}return null}
 
 /* One-time recovery for offers that were archived when the first Railway template contained only 92 items. */
 const KASPI_RECOVERY_OFFERS = [
   ['099973580', 'Брелок LuxAr Скелет 7 см металл 1 шт', 790],
-  ['521547783', 'Брелок LuxAr Cat Crazy 6 см металл 1 шт', 690],
+  ['521547783', 'Брелок LuxAr Cat Crazy 6 см металл 1 шт', 690, ['cat crazy','кот crazy','кот сумасш','сумасшедш']],
   ['812896427', 'Брелок LuxAr Рулетка Казино Красный 5 см пластик 1 шт', 990],
   ['514147108', 'Брелок LuxAr Годжо Сатору Черный 13 см текстиль 1 шт', 990],
   ['407734445', 'Брелок LuxAr Wednesday Вещь 5 см силикон 1 шт', 790],
-  ['737386976', 'Брелок LuxAr Череп Золотистый 6 см металл 1 шт', 390],
+  ['737386976', 'Брелок LuxAr Череп Золотистый 6 см металл 1 шт', 390, ['череп золот']],
   ['788701897', 'Брелок LuxAr Рулетка Казино Розовый 5 см пластик 1 шт', 990],
-  ['192382685', 'Брелок LuxAr Клавиши 10 см пластик 1 шт', 590],
-  ['898332897', 'Брелок LuxAr Рулетка Казино Синий 5 см пластик 1 шт', 990],
+  ['192382685', 'Брелок LuxAr Клавиши 10 см пластик 1 шт', 590, ['клавиш']],
+  ['898332897', 'Брелок LuxAr Рулетка Казино Синий 5 см пластик 1 шт', 990, ['казино син']],
   ['908343573', 'Брелок LuxAr Череп Черный 6 см металл 1 шт', 390]
-].map(([sku, model, price]) => ({ sku, model, price }));
+].map(([sku, model, price, hints=[]]) => ({ sku, model, price, hints }));
 
 function appendOffers(rawXml, offers) {
   if (!offers.length) return rawXml;
@@ -116,7 +116,7 @@ async function liveKaspiXml() {
   let raw=String(template.rawXml),info=templateInfo(raw),primaryStoreId=String(template.primaryStoreId||'').trim()||info.storeIds[0]||'';
   if(!primaryStoreId)throw new Error('Kaspi primary store is not configured');
   const snapshot=parsePayload(stateResult.rows[0]?.payload),availability=warehouseAvailability(snapshot),products=[...availability.products.values()],recovered=[];
-  for(const offer of KASPI_RECOVERY_OFFERS){if(info.offers.has(offer.sku))continue;const product=recoveryProduct(products,offer.model);if(!product)continue;const stock=availability.available(String(product.id||''));recovered.push({...offer,stock,storeId:primaryStoreId});stocks.set(offer.sku,stock)}
+  for(const offer of KASPI_RECOVERY_OFFERS){if(info.offers.has(offer.sku))continue;const product=recoveryProduct(products,offer.model,offer.hints);if(!product)continue;const stock=availability.available(String(product.id||''));recovered.push({...offer,stock,storeId:primaryStoreId});stocks.set(offer.sku,stock)}
   raw=appendOffers(raw,recovered);
   const offerRe=/<offer\b[^>]*\bsku\s*=\s*(["'])([^"']+)\1[^>]*>[\s\S]*?<\/offer>/gi;
   return raw.replace(offerRe,(whole,_quote,encodedSku)=>{
