@@ -111,10 +111,13 @@ async function liveTemplate() {
   return row.rows[0] || null;
 }
 async function liveKaspiXml() {
-  const [template,rows]=await Promise.all([liveTemplate(),warehouseKaspiRows()]),stocks=new Map(rows.map(row=>[row.sku,row.stock]));
+  const [template,rows,stateResult]=await Promise.all([liveTemplate(),warehouseKaspiRows(),pool.query('SELECT payload FROM warehouse_state WHERE id=1')]),stocks=new Map(rows.map(row=>[row.sku,row.stock]));
   if(!template?.rawXml){const offers=rows.map(row=>`    <offer sku="${esc(row.sku)}"><stockCount>${row.stock}</stockCount></offer>`).join('\n');return `<?xml version="1.0" encoding="UTF-8"?>\n<kaspi_catalog date="${new Date().toISOString()}">\n  <offers>\n${offers}\n  </offers>\n</kaspi_catalog>`;}
   let raw=String(template.rawXml),info=templateInfo(raw),primaryStoreId=String(template.primaryStoreId||'').trim()||info.storeIds[0]||'';
   if(!primaryStoreId)throw new Error('Kaspi primary store is not configured');
+  const snapshot=parsePayload(stateResult.rows[0]?.payload),availability=warehouseAvailability(snapshot),products=[...availability.products.values()],recovered=[];
+  for(const offer of KASPI_RECOVERY_OFFERS){if(info.offers.has(offer.sku))continue;const product=recoveryProduct(products,offer.model);if(!product)continue;const stock=availability.available(String(product.id||''));recovered.push({...offer,stock,storeId:primaryStoreId});stocks.set(offer.sku,stock)}
+  raw=appendOffers(raw,recovered);
   const offerRe=/<offer\b[^>]*\bsku\s*=\s*(["'])([^"']+)\1[^>]*>[\s\S]*?<\/offer>/gi;
   return raw.replace(offerRe,(whole,_quote,encodedSku)=>{
     const sku=xmlDecode(encodedSku).trim();if(!stocks.has(sku))return whole;
@@ -154,6 +157,7 @@ stockRouter.put('/kaspi-price-template',requireTrustedOrigin,asyncRoute(async (r
   const existing=await liveTemplate(),hasXml=typeof req.body?.xml==='string';let rawXml=hasXml?String(req.body.xml||'').trim():String(existing?.rawXml||'');
   if(!rawXml){const error=new Error('Выберите полный XML-прайс Kaspi.');error.status=400;throw error}
   if(Buffer.byteLength(rawXml,'utf8')>6_000_000){const error=new Error('XML больше 6 МБ.');error.status=413;throw error}
+  if(hasXml&&existing?.rawXml)rawXml=mergeMissingTemplateOffers(rawXml,String(existing.rawXml));
   const info=templateInfo(rawXml);if(!info.offers.size){const error=new Error('В XML не найдено ни одного offer с Kaspi SKU.');error.status=400;throw error}
   const requestedPrimary=String(req.body?.primaryStoreId||'').trim(),primaryStoreId=requestedPrimary||String(existing?.primaryStoreId||'').trim()||info.storeIds[0]||'';
   if(requestedPrimary&&info.storeIds.length&&!info.storeIds.includes(requestedPrimary)){const error=new Error('Выбранный склад отсутствует в XML Kaspi.');error.status=400;throw error}
