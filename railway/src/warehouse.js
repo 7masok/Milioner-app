@@ -24,6 +24,30 @@ function cleanState(input) {
   return result;
 }
 
+function stockLedgerViolation(previous, next) {
+  const oldState = cleanState(previous), nextState = cleanState(next), cutoff = Date.now() - 45 * 86_400_000;
+  const oldMovements = new Map(oldState.movements.map(row => [String(row?.id || ''), row]).filter(([id]) => id));
+  const nextMovements = new Map(nextState.movements.map(row => [String(row?.id || ''), row]).filter(([id]) => id));
+  const removedRecent = [...oldMovements.values()].filter(row => Number(row?.date || 0) >= cutoff && !nextMovements.has(String(row?.id || '')));
+  if (removedRecent.length) return { reason: 'recent-movement-removed', movementIds: removedRecent.slice(0, 10).map(row => String(row.id)) };
+  const movementDelta = new Map();
+  const ids = new Set([...oldMovements.keys(), ...nextMovements.keys()]);
+  for (const id of ids) {
+    const before = oldMovements.get(id), after = nextMovements.get(id), productId = String(after?.productId || before?.productId || '');
+    if (!productId) continue;
+    const delta = (Number(after?.qty) || 0) - (Number(before?.qty) || 0);
+    movementDelta.set(productId, (movementDelta.get(productId) || 0) + delta);
+  }
+  const oldProducts = new Map(oldState.products.map(row => [String(row?.id || ''), row]).filter(([id]) => id));
+  for (const product of nextState.products) {
+    const id = String(product?.id || ''), before = oldProducts.get(id);
+    if (!id || !before) continue;
+    const stockDelta = (Number(product?.stock) || 0) - (Number(before?.stock) || 0), loggedDelta = movementDelta.get(id) || 0;
+    if (Math.abs(stockDelta - loggedDelta) > 0.000001) return { reason: 'stock-change-without-movement', productId: id, stockDelta, loggedDelta };
+  }
+  return null;
+}
+
 function marketplaceSkus(product, field) {
   const primary = String(product?.[field] || '').trim();
   const rawAliases = product?.[`${field}Aliases`];
@@ -129,9 +153,13 @@ warehouseRouter.put('/warehouse-state', requireTrustedOrigin, requireWritesEnabl
 
   const result = await transaction(async client => {
     await client.query('SELECT pg_advisory_xact_lock($1)', [730021]);
-    const current = await client.query('SELECT revision FROM warehouse_state WHERE id=1 FOR UPDATE');
+    const current = await client.query('SELECT payload,revision FROM warehouse_state WHERE id=1 FOR UPDATE');
     const currentRevision = Number(current.rows[0]?.revision || 0);
     if (current.rowCount && baseRevision !== currentRevision) return { conflict: true, revision: currentRevision };
+    if (current.rowCount) {
+      const violation = stockLedgerViolation(parsePayload(current.rows[0].payload), state);
+      if (violation) return { conflict: true, revision: currentRevision, stockGuard: violation };
+    }
     const revision = currentRevision + 1;
     const updatedAt = Date.now();
     await client.query(`INSERT INTO warehouse_state(id,payload,revision,updated_at) VALUES(1,$1,$2,$3)
@@ -143,7 +171,7 @@ warehouseRouter.put('/warehouse-state', requireTrustedOrigin, requireWritesEnabl
       [revision, updatedAt, sha, 'api']);
     return { revision, updatedAt };
   });
-  if (result.conflict) return res.status(409).json({ ok: false, error: 'revision-conflict', revision: result.revision });
+  if (result.conflict) return res.status(409).json({ ok: false, error: result.stockGuard?'stock-ledger-conflict':'revision-conflict', revision: result.revision, stockGuard: result.stockGuard || undefined });
   res.setHeader('ETag', `"${result.revision}"`);
   return res.json({ ok: true, ...result, products: state.products.length });
 }));
