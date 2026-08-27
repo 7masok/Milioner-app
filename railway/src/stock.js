@@ -117,7 +117,7 @@ async function liveKaspiXml() {
   if(!primaryStoreId)throw new Error('Kaspi primary store is not configured');
   const offerRe=/<offer\b[^>]*\bsku\s*=\s*(["'])([^"']+)\1[^>]*>[\s\S]*?<\/offer>/gi;
   return raw.replace(offerRe,(whole,_quote,encodedSku)=>{
-    const sku=xmlDecode(encodedSku).trim();if(!stocks.has(sku))return '';
+    const sku=xmlDecode(encodedSku).trim();if(!stocks.has(sku))return whole;
     const stock=Math.max(0,stocks.get(sku)||0),openingEnd=whole.indexOf('>');if(openingEnd<0)return whole;
     const opening=whole.slice(0,openingEnd+1),body=whole.slice(openingEnd+1,-'</offer>'.length);let foundPrimary=false;
     const updated=body.replace(/<availability\b[^>]*\/?>/gi,tag=>{const storeId=xmlAttr(tag,'storeId');if(!storeId)return tag;if(storeId===primaryStoreId){foundPrimary=true;return setXmlAttr(setXmlAttr(tag,'available',stock>0?'yes':'no'),'stockCount',String(stock))}return setXmlAttr(setXmlAttr(tag,'available','no'),'stockCount','0')});
