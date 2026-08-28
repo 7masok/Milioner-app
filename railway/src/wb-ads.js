@@ -365,12 +365,19 @@ async function fetchCampaigns(marketName, previous) {
       // Never carry yesterday's totals into a new day when WB statistics are
       // temporarily unavailable. Otherwise an auto-resumed campaign is paused
       // again immediately using yesterday's spend.
-      todaySpend: monotonicDailyMetric(hasFreshStats ? spend(statRow, day) : 0, prior?.todaySpend, previousIsToday),
-      orders: monotonicDailyMetric(hasFreshStats ? statMetric(statRow, day, ['orders']) : 0, prior?.orders, previousIsToday),
-      orderedItems: monotonicDailyMetric(hasFreshStats ? statMetric(statRow, day, ['shks', 'orders']) : 0, prior?.orderedItems, previousIsToday),
-      orderRevenue: monotonicDailyMetric(hasFreshStats ? statMetric(statRow, day, ['sum_price', 'revenue']) : 0, prior?.orderRevenue, previousIsToday),
-      views: monotonicDailyMetric(hasFreshStats ? statMetric(statRow, day, ['views']) : 0, prior?.views, previousIsToday),
-      clicks: monotonicDailyMetric(hasFreshStats ? statMetric(statRow, day, ['clicks']) : 0, prior?.clicks, previousIsToday),
+      // Show exactly the latest value reported by WB. Keep the non-decreasing
+      // maximum separately so a delayed partial response cannot defeat auto-stop.
+      todaySpend: hasFreshStats ? spend(statRow, day) : (previousIsToday ? Number(prior?.todaySpend || 0) : 0),
+      maxTodaySpend: monotonicDailyMetric(
+        hasFreshStats ? spend(statRow, day) : 0,
+        prior?.maxTodaySpend ?? prior?.todaySpend,
+        previousIsToday,
+      ),
+      orders: hasFreshStats ? statMetric(statRow, day, ['orders']) : (previousIsToday ? Number(prior?.orders || 0) : 0),
+      orderedItems: hasFreshStats ? statMetric(statRow, day, ['shks', 'orders']) : (previousIsToday ? Number(prior?.orderedItems || 0) : 0),
+      orderRevenue: hasFreshStats ? statMetric(statRow, day, ['sum_price', 'revenue']) : (previousIsToday ? Number(prior?.orderRevenue || 0) : 0),
+      views: hasFreshStats ? statMetric(statRow, day, ['views']) : (previousIsToday ? Number(prior?.views || 0) : 0),
+      clicks: hasFreshStats ? statMetric(statRow, day, ['clicks']) : (previousIsToday ? Number(prior?.clicks || 0) : 0),
       nmIds: label.nmIds.length ? label.nmIds : (prior?.nmIds || []),
       productTitles: hasFreshProducts ? label.productTitles : (prior?.productTitles || []),
       vendorCodes: label.vendorCodes.length ? label.vendorCodes : (prior?.vendorCodes || []),
@@ -510,17 +517,11 @@ async function publicSnapshot(marketName) {
     waitingForFirstSync: !value.updatedAt,
     campaigns: value.campaigns
       .filter(row => MANAGEABLE_CAMPAIGN_STATUSES.has(Number(row.status)))
-      .map(row => {
-        const rule = configured.get(Number(row.id)) || { dailyLimit: 0, enabled: false, scheduleEnabled: false, startTime: '09:00' };
-        const stoppedAtLimitToday = rule.autoPaused && String(rule.autoPausedDay || '') === String(value.day || '');
-        return {
-          ...row,
-          name: overrides.get(Number(row.id)) || row.name,
-          todaySpend: stoppedAtLimitToday ? Math.max(Number(row.todaySpend) || 0, Number(rule.dailyLimit) || 0) : row.todaySpend,
-          spendAtLeast: stoppedAtLimitToday,
-          rule,
-        };
-      }),
+      .map(row => ({
+        ...row,
+        name: overrides.get(Number(row.id)) || row.name,
+        rule: configured.get(Number(row.id)) || { dailyLimit: 0, enabled: false, scheduleEnabled: false, startTime: '09:00' },
+      })),
   };
 }
 
@@ -656,7 +657,8 @@ async function enforce(marketName, snapshot, { allowSchedule = true } = {}) {
       }
     }
 
-    if (!rule.enabled || Number(rule.dailyLimit) <= 0 || !active(row) || Number(row.todaySpend) < Number(rule.dailyLimit)) continue;
+    const enforcementSpend = Math.max(Number(row.todaySpend) || 0, Number(row.maxTodaySpend) || 0);
+    if (!rule.enabled || Number(rule.dailyLimit) <= 0 || !active(row) || enforcementSpend < Number(rule.dailyLimit)) continue;
     try {
       await request(ADVERT_API + '/adv/v0/pause?id=' + encodeURIComponent(row.id), token);
       await pool.query(
@@ -664,7 +666,7 @@ async function enforce(marketName, snapshot, { allowSchedule = true } = {}) {
         [marketName, row.id, Date.now(), day],
       );
       await setStoredCampaignStatus(marketName, row.id, 11);
-      console.info('WB ads auto-paused', marketName, row.id, Number(row.todaySpend), Number(rule.dailyLimit));
+      console.info('WB ads auto-paused', marketName, row.id, enforcementSpend, Number(rule.dailyLimit));
     } catch (error) {
       await pool.query(
         'UPDATE wb_ad_limits SET last_checked_at=$3,last_action_error=$4 WHERE market=$1 AND campaign_id=$2',
