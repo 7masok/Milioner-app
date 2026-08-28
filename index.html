@@ -308,11 +308,12 @@ function refreshProductAverageCost(p){if(!p)return;const lots=fifoLots(p.id),qty
 function localDateInputValue(ts=Date.now()){const d=new Date(Number(ts)||Date.now()),z=n=>String(n).padStart(2,'0');return d.getFullYear()+'-'+z(d.getMonth()+1)+'-'+z(d.getDate())}
 function localDateStart(value){if(!value)return Date.now();const [y,m,d]=String(value).split('-').map(Number);return new Date(y,m-1,d,12,0,0,0).getTime()}
 function log(type,pid,qty,extra=''){const movement={id:id(),date:Date.now(),type,productId:pid,qty,extra};state.movements.unshift(movement);state.movements=state.movements.slice(0,1000);return movement}
- let adsMarket='WB',adsRenderInFlight=false,adsDrrSort='best';
- function setAdsMarket(market){adsMarket=market==='WB2'?'WB2':'WB';document.querySelectorAll('[data-ads-market]').forEach(b=>b.classList.toggle('active',b.dataset.adsMarket===adsMarket));renderAds()}
+ let adsMarket='WB',adsRenderInFlight=false,adsRenderPending=0,adsDrrSort='best';
+ function queueAdsRender(){const request=++adsRenderPending;const run=()=>{if(request!==adsRenderPending)return;if(adsRenderInFlight){setTimeout(run,100);return}renderAds()};run()}
+ function setAdsMarket(market){adsMarket=market==='WB2'?'WB2':'WB';document.querySelectorAll('[data-ads-market]').forEach(b=>b.classList.toggle('active',b.dataset.adsMarket===adsMarket));queueAdsRender()}
  function adsDrrValue(row){const spend=Number(row?.todaySpend)||0,revenue=Number(row?.orderRevenue)||0;return revenue>0?spend/revenue*100:null}
  function adsSortRows(source){const priority={9:0,11:1,4:2,7:3,8:4};return [...source].sort((a,b)=>{const av=adsDrrValue(a),bv=adsDrrValue(b);if(av==null&&bv==null)return (priority[Number(a.status)]??9)-(priority[Number(b.status)]??9);if(av==null)return 1;if(bv==null)return -1;const difference=adsDrrSort==='best'?av-bv:bv-av;return difference||(priority[Number(a.status)]??9)-(priority[Number(b.status)]??9)})}
- function toggleAdsDrrSort(){adsDrrSort=adsDrrSort==='best'?'worst':'best';renderAds()}
+ function toggleAdsDrrSort(){adsDrrSort=adsDrrSort==='best'?'worst':'best';queueAdsRender()}
 async function adsApi(url,options={}){const response=await fetch(MILLIONER_API+url,{...options,headers:{'Content-Type':'application/json',...(options.headers||{})}});let data={};try{data=await response.json()}catch{}if(!response.ok||data?.ok===false)throw new Error(data?.error||('HTTP '+response.status));return data}
 function adsStatusLabel(status){return status===9?'Активна':status===11?'На паузе':status===4?'Готова к запуску':status===7?'Завершена':status===8?'Отменена':'Статус '+(status||'—')}
 function adsProductLine(row){const titles=Array.isArray(row.productTitles)?row.productTitles.filter(Boolean):[],codes=Array.isArray(row.vendorCodes)?row.vendorCodes.filter(Boolean):[];if(titles.length)return 'Товары: '+titles.slice(0,3).map(esc).join(' · ')+(titles.length>3?' · ещё '+(titles.length-3):'');if(codes.length)return 'Артикулы: '+codes.slice(0,3).map(esc).join(' · ')+(codes.length>3?' · ещё '+(codes.length-3):'');return 'Товары кампании пока загружаются'}
