@@ -391,7 +391,7 @@ async function fetchCampaigns(marketName, previous) {
 
 async function rules(marketName) {
   const result = await pool.query(
-    'SELECT campaign_id AS "campaignId",daily_limit AS "dailyLimit",enabled,last_checked_at AS "lastCheckedAt",last_action_at AS "lastActionAt",last_action_error AS "lastActionError",auto_paused AS "autoPaused",auto_paused_day AS "autoPausedDay",last_action_type AS "lastActionType" FROM wb_ad_limits WHERE market=$1',
+    'SELECT campaign_id AS "campaignId",daily_limit AS "dailyLimit",enabled,schedule_enabled AS "scheduleEnabled",start_time AS "startTime",last_scheduled_start_day AS "lastScheduledStartDay",last_checked_at AS "lastCheckedAt",last_action_at AS "lastActionAt",last_action_error AS "lastActionError",auto_paused AS "autoPaused",auto_paused_day AS "autoPausedDay",last_action_type AS "lastActionType" FROM wb_ad_limits WHERE market=$1',
     [marketName],
   );
   return new Map(result.rows.map(row => [Number(row.campaignId), row]));
@@ -508,7 +508,7 @@ async function publicSnapshot(marketName) {
       .map(row => ({
         ...row,
         name: overrides.get(Number(row.id)) || row.name,
-        rule: configured.get(Number(row.id)) || { dailyLimit: 0, enabled: false },
+        rule: configured.get(Number(row.id)) || { dailyLimit: 0, enabled: false, scheduleEnabled: false, startTime: '09:00' },
       })),
   };
 }
@@ -523,17 +523,19 @@ wbAdsRouter.put('/promotion/limits/:market/:campaignId', asyncRoute(async (req, 
   const id = Math.max(0, Number(req.params.campaignId) || 0);
   const limit = Math.max(0, Number(req.body?.dailyLimit) || 0);
   const enabled = Boolean(req.body?.enabled);
+  const scheduleEnabled = Boolean(req.body?.scheduleEnabled);
+  const startTime = /^([01]\d|2[0-3]):[0-5]\d$/.test(String(req.body?.startTime || '')) ? String(req.body.startTime) : '09:00';
   if (!allowed(marketName) || !id) throw new Error('Неверная кампания');
   await pool.query(
-    `INSERT INTO wb_ad_limits(market,campaign_id,daily_limit,enabled,updated_at)
-     VALUES($1,$2,$3,$4,$5)
+    `INSERT INTO wb_ad_limits(market,campaign_id,daily_limit,enabled,schedule_enabled,start_time,updated_at)
+     VALUES($1,$2,$3,$4,$5,$6,$7)
      ON CONFLICT(market,campaign_id)
-     DO UPDATE SET daily_limit=excluded.daily_limit,enabled=excluded.enabled,updated_at=excluded.updated_at,
+     DO UPDATE SET daily_limit=excluded.daily_limit,enabled=excluded.enabled,schedule_enabled=excluded.schedule_enabled,start_time=excluded.start_time,updated_at=excluded.updated_at,
        auto_paused=CASE WHEN excluded.enabled THEN wb_ad_limits.auto_paused ELSE FALSE END,
        auto_paused_day=CASE WHEN excluded.enabled THEN wb_ad_limits.auto_paused_day ELSE '' END`,
-    [marketName, id, limit, enabled, Date.now()],
+    [marketName, id, limit, enabled, scheduleEnabled, startTime, Date.now()],
   );
-  res.json({ ok: true, market: marketName, campaignId: id, dailyLimit: limit, enabled });
+  res.json({ ok: true, market: marketName, campaignId: id, dailyLimit: limit, enabled, scheduleEnabled, startTime });
 }));
 
 wbAdsRouter.post('/promotion/actions/:market/:campaignId', asyncRoute(async (req, res) => {
@@ -573,11 +575,12 @@ wbAdsRouter.post('/promotion/actions/:market/:campaignId', asyncRoute(async (req
 
 async function enforce(marketName, snapshot) {
   const configured = await rules(marketName);
-  const enabled = [...configured.values()].filter(row => row.enabled && Number(row.dailyLimit) > 0);
+  const enabled = [...configured.values()].filter(row => (row.enabled && Number(row.dailyLimit) > 0) || row.scheduleEnabled);
   if (!enabled.length) return;
   const byId = new Map((snapshot?.campaigns || []).map(row => [Number(row.id), row]));
   const token = await tokenFor(marketName);
   const day = localDate();
+  const localClock = new Intl.DateTimeFormat('en-GB', { timeZone: 'Asia/Qyzylorda', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).format(new Date());
   for (const rule of enabled) {
     const row = byId.get(Number(rule.campaignId));
     const now = Date.now();
@@ -589,7 +592,7 @@ async function enforce(marketName, snapshot) {
 
     // Resume only campaigns paused by this limiter. A campaign paused manually
     // in WB or in the app must remain paused.
-    if (rule.autoPaused && String(rule.autoPausedDay || '') !== day) {
+    if (rule.autoPaused && String(rule.autoPausedDay || '') !== day && !rule.scheduleEnabled) {
       if ([4, 11].includes(Number(row.status))) {
         try {
           await request(ADVERT_API + '/adv/v0/start?id=' + encodeURIComponent(row.id), token);
@@ -616,7 +619,33 @@ async function enforce(marketName, snapshot) {
       }
     }
 
-    if (!active(row) || Number(row.todaySpend) < Number(rule.dailyLimit)) continue;
+    const scheduledToday = String(rule.lastScheduledStartDay || '') === day;
+    const scheduleDue = rule.scheduleEnabled && localClock >= String(rule.startTime || '09:00') && !scheduledToday;
+    if (scheduleDue) {
+      // Never undo today's limiter pause. A completed campaign (status 7) is not restartable.
+      if (rule.autoPaused && String(rule.autoPausedDay || '') === day) continue;
+      try {
+        if ([4, 11].includes(Number(row.status))) {
+          await request(ADVERT_API + '/adv/v0/start?id=' + encodeURIComponent(row.id), token);
+          await setStoredCampaignStatus(marketName, row.id, 9);
+        }
+        if (active(row) || [4, 11].includes(Number(row.status))) {
+          await pool.query(
+            "UPDATE wb_ad_limits SET last_scheduled_start_day=$3,auto_paused=FALSE,auto_paused_day='',last_action_at=$4,last_action_type='scheduled_start',last_action_error='' WHERE market=$1 AND campaign_id=$2",
+            [marketName, row.id, day, Date.now()],
+          );
+          console.info('WB ads scheduled start', marketName, row.id, day, rule.startTime);
+        }
+      } catch (error) {
+        await pool.query(
+          'UPDATE wb_ad_limits SET last_action_error=$3 WHERE market=$1 AND campaign_id=$2',
+          [marketName, row.id, String(error?.message || error).slice(0, 500)],
+        );
+        throw error;
+      }
+    }
+
+    if (!rule.enabled || Number(rule.dailyLimit) <= 0 || !active(row) || Number(row.todaySpend) < Number(rule.dailyLimit)) continue;
     try {
       await request(ADVERT_API + '/adv/v0/pause?id=' + encodeURIComponent(row.id), token);
       await pool.query(
