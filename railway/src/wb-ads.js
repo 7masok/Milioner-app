@@ -213,6 +213,11 @@ function spend(row, day) {
   return statMetric(row, day, ['sum', 'spend', 'expenses', 'cost']);
 }
 
+function monotonicDailyMetric(freshValue, priorValue, previousIsToday) {
+  const fresh = Math.max(0, Number(freshValue) || 0);
+  return previousIsToday ? Math.max(fresh, Math.max(0, Number(priorValue) || 0)) : fresh;
+}
+
 function collectNmIds(value, output = new Set(), depth = 0) {
   if (value == null || depth > 8) return output;
   if (Array.isArray(value)) {
@@ -360,12 +365,12 @@ async function fetchCampaigns(marketName, previous) {
       // Never carry yesterday's totals into a new day when WB statistics are
       // temporarily unavailable. Otherwise an auto-resumed campaign is paused
       // again immediately using yesterday's spend.
-      todaySpend: hasFreshStats ? spend(statRow, day) : (previousIsToday ? Number(prior?.todaySpend || 0) : 0),
-      orders: hasFreshStats ? statMetric(statRow, day, ['orders']) : (previousIsToday ? Number(prior?.orders || 0) : 0),
-      orderedItems: hasFreshStats ? statMetric(statRow, day, ['shks', 'orders']) : (previousIsToday ? Number(prior?.orderedItems || 0) : 0),
-      orderRevenue: hasFreshStats ? statMetric(statRow, day, ['sum_price', 'revenue']) : (previousIsToday ? Number(prior?.orderRevenue || 0) : 0),
-      views: hasFreshStats ? statMetric(statRow, day, ['views']) : (previousIsToday ? Number(prior?.views || 0) : 0),
-      clicks: hasFreshStats ? statMetric(statRow, day, ['clicks']) : (previousIsToday ? Number(prior?.clicks || 0) : 0),
+      todaySpend: monotonicDailyMetric(hasFreshStats ? spend(statRow, day) : 0, prior?.todaySpend, previousIsToday),
+      orders: monotonicDailyMetric(hasFreshStats ? statMetric(statRow, day, ['orders']) : 0, prior?.orders, previousIsToday),
+      orderedItems: monotonicDailyMetric(hasFreshStats ? statMetric(statRow, day, ['shks', 'orders']) : 0, prior?.orderedItems, previousIsToday),
+      orderRevenue: monotonicDailyMetric(hasFreshStats ? statMetric(statRow, day, ['sum_price', 'revenue']) : 0, prior?.orderRevenue, previousIsToday),
+      views: monotonicDailyMetric(hasFreshStats ? statMetric(statRow, day, ['views']) : 0, prior?.views, previousIsToday),
+      clicks: monotonicDailyMetric(hasFreshStats ? statMetric(statRow, day, ['clicks']) : 0, prior?.clicks, previousIsToday),
       nmIds: label.nmIds.length ? label.nmIds : (prior?.nmIds || []),
       productTitles: hasFreshProducts ? label.productTitles : (prior?.productTitles || []),
       vendorCodes: label.vendorCodes.length ? label.vendorCodes : (prior?.vendorCodes || []),
@@ -505,11 +510,17 @@ async function publicSnapshot(marketName) {
     waitingForFirstSync: !value.updatedAt,
     campaigns: value.campaigns
       .filter(row => MANAGEABLE_CAMPAIGN_STATUSES.has(Number(row.status)))
-      .map(row => ({
-        ...row,
-        name: overrides.get(Number(row.id)) || row.name,
-        rule: configured.get(Number(row.id)) || { dailyLimit: 0, enabled: false, scheduleEnabled: false, startTime: '09:00' },
-      })),
+      .map(row => {
+        const rule = configured.get(Number(row.id)) || { dailyLimit: 0, enabled: false, scheduleEnabled: false, startTime: '09:00' };
+        const stoppedAtLimitToday = rule.autoPaused && String(rule.autoPausedDay || '') === String(value.day || '');
+        return {
+          ...row,
+          name: overrides.get(Number(row.id)) || row.name,
+          todaySpend: stoppedAtLimitToday ? Math.max(Number(row.todaySpend) || 0, Number(rule.dailyLimit) || 0) : row.todaySpend,
+          spendAtLeast: stoppedAtLimitToday,
+          rule,
+        };
+      }),
   };
 }
 
@@ -573,7 +584,7 @@ wbAdsRouter.post('/promotion/actions/:market/:campaignId', asyncRoute(async (req
   res.json({ ok: true, market: marketName, campaignId: id, action, status });
 }));
 
-async function enforce(marketName, snapshot) {
+async function enforce(marketName, snapshot, { allowSchedule = true } = {}) {
   const configured = await rules(marketName);
   const enabled = [...configured.values()].filter(row => (row.enabled && Number(row.dailyLimit) > 0) || row.scheduleEnabled);
   if (!enabled.length) return;
@@ -620,7 +631,7 @@ async function enforce(marketName, snapshot) {
     }
 
     const scheduledToday = String(rule.lastScheduledStartDay || '') === day;
-    const scheduleDue = rule.scheduleEnabled && localClock >= String(rule.startTime || '09:00') && !scheduledToday;
+    const scheduleDue = allowSchedule && rule.scheduleEnabled && localClock >= String(rule.startTime || '09:00') && !scheduledToday;
     if (scheduleDue) {
       // Never undo today's limiter pause. A completed campaign (status 7) is not restartable.
       if (rule.autoPaused && String(rule.autoPausedDay || '') === day) continue;
@@ -683,7 +694,7 @@ export function startWbAdsLimitLoop() {
       // Day-boundary actions must not depend on the browser being open.
       // They are checked from the persisted Railway snapshot before refreshing WB.
       const previous = await storedSnapshot(marketName);
-      await enforce(marketName, previous);
+      await enforce(marketName, previous, { allowSchedule: false });
       const snapshot = await refreshMarket(marketName);
       if (Number(snapshot?.nextAttemptAt || 0) > Date.now()) {
         scheduleRetry(marketName, snapshot.nextAttemptAt);
