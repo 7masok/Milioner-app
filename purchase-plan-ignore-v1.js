@@ -31,6 +31,7 @@ purchaseRecommendations=function(){
   const all=Array.isArray(rows)?rows:[];
   const ignored=ignoredMap();
   lastVisibleRecommendations=all.filter(x=>!ignored[String(x?.productId)]?.hidden);
+  window.__lastPurchaseRecommendations=lastVisibleRecommendations;
   return lastVisibleRecommendations;
 };
 
