@@ -1,5 +1,6 @@
 import crypto from 'node:crypto';
 import { transaction } from './db.js';
+import { kaspiOrderIsCollected } from './kaspi-status.js';
 
 // The server became authoritative for marketplace orders on 24 August 2026.
 // Never backfill older rows: some of them were already written by the former
@@ -21,9 +22,7 @@ function isCancelled(market, status, state) {
 function isCollected(market, status, state) {
   if (isCancelled(market, status, state)) return false;
   const s = upper(status), w = upper(state);
-  if (market === 'Kaspi') {
-    return s === 'COMPLETED' || ['KASPI_DELIVERY_ASSEMBLED', 'KASPI_DELIVERY_TRANSIT', 'DELIVERY', 'ARCHIVE'].includes(w);
-  }
+  if (market === 'Kaspi') return kaspiOrderIsCollected(s, w);
   // In WB supplier status COMPLETE means the seller has finished assembly.
   // From that moment the goods are no longer physically on the warehouse shelf.
   return s === 'COMPLETE' || ['SORTED', 'ACCEPTED_BY_CARRIER', 'SENT_TO_CARRIER', 'READY_FOR_PICKUP', 'SOLD'].includes(w);
@@ -128,4 +127,3 @@ export async function reconcileMarketplaceSales(market) {
     return { changed: true, market, sold, unlinked, revision, backupId: String(backup.rows[0].id) };
   });
 }
-

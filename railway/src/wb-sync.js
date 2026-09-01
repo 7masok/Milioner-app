@@ -3,12 +3,16 @@ import { config } from './config.js';
 import { reconcileWbReservations } from './reservation-reconcile.js';
 import { reconcileMarketplaceSales } from './marketplace-sale-reconcile.js';
 import { configuredWbConnectionIds, credentialFor } from './connections.js';
+import { financeRowsFromPayload } from './wb-finance.js';
 
 const WB_API = 'https://marketplace-api.wildberries.ru';
 const WB_FINANCE_API = 'https://finance-api.wildberries.ru';
 const SYNC_MS = 10 * 60 * 1000;
 const TIMEOUT_MS = 25_000;
 const LOOKBACK_DAYS = 14;
+// WB allows only two calls of the financial report-by-period method per 12
+// hours. Orders may still refresh every ten minutes, but finance must not.
+const FINANCE_SYNC_MS = 6 * 60 * 60 * 1000 + 5 * 60 * 1000;
 const inFlight = new Map();
 
 function isoDate(time) {
@@ -102,7 +106,7 @@ async function fetchFinanceRows(token) {
     method: 'POST', headers: { Accept: 'application/json', Authorization: token, 'Content-Type': 'application/json' },
     body: JSON.stringify({ dateFrom, dateTo, limit: 100000, rrdId: 0, period: 'weekly' })
   }, 'WB Finance report');
-  return Array.isArray(data) ? data : Array.isArray(data?.data) ? data.data : [];
+  return financeRowsFromPayload(data);
 }
 
 async function upsertFinance(market, rows) {
@@ -135,7 +139,7 @@ async function upsertFinance(market, rows) {
 }
 
 async function syncFinanceReport(market, token) {
-  const client = await pool.connect(), lockName = `millioner:wb-finance:${market}`, cooldownMs = 90_000;
+  const client = await pool.connect(), lockName = `millioner:wb-finance:${market}`;
   let locked = false;
   try {
     const lock = await client.query('SELECT pg_try_advisory_lock(hashtext($1)) AS locked', [lockName]);
@@ -143,13 +147,13 @@ async function syncFinanceReport(market, token) {
     if (!locked) return { financeItems: 0, financeError: '', financeSkipped: true, financeSkipReason: 'already-running' };
     const latest = await client.query('SELECT started_at FROM wb_finance_sync_runs WHERE market=$1 ORDER BY id DESC LIMIT 1', [market]);
     const lastStartedAt = Number(latest.rows[0]?.started_at || 0), now = Date.now();
-    if (lastStartedAt && now - lastStartedAt < cooldownMs) return { financeItems: 0, financeError: '', financeSkipped: true, financeSkipReason: 'cooldown', financeNextAt: lastStartedAt + cooldownMs };
+    if (lastStartedAt && now - lastStartedAt < FINANCE_SYNC_MS) return { financeItems: 0, financeError: '', financeSkipped: true, financeSkipReason: 'cooldown', financeNextAt: lastStartedAt + FINANCE_SYNC_MS };
     let financeItems = 0, financeError = '', financeOk = 0;
     try { const rows = await fetchFinanceRows(token); financeItems = rows.length; await upsertFinance(market, rows); financeOk = 1; }
     catch (error) { financeError = String(error?.message || error).slice(0, 1000); console.error(`WB finance sync failed (${market})`, error); }
     await client.query(`INSERT INTO wb_finance_sync_runs(market,started_at,finished_at,ok,finance_ok,promotion_ok,finance_items,ad_items,error)
       VALUES($1,$2,$3,$4,$4,0,$5,0,$6)`, [market, now, Date.now(), financeOk, financeItems, financeError]);
-    return { financeItems, financeError, financeSkipped: false, financeNextAt: now + cooldownMs };
+    return { financeItems, financeError, financeSkipped: false, financeNextAt: now + FINANCE_SYNC_MS };
   } finally {
     if (locked) await client.query('SELECT pg_advisory_unlock(hashtext($1))', [lockName]).catch(() => {});
     client.release();
@@ -235,4 +239,3 @@ export function startWbSyncLoop() {
   timer.unref();
   return timer;
 }
-
