@@ -18,9 +18,14 @@ test('reading a stock alert clears only the unread badge, not the active list',(
   assert.equal(context.activeAlertsFrom(rows,{a:{dismissed:true}}).length,1);
 });
 
-test('stock bell uses the same full-batch purchase formula as the purchase plan',()=>{
-  assert.match(source,/fullPurchaseBatchQty\(daily,available,coming,COVER_DAYS\)/);
-  assert.doesNotMatch(source,/target-available-warehouse-coming/);
-  assert.doesNotMatch(source,/x\.buyQty\|\|Math\.ceil/);
-  assert.match(source,/if\(!x\.buyQty\)return alert\('Повторная закупка не нужна/);
+test('stock bell alerts only when sale stock is zero and warehouse stock can be released',()=>{
+  const predicate=lines.find(line=>line.startsWith('function shouldAlertWarehouseRelease('));
+  const context={};
+  vm.runInNewContext(predicate,context);
+  assert.equal(context.shouldAlertWarehouseRelease(0,5),true);
+  assert.equal(context.shouldAlertWarehouseRelease(1,5),false);
+  assert.equal(context.shouldAlertWarehouseRelease(0,0),false);
+  assert.doesNotMatch(source,/openStockAlertPurchase/);
+  assert.doesNotMatch(source,/>Закупить</);
+  assert.match(source,/>Выставить со склада</);
 });

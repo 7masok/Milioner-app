@@ -1,11 +1,9 @@
 (function(){
 'use strict';
-const ALERT_DAYS=1.15;
-const COVER_DAYS=25;
-const LEGACY_HIDDEN_KEY='milioner_low_stock_hidden_v1';
-const LOCAL_SEEN_KEY='milioner_low_stock_seen_v1';
-const SHARED_HIDDEN_KEY='stockAlertDismissals';
-const SHARED_SEEN_KEY='stockAlertAcknowledged';
+const LEGACY_HIDDEN_KEY='milioner_warehouse_release_hidden_v1';
+const LOCAL_SEEN_KEY='milioner_warehouse_release_seen_v1';
+const SHARED_HIDDEN_KEY='warehouseReleaseAlertDismissals';
+const SHARED_SEEN_KEY='warehouseReleaseAlertAcknowledged';
 let lastSignature='';
 let legacyHiddenMigrated=false;
 
@@ -18,8 +16,6 @@ function activeReserved(p){try{return Math.max(0,safeNum(reserved(p)))}catch{ret
 function availableStock(p){try{return Math.max(0,safeNum(productAvailableStock(p)))}catch{return Math.max(0,safeNum(p?.stock)-activeReserved(p))}}
 function atWarehouse(pid){try{return Math.max(0,safeNum(purchaseAtWarehouseQty(pid)))}catch{return 0}}
 function inbound(pid){try{return Math.max(0,safeNum(purchaseInboundQty(pid)))}catch{return 0}}
-function demand(p,days){try{return Math.max(0,safeNum(purchaseDemandQty(p,days)))}catch{return 0}}
-function lastUnitCost(pid){try{return Math.max(0,safeNum(purchaseLastUnitCost(pid)))}catch{return 0}}
 function readLocalMap(key){try{const x=JSON.parse(localStorage.getItem(key)||'{}');return x&&typeof x==='object'&&!Array.isArray(x)?x:{}}catch{return {}}}
 function writeLocalMap(key,value){try{localStorage.setItem(key,JSON.stringify(value||{}))}catch{}}
 function sharedSettings(){try{return state&&state.settings&&typeof state.settings==='object'?state.settings:null}catch{return null}}
@@ -28,25 +24,21 @@ function writeSharedMap(key,value){const settings=sharedSettings();if(!settings)
 function readHidden(){return {...readLocalMap(LEGACY_HIDDEN_KEY),...readSharedMap(SHARED_HIDDEN_KEY)}}
 function migrateLegacyHidden(){if(legacyHiddenMigrated)return;const legacy=readLocalMap(LEGACY_HIDDEN_KEY),ids=Object.keys(legacy),settings=sharedSettings();if(!ids.length||!settings)return;const shared=readSharedMap(SHARED_HIDDEN_KEY),next={...shared};let changed=false;for(const id of ids)if(!next[id]){next[id]=legacy[id];changed=true}legacyHiddenMigrated=true;if(changed)writeSharedMap(SHARED_HIDDEN_KEY,next)}
 function acknowledgeAlerts(alerts){if(!alerts?.length)return;const seen=readSharedMap(SHARED_SEEN_KEY),next={...seen};let changed=false;for(const x of alerts){const id=String(x.p.id);if(!next[id]){next[id]={seen:true,at:Date.now()};changed=true}}if(changed){if(!writeSharedMap(SHARED_SEEN_KEY,next)){const local=readLocalMap(LOCAL_SEEN_KEY);for(const x of alerts)local[String(x.p.id)]={seen:true,at:Date.now()};writeLocalMap(LOCAL_SEEN_KEY,local)}}}
+function shouldAlertWarehouseRelease(available,warehouse){return Math.max(0,Number(available)||0)<=0&&Math.max(0,Number(warehouse)||0)>0}
 
 function stockAlertFor(p){
   if(!p||isBundle(p))return null;
-  const d7=demand(p,7)/7,d25=demand(p,25)/25,daily=Math.max(d7,d25);
-  if(!(daily>0))return null;
-  const available=availableStock(p),days=available/daily;
-  if(days>ALERT_DAYS)return null;
-  const warehouse=atWarehouse(p.id),coming=inbound(p.id),book=Math.max(0,safeNum(p.stock)),reserve=activeReserved(p);
-  const target=Math.ceil(daily*COVER_DAYS),buyQty=typeof fullPurchaseBatchQty==='function'?fullPurchaseBatchQty(daily,available,coming,COVER_DAYS):(coming>=target?0:target);
-  return {p,daily,available,days,warehouse,coming,book,reserve,buyQty,target};
+  const available=availableStock(p),warehouse=atWarehouse(p.id);
+  if(!shouldAlertWarehouseRelease(available,warehouse))return null;
+  const book=Math.max(0,safeNum(p.stock)),reserve=activeReserved(p);
+  return {p,available,warehouse,book,reserve};
 }
-function allAlerts(){return products().map(stockAlertFor).filter(Boolean).sort((a,b)=>a.days-b.days||b.daily-a.daily||String(a.p.name).localeCompare(String(b.p.name),'ru'))}
+function allAlerts(){return products().map(stockAlertFor).filter(Boolean).sort((a,b)=>String(a.p.name).localeCompare(String(b.p.name),'ru'))}
 function activeAlertsFrom(rows,hidden){return (Array.isArray(rows)?rows:[]).filter(x=>!hidden?.[String(x.p.id)])}
 function unreadAlertsFrom(rows,seen){return (Array.isArray(rows)?rows:[]).filter(x=>!seen?.[String(x.p.id)])}
 function activeAlerts(){return activeAlertsFrom(allAlerts(),readHidden())}
 function unreadAlerts(rows=activeAlerts()){const seen={...readLocalMap(LOCAL_SEEN_KEY),...readSharedMap(SHARED_SEEN_KEY)};return unreadAlertsFrom(rows,seen)}
 function forgetResolvedAlerts(rows){const activeIds=new Set((rows||[]).map(x=>String(x.p.id))),shared=readSharedMap(SHARED_SEEN_KEY),local=readLocalMap(LOCAL_SEEN_KEY),nextShared={...shared},nextLocal={...local};let sharedChanged=false,localChanged=false;for(const id of Object.keys(nextShared))if(!activeIds.has(id)){delete nextShared[id];sharedChanged=true}for(const id of Object.keys(nextLocal))if(!activeIds.has(id)){delete nextLocal[id];localChanged=true}if(sharedChanged)writeSharedMap(SHARED_SEEN_KEY,nextShared);if(localChanged)writeLocalMap(LOCAL_SEEN_KEY,nextLocal)}
-function dayText(x){if(!Number.isFinite(x))return '—';if(x<=0)return 'закончился';if(x<0.1)return '< 0,1 дня';return x.toFixed(1).replace('.',',')+' дня'}
-
 function ensureStyle(){if(document.getElementById('stockAlertStyle'))return;const st=document.createElement('style');st.id='stockAlertStyle';st.textContent=`
 .stock-alert-button{position:relative;width:44px;min-width:44px;height:44px;padding:0;border:0;background:transparent;display:inline-flex;align-items:center;justify-content:center;color:#111}
 .stock-alert-button:hover{background:#f4f5f6}.stock-alert-button:active{transform:scale(.96)}
@@ -60,7 +52,7 @@ function ensureStyle(){if(document.getElementById('stockAlertStyle'))return;cons
 function ensureBell(){ensureStyle();const head=document.querySelector('header .headrow');if(!head)return null;let btn=document.getElementById('stockAlertBell');if(btn)return btn;btn=document.createElement('button');btn.id='stockAlertBell';btn.type='button';btn.className='btn stock-alert-button';btn.innerHTML='<svg class="stock-alert-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9"></path><path d="M10 21h4"></path></svg><span id="stockAlertCount" class="stock-alert-count" hidden>0</span>';btn.title='Предупреждения по остаткам';btn.setAttribute('aria-label','Предупреждения по остаткам');btn.onclick=()=>window.openStockAlerts?.();const sync=head.querySelector('button[onclick*="syncNow"]')||head.querySelector('button:last-child');if(sync)head.insertBefore(btn,sync);else head.appendChild(btn);return btn}
 function paintBell(){const btn=ensureBell();if(!btn)return;const active=activeAlerts();forgetResolvedAlerts(active);const unread=unreadAlerts(active),badge=document.getElementById('stockAlertCount'),label=active.length?`Предупреждения по остаткам: ${active.length}, новых: ${unread.length}. Нажмите, чтобы просмотреть.`:'Нет активных предупреждений по остаткам';if(badge){badge.textContent=String(unread.length);badge.hidden=!unread.length}btn.title=label;btn.setAttribute('aria-label',label);btn.style.display='inline-flex';const sig=unread.map(x=>String(x.p.id)).join('|');if(sig!==lastSignature){lastSignature=sig;if(unread.length)btn.animate?.([{transform:'scale(1)'},{transform:'scale(1.08)'},{transform:'scale(1)'}],{duration:260})}}
 function findProduct(pid){try{return prod(pid)}catch{return products().find(p=>String(p.id)===String(pid))||null}}
-function alertCard(x){const pid=String(x.p.id).replace(/'/g,"\\'");const action=x.warehouse>0?`На складе ждёт ввода в продажу: <b>${x.warehouse} шт.</b>`:x.buyQty>0?`Рекомендуется закупить примерно <b>${x.buyQty} шт.</b>`:'Поставка уже в пути';return `<div class="item stock-alert-card" onclick="openStockAlertProduct('${pid}')"><button type="button" class="stock-alert-dismiss" aria-label="Скрыть" title="Скрыть на всех устройствах" onclick="event.stopPropagation();hideStockAlert('${pid}')">×</button><div class="row"><div class="grow"><div class="name">${escText(x.p.name)}</div><div class="muted">Запаса к продаже осталось примерно на ${dayText(x.days)}</div></div><span class="badge bad">${x.available} шт.</span></div><div class="stock-alert-grid"><div class="stock-alert-mini"><div class="label">По учёту в продаже</div><b>${x.book} шт.</b></div><div class="stock-alert-mini"><div class="label">В резерве</div><b>${x.reserve} шт.</b></div><div class="stock-alert-mini"><div class="label">Темп продаж</div><b>${x.daily.toFixed(1)} шт./день</b></div><div class="stock-alert-mini"><div class="label">В пути</div><b>${x.coming} шт.</b></div></div><div class="muted" style="margin-top:9px">${action}. Нажмите, чтобы пересчитать товар и начать инвентаризацию.</div><div class="actions" onclick="event.stopPropagation()">${x.warehouse>0?`<button class="btn" onclick="openStockAlertWarehouse('${pid}')">Со склада</button>`:''}<button class="btn" onclick="openStockAlertPurchase('${pid}')">Закупить</button><button class="btn dark" onclick="openStockAlertProduct('${pid}')">Пересчитать</button></div></div>`}
+function alertCard(x){const pid=String(x.p.id).replace(/'/g,"\\'");return `<div class="item stock-alert-card" onclick="openStockAlertWarehouse('${pid}')"><button type="button" class="stock-alert-dismiss" aria-label="Скрыть" title="Скрыть на всех устройствах" onclick="event.stopPropagation();hideStockAlert('${pid}')">×</button><div class="row"><div class="grow"><div class="name">${escText(x.p.name)}</div><div class="muted">Товар закончился в продаже — выставьте остаток со склада</div></div><span class="badge bad">0 шт.</span></div><div class="stock-alert-grid"><div class="stock-alert-mini"><div class="label">В продаже свободно</div><b>${x.available} шт.</b></div><div class="stock-alert-mini"><div class="label">На складе поставки</div><b>${x.warehouse} шт.</b></div><div class="stock-alert-mini"><div class="label">По учёту</div><b>${x.book} шт.</b></div><div class="stock-alert-mini"><div class="label">В резерве</div><b>${x.reserve} шт.</b></div></div><div class="actions" onclick="event.stopPropagation()"><button class="btn dark" onclick="openStockAlertWarehouse('${pid}')">Выставить со склада</button><button class="btn" onclick="openStockAlertProduct('${pid}')">Пересчитать</button></div></div>`}
 window.openStockAlerts=function(){const alerts=activeAlerts();if(!alerts.length)return alert('Сейчас нет активных предупреждений по остаткам.');acknowledgeAlerts(alerts);paintBell();showSheet(`<h3>Предупреждения по остаткам · ${alerts.length}</h3><div class="link-note">Красный счётчик показывает только новые предупреждения, но здесь всегда видны все активные. Повторное уведомление появится, если дефицит сначала исчезнет, а потом возникнет снова. Крестик × скрывает конкретный товар на всех устройствах.</div>${alerts.map(alertCard).join('')}`)};
 window.hideStockAlert=function(pid){
   if(!findProduct(pid))return;
@@ -80,8 +72,6 @@ function focusProduct(pid){const p=findProduct(pid);if(!p)return false;openView(
 function decorateInventory(pid){const p=findProduct(pid),input=document.getElementById('iq');if(!p||!input)return;const expected=Math.max(0,safeNum(p.stock)),reserve=activeReserved(p),available=availableStock(p),warehouse=atWarehouse(pid);let note=document.getElementById('inventoryExpectedNote');if(!note){note=document.createElement('div');note.id='inventoryExpectedNote';note.className='inventory-diff-note';input.closest('.two')?.insertAdjacentElement('afterend',note)}const update=()=>{const actual=Math.max(0,safeNum(input.value)),diff=actual-expected;note.className='inventory-diff-note '+(diff===0?'ok':'bad');note.innerHTML=`<b>Проверка учёта</b><br>По системе: ${expected} шт. · резерв ${reserve} шт. · свободно ${available} шт.${warehouse?` · отдельно на складе ${warehouse} шт.`:''}<br><b>${diff===0?'Совпадает с учётом':`Расхождение: ${diff>0?'+':''}${diff} шт.`}</b>`};input.addEventListener('input',update);update();input.focus();input.select()}
 window.openStockAlertProduct=function(pid){if(!serverReady())return alert('Дождитесь статуса «онлайн», чтобы безопасно начать инвентаризацию.');closeModal();if(!focusProduct(pid))return;setTimeout(()=>{openModal('inventory',pid);setTimeout(()=>decorateInventory(pid),30)},130)};
 window.openStockAlertWarehouse=function(pid){if(!serverReady())return alert('Дождитесь статуса «онлайн».');closeModal();focusProduct(pid);setTimeout(()=>openProductWarehouseRelease(pid),120)};
-window.openStockAlertPurchase=function(pid){if(!serverReady())return alert('Дождитесь статуса «онлайн».');const x=stockAlertFor(findProduct(pid));if(!x)return;if(!x.buyQty)return alert('Повторная закупка не нужна: в пути уже есть полная партия минимум на 25 дней.');const qty=Math.max(1,x.buyQty);window.pendingPurchaseRecommendations=[{productId:pid,qty,unitCost:lastUnitCost(pid)}];window.pendingPurchaseHint=`Запас примерно на ${dayText(x.days)}; новая полная партия — на ${COVER_DAYS} дней.`;closeModal();openView('purchases',true);setTimeout(()=>openModal('purchase'),100)};
-
 function start(){migrateLegacyHidden();ensureBell();paintBell();setInterval(()=>{migrateLegacyHidden();paintBell()},30000);document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='visible')setTimeout(paintBell,300)});window.addEventListener('focus',()=>setTimeout(paintBell,300))}
 if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',start,{once:true});else start();setTimeout(paintBell,1800);setTimeout(paintBell,5000);
 })();

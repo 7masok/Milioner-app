@@ -31,6 +31,6 @@
   document.head.appendChild(reservationCompat);
 
   const extra=document.createElement('script');
-  extra.src='./stock-alerts-rescue-v1.js?v=20260901-bell-fix';
+  extra.src='./stock-alerts-rescue-v1.js?v=20260901-warehouse-only';
   extra.async=false;
   document.head.appendChild(extra);})();
