@@ -64,7 +64,7 @@
     .ads-compact-card>.ads-compact-traffic{margin-top:3px!important;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:8px;line-height:1.1}
     .ads-compact-card>.ads-compact-settings{display:grid!important;grid-template-columns:minmax(66px,1.05fr) minmax(48px,.65fr) minmax(74px,1fr) minmax(48px,.65fr)!important;gap:4px!important;margin-top:4px!important;align-items:end}
     .ads-compact-settings .field{min-width:0;margin:0!important}
-    .ads-compact-settings .field>label:first-child{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:7px!important;line-height:1;margin-bottom:2px}
+    .ads-compact-settings .field>label:first-child{display:none!important}
     .ads-compact-settings input[type=number],.ads-compact-settings input[type=time]{height:28px!important;min-height:28px!important;padding:3px 5px!important;font-size:10px!important}
     .ads-compact-settings .field>label.row{height:28px!important;min-height:28px!important;padding:3px 5px!important;justify-content:center!important}
     .ads-compact-settings .field>label.row>span{display:none!important}
@@ -115,6 +115,11 @@
         renameLabel(fields[1],'Стоп');
         renameLabel(fields[2],'Запуск');
         renameLabel(fields[3],'Авто');
+        const controlTitles=['Лимит расходов в день, ₸','Остановить по лимиту','Время ежедневного запуска','Запускать по расписанию'];
+        fields.forEach((field,index)=>{
+          const control=field.querySelector('input');
+          if(control&&!control.title)control.title=controlTitles[index]||'';
+        });
       }
       const header=direct.find(el=>el.classList.contains('order-head'));
       const products=header&&header.nextElementSibling;
