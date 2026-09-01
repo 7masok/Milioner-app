@@ -31,6 +31,6 @@
   document.head.appendChild(reservationCompat);
 
   const extra=document.createElement('script');
-  extra.src='./stock-alerts-rescue-v1.js?v=20260822-bell2';
+  extra.src='./stock-alerts-rescue-v1.js?v=20260901-bell-fix';
   extra.async=false;
   document.head.appendChild(extra);})();
