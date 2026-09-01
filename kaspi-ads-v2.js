@@ -64,10 +64,10 @@
     .ads-compact-card>.ads-compact-traffic{margin-top:3px!important;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:8px;line-height:1.1}
     .ads-compact-card>.ads-compact-settings{display:grid!important;grid-template-columns:minmax(66px,1.05fr) minmax(48px,.65fr) minmax(74px,1fr) minmax(48px,.65fr)!important;gap:4px!important;margin-top:4px!important;align-items:end}
     .ads-compact-settings .field{min-width:0;margin:0!important}
-    .ads-compact-settings .field>span:first-child{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:7px!important;line-height:1;margin-bottom:2px}
+    .ads-compact-settings .field>label:first-child{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:7px!important;line-height:1;margin-bottom:2px}
     .ads-compact-settings input[type=number],.ads-compact-settings input[type=time]{height:28px!important;min-height:28px!important;padding:3px 5px!important;font-size:10px!important}
-    .ads-compact-settings .toggle-row{height:28px!important;min-height:28px!important;padding:3px 5px!important;justify-content:center!important}
-    .ads-compact-settings .toggle-row>span{display:none!important}
+    .ads-compact-settings .field>label.row{height:28px!important;min-height:28px!important;padding:3px 5px!important;justify-content:center!important}
+    .ads-compact-settings .field>label.row>span{display:none!important}
     .ads-compact-settings input[type=checkbox]{width:16px!important;height:16px!important;margin:0!important}
     .ads-compact-actions{display:grid;grid-template-columns:1fr 1fr 1fr;gap:4px;margin-top:4px}
     .ads-compact-actions>.btn{width:100%!important;margin:0!important;padding:6px 4px!important;font-size:9px!important;line-height:1.05;white-space:nowrap}
@@ -81,7 +81,7 @@
   document.head.appendChild(style);
 
   function renameLabel(field,shortText){
-    const label=field&&field.querySelector(':scope > span:first-child');
+    const label=field&&field.querySelector(':scope > label:first-child');
     if(!label)return;
     if(!label.title)label.title=label.textContent.trim();
     label.textContent=shortText;
