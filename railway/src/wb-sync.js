@@ -3,11 +3,12 @@ import { config } from './config.js';
 import { reconcileWbReservations } from './reservation-reconcile.js';
 import { reconcileMarketplaceSales } from './marketplace-sale-reconcile.js';
 import { configuredWbConnectionIds, credentialFor } from './connections.js';
-import { financeRowsFromPayload } from './wb-finance.js';
+import { financeRowsFromPayload, promotionCostDay, promotionCostRowsFromPayload } from './wb-finance.js';
 import { syncWbStockMarket } from './wb-stock-sync.js';
 
 const WB_API = 'https://marketplace-api.wildberries.ru';
-const WB_FINANCE_API = 'https://finance-api.wildberries.ru';
+const WB_STATISTICS_API = 'https://statistics-api.wildberries.ru';
+const WB_ADVERT_API = 'https://advert-api.wildberries.ru';
 const SYNC_MS = 10 * 60 * 1000;
 const TIMEOUT_MS = 25_000;
 const LOOKBACK_DAYS = 14;
@@ -103,11 +104,65 @@ async function fetchOrders(market, token) {
 
 async function fetchFinanceRows(token) {
   const dateTo = isoDate(Date.now()), dateFrom = isoDate(Date.now() - 45 * 86_400_000);
-  const data = await requestJson(`${WB_FINANCE_API}/api/finance/v1/sales-reports/detailed`, {
-    method: 'POST', headers: { Accept: 'application/json', Authorization: token, 'Content-Type': 'application/json' },
-    body: JSON.stringify({ dateFrom, dateTo, limit: 100000, rrdId: 0, period: 'weekly' })
-  }, 'WB Finance report');
-  return financeRowsFromPayload(data);
+  const rows = [];
+  let rrdid = 0;
+  for (let page = 0; page < 20; page += 1) {
+    const query = new URLSearchParams({ dateFrom, dateTo, limit: '100000', rrdid: String(rrdid), period: 'weekly' });
+    const data = await requestJson(`${WB_STATISTICS_API}/api/v5/supplier/reportDetailByPeriod?${query}`, {
+      headers: { Accept: 'application/json', Authorization: token }
+    }, 'WB Finance report');
+    const batch = financeRowsFromPayload(data);
+    rows.push(...batch);
+    if (batch.length < 100000) break;
+    const next = Number(value(batch[batch.length - 1], 'rrdId', 'rrd_id')) || 0;
+    if (!next || next === rrdid) break;
+    rrdid = next;
+  }
+  return rows;
+}
+
+async function fetchPromotionCosts(token) {
+  const to = isoDate(Date.now()), from = isoDate(Date.now() - 30 * 86_400_000);
+  const query = new URLSearchParams({ from, to });
+  const data = await requestJson(`${WB_ADVERT_API}/adv/v1/upd?${query}`, {
+    headers: { Accept: 'application/json', Authorization: token }
+  }, 'WB Promotion costs');
+  return promotionCostRowsFromPayload(data);
+}
+
+async function upsertPromotionCosts(market, rows) {
+  if (!rows.length) return { saved: 0, skippedWithoutDate: 0 };
+  const snapshot = await pool.query('SELECT payload FROM wb_ads_snapshots WHERE market=$1', [market]);
+  const campaigns = Array.isArray(snapshot.rows[0]?.payload?.campaigns) ? snapshot.rows[0].payload.campaigns : [];
+  const nmIdsByCampaign = new Map(campaigns.map(row => [String(row.id), [...new Set((row.nmIds || []).map(Number).filter(id => id > 0))]]));
+  const now = Date.now(), client = await pool.connect();
+  let saved = 0, skippedWithoutDate = 0;
+  try {
+    await client.query('BEGIN');
+    for (const row of rows) {
+      const day = promotionCostDay(row);
+      if (!day) { skippedWithoutDate += 1; continue; }
+      const advertId = String(value(row, 'advertId', 'advert_id') || '');
+      if (!advertId) continue;
+      const nmIds = nmIdsByCampaign.get(advertId) || [];
+      await client.query(`INSERT INTO wb_ad_costs
+        (market,day,advert_id,upd_num,amount,campaign,payment_type,nm_ids,raw_json,updated_at)
+        VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+        ON CONFLICT(market,day,advert_id,upd_num) DO UPDATE SET
+          amount=excluded.amount,campaign=excluded.campaign,payment_type=excluded.payment_type,
+          nm_ids=CASE WHEN jsonb_array_length(excluded.nm_ids)>0 THEN excluded.nm_ids ELSE wb_ad_costs.nm_ids END,
+          raw_json=excluded.raw_json,updated_at=excluded.updated_at`, [
+        market, day, advertId, String(value(row, 'updNum', 'upd_num') || '0'),
+        Math.max(0, Number(value(row, 'updSum', 'upd_sum', 'amount')) || 0),
+        String(value(row, 'campName', 'campaign', 'camp_name') || ''),
+        String(value(row, 'paymentType', 'payment_type') || ''), JSON.stringify(nmIds), JSON.stringify(row), now
+      ]);
+      saved += 1;
+    }
+    await client.query('COMMIT');
+    return { saved, skippedWithoutDate };
+  } catch (error) { await client.query('ROLLBACK').catch(() => {}); throw error; }
+  finally { client.release(); }
 }
 
 async function upsertFinance(market, rows) {
@@ -146,15 +201,29 @@ async function syncFinanceReport(market, token) {
     const lock = await client.query('SELECT pg_try_advisory_lock(hashtext($1)) AS locked', [lockName]);
     locked = Boolean(lock.rows[0]?.locked);
     if (!locked) return { financeItems: 0, financeError: '', financeSkipped: true, financeSkipReason: 'already-running' };
-    const latest = await client.query('SELECT started_at FROM wb_finance_sync_runs WHERE market=$1 ORDER BY id DESC LIMIT 1', [market]);
-    const lastStartedAt = Number(latest.rows[0]?.started_at || 0), now = Date.now();
-    if (lastStartedAt && now - lastStartedAt < FINANCE_SYNC_MS) return { financeItems: 0, financeError: '', financeSkipped: true, financeSkipReason: 'cooldown', financeNextAt: lastStartedAt + FINANCE_SYNC_MS };
+    const latest = await client.query('SELECT started_at,finance_ok,promotion_ok FROM wb_finance_sync_runs WHERE market=$1 ORDER BY id DESC LIMIT 1', [market]);
+    const previousRun = latest.rows[0] || {};
+    const lastStartedAt = Number(previousRun.started_at || 0), now = Date.now();
+    const previousRunComplete = Number(previousRun.finance_ok) === 1 && Number(previousRun.promotion_ok) === 1;
+    if (previousRunComplete && lastStartedAt && now - lastStartedAt < FINANCE_SYNC_MS) return { financeItems: 0, financeError: '', financeSkipped: true, financeSkipReason: 'cooldown', financeNextAt: lastStartedAt + FINANCE_SYNC_MS };
     let financeItems = 0, financeError = '', financeOk = 0;
+    let adItems = 0, promotionError = '', promotionOk = 0, adRowsWithoutDate = 0;
     try { const rows = await fetchFinanceRows(token); financeItems = rows.length; await upsertFinance(market, rows); financeOk = 1; }
     catch (error) { financeError = String(error?.message || error).slice(0, 1000); console.error(`WB finance sync failed (${market})`, error); }
+    try {
+      const rows = await fetchPromotionCosts(token);
+      const saved = await upsertPromotionCosts(market, rows);
+      adItems = saved.saved;
+      adRowsWithoutDate = saved.skippedWithoutDate;
+      promotionOk = 1;
+    } catch (error) {
+      promotionError = String(error?.message || error).slice(0, 1000);
+      console.error(`WB promotion cost sync failed (${market})`, error);
+    }
+    const errorText = [financeError, promotionError].filter(Boolean).join(' · ');
     await client.query(`INSERT INTO wb_finance_sync_runs(market,started_at,finished_at,ok,finance_ok,promotion_ok,finance_items,ad_items,error)
-      VALUES($1,$2,$3,$4,$4,0,$5,0,$6)`, [market, now, Date.now(), financeOk, financeItems, financeError]);
-    return { financeItems, financeError, financeSkipped: false, financeNextAt: now + FINANCE_SYNC_MS };
+      VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9)`, [market, now, Date.now(), financeOk && promotionOk ? 1 : 0, financeOk, promotionOk, financeItems, adItems, errorText]);
+    return { financeItems, financeError, adItems, adRowsWithoutDate, promotionError, financeSkipped: false, financeNextAt: now + FINANCE_SYNC_MS };
   } finally {
     if (locked) await client.query('SELECT pg_advisory_unlock(hashtext($1))', [lockName]).catch(() => {});
     client.release();

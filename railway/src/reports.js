@@ -205,7 +205,7 @@ reportsRouter.get('/wb-finance-summary', asyncRoute(async (req, res) => {
     COALESCE(SUM(deduction),0) AS deduction,COALESCE(SUM(penalty),0) AS penalty,
     COALESCE(SUM(additional_payment),0) AS "additionalPayment",COALESCE(SUM(rebill_logistic_cost),0) AS rebill
     FROM wb_finance_rows WHERE market=$1 AND rr_date >= $2 AND rr_date < $3`, [selected, since, until]),
-    pool.query('SELECT finished_at AS "finishedAt",finance_ok AS "financeOk",finance_items AS "financeItems",error FROM wb_finance_sync_runs WHERE market=$1 ORDER BY id DESC LIMIT 1',[selected]),
+    pool.query('SELECT finished_at AS "finishedAt",finance_ok AS "financeOk",promotion_ok AS "promotionOk",finance_items AS "financeItems",ad_items AS "adItems",error FROM wb_finance_sync_runs WHERE market=$1 ORDER BY id DESC LIMIT 1',[selected]),
     pool.query('SELECT finished_at AS "lastSuccessAt",finance_items AS "lastSuccessItems" FROM wb_finance_sync_runs WHERE market=$1 AND finance_ok=1 AND finance_items>0 ORDER BY id DESC LIMIT 1',[selected])]);
   const daysList = [];
   for (let time = since; time < until; time += 86_400_000) daysList.push(dateKey(time));
@@ -224,7 +224,9 @@ reportsRouter.get('/wb-finance-products', asyncRoute(async (req, res) => {
   if (!['WB', 'WB2'].includes(selected)) return res.status(400).json({ ok: false, error: 'market must be WB or WB2' });
   const days = Number(req.query.days || 1);
   const { since, until } = requestPeriodBounds(req);
-  const result = await pool.query(`SELECT f.vendor_code AS "vendorCode",f.nm_id AS "nmId",MAX(f.title) AS title,l.product_id AS "productId",
+  const daysList = [];
+  for (let time = since; time < until; time += 86_400_000) daysList.push(dateKey(time));
+  const [result, adResult] = await Promise.all([pool.query(`SELECT f.vendor_code AS "vendorCode",f.nm_id AS "nmId",MAX(f.title) AS title,l.product_id AS "productId",
     SUM(CASE WHEN trim(f.doc_type)='Продажа' THEN f.qty WHEN trim(f.doc_type)='Возврат' THEN -f.qty ELSE 0 END) AS qty,
     SUM(f.retail_amount) AS "retailAmount",SUM(f.for_pay) AS "forPay",SUM(f.acquiring_fee) AS acquiring,
     SUM(f.delivery_service) AS delivery,SUM(f.paid_storage) AS storage,SUM(f.paid_acceptance) AS acceptance,
@@ -236,12 +238,27 @@ reportsRouter.get('/wb-finance-products', asyncRoute(async (req, res) => {
       ORDER BY CASE WHEN pl.sku=f.vendor_code THEN 0 ELSE 1 END LIMIT 1
     ) l ON TRUE
     WHERE f.market=$1 AND f.rr_date >= $2 AND f.rr_date < $3
-    GROUP BY f.vendor_code,f.nm_id,l.product_id ORDER BY SUM(f.for_pay) DESC`, [selected, since, until]);
+    GROUP BY f.vendor_code,f.nm_id,l.product_id ORDER BY SUM(f.for_pay) DESC`, [selected, since, until]),
+    daysList.length
+      ? pool.query('SELECT amount,nm_ids AS "nmIds" FROM wb_ad_costs WHERE market=$1 AND day=ANY($2::text[])', [selected, daysList])
+      : Promise.resolve({ rows: [] })]);
+  const advertisingByNmId = new Map();
+  let advertising = 0, unmatchedAdvertising = 0;
+  for (const row of adResult.rows) {
+    const amount = Math.max(0, Number(row.amount) || 0);
+    advertising += amount;
+    const ids = Array.isArray(row.nmIds) ? [...new Set(row.nmIds.map(String).filter(Boolean))] : [];
+    if (ids.length !== 1) { unmatchedAdvertising += amount; continue; }
+    advertisingByNmId.set(ids[0], (advertisingByNmId.get(ids[0]) || 0) + amount);
+  }
   const products = result.rows.map(row => {
     const wbCharges = Number(row.acquiring || 0) + Number(row.delivery || 0) + Number(row.storage || 0) + Number(row.acceptance || 0) + Number(row.deduction || 0) + Number(row.penalty || 0) + Number(row.rebill || 0);
-    return { ...row, wbCharges, netBeforeCost: Number(row.forPay || 0) - wbCharges + Number(row.additionalPayment || 0) };
+    const productAdvertising = advertisingByNmId.get(String(row.nmId || '')) || 0;
+    const wbExpenses = Number(row.retailAmount || 0) - Number(row.forPay || 0) + wbCharges;
+    return { ...row, wbCharges, wbExpenses, advertising: productAdvertising,
+      netBeforeCost: Number(row.forPay || 0) - wbCharges + Number(row.additionalPayment || 0) - productAdvertising };
   });
-  res.json({ ok: true, market: selected, days, range: { since, until, timezone: 'Asia/Almaty' }, products, advertising: 0, accountAdvertising: 0 });
+  res.json({ ok: true, market: selected, days, range: { since, until, timezone: 'Asia/Almaty' }, products, advertising, unmatchedAdvertising });
 }));
 
 reportsRouter.get('/wb-dashboard-buyouts', asyncRoute(async (req, res) => {

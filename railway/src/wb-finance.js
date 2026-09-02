@@ -11,3 +11,18 @@ export function financeRowsFromPayload(payload) {
   }
   return [];
 }
+
+export function promotionCostRowsFromPayload(payload) {
+  if (Array.isArray(payload)) return payload;
+  if (!payload || typeof payload !== 'object') return [];
+  for (const key of ['data', 'rows', 'items', 'result']) {
+    if (Array.isArray(payload[key])) return payload[key];
+  }
+  return [];
+}
+
+export function promotionCostDay(row) {
+  const raw = String(row?.updTime ?? row?.upd_time ?? '').trim();
+  const match = raw.match(/^(\d{4}-\d{2}-\d{2})/);
+  return match ? match[1] : '';
+}

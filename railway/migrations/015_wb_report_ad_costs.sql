@@ -1,0 +1,3 @@
+ALTER TABLE wb_ad_costs
+  ADD COLUMN IF NOT EXISTS nm_ids JSONB NOT NULL DEFAULT '[]'::jsonb;
+
