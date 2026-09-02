@@ -2,6 +2,7 @@ import crypto from 'node:crypto';
 import express from 'express';
 import { pool, transaction } from './db.js';
 import { asyncRoute, requireTrustedOrigin, requireWritesEnabled } from './http.js';
+import { stockLedgerViolation } from './warehouse-ledger.js';
 
 export const warehouseRouter = express.Router();
 const MAX_WAREHOUSE_SNAPSHOT_BYTES = 6_000_000;
@@ -23,30 +24,6 @@ function cleanState(input) {
   result.settings = state.settings && typeof state.settings === 'object' && !Array.isArray(state.settings) ? state.settings : {};
   for (const key of DERIVED_CACHE_KEYS) delete result[key];
   return result;
-}
-
-function stockLedgerViolation(previous, next) {
-  const oldState = cleanState(previous), nextState = cleanState(next), cutoff = Date.now() - 45 * 86_400_000;
-  const oldMovements = new Map(oldState.movements.map(row => [String(row?.id || ''), row]).filter(([id]) => id));
-  const nextMovements = new Map(nextState.movements.map(row => [String(row?.id || ''), row]).filter(([id]) => id));
-  const removedRecent = [...oldMovements.values()].filter(row => Number(row?.date || 0) >= cutoff && !nextMovements.has(String(row?.id || '')));
-  if (removedRecent.length) return { reason: 'recent-movement-removed', movementIds: removedRecent.slice(0, 10).map(row => String(row.id)) };
-  const movementDelta = new Map();
-  const ids = new Set([...oldMovements.keys(), ...nextMovements.keys()]);
-  for (const id of ids) {
-    const before = oldMovements.get(id), after = nextMovements.get(id), productId = String(after?.productId || before?.productId || '');
-    if (!productId) continue;
-    const delta = (Number(after?.qty) || 0) - (Number(before?.qty) || 0);
-    movementDelta.set(productId, (movementDelta.get(productId) || 0) + delta);
-  }
-  const oldProducts = new Map(oldState.products.map(row => [String(row?.id || ''), row]).filter(([id]) => id));
-  for (const product of nextState.products) {
-    const id = String(product?.id || ''), before = oldProducts.get(id);
-    if (!id || !before) continue;
-    const stockDelta = (Number(product?.stock) || 0) - (Number(before?.stock) || 0), loggedDelta = movementDelta.get(id) || 0;
-    if (Math.abs(stockDelta - loggedDelta) > 0.000001) return { reason: 'stock-change-without-movement', productId: id, stockDelta, loggedDelta };
-  }
-  return null;
 }
 
 function marketplaceSkus(product, field) {
