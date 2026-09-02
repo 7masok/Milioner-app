@@ -1,7 +1,7 @@
 // Load the warehouse save guard first, then preserved Kaspi helpers.
 (function(){
   const saveGuard=document.createElement('script');
-  saveGuard.src='./save-conflict-v1.js?v=20260820-2353';
+  saveGuard.src='./save-conflict-v1.js?v=20260902-large-warehouse';
   saveGuard.async=false;
   document.head.appendChild(saveGuard);
 

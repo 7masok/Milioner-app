@@ -44,7 +44,11 @@ pushWarehouseToServer=async function(){
       return false;
     }
 
-    if(!response.ok||data.ok===false)throw new Error(data.error||('HTTP '+response.status));
+    if(!response.ok||data.ok===false){
+      const error=new Error(data.error||('HTTP '+response.status));
+      error.status=response.status;
+      throw error;
+    }
 
     warehouseRemoteRevision=Number(data.revision||warehouseRemoteRevision);
     warehouseRemoteUpdatedAt=Number(data.updatedAt||Date.now());
@@ -63,6 +67,10 @@ pushWarehouseToServer=async function(){
   }catch(error){
     console.error('safe warehouse save failed',error);
     markWarehouseDirty();
+    if(Number(error?.status)===413){
+      cloudStatus('склад слишком большой · требуется обновление','bad');
+      return false;
+    }
     cloudStatus('изменения не сохранены · повторяю','warn');
     setTimeout(()=>scheduleWarehouseSave(0),2000);
     return false;

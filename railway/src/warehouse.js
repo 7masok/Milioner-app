@@ -4,6 +4,7 @@ import { pool, transaction } from './db.js';
 import { asyncRoute, requireTrustedOrigin, requireWritesEnabled } from './http.js';
 
 export const warehouseRouter = express.Router();
+const MAX_WAREHOUSE_SNAPSHOT_BYTES = 6_000_000;
 
 // Order feeds are canonical in their own PostgreSQL tables. They must not be
 // kept inside the warehouse document as that creates a growing duplicate cache.
@@ -149,7 +150,7 @@ warehouseRouter.put('/warehouse-state', requireTrustedOrigin, requireWritesEnabl
   const baseRevision = Number(req.body?.baseRevision || 0);
   const state = cleanState(req.body?.state);
   const raw = JSON.stringify(state);
-  if (Buffer.byteLength(raw, 'utf8') > 1_500_000) return res.status(413).json({ ok: false, error: 'Warehouse snapshot is too large' });
+  if (Buffer.byteLength(raw, 'utf8') > MAX_WAREHOUSE_SNAPSHOT_BYTES) return res.status(413).json({ ok: false, error: 'Warehouse snapshot is too large' });
 
   const result = await transaction(async client => {
     await client.query('SELECT pg_advisory_xact_lock($1)', [730021]);
