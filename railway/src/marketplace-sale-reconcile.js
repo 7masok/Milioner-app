@@ -1,6 +1,7 @@
 import crypto from 'node:crypto';
 import { transaction } from './db.js';
 import { kaspiOrderIsCollected } from './kaspi-status.js';
+import { wbOrderIsActive, wbOrderIsCollected } from './wb-status.js';
 
 // The server became authoritative for marketplace orders on 24 August 2026.
 // Never backfill older rows: some of them were already written by the former
@@ -23,9 +24,7 @@ function isCollected(market, status, state) {
   if (isCancelled(market, status, state)) return false;
   const s = upper(status), w = upper(state);
   if (market === 'Kaspi') return kaspiOrderIsCollected(s, w);
-  // In WB supplier status COMPLETE means the seller has finished assembly.
-  // From that moment the goods are no longer physically on the warehouse shelf.
-  return s === 'COMPLETE' || ['SORTED', 'ACCEPTED_BY_CARRIER', 'SENT_TO_CARRIER', 'READY_FOR_PICKUP', 'SOLD'].includes(w);
+  return wbOrderIsCollected(s, w);
 }
 
 function externalKey(market, row) {
@@ -65,6 +64,28 @@ function consumeProduct(state, products, product, qty, label, now) {
   return { unitCost: qty ? totalCost / qty : 0, shortage };
 }
 
+function restorePrematureWbSale(state, products, row, market) {
+  if (market === 'Kaspi' || !wbOrderIsActive(row.status, row.state)) return 0;
+  const key = externalKey(market, row);
+  const matches = state.sales.filter(sale => sale?.serverReconciled === true && String(sale?.externalKey || '') === key);
+  if (!matches.length) return 0;
+  const product = products.get(String(row.product_id || ''));
+  if (!product) return 0;
+  const qty = matches.reduce((sum, sale) => sum + Math.max(0, Number(sale?.qty) || 0), 0);
+  if (!qty) return 0;
+  const targets = components(product).length
+    ? components(product).map(part => ({ product: products.get(part.productId), qty: qty * part.qty }))
+    : [{ product, qty }];
+  for (const target of targets) if (target.product) target.product.stock = Math.max(0, Number(target.product.stock) || 0) + target.qty;
+  const label = `${market} ${String(row.code || row.order_id)}`;
+  state.sales = state.sales.filter(sale => !(sale?.serverReconciled === true && String(sale?.externalKey || '') === key));
+  state.movements = state.movements.filter(movement => !(
+    String(movement?.type || '') === 'продажа' &&
+    String(movement?.extra || '').startsWith(`${label} · собрано на маркетплейсе`)
+  ));
+  return qty;
+}
+
 export async function reconcileMarketplaceSales(market) {
   if (!['Kaspi', 'WB', 'WB2'].includes(market)) throw new Error('Unsupported marketplace');
   return transaction(async client => {
@@ -83,6 +104,8 @@ export async function reconcileMarketplaceSales(market) {
     state.sales = Array.isArray(state.sales) ? state.sales : [];
     state.reservations = Array.isArray(state.reservations) ? state.reservations : [];
     const products = new Map(state.products.map(product => [String(product?.id || ''), product]));
+    let restored = 0;
+    for (const row of rows.rows) restored += restorePrematureWbSale(state, products, row, market);
     const existing = new Set(state.sales.map(sale => String(sale?.externalKey || '')).filter(Boolean));
     let sold = 0, unlinked = 0;
     const now = Date.now();
@@ -115,7 +138,7 @@ export async function reconcileMarketplaceSales(market) {
       existing.add(key);
       sold += qty;
     }
-    if (!sold) return { changed: false, market, sold: 0, unlinked, revision: Number(stored.rows[0].revision || 0) };
+    if (!sold && !restored) return { changed: false, market, sold: 0, restored: 0, unlinked, revision: Number(stored.rows[0].revision || 0) };
     state.movements = state.movements.slice(0, 1000);
     const backup = await client.query(`INSERT INTO warehouse_backups(label,payload,revision,created_at)
       VALUES($1,$2,$3,$4) RETURNING id`, [`before-${market.toLowerCase()}-sale-reconcile`, stored.rows[0].payload, stored.rows[0].revision, now]);
@@ -124,6 +147,6 @@ export async function reconcileMarketplaceSales(market) {
     const sha = crypto.createHash('sha256').update(raw).digest('hex').toUpperCase();
     await client.query('INSERT INTO warehouse_audit(revision,updated_at,payload_sha256,source) VALUES($1,$2,$3,$4)',
       [revision, now, sha, `${market.toLowerCase()}-sale-reconcile`]);
-    return { changed: true, market, sold, unlinked, revision, backupId: String(backup.rows[0].id) };
+    return { changed: true, market, sold, restored, unlinked, revision, backupId: String(backup.rows[0].id) };
   });
 }

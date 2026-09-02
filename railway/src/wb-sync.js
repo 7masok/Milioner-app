@@ -4,6 +4,7 @@ import { reconcileWbReservations } from './reservation-reconcile.js';
 import { reconcileMarketplaceSales } from './marketplace-sale-reconcile.js';
 import { configuredWbConnectionIds, credentialFor } from './connections.js';
 import { financeRowsFromPayload } from './wb-finance.js';
+import { syncWbStockMarket } from './wb-stock-sync.js';
 
 const WB_API = 'https://marketplace-api.wildberries.ru';
 const WB_FINANCE_API = 'https://finance-api.wildberries.ru';
@@ -209,9 +210,16 @@ export async function syncWbOrders(market, { force = false } = {}) {
         console.error(`WB reservation reconciliation failed (${market})`, error);
       }
       const saleReconcile = await reconcileMarketplaceSales(market);
+      let stockSync = null;
+      try {
+        stockSync = await syncWbStockMarket(market, { write: true });
+      } catch (error) {
+        stockSync = { ok: false, market, error: String(error?.message || error) };
+        console.error(`WB stock synchronization failed (${market})`, error);
+      }
       const finishedAt = Date.now();
       await pool.query("UPDATE sync_runs SET finished_at=$1,ok=1,items=$2,error='' WHERE id=$3", [finishedAt, rows.length, runId]);
-      return { ok: true, market, items: rows.length, ...finance, reservationReconcile, saleReconcile, finishedAt, nextSyncAt: finishedAt + SYNC_MS };
+      return { ok: true, market, items: rows.length, ...finance, reservationReconcile, saleReconcile, stockSync, finishedAt, nextSyncAt: finishedAt + SYNC_MS };
     } catch (error) {
       const message = String(error?.message || error).slice(0, 2000);
       await pool.query('UPDATE sync_runs SET finished_at=$1,ok=0,error=$2 WHERE id=$3', [Date.now(), message, runId]).catch(() => {});
