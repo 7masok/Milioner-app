@@ -403,7 +403,7 @@ async function fetchCampaigns(marketName, previous) {
 
 async function rules(marketName) {
   const result = await pool.query(
-    'SELECT campaign_id AS "campaignId",daily_limit AS "dailyLimit",enabled,schedule_enabled AS "scheduleEnabled",start_time AS "startTime",last_scheduled_start_day AS "lastScheduledStartDay",last_checked_at AS "lastCheckedAt",last_action_at AS "lastActionAt",last_action_error AS "lastActionError",auto_paused AS "autoPaused",auto_paused_day AS "autoPausedDay",last_action_type AS "lastActionType" FROM wb_ad_limits WHERE market=$1',
+    'SELECT campaign_id AS "campaignId",daily_limit AS "dailyLimit",enabled,schedule_enabled AS "scheduleEnabled",start_time AS "startTime",last_scheduled_start_day AS "lastScheduledStartDay",last_checked_at AS "lastCheckedAt",last_action_at AS "lastActionAt",last_action_error AS "lastActionError",auto_paused AS "autoPaused",auto_paused_day AS "autoPausedDay",manual_paused AS "manualPaused",last_action_type AS "lastActionType" FROM wb_ad_limits WHERE market=$1',
     [marketName],
   );
   return new Map(result.rows.map(row => [Number(row.campaignId), row]));
@@ -520,7 +520,7 @@ async function publicSnapshot(marketName) {
       .map(row => ({
         ...row,
         name: overrides.get(Number(row.id)) || row.name,
-        rule: configured.get(Number(row.id)) || { dailyLimit: 0, enabled: false, scheduleEnabled: false, startTime: '09:00' },
+        rule: configured.get(Number(row.id)) || { dailyLimit: 0, enabled: false, scheduleEnabled: false, startTime: '09:00', manualPaused: false },
       })),
   };
 }
@@ -577,9 +577,21 @@ wbAdsRouter.post('/promotion/actions/:market/:campaignId', asyncRoute(async (req
   const actionPath = action === 'pause' ? '/adv/v0/pause' : action === 'start' ? '/adv/v0/start' : '/adv/v0/stop';
   await request(ADVERT_API + actionPath + '?id=' + encodeURIComponent(id), token);
   const status = action === 'pause' ? 11 : action === 'start' ? 9 : 7;
+  const now = Date.now();
   await pool.query(
-    "UPDATE wb_ad_limits SET auto_paused=FALSE,auto_paused_day='',last_action_type=$3,last_action_at=$4,last_action_error='' WHERE market=$1 AND campaign_id=$2",
-    [marketName, id, action, Date.now()],
+    `INSERT INTO wb_ad_limits(
+       market,campaign_id,daily_limit,enabled,schedule_enabled,start_time,updated_at,
+       auto_paused,auto_paused_day,manual_paused,last_action_type,last_action_at,last_action_error
+     ) VALUES($1,$2,0,FALSE,FALSE,'09:00',$4,FALSE,'',$3,$5,$4,'')
+     ON CONFLICT(market,campaign_id) DO UPDATE SET
+       auto_paused=FALSE,
+       auto_paused_day='',
+       manual_paused=EXCLUDED.manual_paused,
+       last_action_type=EXCLUDED.last_action_type,
+       last_action_at=EXCLUDED.last_action_at,
+       last_action_error='',
+       updated_at=EXCLUDED.updated_at`,
+    [marketName, id, action === 'pause', now, action],
   );
   await setStoredCampaignStatus(marketName, id, status);
   res.json({ ok: true, market: marketName, campaignId: id, action, status });
@@ -601,6 +613,10 @@ async function enforce(marketName, snapshot, { allowSchedule = true } = {}) {
       [marketName, rule.campaignId, now],
     );
     if (!row) continue;
+
+    // A manual pause is a hard opt-out from every automatic start. It is
+    // cleared only by the explicit "Возобновить" action in the app.
+    if (rule.manualPaused) continue;
 
     // Resume only campaigns paused by this limiter. A campaign paused manually
     // in WB or in the app must remain paused.
