@@ -3,7 +3,7 @@ import { config } from './config.js';
 import { credentialFor } from './connections.js';
 import { pool } from './db.js';
 import { asyncRoute, requireTrustedOrigin } from './http.js';
-import { normalizeWbCard, normalizeWbText } from './wb-variant-normalize.js';
+import { normalizeWbCard, normalizeWbText, wbCardSearchText } from './wb-variant-normalize.js';
 
 const CONTENT_API = 'https://content-api.wildberries.ru';
 const MARKETPLACE_API = 'https://marketplace-api.wildberries.ru';
@@ -99,7 +99,7 @@ wbVariantsRouter.get('/wb-variants', requireTrustedOrigin, asyncRoute(async (req
   if (!token) return res.status(409).json({ ok: false, error: `${market} API key is not configured` });
   const query = normalizeWbText(req.query.query || '');
   let cards = await fetchCatalog(token, market);
-  if (query) cards = cards.filter(card => normalizeWbText([card.title, card.vendorCode, card.nmId, card.color].join(' ')).includes(query));
+  if (query) cards = cards.filter(card => wbCardSearchText(card).includes(query));
   cards = cards.filter(card => card.sizes.length > 1);
   const warehouse = await resolveWarehouse(token, market);
   let stocks = new Map();

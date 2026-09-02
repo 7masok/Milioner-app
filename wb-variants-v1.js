@@ -70,7 +70,64 @@ window.syncWbRingVariants=async function(manual=false){
   }catch(error){if(manual)alert('Не удалось обновить размеры WB1: '+String(error?.message||error));throw error}
 };
 
-const style=document.createElement('style');style.textContent='.variant-group-card{border-left:4px solid #7b2cbf}.variant-group-icon{display:grid;place-items:center;width:44px;height:44px;flex:0 0 44px;border-radius:13px;background:#f3e9ff;color:#6b21a8;font-size:22px}.variant-list{display:flex;flex-direction:column;gap:7px;margin-top:10px}.variant-row{width:100%;display:flex;align-items:center;gap:10px;padding:12px;border:1px solid var(--line);border-radius:14px;background:#fff;text-align:left;color:inherit}.variant-row:active{background:#f5f6f8}';document.head.appendChild(style);
+function variantGroupForCard(card,market){
+  return (state.products||[]).find(product=>isGroup(product)&&String(product.variantMarket||'').toUpperCase()===market&&String(product.variantNmId||'')===String(card.nmId||''));
+}
+function manualVariantGroup(card,market){
+  let group=variantGroupForCard(card,market);if(group)return group;
+  const title=String(card.title||card.vendorCode||'Товар WB').trim();
+  group={id:id(),name:title,category:'',photo:'',kaspi:'',wb:'',wb2:'',ozon:'',min:0,stock:0,cost:0,totalProfit:0,createdAt:Date.now(),kind:'variant-group',variantMarket:market,variantNmId:String(card.nmId||''),variantVendorCode:String(card.vendorCode||'')};
+  group[market==='WB2'?'wb2':'wb']=String(card.vendorCode||'');
+  state.products.push(group);return group;
+}
+function manualVariantProduct(card,size,market){
+  const group=manualVariantGroup(card,market),field=market==='WB2'?'wb2':'wb';
+  let product=(state.products||[]).find(row=>String(row?.variantGroupId||'')===String(group.id)&&(
+    Number(row?.wbVariant?.chrtId||0)===Number(size.chrtId||0)||String(row?.wbVariant?.size||'')===String(size.size||'')
+  ));
+  if(!product){
+    const label=String(size.size||'Без размера');
+    product={id:id(),name:`${group.name} · размер ${label}`,category:group.category||'',photo:group.photo||'',kaspi:'',wb:'',wb2:'',ozon:'',min:0,stock:0,cost:0,totalProfit:0,createdAt:Date.now(),variantGroupId:group.id,variantLabel:`Размер ${label}`};
+    state.products.push(product);
+  }
+  product.variantGroupId=group.id;product.variantLabel=`Размер ${String(size.size||'Без размера')}`;
+  product[field]=String(size.barcode||product[field]||'');
+  const aliasField=field+'Aliases',aliases=[...(Array.isArray(product[aliasField])?product[aliasField]:[]),...(size.barcodes||[])].map(String).filter(Boolean);
+  product[aliasField]=[...new Set(aliases.filter(value=>value!==String(product[field]||'')))];
+  product.wbVariant={market,nmId:String(card.nmId||''),vendorCode:String(card.vendorCode||''),size:String(size.size||''),chrtId:Number(size.chrtId||0),barcode:String(size.barcode||''),wbAmount:Number.isFinite(Number(size.amount))?Number(size.amount):null,checkedAt:Date.now()};
+  return product;
+}
+
+window.choosePendingWbVariant=function(cardIndex,sizeIndex){
+  const link=window.pendingMarketplaceLink,card=window.pendingWbVariantCards?.[Number(cardIndex)],size=card?.sizes?.[Number(sizeIndex)];
+  if(!link||!card||!size)return alert('Размер WB не найден. Обновите список.');
+  const market=String(link.market)==='WB2'?'WB2':'WB',product=manualVariantProduct(card,size,market);
+  if(attachMarketplaceSku(product,market,link.sku||size.barcode,link.feedKey)!==false){closeModal();render()}
+};
+
+window.loadPendingWbVariants=async function(){
+  const link=window.pendingMarketplaceLink,panel=document.getElementById('wbVariantLinkPanel');if(!link||!panel||!['WB','WB2'].includes(String(link.market)))return;
+  panel.innerHTML='<div class="muted">Загружаю размеры и баркоды WB…</div>';
+  try{
+    const response=await fetch(MILLIONER_API+'/api/wb-variants?market='+encodeURIComponent(link.market)+'&query='+encodeURIComponent(link.sku||''),{cache:'no-store'}),data=await response.json().catch(()=>({}));
+    if(!response.ok||!data?.ok)throw new Error(data?.error||('HTTP '+response.status));
+    const cards=Array.isArray(data.cards)?data.cards:[];window.pendingWbVariantCards=cards;
+    if(!cards.length){panel.innerHTML='<div class="muted">Карточка с размерами по этому баркоду не найдена. Можно найти обычный товар по названию ниже.</div>';return}
+    const pendingSku=String(link.sku||'').trim();
+    panel.innerHTML='<b>Выберите размер из карточки WB</b><div class="muted" style="margin-top:3px">Каждый размер сохранится отдельным остатком со своим баркодом.</div>'+cards.map((card,cardIndex)=>`<div class="wb-variant-link-card"><div class="muted">${esc(card.title||card.vendorCode)} · ${esc(card.vendorCode||card.nmId)}</div><div class="wb-variant-link-sizes">${(card.sizes||[]).map((size,sizeIndex)=>{const exact=(size.barcodes||[]).map(String).includes(pendingSku),amount=Number.isFinite(Number(size.amount))?` · WB ${Number(size.amount)} шт.`:'';return `<button type="button" class="btn ${exact?'dark':''}" onclick="choosePendingWbVariant(${cardIndex},${sizeIndex})"><b>${esc(size.size||'Без размера')}</b><span>${esc(size.barcode||'')}${amount}${exact?' · из заказа':''}</span></button>`}).join('')}</div></div>`).join('');
+  }catch(error){panel.innerHTML='<div class="muted" style="color:var(--bad)">Не удалось загрузить размеры WB: '+esc(String(error?.message||error))+'</div><button type="button" class="btn" onclick="loadPendingWbVariants()">Повторить</button>'}
+};
+
+const originalOpenMarketplaceLink=window.openMarketplaceLink;
+if(typeof originalOpenMarketplaceLink==='function')window.openMarketplaceLink=function(market,sku,context='',feedKey='',productName=''){
+  originalOpenMarketplaceLink.apply(this,arguments);
+  if(!['WB','WB2'].includes(String(market)))return;
+  const suggestions=document.getElementById('linkSuggestions');if(!suggestions)return;
+  const panel=document.createElement('div');panel.id='wbVariantLinkPanel';panel.className='item';panel.style.marginBottom='10px';suggestions.before(panel);
+  loadPendingWbVariants();
+};
+
+const style=document.createElement('style');style.textContent='.variant-group-card{border-left:4px solid #7b2cbf}.variant-group-icon{display:grid;place-items:center;width:44px;height:44px;flex:0 0 44px;border-radius:13px;background:#f3e9ff;color:#6b21a8;font-size:22px}.variant-list{display:flex;flex-direction:column;gap:7px;margin-top:10px}.variant-row{width:100%;display:flex;align-items:center;gap:10px;padding:12px;border:1px solid var(--line);border-radius:14px;background:#fff;text-align:left;color:inherit}.variant-row:active{background:#f5f6f8}.wb-variant-link-card{margin-top:8px}.wb-variant-link-sizes{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:5px;margin-top:5px}.wb-variant-link-sizes .btn{margin:0;padding:7px 5px;min-width:0}.wb-variant-link-sizes .btn b,.wb-variant-link-sizes .btn span{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.wb-variant-link-sizes .btn span{font-size:7px;margin-top:2px;opacity:.75}@media(max-width:440px){.wb-variant-link-sizes{grid-template-columns:repeat(2,minmax(0,1fr))}}';document.head.appendChild(style);
 
 function start(){if(typeof state==='undefined'||!state?.settings||typeof warehouseRemoteReady==='undefined'||!warehouseRemoteReady){setTimeout(start,1200);return}syncWbRingVariants(false).catch(()=>setTimeout(start,60_000))}
 setTimeout(start,3500);

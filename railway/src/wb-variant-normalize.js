@@ -2,6 +2,16 @@ export function normalizeWbText(value) {
   return String(value || '').toLocaleLowerCase('ru-RU').replace(/ё/g, 'е').replace(/[^a-zа-я0-9]+/gi, ' ').trim().replace(/\s+/g, ' ');
 }
 
+export function wbCardSearchText(card) {
+  return normalizeWbText([
+    card?.title,
+    card?.vendorCode,
+    card?.nmId,
+    card?.color,
+    ...(Array.isArray(card?.sizes) ? card.sizes.flatMap(size => [size?.size, size?.chrtId, size?.barcode, ...(size?.barcodes || [])]) : [])
+  ].join(' '));
+}
+
 function characteristicText(card, wanted) {
   const hit = (Array.isArray(card?.characteristics) ? card.characteristics : []).find(row => normalizeWbText(row?.name).includes(wanted));
   const value = hit?.value;
@@ -24,4 +34,3 @@ export function normalizeWbCard(card) {
     sizes
   };
 }
-
