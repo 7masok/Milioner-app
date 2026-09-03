@@ -29,6 +29,7 @@ function xmlAttr(tag, name) {
   const m = new RegExp(`\\b${name}\\s*=\\s*(["'])([^"']*)\\1`, 'i').exec(String(tag || ''));
   return m ? xmlDecode(m[2]) : '';
 }
+function xmlText(xml,name){const match=new RegExp(`<${name}\\b[^>]*>([\\s\\S]*?)<\\/${name}>`,'i').exec(String(xml||''));return match?xmlDecode(match[1].replace(/<[^>]*>/g,'').trim()):''}
 function setXmlAttr(tag, name, value) {
   const safe = esc(value);
   const re = new RegExp(`(\\s${name}\\s*=\\s*)(["'])([^"']*)\\2`, 'i');
@@ -90,7 +91,7 @@ function warehouseAvailability(snapshot){
 }
 function templateInfo(rawXml){
   const offers=new Map(),storeIds=new Set(),offerRe=/<offer\b[^>]*\bsku\s*=\s*(["'])([^"']+)\1[^>]*>[\s\S]*?<\/offer>/gi;let match;
-  while((match=offerRe.exec(String(rawXml||'')))){const whole=match[0],sku=xmlDecode(match[2]).trim();if(!sku||offers.has(sku))continue;const stores=new Set(),availabilityRe=/<availability\b[^>]*\bstoreId\s*=\s*(["'])([^"']+)\1[^>]*\/?>/gi;let availability;while((availability=availabilityRe.exec(whole))){const storeId=xmlDecode(availability[2]).trim();if(storeId){stores.add(storeId);storeIds.add(storeId)}}offers.set(sku,{stores})}
+  while((match=offerRe.exec(String(rawXml||'')))){const whole=match[0],sku=xmlDecode(match[2]).trim();if(!sku||offers.has(sku))continue;const stores=new Set(),availabilityRe=/<availability\b[^>]*\bstoreId\s*=\s*(["'])([^"']+)\1[^>]*\/?>/gi;let availability;while((availability=availabilityRe.exec(whole))){const storeId=xmlDecode(availability[2]).trim();if(storeId){stores.add(storeId);storeIds.add(storeId)}}offers.set(sku,{stores,name:xmlText(whole,'model'),brand:xmlText(whole,'brand'),price:Math.max(0,n(xmlText(whole,'price')||xmlText(whole,'cityprice'),0))})}
   return {offers,storeIds:[...storeIds]};
 }
 async function warehouseKaspiRows(){
@@ -171,6 +172,12 @@ stockRouter.get('/stock-sync-status', requireTrustedOrigin, asyncRoute(async (_r
 
 stockRouter.get('/kaspi-live-stock-status',asyncRoute(async (_req,res)=>{const rows=await warehouseKaspiRows();res.json({ok:true,source:'Railway warehouse state minus active reservations',linked:rows.length,positive_stock:rows.filter(row=>row.stock>0).length,zero_stock:rows.filter(row=>row.stock<=0).length})}));
 stockRouter.get('/kaspi-stock-feed-status',requireTrustedOrigin,asyncRoute(async (req,res)=>{res.json(await kaspiStockFeedStatus(req))}));
+stockRouter.get('/kaspi-catalog',requireTrustedOrigin,asyncRoute(async (_req,res)=>{
+  const [template,linkedRows]=await Promise.all([liveTemplate(),warehouseKaspiRows()]),info=templateInfo(String(template?.rawXml||'')),linkedBySku=new Map(linkedRows.map(row=>[row.sku,row.productId])),catalog=new Map();
+  for(const [sku,offer] of info.offers)catalog.set(sku,{sku,name:offer.name||sku,brand:offer.brand||'',price:offer.price||0,linkedProductId:linkedBySku.get(sku)||null});
+  for(const offer of KASPI_RECOVERY_OFFERS)if(!catalog.has(offer.sku))catalog.set(offer.sku,{sku:offer.sku,name:offer.model,brand:'LuxAr',price:offer.price,linkedProductId:linkedBySku.get(offer.sku)||null});
+  res.json({ok:true,products:[...catalog.values()].sort((a,b)=>a.name.localeCompare(b.name,'ru'))});
+}));
 stockRouter.put('/kaspi-price-template',requireTrustedOrigin,asyncRoute(async (req,res)=>{
   const existing=await liveTemplate(),hasXml=typeof req.body?.xml==='string';let rawXml=hasXml?String(req.body.xml||'').trim():String(existing?.rawXml||'');
   if(!rawXml){const error=new Error('Выберите полный XML-прайс Kaspi.');error.status=400;throw error}
