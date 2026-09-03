@@ -1,6 +1,7 @@
 import express from 'express';
 import { pool } from './db.js';
 import { asyncRoute, requireTrustedOrigin } from './http.js';
+import { linkedRecoveryStock } from './kaspi-stock-feed.js';
 
 export const stockRouter = express.Router();
 
@@ -39,6 +40,12 @@ function makeAvailability(storeId, available, stockCount) {
 }
 function normalizeProductName(value){return String(value||'').toLowerCase().replace(/ё/g,'е').replace(/[^a-zа-я0-9]+/gi,' ').trim().replace(/\s+/g,' ')}
 function recoveryProduct(products,model,hints=[]){const target=normalizeProductName(model),named=(products||[]).map(product=>({product,name:normalizeProductName(product?.name)})),matches=named.filter(x=>x.name.length>=4&&(target.includes(x.name)||x.name.includes(target))).sort((a,b)=>b.name.length-a.name.length);if(matches.length&&(!matches[1]||matches[0].name.length!==matches[1].name.length))return matches[0].product;for(const rawHint of hints){const hint=normalizeProductName(rawHint),hintMatches=named.filter(x=>hint&&x.name.includes(hint));if(hintMatches.length===1)return hintMatches[0].product}return null}
+function recoveryOfferStock(offer,rowsBySku,products,availability){
+  const linked=linkedRecoveryStock(offer.sku,rowsBySku);
+  if(linked.found)return linked.stock;
+  const product=recoveryProduct(products,offer.model,offer.hints);
+  return product?Math.max(0,Math.floor(n(availability.available(String(product.id||'')),0))):null;
+}
 
 /* One-time recovery for offers that were archived when the first Railway template contained only 92 items. */
 const KASPI_RECOVERY_OFFERS = [
@@ -111,12 +118,18 @@ async function liveTemplate() {
   return row.rows[0] || null;
 }
 async function liveKaspiXml() {
-  const [template,rows,stateResult]=await Promise.all([liveTemplate(),warehouseKaspiRows(),pool.query('SELECT payload FROM warehouse_state WHERE id=1')]),stocks=new Map(rows.map(row=>[row.sku,row.stock]));
+  const [template,rows,stateResult]=await Promise.all([liveTemplate(),warehouseKaspiRows(),pool.query('SELECT payload FROM warehouse_state WHERE id=1')]),rowsBySku=new Map(rows.map(row=>[row.sku,row])),stocks=new Map(rows.map(row=>[row.sku,row.stock]));
   if(!template?.rawXml){const offers=rows.map(row=>`    <offer sku="${esc(row.sku)}"><stockCount>${row.stock}</stockCount></offer>`).join('\n');return `<?xml version="1.0" encoding="UTF-8"?>\n<kaspi_catalog date="${new Date().toISOString()}">\n  <offers>\n${offers}\n  </offers>\n</kaspi_catalog>`;}
   let raw=String(template.rawXml),info=templateInfo(raw),primaryStoreId=String(template.primaryStoreId||'').trim()||info.storeIds[0]||'';
   if(!primaryStoreId)throw new Error('Kaspi primary store is not configured');
   const snapshot=parsePayload(stateResult.rows[0]?.payload),availability=warehouseAvailability(snapshot),products=[...availability.products.values()],recovered=[];
-  for(const offer of KASPI_RECOVERY_OFFERS){if(info.offers.has(offer.sku))continue;const product=recoveryProduct(products,offer.model,offer.hints);if(!product)continue;const stock=availability.available(String(product.id||''));recovered.push({...offer,stock,storeId:primaryStoreId});stocks.set(offer.sku,stock)}
+  for(const offer of KASPI_RECOVERY_OFFERS){
+    if(info.offers.has(offer.sku))continue;
+    const stock=recoveryOfferStock(offer,rowsBySku,products,availability);
+    if(stock===null)continue;
+    recovered.push({...offer,stock,storeId:primaryStoreId});
+    stocks.set(offer.sku,stock);
+  }
   raw=appendOffers(raw,recovered);
   const offerRe=/<offer\b[^>]*\bsku\s*=\s*(["'])([^"']+)\1[^>]*>[\s\S]*?<\/offer>/gi;
   return raw.replace(offerRe,(whole,_quote,encodedSku)=>{
