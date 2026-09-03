@@ -758,12 +758,38 @@ function renderKaspiStockSetup(status={}) {
   const missing = Array.isArray(status.missingSkus) ? status.missingSkus : [];
   const missingOffers = Array.isArray(status.missingOffers) ? status.missingOffers : [];
   const missingStore = Array.isArray(status.missingPrimaryStore) ? status.missingPrimaryStore : [];
-  const missingList = missingOffers.length ? `<details class="item" style="margin-top:8px"><summary><b>Нет в итоговом XML: ${missingOffers.length}</b></summary><div class="suggestions" style="margin-top:8px">${missingOffers.map(row=>`<div class="suggestion"><b>${esc(row.name||'Без названия')}</b><div class="muted">SKU ${esc(row.sku)} · остаток ${Number(row.stock||0)} шт.${Number(row.price||0)>0?' · '+fmt(Number(row.price)) : ' · цена не указана'}</div></div>`).join('')}</div><div class="link-note">Это только список для контроля. Автоматически товары не привязываются.</div></details>` : '';
+  const missingList = missingOffers.length ? `<details class="item" style="margin-top:8px" open><summary><b>Нет в итоговом XML: ${missingOffers.length}</b></summary><div class="suggestions" style="margin-top:8px">${missingOffers.map(row=>`<div class="suggestion"><b>${esc(row.name||'Без названия')}</b><div class="muted">SKU ${esc(row.sku)} · остаток ${Number(row.stock||0)} шт.${Number(row.price||0)>0?' · '+fmt(Number(row.price)) : ' · цена не указана'}</div><button type="button" class="btn dark full" onclick="openKaspiXmlRepair('${encodeURIComponent(String(row.productId||''))}')">Исправить</button></div>`).join('')}</div></details>` : '';
   const fetchedAt = Number(status.lastFetchedAt||0);
   const fetchInfo = status.configured ? `<div class="link-note">Последнее обращение Kaspi к XML: <b>${fetchedAt?new Date(fetchedAt).toLocaleString('ru-RU'):'ещё не было'}</b>${Number(status.fetchCount||0)?` · загрузок: ${Number(status.fetchCount||0)}`:''}</div>` : '';
   const summary = status.configured ? `<div class="item"><div><b>${status.ready?'XML готов к синхронизации':'XML загружен, нужна настройка'}</b></div><div class="muted" style="margin-top:7px">В исходном XML: ${Number(status.templateOfferCount||0)} · в итоговом: ${Number(status.offerCount||0)} · привязано: ${Number(status.linked||0)} · нет в итоговом XML: ${missing.length}</div>${missingStore.length?`<div class="muted" style="margin-top:5px;color:#a40000">У выбранного склада нет availability у SKU: ${esc(missingStore.slice(0,12).join(', '))}</div>`:''}${status.error?`<div class="muted" style="margin-top:5px;color:#a40000">${esc(status.error)}</div>`:''}</div>${missingList}` : '<div class="link-note">Нужно один раз загрузить <b>полный текущий XML-прайс</b> из Kaspi. Привязанным товарам склад обновляет остаток. Непривязанные позиции сохраняются в XML без изменений и не снимаются с продажи.</div>';
   const feed = status.ready && status.feedUrl ? `<div class="field"><label>Защищённая ссылка для Kaspi</label><input id="kaspiFeedUrl" readonly value="${esc(status.feedUrl)}"></div><button class="btn dark full" onclick="copyKaspiStockFeed()">Скопировать ссылку</button><div class="link-note">В кабинете Kaspi вставьте её: <b>Товары → Загрузить прайс-лист → Автоматическая загрузка</b>. Kaspi будет забирать актуальный XML с нашего склада автоматически.</div>` : '';
   showSheet(`<h3>Остатки Kaspi</h3>${summary}${fetchInfo}${storeControl}<div class="field"><label>${status.configured?'Заменить текущий XML-прайс':'Текущий XML-прайс Kaspi'}</label><input id="kaspiStockXmlFile" type="file" accept=".xml,text/xml,application/xml"></div><button class="btn ${status.configured?'':'dark'} full" onclick="uploadKaspiStockTemplate()">${status.configured?'Загрузить новый XML':'Загрузить XML Kaspi'}</button>${feed}<div class="link-note">Скачать файл: веб-кабинет Kaspi → <b>Управление товарами → Прайс-лист → Скачать в XML</b>.</div>`);
+}
+
+
+function openKaspiXmlRepair(encodedProductId) {
+  const productId=decodeURIComponent(String(encodedProductId||'')),p=prod(productId);
+  if(!p)return alert('Товар не найден на складе. Обновите страницу.');
+  const sku=String(p.kaspi||'').trim();
+  showSheet(`<h3>Исправить XML</h3><div class="item"><b>${esc(p.name||'Без названия')}</b><div class="muted" style="margin-top:5px">Kaspi SKU: ${esc(sku||'—')}</div></div><div class="field"><label>Цена для Kaspi, ₸</label><input id="kaspiRepairPrice" type="number" min="1" step="1" inputmode="numeric" value="${Number(p.kaspiPrice||0)>0?Number(p.kaspiPrice):''}" placeholder="Введите цену"></div><div class="link-note">Цена нужна, чтобы добавить товар в XML. После сохранения она будет передаваться в Kaspi через этот XML.</div><button id="kaspiRepairButton" type="button" class="btn dark full" onclick="saveKaspiXmlRepair('${encodeURIComponent(productId)}')">Сохранить и добавить в XML</button><button type="button" class="btn full" onclick="openKaspiStockSetup()">Назад к отчёту</button>`);
+  setTimeout(()=>document.getElementById('kaspiRepairPrice')?.focus(),50);
+}
+
+async function saveKaspiXmlRepair(encodedProductId) {
+  const productId=decodeURIComponent(String(encodedProductId||'')),p=prod(productId),input=document.getElementById('kaspiRepairPrice'),button=document.getElementById('kaspiRepairButton'),price=Math.round(Number(input?.value)||0);
+  if(!p)return alert('Товар не найден на складе.');
+  if(!String(p.kaspi||'').trim())return alert('У товара не указан Kaspi SKU.');
+  if(price<=0)return alert('Укажите цену больше нуля.');
+  if(button){button.disabled=true;button.textContent='Сохраняю…'}
+  try{
+    p.kaspiPrice=price;save();clearTimeout(warehouseSaveTimer);
+    await pushWarehouseToServer();
+    if(warehouseLocalDirty){await new Promise(resolve=>setTimeout(resolve,400));await pushWarehouseToServer()}
+    await openKaspiStockSetup();
+  }catch(error){
+    alert('Не удалось исправить XML:\n'+String(error.message||error));
+    if(button){button.disabled=false;button.textContent='Сохранить и добавить в XML'}
+  }
 }
 
 async function uploadKaspiStockTemplate() {
