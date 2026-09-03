@@ -36,6 +36,8 @@ test('Kaspi diagnostics exposes named offers missing from the uploaded XML', () 
   const source = readFileSync(new URL('../src/stock.js', import.meta.url), 'utf8');
   assert.match(source, /missingOffers=rows\.filter/);
   assert.match(source, /name:row\.name/);
+  assert.match(source, /automaticOfferFromRow\(row,effective,primaryStoreId\)/);
+  assert.match(source, /effective\.size-info\.offers\.size/);
   assert.match(source, /inXml:true/);
   assert.match(source, /inXml:false/);
 });
