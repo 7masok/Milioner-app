@@ -1,7 +1,7 @@
 import express from 'express';
 import { pool } from './db.js';
 import { asyncRoute, requireTrustedOrigin } from './http.js';
-import { linkedRecoveryStock } from './kaspi-stock-feed.js';
+import { linkedRecoveryStock, normalizedWordsMatch } from './kaspi-stock-feed.js';
 
 export const stockRouter = express.Router();
 
@@ -39,7 +39,7 @@ function makeAvailability(storeId, available, stockCount) {
   return `<availability storeId="${esc(storeId)}" available="${available ? 'yes' : 'no'}" stockCount="${Math.max(0, Math.floor(stockCount))}"/>`;
 }
 function normalizeProductName(value){return String(value||'').toLowerCase().replace(/ё/g,'е').replace(/[^a-zа-я0-9]+/gi,' ').trim().replace(/\s+/g,' ')}
-function recoveryProduct(products,model,hints=[]){const target=normalizeProductName(model),named=(products||[]).map(product=>({product,name:normalizeProductName(product?.name)})),matches=named.filter(x=>x.name.length>=4&&(target.includes(x.name)||x.name.includes(target))).sort((a,b)=>b.name.length-a.name.length);if(matches.length&&(!matches[1]||matches[0].name.length!==matches[1].name.length))return matches[0].product;for(const rawHint of hints){const hint=normalizeProductName(rawHint),hintMatches=named.filter(x=>hint&&x.name.includes(hint));if(hintMatches.length===1)return hintMatches[0].product}return null}
+function recoveryProduct(products,model,hints=[]){const target=normalizeProductName(model),named=(products||[]).map(product=>({product,name:normalizeProductName(product?.name)})),matches=named.filter(x=>x.name.length>=4&&(target.includes(x.name)||x.name.includes(target))).sort((a,b)=>b.name.length-a.name.length);if(matches.length&&(!matches[1]||matches[0].name.length!==matches[1].name.length))return matches[0].product;for(const rawHint of hints){const hintMatches=named.filter(x=>normalizedWordsMatch(x.name,rawHint));if(hintMatches.length===1)return hintMatches[0].product}return null}
 function recoveryOfferStock(offer,rowsBySku,products,availability){
   const linked=linkedRecoveryStock(offer.sku,rowsBySku);
   if(linked.found)return linked.stock;
@@ -51,13 +51,13 @@ function recoveryOfferStock(offer,rowsBySku,products,availability){
 const KASPI_RECOVERY_OFFERS = [
   ['099973580', 'Брелок LuxAr Скелет 7 см металл 1 шт', 790],
   ['521547783', 'Брелок LuxAr Cat Crazy 6 см металл 1 шт', 690, ['cat crazy','кот crazy','кот сумасш','сумасшедш']],
-  ['812896427', 'Брелок LuxAr Рулетка Казино Красный 5 см пластик 1 шт', 990],
+  ['812896427', 'Брелок LuxAr Рулетка Казино Красный 5 см пластик 1 шт', 990, ['рулетка красн']],
   ['514147108', 'Брелок LuxAr Годжо Сатору Черный 13 см текстиль 1 шт', 990],
   ['407734445', 'Брелок LuxAr Wednesday Вещь 5 см силикон 1 шт', 790],
   ['737386976', 'Брелок LuxAr Череп Золотистый 6 см металл 1 шт', 390, ['череп золот']],
-  ['788701897', 'Брелок LuxAr Рулетка Казино Розовый 5 см пластик 1 шт', 990],
+  ['788701897', 'Брелок LuxAr Рулетка Казино Розовый 5 см пластик 1 шт', 990, ['рулетка розов']],
   ['192382685', 'Брелок LuxAr Клавиши 10 см пластик 1 шт', 590, ['клавиш']],
-  ['898332897', 'Брелок LuxAr Рулетка Казино Синий 5 см пластик 1 шт', 990, ['казино син']],
+  ['898332897', 'Брелок LuxAr Рулетка Казино Синий 5 см пластик 1 шт', 990, ['казино син','рулетка син']],
   ['908343573', 'Брелок LuxAr Череп Черный 6 см металл 1 шт', 390]
 ].map(([sku, model, price, hints=[]]) => ({ sku, model, price, hints }));
 

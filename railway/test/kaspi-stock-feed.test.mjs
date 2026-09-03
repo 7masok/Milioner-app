@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { linkedRecoveryStock } from '../src/kaspi-stock-feed.js';
+import { linkedRecoveryStock, normalizedWordsMatch } from '../src/kaspi-stock-feed.js';
 
 test('Kaspi recovery uses the stock of the exact linked SKU before name matching', () => {
   const offer={sku:'737386976',model:'Брелок LuxAr Череп Золотистый 6 см металл 1 шт',hints:['череп золот']};
@@ -15,4 +15,9 @@ test('Kaspi recovery keeps a linked zero stock offer in the feed', () => {
   const rowsBySku=new Map([[offer.sku,{sku:offer.sku,stock:0}]]);
 
   assert.deepEqual(linkedRecoveryStock(offer.sku,rowsBySku),{found:true,stock:0});
+});
+
+test('Kaspi recovery matches a product when descriptive words are in another order', () => {
+  assert.equal(normalizedWordsMatch('Синий брелок рулетка', 'рулетка син'),true);
+  assert.equal(normalizedWordsMatch('Красная рулетка', 'рулетка син'),false);
 });
