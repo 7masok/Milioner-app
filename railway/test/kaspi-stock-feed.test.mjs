@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { linkedRecoveryStock, normalizedWordsMatch } from '../src/kaspi-stock-feed.js';
+import { automaticOfferFromRow, linkedRecoveryStock, rewriteOfferPrice } from '../src/kaspi-stock-feed.js';
 
 test('Kaspi recovery uses the stock of the exact linked SKU before name matching', () => {
   const offer={sku:'737386976',model:'Брелок LuxAr Череп Золотистый 6 см металл 1 шт',hints:['череп золот']};
@@ -17,7 +17,16 @@ test('Kaspi recovery keeps a linked zero stock offer in the feed', () => {
   assert.deepEqual(linkedRecoveryStock(offer.sku,rowsBySku),{found:true,stock:0});
 });
 
-test('Kaspi recovery matches a product when descriptive words are in another order', () => {
-  assert.equal(normalizedWordsMatch('Синий брелок рулетка', 'рулетка син'),true);
-  assert.equal(normalizedWordsMatch('Красная рулетка', 'рулетка син'),false);
+test('a new linked warehouse product becomes a complete Kaspi XML offer', () => {
+  assert.deepEqual(automaticOfferFromRow({sku:'new-1',name:'Новый товар',brand:'LuxAr',price:1590,stock:8},new Set(),'30412942_PP1'),{
+    sku:'new-1',model:'Новый товар',brand:'LuxAr',price:1590,stock:8,storeId:'30412942_PP1'
+  });
+});
+
+test('a new Kaspi offer is not generated without its sale price', () => {
+  assert.equal(automaticOfferFromRow({sku:'new-1',name:'Новый товар',stock:8},new Set(),'store'),null);
+});
+
+test('warehouse Kaspi price replaces both price formats in an existing offer', () => {
+  assert.equal(rewriteOfferPrice('<price>990</price><cityprices><cityprice cityId="750000000">990</cityprice></cityprices>',1290),'<price>1290</price><cityprices><cityprice cityId="750000000">1290</cityprice></cityprices>');
 });

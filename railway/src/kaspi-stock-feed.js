@@ -5,12 +5,17 @@ export function linkedRecoveryStock(sku,rowsBySku){
   return {found:true,stock:Number.isFinite(raw)?Math.max(0,Math.floor(raw)):0};
 }
 
-function normalize(value){return String(value||'').toLowerCase().replace(/ё/g,'е').replace(/[^a-zа-я0-9]+/gi,' ').trim().replace(/\s+/g,' ')}
+export function automaticOfferFromRow(row,existingSkus,storeId){
+  const sku=String(row?.sku||'').trim(),model=String(row?.name||'').trim(),price=Math.max(0,Number(row?.price)||0);
+  if(!sku||!model||!(price>0)||existingSkus.has(sku))return null;
+  return {sku,model,brand:String(row?.brand||'LuxAr'),price,stock:Math.max(0,Math.floor(Number(row?.stock)||0)),storeId:String(storeId||'')};
+}
 
-export function normalizedWordsMatch(value,hintValue){
-  const name=normalize(value),hint=normalize(hintValue);
-  if(!hint)return false;
-  if(name.includes(hint))return true;
-  const words=name.split(' '),tokens=hint.split(' ').filter(x=>x.length>=3);
-  return tokens.length>0&&tokens.every(token=>words.some(word=>word.startsWith(token)||token.startsWith(word)));
+export function rewriteOfferPrice(body,price){
+  const amount=Math.max(0,Number(price)||0);
+  if(!(amount>0))return String(body||'');
+  const value=String(Math.floor(amount));
+  let next=String(body||'').replace(/<price\b([^>]*)>[\s\S]*?<\/price>/gi,(_whole,attrs)=>`<price${attrs}>${value}</price>`);
+  next=next.replace(/<cityprice\b([^>]*)>[\s\S]*?<\/cityprice>/gi,(_whole,attrs)=>`<cityprice${attrs}>${value}</cityprice>`);
+  return next;
 }

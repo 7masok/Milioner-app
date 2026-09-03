@@ -1,7 +1,7 @@
 import express from 'express';
 import { pool } from './db.js';
 import { asyncRoute, requireTrustedOrigin } from './http.js';
-import { linkedRecoveryStock, normalizedWordsMatch } from './kaspi-stock-feed.js';
+import { automaticOfferFromRow, linkedRecoveryStock, rewriteOfferPrice } from './kaspi-stock-feed.js';
 
 export const stockRouter = express.Router();
 
@@ -38,32 +38,28 @@ function setXmlAttr(tag, name, value) {
 function makeAvailability(storeId, available, stockCount) {
   return `<availability storeId="${esc(storeId)}" available="${available ? 'yes' : 'no'}" stockCount="${Math.max(0, Math.floor(stockCount))}"/>`;
 }
-function normalizeProductName(value){return String(value||'').toLowerCase().replace(/ё/g,'е').replace(/[^a-zа-я0-9]+/gi,' ').trim().replace(/\s+/g,' ')}
-function recoveryProduct(products,model,hints=[]){const target=normalizeProductName(model),named=(products||[]).map(product=>({product,name:normalizeProductName(product?.name)})),matches=named.filter(x=>x.name.length>=4&&(target.includes(x.name)||x.name.includes(target))).sort((a,b)=>b.name.length-a.name.length);if(matches.length&&(!matches[1]||matches[0].name.length!==matches[1].name.length))return matches[0].product;for(const rawHint of hints){const hintMatches=named.filter(x=>normalizedWordsMatch(x.name,rawHint));if(hintMatches.length===1)return hintMatches[0].product}return null}
-function recoveryOfferStock(offer,rowsBySku,products,availability){
+function recoveryOfferStock(offer,rowsBySku){
   const linked=linkedRecoveryStock(offer.sku,rowsBySku);
-  if(linked.found)return linked.stock;
-  const product=recoveryProduct(products,offer.model,offer.hints);
-  return product?Math.max(0,Math.floor(n(availability.available(String(product.id||'')),0))):null;
+  return linked.found?linked.stock:null;
 }
 
 /* One-time recovery for offers that were archived when the first Railway template contained only 92 items. */
 const KASPI_RECOVERY_OFFERS = [
   ['099973580', 'Брелок LuxAr Скелет 7 см металл 1 шт', 790],
   ['521547783', 'Брелок LuxAr Cat Crazy 6 см металл 1 шт', 690, ['cat crazy','кот crazy','кот сумасш','сумасшедш']],
-  ['812896427', 'Брелок LuxAr Рулетка Казино Красный 5 см пластик 1 шт', 990, ['рулетка красн']],
+  ['812896427', 'Брелок LuxAr Рулетка Казино Красный 5 см пластик 1 шт', 990],
   ['514147108', 'Брелок LuxAr Годжо Сатору Черный 13 см текстиль 1 шт', 990],
   ['407734445', 'Брелок LuxAr Wednesday Вещь 5 см силикон 1 шт', 790],
   ['737386976', 'Брелок LuxAr Череп Золотистый 6 см металл 1 шт', 390, ['череп золот']],
-  ['788701897', 'Брелок LuxAr Рулетка Казино Розовый 5 см пластик 1 шт', 990, ['рулетка розов']],
+  ['788701897', 'Брелок LuxAr Рулетка Казино Розовый 5 см пластик 1 шт', 990],
   ['192382685', 'Брелок LuxAr Клавиши 10 см пластик 1 шт', 590, ['клавиш']],
-  ['898332897', 'Брелок LuxAr Рулетка Казино Синий 5 см пластик 1 шт', 990, ['казино син','рулетка син']],
+  ['898332897', 'Брелок LuxAr Рулетка Казино Синий 5 см пластик 1 шт', 990],
   ['908343573', 'Брелок LuxAr Череп Черный 6 см металл 1 шт', 390]
 ].map(([sku, model, price, hints=[]]) => ({ sku, model, price, hints }));
 
 function appendOffers(rawXml, offers) {
   if (!offers.length) return rawXml;
-  const xml = offers.map(({ sku, model, price, stock, storeId }) => `    <offer sku="${esc(sku)}"><model>${esc(model)}</model><brand>LuxAr</brand><availabilities>${makeAvailability(storeId, stock > 0, stock)}</availabilities><price>${Math.max(0, Math.floor(price))}</price></offer>`).join('\n');
+  const xml = offers.map(({ sku, model, brand='LuxAr', price, stock, storeId }) => `    <offer sku="${esc(sku)}"><model>${esc(model)}</model><brand>${esc(brand||'LuxAr')}</brand><availabilities>${makeAvailability(storeId, stock > 0, stock)}</availabilities><price>${Math.max(0, Math.floor(price))}</price></offer>`).join('\n');
   return /<\/offers\s*>/i.test(rawXml) ? rawXml.replace(/<\/offers\s*>/i, `${xml}\n  </offers>`) : rawXml;
 }
 
@@ -102,7 +98,7 @@ async function warehouseKaspiRows(){
   const snapshot=parsePayload(stateResult.rows[0]?.payload),availability=warehouseAvailability(snapshot),combined=new Map();
   for(const product of(Array.isArray(snapshot.products)?snapshot.products:[])){
     const productId=String(product?.id||''),aliases=Array.isArray(product?.kaspiAliases)?product.kaspiAliases:[];
-    for(const rawSku of [product?.kaspi,...aliases]){const sku=String(rawSku||'').trim();if(!sku||combined.has(sku))continue;combined.set(sku,{sku,productId,name:String(product?.name||''),stock:availability.available(productId)})}
+    for(const rawSku of [product?.kaspi,...aliases]){const sku=String(rawSku||'').trim();if(!sku||combined.has(sku))continue;combined.set(sku,{sku,productId,name:String(product?.name||''),brand:String(product?.brand||'LuxAr'),price:Math.max(0,n(product?.kaspiPrice,0)),stock:availability.available(productId)})}
   }
   return [...combined.values()].sort((a,b)=>a.sku.localeCompare(b.sku));
 }
@@ -118,25 +114,34 @@ async function liveTemplate() {
   return row.rows[0] || null;
 }
 async function liveKaspiXml() {
-  const [template,rows,stateResult]=await Promise.all([liveTemplate(),warehouseKaspiRows(),pool.query('SELECT payload FROM warehouse_state WHERE id=1')]),rowsBySku=new Map(rows.map(row=>[row.sku,row])),stocks=new Map(rows.map(row=>[row.sku,row.stock]));
+  const [template,rows]=await Promise.all([liveTemplate(),warehouseKaspiRows()]),rowsBySku=new Map(rows.map(row=>[row.sku,row])),stocks=new Map(rows.map(row=>[row.sku,row.stock]));
   if(!template?.rawXml){const offers=rows.map(row=>`    <offer sku="${esc(row.sku)}"><stockCount>${row.stock}</stockCount></offer>`).join('\n');return `<?xml version="1.0" encoding="UTF-8"?>\n<kaspi_catalog date="${new Date().toISOString()}">\n  <offers>\n${offers}\n  </offers>\n</kaspi_catalog>`;}
   let raw=String(template.rawXml),info=templateInfo(raw),primaryStoreId=String(template.primaryStoreId||'').trim()||info.storeIds[0]||'';
   if(!primaryStoreId)throw new Error('Kaspi primary store is not configured');
-  const snapshot=parsePayload(stateResult.rows[0]?.payload),availability=warehouseAvailability(snapshot),products=[...availability.products.values()],recovered=[];
+  const recovered=[];
   for(const offer of KASPI_RECOVERY_OFFERS){
     if(info.offers.has(offer.sku))continue;
-    const stock=recoveryOfferStock(offer,rowsBySku,products,availability);
+    const stock=recoveryOfferStock(offer,rowsBySku);
     if(stock===null)continue;
     recovered.push({...offer,stock,storeId:primaryStoreId});
     stocks.set(offer.sku,stock);
+  }
+  const alreadyRecovered=new Set(recovered.map(offer=>offer.sku)),effectiveSkus=new Set([...info.offers.keys(),...alreadyRecovered]);
+  for(const row of rows){
+    const offer=automaticOfferFromRow(row,effectiveSkus,primaryStoreId);
+    if(!offer)continue;
+    recovered.push(offer);
+    alreadyRecovered.add(offer.sku);
+    effectiveSkus.add(offer.sku);
   }
   raw=appendOffers(raw,recovered);
   const offerRe=/<offer\b[^>]*\bsku\s*=\s*(["'])([^"']+)\1[^>]*>[\s\S]*?<\/offer>/gi;
   return raw.replace(offerRe,(whole,_quote,encodedSku)=>{
     const sku=xmlDecode(encodedSku).trim();if(!stocks.has(sku))return whole;
-    const stock=Math.max(0,stocks.get(sku)||0),openingEnd=whole.indexOf('>');if(openingEnd<0)return whole;
+    const stock=Math.max(0,stocks.get(sku)||0),price=Math.max(0,n(rowsBySku.get(sku)?.price,0)),openingEnd=whole.indexOf('>');if(openingEnd<0)return whole;
     const opening=whole.slice(0,openingEnd+1),body=whole.slice(openingEnd+1,-'</offer>'.length);let foundPrimary=false;
-    const updated=body.replace(/<availability\b[^>]*\/?>/gi,tag=>{const storeId=xmlAttr(tag,'storeId');if(!storeId)return tag;if(storeId===primaryStoreId){foundPrimary=true;return setXmlAttr(setXmlAttr(tag,'available',stock>0?'yes':'no'),'stockCount',String(stock))}return setXmlAttr(setXmlAttr(tag,'available','no'),'stockCount','0')});
+    const availabilityUpdated=body.replace(/<availability\b[^>]*\/?>/gi,tag=>{const storeId=xmlAttr(tag,'storeId');if(!storeId)return tag;if(storeId===primaryStoreId){foundPrimary=true;return setXmlAttr(setXmlAttr(tag,'available',stock>0?'yes':'no'),'stockCount',String(stock))}return setXmlAttr(setXmlAttr(tag,'available','no'),'stockCount','0')});
+    const updated=rewriteOfferPrice(availabilityUpdated,price);
     return `${opening}${foundPrimary?updated:updated+makeAvailability(primaryStoreId,stock>0,stock)}</offer>`;
   });
 }
