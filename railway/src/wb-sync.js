@@ -15,6 +15,9 @@ const LOOKBACK_DAYS = 14;
 // WB allows only two calls of the financial report-by-period method per 12
 // hours. Orders may still refresh every ten minutes, but finance must not.
 const FINANCE_SYNC_MS = 6 * 60 * 60 * 1000 + 5 * 60 * 1000;
+// A failed finance request must not be retried by every ten-minute order sync.
+// WB commonly asks clients to wait close to an hour after HTTP 429.
+const FINANCE_FAILURE_RETRY_MS = 65 * 60 * 1000;
 const inFlight = new Map();
 
 function isoDate(time) {
@@ -205,7 +208,8 @@ async function syncFinanceReport(market, token) {
     const previousRun = latest.rows[0] || {};
     const lastStartedAt = Number(previousRun.started_at || 0), now = Date.now();
     const previousRunComplete = Number(previousRun.finance_ok) === 1 && Number(previousRun.promotion_ok) === 1;
-    if (previousRunComplete && lastStartedAt && now - lastStartedAt < FINANCE_SYNC_MS) return { financeItems: 0, financeError: '', financeSkipped: true, financeSkipReason: 'cooldown', financeNextAt: lastStartedAt + FINANCE_SYNC_MS };
+    const cooldownMs = previousRunComplete ? FINANCE_SYNC_MS : FINANCE_FAILURE_RETRY_MS;
+    if (lastStartedAt && now - lastStartedAt < cooldownMs) return { financeItems: 0, financeError: '', financeSkipped: true, financeSkipReason: previousRunComplete ? 'cooldown' : 'failure-cooldown', financeNextAt: lastStartedAt + cooldownMs };
     let financeItems = 0, financeError = '', financeOk = 0;
     let adItems = 0, promotionError = '', promotionOk = 0, adRowsWithoutDate = 0;
     try { const rows = await fetchFinanceRows(token); financeItems = rows.length; await upsertFinance(market, rows); financeOk = 1; }

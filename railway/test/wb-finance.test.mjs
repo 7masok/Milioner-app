@@ -34,6 +34,15 @@ test('WB synchronization uses official paginated finance and promotion cost meth
   assert.match(source, /INSERT INTO wb_ad_costs/);
   assert.match(source, /previousRun\.finance_ok/);
   assert.match(source, /previousRun\.promotion_ok/);
+  assert.match(source, /FINANCE_FAILURE_RETRY_MS/);
+  assert.match(source, /failure-cooldown/);
+});
+
+test('browser sync avoids five-second warehouse polling and duplicate order loads', () => {
+  const source = readFileSync(new URL('../../cloud-sync-v3.js', import.meta.url), 'utf8');
+  assert.doesNotMatch(source, /setInterval\(\(\)=>pullWarehouseFromServer\(\),5000\)/);
+  assert.match(source, /visibilityState==='visible'/);
+  assert.match(source, /sharedOrderCacheInFlight/);
 });
 
 test('WB product report keeps multi-product advertising unallocated', () => {

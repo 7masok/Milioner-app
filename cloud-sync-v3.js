@@ -156,7 +156,7 @@ bootstrapWarehouseFromServer=async function(){
   }catch(error){warehouseRemoteReady=false;clearWarehouseDirty();setReadOnlyCache(Boolean(fastCached?.state));console.error('server bootstrap failed',error);cloudStatus(fastCached?.state?'сервер недоступен · показаны последние данные':'нет связи с сервером · изменения заблокированы','warn');return {mode:'server-unavailable',error:String(error?.message||error)}}
 };
 startWarehouseServerWatcher=function(){
-  if(warehouseWatchStarted)return;warehouseWatchStarted=true;setInterval(()=>pullWarehouseFromServer(),5000);
+  if(warehouseWatchStarted)return;warehouseWatchStarted=true;setInterval(()=>{if(document.visibilityState==='visible')pullWarehouseFromServer()},20000);
   document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='visible')pullWarehouseFromServer({force:true})});
   window.addEventListener('focus',()=>pullWarehouseFromServer({force:true}));window.addEventListener('online',()=>pullWarehouseFromServer({force:true}));
 };
@@ -244,10 +244,13 @@ function showMarketSyncTimes(){
 }
 const originalLoadSharedOrderCache=window.loadSharedOrderCache;
 if(typeof originalLoadSharedOrderCache==='function'){
+  let sharedOrderCacheInFlight=null;
   window.loadSharedOrderCache=async function(options){
     for(let waited=0;!warehouseRemoteReady&&waited<15000;waited+=50)await sleep(50);
     if(!warehouseRemoteReady)return {error:new Error('warehouse-not-ready')};
-    const result=await originalLoadSharedOrderCache(options);showMarketSyncTimes();restoreOrderMarketUi();setTimeout(restoreOrderMarketUi,100);return result;
+    if(sharedOrderCacheInFlight)return sharedOrderCacheInFlight;
+    sharedOrderCacheInFlight=(async()=>{const result=await originalLoadSharedOrderCache(options);showMarketSyncTimes();restoreOrderMarketUi();setTimeout(restoreOrderMarketUi,100);return result})();
+    try{return await sharedOrderCacheInFlight}finally{sharedOrderCacheInFlight=null}
   };
 }
 window.syncNow=async function(){
