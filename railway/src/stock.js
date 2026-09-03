@@ -106,8 +106,8 @@ async function warehouseKaspiRows(){
 function feedUrl(req){const host=String(req.get('x-forwarded-host')||req.get('host')||'').split(',')[0].trim(),protocol=String(req.get('x-forwarded-proto')||req.protocol||'https').split(',')[0].trim()||'https';return host?`${protocol}://${host}/kaspi/price-list.xml`:''}
 async function kaspiStockFeedStatus(req){
   const [template,rows,access]=await Promise.all([liveTemplate(),warehouseKaspiRows(),pool.query('SELECT last_fetched_at AS "lastFetchedAt",fetch_count AS "fetchCount" FROM kaspi_price_feed_access WHERE id=1').catch(()=>({rows:[]}))]);
-  const rawXml=String(template?.rawXml||''),info=templateInfo(rawXml),primaryStoreId=String(template?.primaryStoreId||'').trim()||info.storeIds[0]||'',effective=new Set(info.offers.keys()),missingSkus=rows.filter(row=>!effective.has(row.sku)).map(row=>row.sku),missingPrimaryStore=primaryStoreId?rows.filter(row=>info.offers.has(row.sku)&&!info.offers.get(row.sku).stores.has(primaryStoreId)).map(row=>row.sku):[],configured=Boolean(rawXml),ready=configured&&Boolean(primaryStoreId);
-  return {ok:true,configured,ready,primaryStoreId,storeIds:info.storeIds,templateOfferCount:info.offers.size,offerCount:effective.size,recoveredOffers:0,linked:rows.length,matched:rows.length-missingSkus.length,missingSkus,missingPrimaryStore,lastFetchedAt:Number(access.rows[0]?.lastFetchedAt||0),fetchCount:Number(access.rows[0]?.fetchCount||0),feedUrl:ready?feedUrl(req):'',error:configured&&!primaryStoreId?'В XML не найден склад Kaspi (availability storeId).':''};
+  const rawXml=String(template?.rawXml||''),info=templateInfo(rawXml),primaryStoreId=String(template?.primaryStoreId||'').trim()||info.storeIds[0]||'',effective=new Set(info.offers.keys()),missingOffers=rows.filter(row=>!effective.has(row.sku)).map(row=>({sku:row.sku,productId:row.productId,name:row.name,stock:row.stock,price:row.price})),missingSkus=missingOffers.map(row=>row.sku),missingPrimaryStore=primaryStoreId?rows.filter(row=>info.offers.has(row.sku)&&!info.offers.get(row.sku).stores.has(primaryStoreId)).map(row=>row.sku):[],configured=Boolean(rawXml),ready=configured&&Boolean(primaryStoreId);
+  return {ok:true,configured,ready,primaryStoreId,storeIds:info.storeIds,templateOfferCount:info.offers.size,offerCount:effective.size,recoveredOffers:0,linked:rows.length,matched:rows.length-missingSkus.length,missingSkus,missingOffers,missingPrimaryStore,lastFetchedAt:Number(access.rows[0]?.lastFetchedAt||0),fetchCount:Number(access.rows[0]?.fetchCount||0),feedUrl:ready?feedUrl(req):'',error:configured&&!primaryStoreId?'В XML не найден склад Kaspi (availability storeId).':''};
 }
 
 async function liveTemplate() {
@@ -174,8 +174,8 @@ stockRouter.get('/kaspi-live-stock-status',asyncRoute(async (_req,res)=>{const r
 stockRouter.get('/kaspi-stock-feed-status',requireTrustedOrigin,asyncRoute(async (req,res)=>{res.json(await kaspiStockFeedStatus(req))}));
 stockRouter.get('/kaspi-catalog',requireTrustedOrigin,asyncRoute(async (_req,res)=>{
   const [template,linkedRows]=await Promise.all([liveTemplate(),warehouseKaspiRows()]),info=templateInfo(String(template?.rawXml||'')),linkedBySku=new Map(linkedRows.map(row=>[row.sku,row.productId])),catalog=new Map();
-  for(const [sku,offer] of info.offers)catalog.set(sku,{sku,name:offer.name||sku,brand:offer.brand||'',price:offer.price||0,linkedProductId:linkedBySku.get(sku)||null});
-  for(const offer of KASPI_RECOVERY_OFFERS)if(!catalog.has(offer.sku))catalog.set(offer.sku,{sku:offer.sku,name:offer.model,brand:'LuxAr',price:offer.price,linkedProductId:linkedBySku.get(offer.sku)||null});
+  for(const [sku,offer] of info.offers)catalog.set(sku,{sku,name:offer.name||sku,brand:offer.brand||'',price:offer.price||0,inXml:true,linkedProductId:linkedBySku.get(sku)||null});
+  for(const offer of KASPI_RECOVERY_OFFERS)if(!catalog.has(offer.sku))catalog.set(offer.sku,{sku:offer.sku,name:offer.model,brand:'LuxAr',price:offer.price,inXml:false,linkedProductId:linkedBySku.get(offer.sku)||null});
   res.json({ok:true,products:[...catalog.values()].sort((a,b)=>a.name.localeCompare(b.name,'ru'))});
 }));
 stockRouter.put('/kaspi-price-template',requireTrustedOrigin,asyncRoute(async (req,res)=>{

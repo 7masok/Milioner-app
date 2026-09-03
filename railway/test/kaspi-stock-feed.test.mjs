@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 
 import { automaticOfferFromRow, linkedRecoveryStock, rewriteOfferPrice } from '../src/kaspi-stock-feed.js';
 
@@ -29,4 +30,12 @@ test('a new Kaspi offer is not generated without its sale price', () => {
 
 test('warehouse Kaspi price replaces both price formats in an existing offer', () => {
   assert.equal(rewriteOfferPrice('<price>990</price><cityprices><cityprice cityId="750000000">990</cityprice></cityprices>',1290),'<price>1290</price><cityprices><cityprice cityId="750000000">1290</cityprice></cityprices>');
+});
+
+test('Kaspi diagnostics exposes named offers missing from the uploaded XML', () => {
+  const source = readFileSync(new URL('../src/stock.js', import.meta.url), 'utf8');
+  assert.match(source, /missingOffers=rows\.filter/);
+  assert.match(source, /name:row\.name/);
+  assert.match(source, /inXml:true/);
+  assert.match(source, /inXml:false/);
 });
