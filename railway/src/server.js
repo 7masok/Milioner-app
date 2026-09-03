@@ -16,6 +16,7 @@ import { authConfig, login, requireAppSession } from './auth.js';
 import { configuredWbConnectionIds, connectionsRouter } from './connections.js';
 import { wbVariantsRouter } from './wb-variants.js';
 import { wbAdsRouter, startWbAdsLimitLoop } from './wb-ads.js';
+import { aiAssistantRouter } from './ai-assistant.js';
 
 assertRuntimeConfig();
 const app = express();
@@ -32,6 +33,7 @@ const frontendFiles = Object.freeze([
   'kaspi-ads-v2-original.js',
   'reservation-compat-v1.js',
   'stock-alerts-rescue-v1.js',
+  'ai-assistant-v1.js',
 ]);
 app.set('trust proxy', 1);
 app.disable('x-powered-by');
@@ -141,6 +143,7 @@ app.use('/api', warehouseRouter);
 app.use('/api', ordersRouter);
 app.use('/api', reportsRouter);
 app.use('/api', stockRouter);
+app.use('/api', aiAssistantRouter);
 // Keep every legacy path used by Kaspi automatic feeds, but serve the XML
 // from the live Railway warehouse source instead of a stale migration snapshot.
 app.get('/kaspi/price-list.xml', kaspiFeedHandler);

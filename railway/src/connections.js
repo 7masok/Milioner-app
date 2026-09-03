@@ -10,7 +10,8 @@ const cache = new Map();
 const BUILTIN_CONNECTIONS = Object.freeze({
   Kaspi: { provider:'KASPI', label:'Kaspi', env:() => config.kaspiToken },
   WB: { provider:'WB', label:'Wildberries 1', env:() => config.wbToken },
-  WB2: { provider:'WB', label:'Wildberries 2', env:() => config.wbToken2 }
+  WB2: { provider:'WB', label:'Wildberries 2', env:() => config.wbToken2 },
+  OPENAI: { provider:'OPENAI', label:'GPT помощник', env:() => process.env.OPENAI_API_KEY }
 });
 
 function vaultKey() {
@@ -74,6 +75,11 @@ async function testToken(provider, token) {
         signal:controller.signal,
         headers:{ Accept:'application/vnd.api+json', 'Content-Type':'application/vnd.api+json', 'X-Auth-Token':token }
       });
+    } else if (provider === 'OPENAI') {
+      response = await fetch('https://api.openai.com/v1/models', {
+        signal:controller.signal,
+        headers:{ Accept:'application/json', Authorization:'Bearer '+token }
+      });
     } else {
       const from = Math.floor((Date.now() - 86_400_000) / 1000);
       response = await fetch('https://marketplace-api.wildberries.ru/api/v3/orders?limit=1&next=0&dateFrom=' + from, {
@@ -129,7 +135,8 @@ connectionsRouter.get('/connections', asyncRoute(async (_req, res) => {
     providers:[
       { id:'WB', label:'Wildberries', canAdd:true, hint:'Можно добавить несколько кабинетов' },
       { id:'KASPI', label:'Kaspi', canAdd:false, hint:'Основной кабинет уже создан' },
-      { id:'OZON', label:'Ozon', canAdd:false, hint:'Серверный коннектор ещё не подключён' }
+      { id:'OZON', label:'Ozon', canAdd:false, hint:'Серверный коннектор ещё не подключён' },
+      { id:'OPENAI', label:'GPT помощник', canAdd:false, hint:'Помощник для склада' }
     ]
   });
 }));
@@ -170,7 +177,7 @@ connectionsRouter.put('/connections/:id', asyncRoute(async (req, res) => {
   const existing = await pool.query('SELECT provider,label FROM marketplace_credentials WHERE id=$1', [id]);
   const slot = BUILTIN_CONNECTIONS[id];
   const provider = String(existing.rows[0]?.provider || slot?.provider || '');
-  if (!provider || !['KASPI','WB'].includes(provider)) {
+  if (!provider || !['KASPI','WB','OPENAI'].includes(provider)) {
     const error = new Error('Этот тип подключения пока не поддерживается');
     error.status = 400;
     throw error;
