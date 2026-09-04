@@ -14,8 +14,18 @@ function cleanMessages(value) {
   })).filter(row => row.content);
 }
 
-function snapshotSummary(payload) {
-  const state = payload && typeof payload === 'object' ? payload : {};
+export function parseWarehousePayload(payload) {
+  if (payload && typeof payload === 'object' && !Array.isArray(payload)) return payload;
+  try {
+    const parsed = JSON.parse(String(payload || '{}'));
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+export function snapshotSummary(payload, orderRows = []) {
+  const state = parseWarehousePayload(payload);
   const reservations = new Map();
   for (const row of Array.isArray(state.reservations) ? state.reservations : []) {
     if (row?.active === false || row?.cancelled) continue;
@@ -25,11 +35,13 @@ function snapshotSummary(payload) {
   const products = (Array.isArray(state.products) ? state.products : []).slice(0, 500).map(p => ({
     id:String(p?.id||''), name:String(p?.name||''), category:String(p?.category||''),
     stock:Number(p?.stock)||0, reserved:reservations.get(String(p?.id||''))||0,
-    cost:Number(p?.cost)||0, kaspi:String(p?.kaspi||''), wb:String(p?.wb||''), wb2:String(p?.wb2||'')
+    minStock:Number(p?.min ?? p?.minStock ?? 0)||0, cost:Number(p?.cost)||0,
+    kaspi:String(p?.kaspi||''), wb:String(p?.wb||''), wb2:String(p?.wb2||''), ozon:String(p?.ozon||'')
   }));
-  const purchases=(Array.isArray(state.purchases)?state.purchases:[]).slice(0,150).map(x=>({productId:String(x?.productId||''),qty:Number(x?.qty)||0,status:String(x?.status||''),date:Number(x?.date||x?.orderedAt||0)||0,unitCost:Number(x?.unitCost)||0}));
-  const sales=(Array.isArray(state.sales)?state.sales:[]).slice(0,250).map(x=>({productId:String(x?.productId||''),qty:Number(x?.qty)||0,date:Number(x?.date||0)||0,market:String(x?.market||'')}));
-  return {generatedAt:new Date().toISOString(),products,purchases,sales};
+  const purchases=(Array.isArray(state.purchases)?state.purchases:[]).slice(0,200).map(x=>({productId:String(x?.productId||''),qty:Number(x?.qty)||0,status:String(x?.status||''),orderedAt:Number(x?.orderedAt||x?.date||0)||0,receivedAt:Number(x?.receivedAt||0)||0,unitCost:Number(x?.unitCost)||0,buyTotal:Number(x?.buyTotal)||0,batch:String(x?.batch||'')}));
+  const sales=(Array.isArray(state.sales)?state.sales:[]).slice(0,400).map(x=>({productId:String(x?.productId||''),qty:Number(x?.qty)||0,date:Number(x?.date||0)||0,market:String(x?.channel||x?.market||''),price:Number(x?.price)||0,fee:Number(x?.fee)||0,cost:Number(x?.cost)||0}));
+  const orders=(Array.isArray(orderRows)?orderRows:[]).slice(0,500).map(x=>({market:String(x?.market||''),orderId:String(x?.order_id||''),status:String(x?.status||''),state:String(x?.state||''),createdAt:Number(x?.creation_date)||0,sku:String(x?.sku||''),name:String(x?.product_name||''),qty:Number(x?.qty)||0,unitPrice:Number(x?.unit_price)||0,totalPrice:Number(x?.total_price)||0}));
+  return {generatedAt:new Date().toISOString(),counts:{products:products.length,purchases:purchases.length,sales:sales.length,orders:orders.length},products,purchases,sales,orders};
 }
 
 function outputText(data) {
@@ -49,11 +61,15 @@ aiAssistantRouter.post('/assistant/chat', requireTrustedOrigin, asyncRoute(async
   recentRequests.set(bucket,now);
   const messages=cleanMessages(req.body?.messages);
   if(!messages.length){const error=new Error('Напишите вопрос');error.status=400;throw error}
-  const result=await pool.query('SELECT payload FROM warehouse_state WHERE id=1');
-  const context=snapshotSummary(result.rows[0]?.payload);
+  const [result,ordersResult]=await Promise.all([
+    pool.query('SELECT payload FROM warehouse_state WHERE id=1'),
+    pool.query(`SELECT market,order_id,status,state,creation_date,sku,product_name,qty,unit_price,total_price
+      FROM marketplace_order_lines ORDER BY creation_date DESC LIMIT 500`)
+  ]);
+  const context=snapshotSummary(result.rows[0]?.payload,ordersResult.rows);
   const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),55_000);
   try{
-    const response=await fetch('https://api.openai.com/v1/responses',{method:'POST',signal:controller.signal,headers:{Authorization:'Bearer '+key,'Content-Type':'application/json'},body:JSON.stringify({model:MODEL,store:false,max_output_tokens:900,instructions:'Ты помощник владельца склада и продавца на Kaspi и Wildberries. Отвечай по-русски, коротко и конкретно. Используй только переданные данные склада; не выдумывай числа. Если данных недостаточно, прямо скажи об этом. Ты пока только анализируешь и советуешь, но не изменяешь склад.',input:[{role:'developer',content:'Текущие данные склада (JSON): '+JSON.stringify(context)},...messages]})});
+    const response=await fetch('https://api.openai.com/v1/responses',{method:'POST',signal:controller.signal,headers:{Authorization:'Bearer '+key,'Content-Type':'application/json'},body:JSON.stringify({model:MODEL,store:false,max_output_tokens:900,instructions:'Ты встроенный помощник владельца этого склада и продавца на Kaspi и Wildberries. Перед каждым ответом тебе автоматически передаются актуальные данные приложения: товары, остатки, резервы, продажи, закупки и последние заказы. Если владелец говорит «смотри на сайте», «посмотри склад» или похожее — анализируй именно эти переданные данные, не проси CSV, Excel, JSON или скриншоты. Отвечай по-русски, коротко и конкретно. Не выдумывай числа. Если конкретного показателя действительно нет в переданных данных, назови ровно какой показатель отсутствует. Ты анализируешь и советуешь, но пока не изменяешь склад.',input:[{role:'developer',content:'Актуальные данные приложения (JSON): '+JSON.stringify(context)},...messages]})});
     const data=await response.json().catch(()=>({}));
     if(!response.ok){const error=new Error(String(data?.error?.message||('OpenAI HTTP '+response.status)));error.status=response.status===429?429:502;throw error}
     const answer=outputText(data);if(!answer)throw new Error('OpenAI вернул пустой ответ');
