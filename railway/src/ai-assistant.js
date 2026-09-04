@@ -69,10 +69,16 @@ aiAssistantRouter.post('/assistant/chat', requireTrustedOrigin, asyncRoute(async
   const context=snapshotSummary(result.rows[0]?.payload,ordersResult.rows);
   const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),55_000);
   try{
-    const response=await fetch('https://api.openai.com/v1/responses',{method:'POST',signal:controller.signal,headers:{Authorization:'Bearer '+key,'Content-Type':'application/json'},body:JSON.stringify({model:MODEL,store:false,max_output_tokens:900,instructions:'Ты встроенный помощник владельца этого склада и продавца на Kaspi и Wildberries. Перед каждым ответом тебе автоматически передаются актуальные данные приложения: товары, остатки, резервы, продажи, закупки и последние заказы. Если владелец говорит «смотри на сайте», «посмотри склад» или похожее — анализируй именно эти переданные данные, не проси CSV, Excel, JSON или скриншоты. Отвечай по-русски, коротко и конкретно. Не выдумывай числа. Если конкретного показателя действительно нет в переданных данных, назови ровно какой показатель отсутствует. Ты анализируешь и советуешь, но пока не изменяешь склад.',input:[{role:'developer',content:'Актуальные данные приложения (JSON): '+JSON.stringify(context)},...messages]})});
+    const response=await fetch('https://api.openai.com/v1/responses',{method:'POST',signal:controller.signal,headers:{Authorization:'Bearer '+key,'Content-Type':'application/json'},body:JSON.stringify({model:MODEL,store:false,max_output_tokens:4000,reasoning:{effort:'low'},text:{verbosity:'low'},instructions:'Ты встроенный помощник владельца этого склада и продавца на Kaspi и Wildberries. Перед каждым ответом тебе автоматически передаются актуальные данные приложения: товары, остатки, резервы, продажи, закупки и последние заказы. Если владелец говорит «смотри на сайте», «посмотри склад» или похожее — анализируй именно эти переданные данные, не проси CSV, Excel, JSON или скриншоты. Отвечай по-русски, коротко и конкретно. Не выдумывай числа. Если конкретного показателя действительно нет в переданных данных, назови ровно какой показатель отсутствует. Ты анализируешь и советуешь, но пока не изменяешь склад.',input:[{role:'developer',content:'Актуальные данные приложения (JSON): '+JSON.stringify(context)},...messages]})});
     const data=await response.json().catch(()=>({}));
     if(!response.ok){const error=new Error(String(data?.error?.message||('OpenAI HTTP '+response.status)));error.status=response.status===429?429:502;throw error}
-    const answer=outputText(data);if(!answer)throw new Error('OpenAI вернул пустой ответ');
+    const answer=outputText(data);
+    if(!answer){
+      const error=new Error(data?.status==='incomplete'&&data?.incomplete_details?.reason==='max_output_tokens'
+        ?'GPT не успел сформировать ответ. Повторите вопрос короче.'
+        :'GPT временно не сформировал ответ. Повторите ещё раз.');
+      error.status=502;throw error;
+    }
     res.json({ok:true,answer,model:MODEL});
   }finally{clearTimeout(timer)}
 }));
