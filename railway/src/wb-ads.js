@@ -299,18 +299,9 @@ async function fetchCampaigns(marketName, previous) {
 
   const previousRows = Array.isArray(previous?.campaigns) ? previous.campaigns : [];
   const previousById = new Map(previousRows.map(row => [Number(row.id), row]));
-  const recoveryIds = [...new Set(previousRows
-    .filter(row => MANAGEABLE_CAMPAIGN_STATUSES.has(Number(row.status)) && row.nameSource !== 'wb')
-    .map(row => Number(row.id))
-    .filter(Boolean))];
-  // WB's seller-wide limiter can currently allow only one promotion request for
-  // a long interval. Recover names directly by known IDs instead of spending the
-  // allowed request on a name-less status list and immediately asking again.
-  let list = campaignRows(await request(
-    recoveryIds.length
-      ? ADVERT_API + '/api/advert/v2/adverts?ids=' + recoveryIds.slice(0, 50).join(',')
-      : ADVERT_API + '/api/advert/v2/adverts?statuses=4,9,11',
-    token,
+  // Always fetch the full manageable set; name recovery must not hide other campaigns.
+  const list = campaignRows(await request(
+    ADVERT_API + '/api/advert/v2/adverts?statuses=4,9,11', token,
   )).filter(row => MANAGEABLE_CAMPAIGN_STATUSES.has(Number(row?.status ?? row?.statusId ?? 0)));
   const unresolvedNames = list.filter(row => !campaignApiName(row));
   if (unresolvedNames.length) {
@@ -326,6 +317,7 @@ async function fetchCampaigns(marketName, previous) {
     .map(campaignId)
     .filter(Boolean))];
   const stats = [];
+  let statsError = null;
   try {
     for (let offset = 0; offset < statIds.length; offset += 50) {
       const ids = statIds.slice(offset, offset + 50);
@@ -336,6 +328,7 @@ async function fetchCampaigns(marketName, previous) {
     }
   } catch (error) {
     // A statistics limit must not discard campaign names already received by ID.
+    statsError = error;
     console.warn('WB ads statistics unavailable', marketName, String(error?.message || error));
   }
 
@@ -367,6 +360,8 @@ async function fetchCampaigns(marketName, previous) {
       // again immediately using yesterday's spend.
       // Show exactly the latest value reported by WB. Keep the non-decreasing
       // maximum separately so a delayed partial response cannot defeat auto-stop.
+      statsStale: !hasFreshStats,
+      statsUpdatedAt: hasFreshStats ? Date.now() : Number(prior?.statsUpdatedAt || 0),
       todaySpend: hasFreshStats ? spend(statRow, day) : (previousIsToday ? Number(prior?.todaySpend || 0) : 0),
       maxTodaySpend: monotonicDailyMetric(
         hasFreshStats ? spend(statRow, day) : 0,
@@ -398,7 +393,7 @@ async function fetchCampaigns(marketName, previous) {
       vendorCodes: [...new Set([...(existing.vendorCodes || []), ...(row.vendorCodes || [])])],
     });
   }
-  return [...unique.values()];
+  return { campaigns: [...unique.values()], statsError };
 }
 
 async function rules(marketName) {
@@ -448,16 +443,15 @@ async function nameOverrides(marketName) {
 }
 
 async function setStoredCampaignStatus(marketName, campaignIdValue, status) {
-  const snapshot = await storedSnapshot(marketName);
-  if (!snapshot) return;
-  const campaigns = snapshot.campaigns.map(row => Number(row.id) === campaignIdValue
-    ? { ...row, status }
-    : row);
-  await saveSnapshot(marketName, {
-    market: marketName,
-    day: snapshot.day,
-    campaigns,
-  });
+  // A status action is not a statistics refresh. Preserve timestamps and cooldown.
+  await pool.query(
+    `UPDATE wb_ads_snapshots SET payload=jsonb_set(payload,'{campaigns}',
+       COALESCE((SELECT jsonb_agg(CASE WHEN (item->>'id')::bigint=$2
+         THEN jsonb_set(item,'{status}',to_jsonb($3::int)) ELSE item END)
+         FROM jsonb_array_elements(payload->'campaigns') item),'[]'::jsonb))
+     WHERE market=$1`,
+    [marketName, campaignIdValue, status],
+  );
 }
 
 async function saveRefreshError(marketName, error) {
@@ -477,11 +471,15 @@ async function refreshMarket(marketName) {
     const previous = await storedSnapshot(marketName);
     if (previous?.nextAttemptAt > Date.now()) return previous;
     try {
-      const campaigns = await fetchCampaigns(marketName, previous);
+      const { campaigns, statsError } = await fetchCampaigns(marketName, previous);
       const saved = await saveSnapshot(marketName, { market: marketName, day: localDate(), campaigns });
       if (!verifiedSnapshots.has(marketName)) {
         verifiedSnapshots.add(marketName);
         console.info('WB ads snapshot updated', marketName, campaigns.map(row => ({ id: row.id, name: row.name, status: row.status })));
+      }
+      if (statsError) {
+        await saveRefreshError(marketName, statsError);
+        return storedSnapshot(marketName);
       }
       return saved;
     } catch (error) {
@@ -597,7 +595,7 @@ wbAdsRouter.post('/promotion/actions/:market/:campaignId', asyncRoute(async (req
   res.json({ ok: true, market: marketName, campaignId: id, action, status });
 }));
 
-async function enforce(marketName, snapshot, { allowSchedule = true } = {}) {
+async function enforce(marketName, snapshot, { allowSchedule = true, allowStarts = true } = {}) {
   const configured = await rules(marketName);
   const enabled = [...configured.values()].filter(row => (row.enabled && Number(row.dailyLimit) > 0) || row.scheduleEnabled);
   if (!enabled.length) return;
@@ -605,6 +603,14 @@ async function enforce(marketName, snapshot, { allowSchedule = true } = {}) {
   const token = await tokenFor(marketName);
   const day = localDate();
   const localClock = new Intl.DateTimeFormat('en-GB', { timeZone: 'Asia/Qyzylorda', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).format(new Date());
+  const snapshotIsToday = snapshot?.day === day;
+  const overLimit = rule => {
+    const row = byId.get(Number(rule.campaignId));
+    return snapshotIsToday && rule.enabled && Number(rule.dailyLimit) > 0 && active(row)
+      && Math.max(Number(row?.todaySpend) || 0, Number(row?.maxTodaySpend) || 0) >= Number(rule.dailyLimit);
+  };
+  // Spend protection runs before starts, even when a later campaign cannot start.
+  enabled.sort((a, b) => Number(overLimit(b)) - Number(overLimit(a)));
   for (const rule of enabled) {
     const row = byId.get(Number(rule.campaignId));
     const now = Date.now();
@@ -620,7 +626,7 @@ async function enforce(marketName, snapshot, { allowSchedule = true } = {}) {
 
     // Resume only campaigns paused by this limiter. A campaign paused manually
     // in WB or in the app must remain paused.
-    if (rule.autoPaused && String(rule.autoPausedDay || '') !== day && !rule.scheduleEnabled) {
+    if (allowStarts && !overLimit(rule) && rule.autoPaused && String(rule.autoPausedDay || '') !== day && !rule.scheduleEnabled) {
       if ([4, 11].includes(Number(row.status))) {
         try {
           await request(ADVERT_API + '/adv/v0/start?id=' + encodeURIComponent(row.id), token);
@@ -635,7 +641,8 @@ async function enforce(marketName, snapshot, { allowSchedule = true } = {}) {
             'UPDATE wb_ad_limits SET last_action_error=$3 WHERE market=$1 AND campaign_id=$2',
             [marketName, row.id, String(error?.message || error).slice(0, 500)],
           );
-          throw error;
+          if (error?.retryAt) await saveRefreshError(marketName, error);
+          continue;
         }
         continue;
       }
@@ -648,7 +655,7 @@ async function enforce(marketName, snapshot, { allowSchedule = true } = {}) {
     }
 
     const scheduledToday = String(rule.lastScheduledStartDay || '') === day;
-    const scheduleDue = allowSchedule && rule.scheduleEnabled && localClock >= String(rule.startTime || '09:00') && !scheduledToday;
+    const scheduleDue = allowStarts && allowSchedule && !overLimit(rule) && rule.scheduleEnabled && localClock >= String(rule.startTime || '09:00') && !scheduledToday;
     if (scheduleDue) {
       // Never undo today's limiter pause. A completed campaign (status 7) is not restartable.
       if (rule.autoPaused && String(rule.autoPausedDay || '') === day) continue;
@@ -669,12 +676,13 @@ async function enforce(marketName, snapshot, { allowSchedule = true } = {}) {
           'UPDATE wb_ad_limits SET last_action_error=$3 WHERE market=$1 AND campaign_id=$2',
           [marketName, row.id, String(error?.message || error).slice(0, 500)],
         );
-        throw error;
+        if (error?.retryAt) await saveRefreshError(marketName, error);
+        continue;
       }
     }
 
     const enforcementSpend = Math.max(Number(row.todaySpend) || 0, Number(row.maxTodaySpend) || 0);
-    if (!rule.enabled || Number(rule.dailyLimit) <= 0 || !active(row) || enforcementSpend < Number(rule.dailyLimit)) continue;
+    if (!snapshotIsToday || !rule.enabled || Number(rule.dailyLimit) <= 0 || !active(row) || enforcementSpend < Number(rule.dailyLimit)) continue;
     try {
       await request(ADVERT_API + '/adv/v0/pause?id=' + encodeURIComponent(row.id), token);
       await pool.query(
@@ -693,6 +701,7 @@ async function enforce(marketName, snapshot, { allowSchedule = true } = {}) {
 }
 
 export function startWbAdsLimitLoop() {
+  const running = new Set();
   const scheduleRetry = (marketName, retryAt) => {
     const at = Number(retryAt || 0);
     if (at <= Date.now()) return;
@@ -708,20 +717,25 @@ export function startWbAdsLimitLoop() {
     console.info('WB ads retry scheduled', marketName, new Date(at).toISOString());
   };
   const runMarket = async marketName => {
+    if (running.has(marketName)) return;
+    running.add(marketName);
     try {
       // Day-boundary actions must not depend on the browser being open.
       // They are checked from the persisted Railway snapshot before refreshing WB.
       const previous = await storedSnapshot(marketName);
-      await enforce(marketName, previous, { allowSchedule: false });
+      await enforce(marketName, previous, { allowSchedule: false, allowStarts: false });
       const snapshot = await refreshMarket(marketName);
+      await enforce(marketName, snapshot, { allowStarts: !snapshot?.lastError });
       if (Number(snapshot?.nextAttemptAt || 0) > Date.now()) {
         scheduleRetry(marketName, snapshot.nextAttemptAt);
         return;
       }
-      await enforce(marketName, snapshot);
+
     } catch (error) {
       console.error('WB ads refresh', marketName, error);
       scheduleRetry(marketName, error?.retryAt);
+    } finally {
+      running.delete(marketName);
     }
   };
   const run = async () => {
