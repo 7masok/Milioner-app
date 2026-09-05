@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import test from 'node:test';
 import vm from 'node:vm';
+import {stockBlock} from '../src/wb-ad-inventory.js';
 
 const source = readFileSync(new URL('../src/wb-ads.js', import.meta.url), 'utf8');
 function harness(configured = []) {
@@ -11,11 +12,11 @@ function harness(configured = []) {
     Date, Intl, URL, AbortController, setTimeout, clearTimeout, setInterval,
     express: { Router: () => ({ get() {}, put() {}, post() {} }) },
     pool: { query: async (sql, args) => { queries.push({ sql, args }); return { rows: configured }; } },
-    config: {}, credentialFor: async () => 'test-token', asyncRoute: fn => fn,
+    stockBlock, config: {}, credentialFor: async () => 'test-token', asyncRoute: fn => fn,
   });
   vm.runInContext(source.replace(/^import .*;\r?\n/gm, '').replace(/export /g, '') + '\nglobalThis.api = { enforce, fetchCampaigns, setStoredCampaignStatus, localDate };', context);
   context.mockRequest = async url => { calls.push(url); return {}; };
-  vm.runInContext('request = (...args) => mockRequest(...args); setStoredCampaignStatus = async () => {};', context);
+  vm.runInContext('request = (...args) => mockRequest(...args); setStoredCampaignStatus = async () => {}; inventoryFor = async (m, rows) => new Map(rows.map(r => [Number(r.id), {known:true, allEmpty:false, allRisky:false}]));', context);
   return { context, api: context.api, calls, queries };
 }
 const limit = (id, extra = {}) => ({ campaignId: id, dailyLimit: 450, enabled: true, ...extra });
@@ -73,4 +74,31 @@ test('status-only writes do not clear refresh errors or advance stats timestamp'
   assert.equal(h.queries.length, 1);
   assert.match(h.queries[0].sql, /UPDATE wb_ads_snapshots SET payload=jsonb_set/);
   assert.doesNotMatch(h.queries[0].sql, /updated_at=|last_error=|next_attempt_at=/);
+});
+
+test('zero stock pauses even without a saved limit rule', async () => {
+  const h=harness();
+  vm.runInContext('inventoryFor = async () => new Map([[1,{known:true,allEmpty:true,allRisky:true}]]);',h.context);
+  await h.api.enforce('WB',{day:h.api.localDate(),campaigns:[campaign(1,9,0)]},{allowStarts:false});
+  assert.equal(h.calls.length,1);assert.match(h.calls[0],/pause\?id=1$/);
+  assert.ok(h.queries.some(q=>q.sql.includes('stock_paused=TRUE')));
+});
+
+test('stock guard blocks scheduled start when inventory is unknown or empty', async () => {
+  for(const stock of [{known:false},{known:true,allEmpty:true}]) {
+    const h=harness([limit(1,{scheduleEnabled:true,startTime:'00:00'})]);
+    h.context.stock=stock;vm.runInContext('inventoryFor = async () => new Map([[1,stock]]);',h.context);
+    await h.api.enforce('WB',{day:h.api.localDate(),campaigns:[campaign(1,11,0)]});
+    assert.equal(h.calls.length,0);
+  }
+});
+
+test('stock pause remains paused after replenishment until manual resume', async () => {
+  const h=harness([limit(1,{stockPaused:true,scheduleEnabled:true,startTime:'00:00'})]);
+  await h.api.enforce('WB',{day:h.api.localDate(),campaigns:[campaign(1,11,0)]});assert.equal(h.calls.length,0);
+});
+
+test('pending manual pause retries even without an enabled daily limit', async () => {
+  const h=harness([limit(1,{manualPaused:true,enabled:false})]);
+  await h.api.enforce('WB',{day:h.api.localDate(),campaigns:[campaign(1,9,0)]});assert.match(h.calls[0],/pause\?id=1$/);
 });

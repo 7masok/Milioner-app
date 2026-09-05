@@ -17,6 +17,6 @@ test('automation cannot resume a manually paused campaign', () => {
 });
 
 test('advertising UI exposes a pause-resume toggle', () => {
-  assert.match(ui, />Пауза<\/button>/);
-  assert.match(ui, />Возобновить<\/button>/);
+  assert.match(ui, /Временно остановить<\/button>/);
+  assert.match(ui, /Возобновить вручную<\/button>/);
 });

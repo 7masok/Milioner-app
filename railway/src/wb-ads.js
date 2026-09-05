@@ -3,6 +3,7 @@ import { pool } from './db.js';
 import { config } from './config.js';
 import { credentialFor } from './connections.js';
 import { asyncRoute } from './http.js';
+import { campaignInventory, parseAdWarehouse, stockBlock } from './wb-ad-inventory.js';
 
 const ADVERT_API = 'https://advert-api.wildberries.ru';
 const CONTENT_API = 'https://content-api.wildberries.ru';
@@ -396,9 +397,19 @@ async function fetchCampaigns(marketName, previous) {
   return { campaigns: [...unique.values()], statsError };
 }
 
+async function inventoryFor(marketName, campaigns) {
+  const [warehouse, orders] = await Promise.all([
+    pool.query('SELECT payload FROM warehouse_state WHERE id=1'),
+    pool.query(`SELECT market,sku,status,state,SUM(qty) AS qty FROM marketplace_order_lines
+      WHERE creation_date >= $1 AND creation_date <= $2 GROUP BY market,sku,status,state`,
+      [Date.now()-25*86400000, Date.now()]),
+  ]);
+  return campaignInventory(parseAdWarehouse(warehouse.rows[0]?.payload), orders.rows, marketName, campaigns);
+}
+
 async function rules(marketName) {
   const result = await pool.query(
-    'SELECT campaign_id AS "campaignId",daily_limit AS "dailyLimit",enabled,schedule_enabled AS "scheduleEnabled",start_time AS "startTime",last_scheduled_start_day AS "lastScheduledStartDay",last_checked_at AS "lastCheckedAt",last_action_at AS "lastActionAt",last_action_error AS "lastActionError",auto_paused AS "autoPaused",auto_paused_day AS "autoPausedDay",manual_paused AS "manualPaused",last_action_type AS "lastActionType" FROM wb_ad_limits WHERE market=$1',
+    'SELECT low_stock_mode AS "lowStockMode",stock_paused AS "stockPaused",campaign_id AS "campaignId",daily_limit AS "dailyLimit",enabled,schedule_enabled AS "scheduleEnabled",start_time AS "startTime",last_scheduled_start_day AS "lastScheduledStartDay",last_checked_at AS "lastCheckedAt",last_action_at AS "lastActionAt",last_action_error AS "lastActionError",auto_paused AS "autoPaused",auto_paused_day AS "autoPausedDay",manual_paused AS "manualPaused",last_action_type AS "lastActionType" FROM wb_ad_limits WHERE market=$1',
     [marketName],
   );
   return new Map(result.rows.map(row => [Number(row.campaignId), row]));
@@ -509,6 +520,7 @@ async function publicSnapshot(marketName) {
     lastError: '',
     nextAttemptAt: 0,
   };
+  const inventory = await inventoryFor(marketName, value.campaigns);
   return {
     ...value,
     cached: true,
@@ -518,6 +530,8 @@ async function publicSnapshot(marketName) {
       .map(row => ({
         ...row,
         name: overrides.get(Number(row.id)) || row.name,
+        inventory: inventory.get(Number(row.id)),
+        startBlocked: stockBlock(inventory.get(Number(row.id)), configured.get(Number(row.id))),
         rule: configured.get(Number(row.id)) || { dailyLimit: 0, enabled: false, scheduleEnabled: false, startTime: '09:00', manualPaused: false },
       })),
   };
@@ -533,17 +547,18 @@ wbAdsRouter.put('/promotion/limits/:market/:campaignId', asyncRoute(async (req, 
   const id = Math.max(0, Number(req.params.campaignId) || 0);
   const limit = Math.max(0, Number(req.body?.dailyLimit) || 0);
   const enabled = Boolean(req.body?.enabled);
+  const lowStockMode = req.body?.lowStockMode === 'pause' ? 'pause' : 'warn';
   const scheduleEnabled = Boolean(req.body?.scheduleEnabled);
   const startTime = /^([01]\d|2[0-3]):[0-5]\d$/.test(String(req.body?.startTime || '')) ? String(req.body.startTime) : '09:00';
   if (!allowed(marketName) || !id) throw new Error('Неверная кампания');
   await pool.query(
-    `INSERT INTO wb_ad_limits(market,campaign_id,daily_limit,enabled,schedule_enabled,start_time,updated_at)
-     VALUES($1,$2,$3,$4,$5,$6,$7)
+    `INSERT INTO wb_ad_limits(market,campaign_id,daily_limit,enabled,schedule_enabled,start_time,updated_at,low_stock_mode)
+     VALUES($1,$2,$3,$4,$5,$6,$7,$8)
      ON CONFLICT(market,campaign_id)
-     DO UPDATE SET daily_limit=excluded.daily_limit,enabled=excluded.enabled,schedule_enabled=excluded.schedule_enabled,start_time=excluded.start_time,updated_at=excluded.updated_at,
+     DO UPDATE SET daily_limit=excluded.daily_limit,enabled=excluded.enabled,schedule_enabled=excluded.schedule_enabled,start_time=excluded.start_time,low_stock_mode=excluded.low_stock_mode,updated_at=excluded.updated_at,
        auto_paused=CASE WHEN excluded.enabled THEN wb_ad_limits.auto_paused ELSE FALSE END,
        auto_paused_day=CASE WHEN excluded.enabled THEN wb_ad_limits.auto_paused_day ELSE '' END`,
-    [marketName, id, limit, enabled, scheduleEnabled, startTime, Date.now()],
+    [marketName, id, limit, enabled, scheduleEnabled, startTime, Date.now(), lowStockMode],
   );
   res.json({ ok: true, market: marketName, campaignId: id, dailyLimit: limit, enabled, scheduleEnabled, startTime });
 }));
@@ -561,7 +576,7 @@ wbAdsRouter.post('/promotion/actions/:market/:campaignId', asyncRoute(async (req
   const snapshot = await storedSnapshot(marketName);
   const campaign = snapshot?.campaigns.find(row => Number(row.id) === id);
   const currentStatus = Number(campaign?.status || 0);
-  const canPause = action === 'pause' && currentStatus === 9;
+  const canPause = action === 'pause' && [4, 9, 11].includes(currentStatus);
   const canStart = action === 'start' && [4, 11].includes(currentStatus);
   const canStop = action === 'stop' && [4, 9, 11].includes(currentStatus);
   if (!canPause && !canStart && !canStop) {
@@ -570,11 +585,21 @@ wbAdsRouter.post('/promotion/actions/:market/:campaignId', asyncRoute(async (req
     throw error;
   }
 
+  if (action === 'start') {
+    const [inventory, configured] = await Promise.all([inventoryFor(marketName, [campaign]), rules(marketName)]);
+    const reason = stockBlock(inventory.get(id), configured.get(id));
+    if (reason) { const error = new Error(reason); error.status = 409; throw error; }
+  }
+  // Persist the user's pause intent even if WB is temporarily unavailable.
+  if (action === 'pause') await pool.query(
+    `INSERT INTO wb_ad_limits(market,campaign_id,daily_limit,enabled,updated_at,manual_paused)
+     VALUES($1,$2,0,FALSE,$3,TRUE) ON CONFLICT(market,campaign_id)
+     DO UPDATE SET manual_paused=TRUE,updated_at=EXCLUDED.updated_at`, [marketName,id,Date.now()]);
   const token = await tokenFor(marketName);
   if (!token) throw new Error((marketName === 'WB2' ? 'WB_TOKEN_2' : 'WB_TOKEN') + ' не настроен');
   const actionPath = action === 'pause' ? '/adv/v0/pause' : action === 'start' ? '/adv/v0/start' : '/adv/v0/stop';
-  await request(ADVERT_API + actionPath + '?id=' + encodeURIComponent(id), token);
-  const status = action === 'pause' ? 11 : action === 'start' ? 9 : 7;
+  if (action !== 'pause' || currentStatus === 9) await request(ADVERT_API + actionPath + '?id=' + encodeURIComponent(id), token);
+  const status = action === 'pause' ? (currentStatus === 4 ? 4 : 11) : action === 'start' ? 9 : 7;
   const now = Date.now();
   await pool.query(
     `INSERT INTO wb_ad_limits(
@@ -585,6 +610,7 @@ wbAdsRouter.post('/promotion/actions/:market/:campaignId', asyncRoute(async (req
        auto_paused=FALSE,
        auto_paused_day='',
        manual_paused=EXCLUDED.manual_paused,
+       stock_paused=FALSE,
        last_action_type=EXCLUDED.last_action_type,
        last_action_at=EXCLUDED.last_action_at,
        last_action_error='',
@@ -596,8 +622,11 @@ wbAdsRouter.post('/promotion/actions/:market/:campaignId', asyncRoute(async (req
 }));
 
 async function enforce(marketName, snapshot, { allowSchedule = true, allowStarts = true } = {}) {
-  const configured = await rules(marketName);
-  const enabled = [...configured.values()].filter(row => (row.enabled && Number(row.dailyLimit) > 0) || row.scheduleEnabled);
+  const [configured, inventory] = await Promise.all([rules(marketName), inventoryFor(marketName, snapshot?.campaigns || [])]);
+  // Zero-stock protection also applies to campaigns without saved budget rules.
+  for (const campaign of snapshot?.campaigns || []) if (!configured.has(Number(campaign.id)))
+    configured.set(Number(campaign.id), { campaignId: Number(campaign.id), lowStockMode: 'warn' });
+  const enabled = [...configured.values()];
   if (!enabled.length) return;
   const byId = new Map((snapshot?.campaigns || []).map(row => [Number(row.id), row]));
   const token = await tokenFor(marketName);
@@ -610,7 +639,7 @@ async function enforce(marketName, snapshot, { allowSchedule = true, allowStarts
       && Math.max(Number(row?.todaySpend) || 0, Number(row?.maxTodaySpend) || 0) >= Number(rule.dailyLimit);
   };
   // Spend protection runs before starts, even when a later campaign cannot start.
-  enabled.sort((a, b) => Number(overLimit(b)) - Number(overLimit(a)));
+  enabled.sort((a, b) => Number(overLimit(b) || inventory.get(Number(b.campaignId))?.allEmpty) - Number(overLimit(a) || inventory.get(Number(a.campaignId))?.allEmpty));
   for (const rule of enabled) {
     const row = byId.get(Number(rule.campaignId));
     const now = Date.now();
@@ -622,11 +651,33 @@ async function enforce(marketName, snapshot, { allowSchedule = true, allowStarts
 
     // A manual pause is a hard opt-out from every automatic start. It is
     // cleared only by the explicit "Возобновить" action in the app.
+    const stock = inventory.get(Number(row.id));
+    const stockReason = stockBlock(stock, rule);
+    const mustPause = rule.manualPaused || (stock?.known && (stock.allEmpty || (rule.lowStockMode === 'pause' && stock.allRisky)));
+    if (mustPause && active(row)) {
+      // Save pause intent before the external request so schedules cannot undo it.
+      if (!rule.manualPaused) await pool.query(
+        `INSERT INTO wb_ad_limits(market,campaign_id,daily_limit,enabled,updated_at,stock_paused)
+         VALUES($1,$2,0,FALSE,$3,TRUE) ON CONFLICT(market,campaign_id)
+         DO UPDATE SET stock_paused=TRUE`, [marketName,row.id,Date.now()]);
+      try {
+        await request(ADVERT_API + '/adv/v0/pause?id=' + encodeURIComponent(row.id), token);
+        await setStoredCampaignStatus(marketName, row.id, 11);
+        await pool.query(`UPDATE wb_ad_limits SET last_action_type=$3,last_action_at=$4,last_action_error=''
+          WHERE market=$1 AND campaign_id=$2`,[marketName,row.id,rule.manualPaused?'pause':'stock_pause',Date.now()]);
+      } catch (error) {
+        await pool.query('UPDATE wb_ad_limits SET last_action_error=$3 WHERE market=$1 AND campaign_id=$2',
+          [marketName,row.id,String(error?.message || error).slice(0,500)]);
+        if (error?.retryAt) await saveRefreshError(marketName,error);
+      }
+      continue;
+    }
     if (rule.manualPaused) continue;
+    if (mustPause || rule.stockPaused) continue;
 
     // Resume only campaigns paused by this limiter. A campaign paused manually
     // in WB or in the app must remain paused.
-    if (allowStarts && !overLimit(rule) && rule.autoPaused && String(rule.autoPausedDay || '') !== day && !rule.scheduleEnabled) {
+    if (allowStarts && !stockReason && !overLimit(rule) && rule.autoPaused && String(rule.autoPausedDay || '') !== day && !rule.scheduleEnabled) {
       if ([4, 11].includes(Number(row.status))) {
         try {
           await request(ADVERT_API + '/adv/v0/start?id=' + encodeURIComponent(row.id), token);
@@ -655,7 +706,7 @@ async function enforce(marketName, snapshot, { allowSchedule = true, allowStarts
     }
 
     const scheduledToday = String(rule.lastScheduledStartDay || '') === day;
-    const scheduleDue = allowStarts && allowSchedule && !overLimit(rule) && rule.scheduleEnabled && localClock >= String(rule.startTime || '09:00') && !scheduledToday;
+    const scheduleDue = allowStarts && !stockReason && allowSchedule && !overLimit(rule) && rule.scheduleEnabled && localClock >= String(rule.startTime || '09:00') && !scheduledToday;
     if (scheduleDue) {
       // Never undo today's limiter pause. A completed campaign (status 7) is not restartable.
       if (rule.autoPaused && String(rule.autoPausedDay || '') === day) continue;
