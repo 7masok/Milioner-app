@@ -327,7 +327,7 @@ function adsStatusBadge(status){const kind=status===9?'ok':status===11?'warn':st
 let adsDashboardData=null,adsDashboardFilter='all',adsDashboardQuery='',adsTargetDrr=Number(localStorage.getItem('adsTargetDrr'))||15;
 document.getElementById('adsTargetInput').value=adsTargetDrr;
 function adsMoney(value){return fmt(Number(value)||0)}
-function adsNumber(value,digits=1){const n=Number(value);return Number.isFinite(n)?n.toLocaleString('ru-RU',{minimumFractionDigits:0,maximumFractionDigits:digits}):'—'}
+function adsNumber(value,digits=0){const n=Number(value);return Number.isFinite(n)?n.toLocaleString('ru-RU',{minimumFractionDigits:0,maximumFractionDigits:digits}):'—'}
 function adsErrorText(value){const text=String(value||'');if(/rate limit|too many requests|\b429\b|X-RateLimit-Retry/i.test(text))return 'Wildberries временно ограничил частоту запросов. Приложение повторит попытку автоматически.';if(/advert has no budget|no budget/i.test(text))return 'На балансе этой кампании WB нет денег для запуска.';return text.slice(0,220)}
 const adsExpandedCards=new Set(JSON.parse(localStorage.getItem('adsExpandedCards')||'[]'));
 function adsCardKey(id){return adsMarket+':'+id}
