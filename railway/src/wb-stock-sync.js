@@ -1,7 +1,7 @@
 import { pool } from './db.js';
 import { config } from './config.js';
 import { credentialFor } from './connections.js';
-import { normalizeWbCard } from './wb-variant-normalize.js';
+import { normalizeWbCard, normalizeWbText } from './wb-variant-normalize.js';
 
 const CONTENT_API='https://content-api.wildberries.ru';
 const MARKETPLACE_API='https://marketplace-api.wildberries.ru';
@@ -17,6 +17,10 @@ async function requestJson(url,options,label){
   }finally{clearTimeout(timer)}
 }
 function parse(value){try{const x=JSON.parse(String(value||'{}'));return x&&typeof x==='object'?x:{}}catch{return {}}}
+export function wbStockAliases(product,field){
+  const raw=product?.[field+'Aliases'];
+  return [...new Set([product?.[field],...(Array.isArray(raw)?raw:String(raw||'').split(/[;,\n]/))].map(value=>String(value||'').trim()).filter(Boolean))];
+}
 function parts(product){return String(product?.kind||'simple')==='bundle'&&Array.isArray(product?.components)?product.components.map(x=>({productId:String(x?.productId||''),qty:Math.max(1,Math.floor(Number(x?.qty)||1))})).filter(x=>x.productId):[]}
 function sharedAvailable(state){
   const products=Array.isArray(state?.products)?state.products:[],byId=new Map(products.map(p=>[String(p?.id||''),p]).filter(([id])=>id));
@@ -79,18 +83,19 @@ export async function syncWbStockMarket(market,{write=true}={}){
   // WB barcode and characteristic ID, so never send the parent as a stock item.
   const linked=[...availability.products.values()].filter(product=>String(product?.[field]||'').trim()&&String(product?.kind||'')!=='variant-group');
   if(linked.length<20)return {ok:false,market:id,skipped:true,reason:'warehouse-safety-gate',linked:linked.length};
-  const cards=await catalog(token),byCode=new Map(cards.map(card=>[String(card.vendorCode).trim(),card])),byChrt=new Map(),byBarcode=new Map();
+  const cards=await catalog(token),byCode=new Map(),byChrt=new Map(),byBarcode=new Map();
+  for(const card of cards){const key=normalizeWbText(card.vendorCode);if(key){const rows=byCode.get(key)||[];rows.push(card);byCode.set(key,rows)}}
   for(const card of cards)for(const size of card.sizes){
     byChrt.set(Number(size.chrtId),{card,size});
     for(const barcode of size.barcodes||[])if(!byBarcode.has(String(barcode).trim()))byBarcode.set(String(barcode).trim(),{card,size});
   }
   const unresolved=[],candidates=[];
   for(const product of linked){
-    const sku=String(product[field]).trim(),aliases=[sku,...(Array.isArray(product?.[field+'Aliases'])?product[field+'Aliases']:[])].map(value=>String(value||'').trim()).filter(Boolean);
+    const sku=String(product[field]).trim(),aliases=wbStockAliases(product,field);
     const variant=product?.wbVariant&&String(product.wbVariant.market||'').toUpperCase()===id?product.wbVariant:null;
     let hit=variant?.chrtId?byChrt.get(Number(variant.chrtId)):null;
     if(!hit){
-      const single=aliases.map(value=>byCode.get(value)).find(card=>card?.sizes?.length===1);
+      const single=aliases.flatMap(value=>byCode.get(normalizeWbText(value))||[]).find(card=>card?.sizes?.length===1);
       hit=single?{card:single,size:single.sizes[0]}:aliases.map(value=>byBarcode.get(value)).find(Boolean);
     }
     if(!hit){unresolved.push({sku,name:String(product?.name||''),reason:'article-or-barcode-not-found'});continue}

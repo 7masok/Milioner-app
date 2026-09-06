@@ -194,7 +194,7 @@ async function triggerImmediateWbStockSync(){
   try{
     const r=await fetch(MILLIONER_API+'/api/stock-sync-now',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({markets:['WB','WB2'],force:false}),cache:'no-store'});
     let data={};try{data=await r.json()}catch{}
-    if(!r.ok||data.ok===false){const errs=Object.values(data.results||{}).filter(x=>x&&x.ok===false).map(x=>x.market+': '+String(x.error||'ошибка')).join('; ');throw new Error(errs||data.error||('HTTP '+r.status))}
+    if(!r.ok||data.ok===false){const errs=Object.values(data.results||{}).filter(x=>x&&x.ok===false).map(x=>x.market+': '+String(x.error||x.reason||'ошибка')).join('; ');throw new Error(errs||data.error||('HTTP '+r.status))}
     const parts=['WB','WB2'].map(m=>{const x=data.results?.[m];if(!x)return null;if(x.sent)return m+' ✓';if(x.skipped&&x.reason==='unchanged')return m+' ✓';if(x.skipped)return m+' '+String(x.reason||'пропущено');return m+' ✓'}).filter(Boolean);
     setWbStockStatus(parts.join(' · ')||'синхронизировано','ok');
     return true;
