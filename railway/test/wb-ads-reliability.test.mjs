@@ -14,7 +14,7 @@ function harness(configured = []) {
     pool: { query: async (sql, args) => { queries.push({ sql, args }); return { rows: configured }; } },
     stockBlock, config: {}, credentialFor: async () => 'test-token', asyncRoute: fn => fn,
   });
-  vm.runInContext(source.replace(/^import .*;\r?\n/gm, '').replace(/export /g, '') + '\nglobalThis.api = { enforce, fetchCampaigns, setStoredCampaignStatus, localDate };', context);
+  vm.runInContext(source.replace(/^import .*;\r?\n/gm, '').replace(/export /g, '') + '\nglobalThis.api = { enforce, fetchCampaigns, setStoredCampaignStatus, localDate, requestInterval };', context);
   context.mockRequest = async url => { calls.push(url); return {}; };
   vm.runInContext('request = (...args) => mockRequest(...args); setStoredCampaignStatus = async () => {}; inventoryFor = async (m, rows) => new Map(rows.map(r => [Number(r.id), {known:true, allEmpty:false, allRisky:false}]));', context);
   return { context, api: context.api, calls, queries };
@@ -101,4 +101,14 @@ test('stock pause remains paused after replenishment until manual resume', async
 test('pending manual pause retries even without an enabled daily limit', async () => {
   const h=harness([limit(1,{manualPaused:true,enabled:false})]);
   await h.api.enforce('WB',{day:h.api.localDate(),campaigns:[campaign(1,9,0)]});assert.match(h.calls[0],/pause\?id=1$/);
+});
+
+test('campaign list and start actions have independent WB rate-limit lanes', () => {
+  const h=harness();
+  assert.equal(h.api.requestInterval('https://advert-api.wildberries.ru/api/advert/v2/adverts').key,'campaign-list');
+  assert.equal(h.api.requestInterval('https://advert-api.wildberries.ru/adv/v0/start?id=1').key,'campaign-action');
+});
+
+test('scheduler permits due starts from the stored snapshot before refresh', () => {
+  assert.match(source,/await enforce\(marketName, previous, \{ allowSchedule: true, allowStarts: true \}\);/);
 });

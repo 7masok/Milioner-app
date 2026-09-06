@@ -74,6 +74,8 @@ function retryAfterMs(response) {
 function requestInterval(url) {
   if (url.includes('/adv/v3/fullstats')) return { key: 'stats', interval: FULLSTATS_REQUEST_INTERVAL_MS };
   if (url.startsWith(CONTENT_API)) return { key: 'content', interval: CONTENT_REQUEST_INTERVAL_MS };
+  if (url.includes('/api/advert/v2/adverts')) return { key: 'campaign-list', interval: GENERAL_REQUEST_INTERVAL_MS };
+  if (url.includes('/adv/v0/')) return { key: 'campaign-action', interval: GENERAL_REQUEST_INTERVAL_MS };
   return { key: 'general', interval: GENERAL_REQUEST_INTERVAL_MS };
 }
 
@@ -83,15 +85,17 @@ async function request(url, token, { method = 'GET', body } = {}) {
   const queueKey = String(token);
   const previous = requestQueues.get(queueKey) || Promise.resolve();
   const queued = previous.catch(() => {}).then(async () => {
-    const window = requestWindows.get(queueKey) || { cooldownUntil: 0, nextAt: {} };
+    const window = requestWindows.get(queueKey) || { cooldowns: {}, nextAt: {} };
     const now = Date.now();
-    if (window.cooldownUntil > now) {
+    const limiter = requestInterval(url);
+    window.cooldowns ||= {};
+    const cooldownUntil = Number(window.cooldowns[limiter.key] || 0);
+    if (cooldownUntil > now) {
       const error = new Error('WB API cooldown');
-      error.retryAt = window.cooldownUntil;
+      error.retryAt = cooldownUntil;
       throw error;
     }
 
-    const limiter = requestInterval(url);
     const waitUntil = Number(window.nextAt[limiter.key] || 0);
     if (waitUntil > now) await delay(waitUntil - now);
     window.nextAt[limiter.key] = Date.now() + limiter.interval;
@@ -121,21 +125,21 @@ async function request(url, token, { method = 'GET', body } = {}) {
           error.status = response.status;
           if (response.status === 429) {
             const waitMs = retryAfterMs(response);
-            window.cooldownUntil = Date.now() + waitMs;
+            window.cooldowns[limiter.key] = Date.now() + waitMs;
             requestWindows.set(queueKey, window);
-            error.retryAt = window.cooldownUntil;
+            error.retryAt = window.cooldowns[limiter.key];
             error.endpoint = new URL(url).pathname;
             error.retryAfterMs = waitMs;
             if (attempt === 0 && waitMs <= MAX_AUTO_RETRY_MS) {
               await delay(waitMs);
-              window.cooldownUntil = 0;
+              window.cooldowns[limiter.key] = 0;
               requestWindows.set(queueKey, window);
               continue;
             }
           }
           throw error;
         }
-        window.cooldownUntil = 0;
+        window.cooldowns[limiter.key] = 0;
         requestWindows.set(queueKey, window);
         return data;
       } finally {
@@ -771,10 +775,11 @@ export function startWbAdsLimitLoop() {
     if (running.has(marketName)) return;
     running.add(marketName);
     try {
-      // Day-boundary actions must not depend on the browser being open.
-      // They are checked from the persisted Railway snapshot before refreshing WB.
+      // Scheduled starts use the persisted campaign ID and stock snapshot before
+      // refreshing the campaign list. WB applies limits per endpoint, so a 429
+      // from the list endpoint must not suppress a due start action.
       const previous = await storedSnapshot(marketName);
-      await enforce(marketName, previous, { allowSchedule: false, allowStarts: false });
+      await enforce(marketName, previous, { allowSchedule: true, allowStarts: true });
       const snapshot = await refreshMarket(marketName);
       await enforce(marketName, snapshot, { allowStarts: !snapshot?.lastError });
       if (Number(snapshot?.nextAttemptAt || 0) > Date.now()) {
