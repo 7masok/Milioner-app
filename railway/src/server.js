@@ -22,6 +22,7 @@ assertRuntimeConfig();
 const app = express();
 const repositoryRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const frontendFiles = Object.freeze([
+  'warehouse-insights.js',
   'cloud-sync-v3.js',
   'wb-variants-v1.js',
   'kaspi-report-v2.js',

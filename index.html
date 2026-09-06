@@ -72,6 +72,7 @@ body:has(#home.active) .fab{bottom:138px;background:#0b9b54}
 </header>
 <main>
 <section id="home" class="view active">
+  <details class="card" style="margin-bottom:12px"><summary style="cursor:pointer;font-weight:700">Запас и деньги в товаре · 25 дней</summary><div id="warehouseInsights" style="margin-top:12px"></div></details>
   <div class="home-period-panel"><div id="orderPeriod" class="order-period"><button class="order-period-btn" data-order-period="today" onclick="setOrderPeriod('today')">Сегодня</button><button class="order-period-btn" data-order-period="yesterday" onclick="setOrderPeriod('yesterday')">Вчера</button><button class="order-period-btn" data-order-period="week" onclick="setOrderPeriod('week')">Неделя</button><button class="order-period-btn" data-order-period="month" onclick="setOrderPeriod('month')">Месяц</button><button class="order-period-btn" data-order-period="custom" onclick="setOrderPeriod('custom')">Период</button></div>
   <div id="orderCustomRange" class="order-custom-range" style="display:none"><div><label for="orderDateFrom">От</label><input id="orderDateFrom" type="date" onchange="setOrderCustomDate('from',this.value)"></div><div><label for="orderDateTo">До</label><input id="orderDateTo" type="date" onchange="setOrderCustomDate('to',this.value)"></div></div>
   </div>
@@ -398,7 +399,7 @@ function render(){
   const activeView=document.querySelector('.view.active')?.id||state.settings.activeView||'home';
   if(activeView==='home'){
     document.querySelectorAll('.market-tab[data-market]').forEach(b=>b.classList.toggle('active',b.dataset.market===selectedOrderMarket));
-    renderOrderPeriodControls();renderMarketplaceOrders();renderAttention();renderRecent();
+    renderOrderPeriodControls();renderMarketplaceOrders();renderAttention();renderRecent();renderWarehouseInsights();
   }else if(activeView==='products'){
     renderProducts(true);
   }else if(activeView==='movement'){
@@ -478,6 +479,20 @@ function renderLinkSuggestions(){const box=document.getElementById('linkSuggesti
 function chooseMarketplaceProduct(pid){const link=window.pendingMarketplaceLink,p=prod(pid);if(!link||!p)return;attachMarketplaceSku(p,link.market,link.sku,link.feedKey);closeModal();render()}
 function attachMarketplaceSku(p,market,sku,feedKey=''){const field=marketplaceField(market);if(!field)return alert('Неизвестный маркетплейс');const next=String(sku||'').trim(),old=String(p[field]||'').trim(),aliasField=field+'Aliases',aliases=Array.isArray(p[aliasField])?p[aliasField].map(x=>String(x||'').trim()).filter(Boolean):String(p[aliasField]||'').split(/[;,\n]/).map(x=>x.trim()).filter(Boolean);if(old&&old!==next){if(!aliases.includes(next))aliases.push(next);p[aliasField]=[...new Set(aliases.filter(x=>x!==old))]}else if(!old)p[field]=next;const validSkus=new Set([String(p[field]||'').trim(),...(p[aliasField]||[])].filter(Boolean));const allFeed=market==='Kaspi'?state.kaspiOrderFeed:isWbMarket(market)?state.wbOrderFeed:state.ozonOrderFeed,feed=isWbMarket(market)?(allFeed||[]).filter(o=>String(o.market||'WB')===market):allFeed;(feed||[]).forEach(o=>{if(validSkus.has(String(o.sku||'').trim()))o.productId=p.id});applyMarketplaceTransitions(market,feed||[]);save();return true}
 function saveMarketplaceLink(){const link=window.pendingMarketplaceLink,input=document.getElementById('linkProductName');if(!link||!input)return;const name=input.value.trim();if(!name)return alert('Введите название товара');const exact=state.products.find(p=>normalizeName(p.name)===normalizeName(name));if(exact){if(attachMarketplaceSku(exact,link.market,link.sku,link.feedKey)!==false){closeModal();render()}return}const p={id:id(),name,category:'',photo:'',kaspi:'',wb:'',wb2:'',ozon:'',min:0,stock:0,cost:0,totalProfit:0};state.products.push(p);attachMarketplaceSku(p,link.market,link.sku,link.feedKey);closeModal();render()}
+function renderWarehouseInsights(){
+ const box=document.getElementById('warehouseInsights');if(!box||!window.WarehouseInsights)return;
+ const products=stockProducts().filter(p=>p.kind!=='variant-group').map(p=>({...p,reserved:reserved(p)}));
+ const orders=[];
+ for(const o of [...(state.kaspiOrderFeed||[]),...(state.wbOrderFeed||[]),...(state.ozonOrderFeed||[])]){
+  const p=prod(o.productId),market=o.market||'Kaspi',base={date:Number(o.creationDate)||0,cancelled:marketplaceLifecycleStage(market,o.status,o.state)==='cancelled',key:o.orderId&&o.entryId?market+':'+o.orderId+':'+o.entryId:null};
+  if(isBundleProduct(p))for(const part of bundleComponents(p))orders.push({...base,key:base.key?base.key+':'+part.productId:null,productId:part.productId,qty:(Number(o.qty)||0)*part.qty});
+  else orders.push({...base,productId:o.productId,qty:o.qty});
+ }
+ const purchases=(state.purchases||[]).filter(p=>['to_forwarder','to_me','at_warehouse'].includes(purchaseStatus(p))).map(p=>{const status=purchaseStatus(p),days=purchaseRemainingDeliveryDays(p);return {productId:p.productId,qty:p.qty,days:status==='at_warehouse'?0:Number.isFinite(days)&&days>0?days:null};});
+ const model=window.WarehouseInsights.analyze(products,orders,purchases),risks=model.rows.filter(r=>r.risk).sort((a,b)=>a.days-b.days),quiet=model.rows.filter(r=>r.noOrders).sort((a,b)=>b.value-a.value),money=n=>Math.round(n).toLocaleString('ru-RU')+' ₸';
+ const row=r=>'<div class="item"><b>'+esc(r.name)+'</b><div class="muted">Свободно '+r.free+' шт. · '+money(r.value)+(r.cost?'':' · себестоимость неизвестна')+'</div><div class="muted">'+(r.days===null?'Нет заказов в загруженных данных':r.days.toLocaleString('ru-RU',{maximumFractionDigits:1})+' дн. запаса · '+r.qty+' шт. заказано за 25 дней')+(r.inbound?' · в пути '+r.inbound+' шт. · '+(r.next===null?'срок не подтверждён':r.next===0?'ждёт ввода в продажу':'≈ '+Math.ceil(r.next)+' дн.'):' · поставки нет')+(r.gap?' · запас закончится до пополнения':'')+'</div></div>';
+ box.innerHTML='<div class="row"><span class="grow">Стоимость свободного запаса</span><b>'+money(model.freeValue)+'</b></div><div class="muted">По складской себестоимости, без резервов и товаров в пути.'+(model.missingCost?' У '+model.missingCost+' позиций нет себестоимости — итог неполный.':'')+'</div><div class="link-note">Прогноз по загруженным заказам всех магазинов за 25 дней. Полнота истории и периоды отсутствия товара не подтверждены; отсутствие заказов не доказывает, что товар залежался. Сроки поставок расчётные.'+(model.unmatched?' Не привязано строк заказов: '+model.unmatched+'.':'')+'</div><details open><summary>Риск дефицита · '+risks.length+'</summary>'+(risks.map(row).join('')||'<p class="muted">По доступным данным риск не выявлен.</p>')+'</details><details><summary>Без заказов в загруженных данных · '+quiet.length+' · '+money(model.quietValue)+'</summary><p class="muted">Кандидаты на проверку: наличие в продаже, цена, карточка и дата поступления. Это не автоматическая рекомендация скидки.</p>'+quiet.map(row).join('')+'</details>';
+}
 function warehouseAttentionRows(){
  const result=[];
  for(const p of stockProducts()){
@@ -1005,9 +1020,10 @@ window.addEventListener('load',()=>initOwnerAuth(),{once:true});
 
 function enhanceArrivalProductSearch(){}
 </script>
+<script src="./warehouse-insights.js?v=20260906"></script>
 <script src="./cloud-sync-v3.js?v=20260820-report-period-v3"></script>
 <script src="./wb-variants-v1.js?v=20260822-size-groups"></script>
-<script src="./kaspi-report-v2.js?v=20260822-completed-sales"></script>
+<script src="./kaspi-report-v2.js?v=20260906-profit-confidence"></script>
 <script src="./kaspi-ads-v2.js?v=20260901-ads-compact3"></script>
 <script src="./ai-assistant-v1.js?v=20260904-assistant1"></script>\n<script src="./purchase-arrival-sort-v1.js?v=20260904-arrival1"></script>
 <!-- cross-device-sync-v3 -->
