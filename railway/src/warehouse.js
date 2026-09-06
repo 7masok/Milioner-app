@@ -39,7 +39,9 @@ async function repairProductLinks(client, products) {
     const id = String(product?.id || '').trim();
     if (!id) continue;
     for (const [market, field] of [['Kaspi', 'kaspi'], ['WB', 'wb'], ['WB2', 'wb2'], ['Ozon', 'ozon']]) {
-      for (const sku of marketplaceSkus(product, field)) {
+      const skus=marketplaceSkus(product,field);
+      await client.query('DELETE FROM product_links WHERE product_id=$1 AND market=$2 AND NOT (sku = ANY($3::text[]))',[id,market,skus]);
+      for (const sku of skus) {
         await client.query(`INSERT INTO product_links(product_id,market,sku,created_at,updated_at)
           VALUES($1,$2,$3,$4,$4) ON CONFLICT(market,sku) DO UPDATE SET product_id=excluded.product_id,updated_at=excluded.updated_at`,
         [id, market, sku, now]);
@@ -66,9 +68,7 @@ async function mirrorProducts(client, products) {
     ]);
     for (const [market, field] of [['Kaspi', 'kaspi'], ['WB', 'wb'], ['WB2', 'wb2'], ['Ozon', 'ozon']]) {
       const skus = marketplaceSkus(product, field);
-      // Marketplace identifiers are an append-only server ledger. A barcode or
-      // article that was linked once must survive edits and stale device
-      // snapshots; only deleting the product itself removes its links.
+      await client.query('DELETE FROM product_links WHERE product_id=$1 AND market=$2 AND NOT (sku = ANY($3::text[]))',[id,market,skus]);
       for (const sku of skus) {
         await client.query(`INSERT INTO product_links(product_id,market,sku,created_at,updated_at)
           VALUES($1,$2,$3,$4,$4) ON CONFLICT(market,sku) DO UPDATE SET product_id=excluded.product_id,updated_at=excluded.updated_at`,
