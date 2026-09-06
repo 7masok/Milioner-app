@@ -44,3 +44,9 @@ test('bundle reservations consume component inventory',()=>{
 test('no demand does not invent a stock coverage forecast',()=>{
  const r=risk([product('a',5)]);assert.equal(r.products[0].days,null);assert.equal(r.status,'no_demand');
 });
+test('string aliases match the warehouse link format without duplicating demand',()=>{
+ const p=product('a',8,{wbAliases:'alias; a\nalias'});
+ const r=risk([p],[order('alias',50)]);
+ assert.equal(r.products[0].daily,2);
+ assert.equal(r.status,'low');
+});

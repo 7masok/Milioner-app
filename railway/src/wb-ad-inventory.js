@@ -34,12 +34,16 @@ export function campaignInventory(state, orders, market, campaigns, now = Date.n
     if(parts(p).length)for(const part of parts(p))add(target,part.productId,qty*num(part.qty),next);
     else target.set(id,(target.get(id)||0)+qty);
   }
-  function codes(p, key) { return [p[key],...list(p[key+'Aliases'])].map(x=>String(x||'').trim()).filter(Boolean); }
+  function codes(p, key) { const aliases=p[key+'Aliases'];return [...new Set([p[key],...(Array.isArray(aliases)?aliases:String(aliases||'').split(/[;,\n]/))].map(x=>String(x||'').trim()).filter(Boolean))]; }
+  const skuIndex=new Map();
+  for(const key of ['kaspi','wb','wb2','ozon'])for(const p of products)for(const code of codes(p,key)){
+    const id=key+':'+code,items=skuIndex.get(id)||[];items.push(p);skuIndex.set(id,items);
+  }
   const keyFor = m => m==='Kaspi'?'kaspi':m==='WB2'?'wb2':m==='WB'||m==='WB1'?'wb':m==='Ozon'?'ozon':null;
   for(const order of orders) {
     if(/CANCEL|RETURN|DECLINED|DEFECT/i.test(String(order.status)+' '+String(order.state)))continue;
     const key=keyFor(order.market); if(!key)continue;
-    const matches=products.filter(p=>codes(p,key).includes(String(order.sku).trim()));
+    const matches=skuIndex.get(key+':'+String(order.sku).trim())||[];
     // Ambiguous variant articles do not provide a reliable rate for one size.
     if(matches.length===1)add(demand,matches[0].id,num(order.qty));
   }
