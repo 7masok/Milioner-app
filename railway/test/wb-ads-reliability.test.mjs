@@ -55,7 +55,8 @@ test('partial statistics retain valid spend and expose failure and freshness', a
   const failure = Object.assign(new Error('429'), { retryAt: Date.now() + 60000 });
   h.context.mockRequest = async url => {
     h.calls.push(url);
-    if (url.includes('/api/advert/v2/adverts')) return { adverts: [{ id: 1, status: 9, settings: { name: 'One' } }, { id: 2, status: 9, settings: { name: 'Two' } }] };
+    if (url.includes('/api/advert/v2/adverts')) return { adverts: [{ id: 1, status: 9 }, { id: 2, status: 9 }] };
+    if (url.includes('/adv/v1/promotion/adverts')) return [{ id: 1, status: 9, name: 'One' }, { id: 2, status: 9, name: 'Two' }];
     if (url.includes('/fullstats')) throw failure;
     return { cards: [] };
   };
@@ -113,9 +114,14 @@ test('scheduler permits due starts from the stored snapshot before refresh', () 
   assert.match(source,/await enforce\(marketName, previous, \{ allowSchedule: true, allowStarts: true \}\);/);
 });
 
-test('single-product campaign uses its product title when WB omits campaign name', () => {
+test('product title never replaces a campaign name omitted by WB', () => {
   const h=harness();
   const cards=new Map([[77,{title:'Крылья',vendorCode:'wings'}]]);
   const value=h.api.campaignName({id:1,nmId:77},null,cards);
-  assert.equal(value.title,'Крылья');
+  assert.equal(value.title,'Кампания 1');
+});
+
+test('campaign detail endpoint has an independent rate-limit lane', () => {
+  const h=harness();
+  assert.equal(h.api.requestInterval('https://advert-api.wildberries.ru/adv/v1/promotion/adverts?ids=1').key,'campaign-details');
 });
