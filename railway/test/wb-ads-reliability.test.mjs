@@ -14,7 +14,7 @@ function harness(configured = []) {
     pool: { query: async (sql, args) => { queries.push({ sql, args }); return { rows: configured }; } },
     stockBlock, config: {}, credentialFor: async () => 'test-token', asyncRoute: fn => fn,
   });
-  vm.runInContext(source.replace(/^import .*;\r?\n/gm, '').replace(/export /g, '') + '\nglobalThis.api = { enforce, fetchCampaigns, setStoredCampaignStatus, localDate, requestInterval };', context);
+  vm.runInContext(source.replace(/^import .*;\r?\n/gm, '').replace(/export /g, '') + '\nglobalThis.api = { enforce, fetchCampaigns, setStoredCampaignStatus, localDate, requestInterval, campaignName };', context);
   context.mockRequest = async url => { calls.push(url); return {}; };
   vm.runInContext('request = (...args) => mockRequest(...args); setStoredCampaignStatus = async () => {}; inventoryFor = async (m, rows) => new Map(rows.map(r => [Number(r.id), {known:true, allEmpty:false, allRisky:false}]));', context);
   return { context, api: context.api, calls, queries };
@@ -111,4 +111,11 @@ test('campaign list and start actions have independent WB rate-limit lanes', () 
 
 test('scheduler permits due starts from the stored snapshot before refresh', () => {
   assert.match(source,/await enforce\(marketName, previous, \{ allowSchedule: true, allowStarts: true \}\);/);
+});
+
+test('single-product campaign uses its product title when WB omits campaign name', () => {
+  const h=harness();
+  const cards=new Map([[77,{title:'Крылья',vendorCode:'wings'}]]);
+  const value=h.api.campaignName({id:1,nmId:77},null,cards);
+  assert.equal(value.title,'Крылья');
 });

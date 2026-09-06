@@ -291,9 +291,10 @@ function campaignName(row, statRow, cards) {
   const titles = [...new Set(matched.map(card => card.title).filter(Boolean))];
   const vendorCodes = [...new Set(matched.map(card => card.vendorCode).filter(Boolean))];
   const apiName = campaignApiName(row);
-  // A product title is not a campaign title. Keep products in productTitles and
-  // use a neutral ID fallback until WB returns the actual campaign name.
-  const title = apiName || ('Кампания ' + campaignId(row));
+  // WB sometimes omits the campaign name. For a single-product campaign its
+  // product title is the clearest stable fallback; multi-product campaigns keep
+  // the neutral ID so one product cannot mislabel the whole campaign.
+  const title = apiName || (titles.length === 1 ? titles[0] : ('Кампания ' + campaignId(row)));
   return { title, apiName, nmIds: allNmIds, productTitles: titles, vendorCodes };
 }
 
