@@ -3,6 +3,7 @@ import express from 'express';
 import { pool, transaction } from './db.js';
 import { asyncRoute, requireTrustedOrigin, requireWritesEnabled } from './http.js';
 import { stockLedgerViolation } from './warehouse-ledger.js';
+import { staleWbLinkRestored, preserveWbValidation } from './wb-link-validation.js';
 
 export const warehouseRouter = express.Router();
 const MAX_WAREHOUSE_SNAPSHOT_BYTES = 6_000_000;
@@ -86,11 +87,8 @@ warehouseRouter.get('/warehouse-state', requireTrustedOrigin, asyncRoute(async (
   if (!result.rowCount) return res.json({ ok: true, exists: false, revision: 0, updatedAt: null, state: metaOnly ? undefined : null });
   const row = result.rows[0];
   const state = metaOnly ? undefined : parsePayload(row.payload);
-  if (!metaOnly) {
-    // Self-heal normalized marketplace links after migration or a partial sync.
-    // The warehouse snapshot remains authoritative for product -> marketplace SKU mapping.
-    await repairProductLinks(pool, state.products);
-  }
+  // GET must not reinsert links from a snapshot read before a concurrent unlink.
+  // Normalized links are maintained transactionally by PUT and link validation.
   res.setHeader('ETag', `"${row.revision}"`);
   res.setHeader('X-Warehouse-Revision', String(row.revision));
   return res.json({
@@ -126,7 +124,7 @@ warehouseRouter.post('/warehouse-backups', requireTrustedOrigin, requireWritesEn
 warehouseRouter.put('/warehouse-state', requireTrustedOrigin, requireWritesEnabled, asyncRoute(async (req, res) => {
   const baseRevision = Number(req.body?.baseRevision || 0);
   const state = cleanState(req.body?.state);
-  const raw = JSON.stringify(state);
+  let raw = JSON.stringify(state);
   if (Buffer.byteLength(raw, 'utf8') > MAX_WAREHOUSE_SNAPSHOT_BYTES) return res.status(413).json({ ok: false, error: 'Warehouse snapshot is too large' });
 
   const result = await transaction(async client => {
@@ -135,8 +133,10 @@ warehouseRouter.put('/warehouse-state', requireTrustedOrigin, requireWritesEnabl
     const currentRevision = Number(current.rows[0]?.revision || 0);
     if (current.rowCount && baseRevision !== currentRevision) return { conflict: true, revision: currentRevision };
     if (current.rowCount) {
-      const violation = stockLedgerViolation(parsePayload(current.rows[0].payload), state);
+      const violation = stockLedgerViolation(parsePayload(current.rows[0].payload), state) || staleWbLinkRestored(parsePayload(current.rows[0].payload), state);
       if (violation) return { conflict: true, revision: currentRevision, stockGuard: violation };
+      preserveWbValidation(parsePayload(current.rows[0].payload), state);
+      raw = JSON.stringify(state);
     }
     const revision = currentRevision + 1;
     const updatedAt = Date.now();

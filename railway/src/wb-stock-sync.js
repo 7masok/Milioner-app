@@ -1,4 +1,5 @@
-import { pool } from './db.js';
+import { pool, transaction } from './db.js';
+import { linkFingerprint, validateWbLink, applyLinkObservation } from './wb-link-validation.js';
 import { config } from './config.js';
 import { credentialFor } from './connections.js';
 import { normalizeWbCard, normalizeWbText } from './wb-variant-normalize.js';
@@ -46,10 +47,43 @@ async function catalog(token){
     const body={settings:{sort:{ascending:true},cursor:{limit:100,...cursor},filter:{withPhoto:-1}}};
     const data=await requestJson(CONTENT_API+'/content/v2/get/cards/list',{method:'POST',headers:{Accept:'application/json','Content-Type':'application/json',Authorization:token},body:JSON.stringify(body)},'WB Content cards');
     const batch=Array.isArray(data?.cards)?data.cards:[];cards.push(...batch.map(normalizeWbCard).filter(card=>card.vendorCode&&card.sizes.length));
-    if(!batch.length||batch.length<100)break;
-    const next=data?.cursor||{};if(!next.updatedAt||!next.nmID)break;cursor={updatedAt:next.updatedAt,nmID:next.nmID};
+    if(!Array.isArray(data?.cards))throw new Error('WB catalog response is incomplete');
+    if(!batch.length||batch.length<100)return cards;
+    const next=data?.cursor||{};if(!next.updatedAt||!next.nmID)throw new Error('WB catalog cursor is incomplete');cursor={updatedAt:next.updatedAt,nmID:next.nmID};
   }
-  return cards;
+  throw new Error('WB catalog pagination limit reached; links were not changed');
+}
+
+export async function validateWbStockLinks(market) {
+  const id=market==='WB2'?'WB2':'WB',field=id==='WB2'?'wb2':'wb';
+  const token=await credentialFor(id,id==='WB2'?config.wbToken2:config.wbToken);
+  if(!token)return;
+  const initial=await pool.query('SELECT payload FROM warehouse_state WHERE id=1');
+  const products=parse(initial.rows[0]?.payload).products||[];
+  const cards=await catalog(token);
+  // An empty successful response is not sufficient evidence to detach a shop.
+  if(!cards.length)return;
+  const observations=products.filter(p=>p[field]&&p.kind!=='variant-group').map(p=>({
+    id:String(p.id), fingerprint:linkFingerprint(p,field), result:validateWbLink(p,field,cards)
+  }));
+  return transaction(async client=>{
+    await client.query('SELECT pg_advisory_xact_lock($1)',[730021]);
+    const current=await client.query('SELECT payload,revision FROM warehouse_state WHERE id=1 FOR UPDATE');
+    if(!current.rowCount)return;
+    const state=parse(current.rows[0].payload),now=Date.now();let changed=false,detached=0;
+    for(const observation of observations){
+      const product=(state.products||[]).find(p=>String(p.id)===observation.id);
+      if(!product||linkFingerprint(product,field)!==observation.fingerprint)continue;
+      if(!observation.result.valid){
+        if(!detached)await client.query('INSERT INTO warehouse_backups(label,payload,revision,created_at) VALUES($1,$2,$3,$4)',['Before WB article unlink '+id,current.rows[0].payload,current.rows[0].revision,now]);
+        await client.query('DELETE FROM product_links WHERE product_id=$1 AND market=$2',[observation.id,id]);
+        detached++;
+      }
+      changed=applyLinkObservation(product,field,observation.result,now)||changed;
+    }
+    if(changed)await client.query('UPDATE warehouse_state SET payload=$1,revision=revision+1,updated_at=$2 WHERE id=1',[JSON.stringify(state),now]);
+    return {market:id,detached};
+  });
 }
 async function warehouseId(token,market){
   const rows=await pool.query('SELECT raw_json FROM marketplace_order_lines WHERE market=$1 ORDER BY creation_date DESC LIMIT 500',[market]);
@@ -92,6 +126,8 @@ export async function syncWbStockMarket(market,{write=true}={}){
   const unresolved=[],candidates=[];
   for(const product of linked){
     const sku=String(product[field]).trim(),aliases=wbStockAliases(product,field);
+    const validation=validateWbLink(product,field,cards);
+    if(!validation?.valid){unresolved.push({sku,name:String(product.name||''),reason:validation?.reason||'relink-required'});continue}
     const variant=product?.wbVariant&&String(product.wbVariant.market||'').toUpperCase()===id?product.wbVariant:null;
     let hit=variant?.chrtId?byChrt.get(Number(variant.chrtId)):null;
     if(!hit){

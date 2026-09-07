@@ -11,7 +11,7 @@ import { reportsRouter } from './reports.js';
 import { stockRouter, kaspiFeedHandler } from './stock.js';
 import { startKaspiSyncLoop, syncKaspiOrders } from './kaspi-sync.js';
 import { startWbSyncLoop, syncWbOrders } from './wb-sync.js';
-import { syncWbStockMarket } from './wb-stock-sync.js';
+import { syncWbStockMarket, validateWbStockLinks } from './wb-stock-sync.js';
 import { authConfig, login, requireAppSession } from './auth.js';
 import { configuredWbConnectionIds, connectionsRouter } from './connections.js';
 import { wbVariantsRouter } from './wb-variants.js';
@@ -163,6 +163,16 @@ const server = app.listen(config.port, '0.0.0.0', () => {
   startKaspiSyncLoop();
   startWbSyncLoop();
   startWbAdsLimitLoop();
+  let checkingLinks=false;
+  const checkLinks=async()=>{
+    if(checkingLinks)return;checkingLinks=true;
+    try{for(const market of ['WB','WB2']){
+      try{const result=await validateWbStockLinks(market);console.info('WB link validation',JSON.stringify(result));}
+      catch(error){console.warn('WB link validation failed',market,String(error.message||error));}
+    }}finally{checkingLinks=false;}
+  };
+  setTimeout(checkLinks,15000).unref();
+  setInterval(checkLinks,10*60*1000).unref();
 });
 
 async function shutdown(signal) {
