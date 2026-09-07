@@ -12,6 +12,24 @@ const catalogCache = new Map();
 
 export const wbVariantsRouter = express.Router();
 
+wbVariantsRouter.get('/wb-order-link', requireTrustedOrigin, asyncRoute(async(req,res)=>{
+  const market=String(req.query.market||'');
+  if(!['WB','WB2'].includes(market))return res.status(400).json({ok:false,error:'Invalid market'});
+  const rows=await pool.query("SELECT raw_json FROM marketplace_order_lines WHERE market=$1 AND (order_id || ':' || entry_id)=$2 LIMIT 1",[market,String(req.query.feedKey||'')]);
+  if(!rows.rowCount)return res.status(404).json({ok:false,error:'Заказ не найден. Обновите список заказов.'});
+  let raw;try{raw=JSON.parse(rows.rows[0].raw_json||'{}')}catch{raw={}}
+  const order=raw.order||{},identity=raw.identity||{};
+  const nmId=String(identity.nmId||order.nmId||''),chrtId=Number(identity.chrtId||order.chrtId||0),barcode=String(identity.barcode||order.skus?.[0]||'');
+  const token=await credentialFor(market,market==='WB2'?config.wbToken2:config.wbToken);
+  if(!token)return res.status(409).json({ok:false,error:'WB не подключён'});
+  const cards=await fetchCatalog(token,market);
+  const matches=cards.filter(c=>nmId?String(c.nmId)===nmId:c.sizes.some(s=>chrtId?Number(s.chrtId)===chrtId:(s.barcodes||[]).includes(barcode)));
+  if(matches.length!==1)return res.status(409).json({ok:false,error:'Не удалось однозначно найти текущую карточку WB для этого заказа.'});
+  const card=matches[0],size=card.sizes.find(s=>chrtId&&Number(s.chrtId)===chrtId)||card.sizes.find(s=>(s.barcodes||[]).includes(barcode))||(card.sizes.length===1?card.sizes[0]:null);
+  if(!size)return res.status(409).json({ok:false,error:'Не удалось определить вариант WB из заказа.'});
+  return res.json({ok:true,market,vendorCode:card.vendorCode,nmId:card.nmId,chrtId:size.chrtId,barcode:size.barcode||size.barcodes?.[0]||'',size:size.size||'',multipleSizes:card.sizes.length>1});
+}));
+
 async function requestJson(url, options, label) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 25_000);

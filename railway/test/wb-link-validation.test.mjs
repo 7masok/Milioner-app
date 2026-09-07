@@ -56,3 +56,17 @@ test('catalog failure never reaches the unlink transaction',async()=>{
   vm.createContext(ctx);vm.runInContext(source.replace(/^import .*;\r?\n/gm,'').replace(/export /g,'')+'\nthis.validate=validateWbStockLinks;',ctx);
   await assert.rejects(()=>ctx.validate('WB'),/429/);assert.equal(mutations,0);
 });
+test('manual order relinking saves current article and retains historical order alias',()=>{
+  const html=readFileSync(new URL('../../index.html',import.meta.url),'utf8');
+  const p={id:'p',wb:'',stock:100,wbRelinkRequired:{oldSku:'old'}};
+  let saves=0;
+  const ctx={window:{pendingResolvedWbLink:{pid:'p',market:'WB',vendorCode:'Сто признаний платина',nmId:10,chrtId:20,barcode:'2049533372954',multipleSizes:false,link:{sku:'old',feedKey:'1:1'}}},prod:()=>p,marketplaceField:()=> 'wb',isWbMarket:()=>true,state:{wbOrderFeed:[{market:'WB',sku:'old'}]},applyMarketplaceTransitions:()=>{},save:()=>saves++,closeModal:()=>{},render:()=>{}};
+  vm.createContext(ctx);
+  for(const name of ['applyEditedMarketplaceSku','attachMarketplaceSku','confirmResolvedWbOrderLink'])vm.runInContext(html.split('\n').find(l=>l.startsWith('function '+name+'(')),ctx);
+  ctx.confirmResolvedWbOrderLink();
+  assert.equal(p.wb,'Сто признаний платина');assert.equal(p.stock,100);assert.equal(saves,1);
+  assert.ok(p.wbAliases.includes('old'));assert.equal(p.wbRelinkRequired,undefined);
+  assert.equal(ctx.state.wbOrderFeed[0].productId,'p');
+  assert.equal(validateWbLink(p,'wb',cards).valid,true);
+  assert.equal(staleWbLinkRestored({products:[{id:'p',wbRelinkRequired:{oldSku:'old'}}]},{products:[p]}),null);
+});
