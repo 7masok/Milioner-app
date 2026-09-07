@@ -74,7 +74,6 @@ function retryAfterMs(response) {
 function requestInterval(url) {
   if (url.includes('/adv/v3/fullstats')) return { key: 'stats', interval: FULLSTATS_REQUEST_INTERVAL_MS };
   if (url.startsWith(CONTENT_API)) return { key: 'content', interval: CONTENT_REQUEST_INTERVAL_MS };
-  if (url.includes('/adv/v1/promotion/adverts')) return { key: 'campaign-details', interval: GENERAL_REQUEST_INTERVAL_MS };
   if (url.includes('/api/advert/v2/adverts')) return { key: 'campaign-list', interval: GENERAL_REQUEST_INTERVAL_MS };
   if (url.includes('/adv/v0/')) return { key: 'campaign-action', interval: GENERAL_REQUEST_INTERVAL_MS };
   return { key: 'general', interval: GENERAL_REQUEST_INTERVAL_MS };
@@ -307,13 +306,6 @@ async function fetchCampaigns(marketName, previous) {
   const list = campaignRows(await request(
     ADVERT_API + '/api/advert/v2/adverts?statuses=4,9,11', token,
   )).filter(row => MANAGEABLE_CAMPAIGN_STATUSES.has(Number(row?.status ?? row?.statusId ?? 0)));
-  const ids=[...new Set(list.map(campaignId).filter(Boolean))];
-  const detailRows=[];
-  for(let offset=0;offset<ids.length;offset+=50){
-    const data=await request(ADVERT_API+'/adv/v1/promotion/adverts?ids='+ids.slice(offset,offset+50).join(','),token);
-    detailRows.push(...campaignRows(data));
-  }
-  const detailsById=new Map(detailRows.map(row=>[campaignId(row),row]));
   const unresolvedNames = list.filter(row => !campaignApiName(row));
   if (unresolvedNames.length) {
     console.warn('WB ads campaign names missing', marketName, unresolvedNames.map(row => ({
@@ -352,8 +344,7 @@ async function fetchCampaigns(marketName, previous) {
   }
 
   const byId = new Map(stats.map(row => [campaignId(row), row]));
-  const campaigns = list.map(summaryRow => {
-    const row={...summaryRow,...(detailsById.get(campaignId(summaryRow))||{})};
+  const campaigns = list.map(row => {
     const id = campaignId(row);
     const prior = previousById.get(id);
     const statRow = byId.get(id);
