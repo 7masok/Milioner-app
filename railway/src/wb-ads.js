@@ -306,6 +306,21 @@ async function fetchCampaigns(marketName, previous) {
   const list = campaignRows(await request(
     ADVERT_API + '/api/advert/v2/adverts?statuses=4,9,11', token,
   )).filter(row => MANAGEABLE_CAMPAIGN_STATUSES.has(Number(row?.status ?? row?.statusId ?? 0)));
+  // Log only title fields, never the full response or credentials, once per process.
+  if (!verifiedSnapshots.has(marketName)) {
+    console.info('WB ads API name fields', marketName, JSON.stringify(list.map(row => ({
+      id: campaignId(row),
+      name: row?.name,
+      settingsName: row?.settings?.name,
+      campaignName: row?.campaignName,
+      campaign_name: row?.campaign_name,
+      paramsName: row?.params?.name,
+      advertName: row?.advertName,
+      advert_name: row?.advert_name,
+      nestedAdvertName: row?.advert?.name,
+      selected: campaignApiName(row),
+    }))));
+  }
   const unresolvedNames = list.filter(row => !campaignApiName(row));
   if (unresolvedNames.length) {
     console.warn('WB ads campaign names missing', marketName, unresolvedNames.map(row => ({
