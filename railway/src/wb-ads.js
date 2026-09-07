@@ -204,12 +204,12 @@ function campaignApiName(row) {
   return String(
     row?.campaignName
     || row?.campaign_name
-    || row?.name
-    || row?.advertName
-    || row?.advert_name
     || row?.settings?.name
     || row?.params?.name
+    || row?.advertName
+    || row?.advert_name
     || row?.advert?.name
+    || row?.name
     || '',
   ).trim();
 }

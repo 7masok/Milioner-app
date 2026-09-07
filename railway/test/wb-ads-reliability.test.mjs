@@ -14,7 +14,7 @@ function harness(configured = []) {
     pool: { query: async (sql, args) => { queries.push({ sql, args }); return { rows: configured }; } },
     stockBlock, config: {}, credentialFor: async () => 'test-token', asyncRoute: fn => fn,
   });
-  vm.runInContext(source.replace(/^import .*;\r?\n/gm, '').replace(/export /g, '') + '\nglobalThis.api = { enforce, fetchCampaigns, setStoredCampaignStatus, localDate, requestInterval, campaignName };', context);
+  vm.runInContext(source.replace(/^import .*;\r?\n/gm, '').replace(/export /g, '') + '\nglobalThis.api = { enforce, fetchCampaigns, setStoredCampaignStatus, localDate, requestInterval, campaignName, campaignApiName };', context);
   context.mockRequest = async url => { calls.push(url); return {}; };
   vm.runInContext('request = (...args) => mockRequest(...args); setStoredCampaignStatus = async () => {}; inventoryFor = async (m, rows) => new Map(rows.map(r => [Number(r.id), {known:true, allEmpty:false, allRisky:false}]));', context);
   return { context, api: context.api, calls, queries };
@@ -125,4 +125,9 @@ test('current WB campaign endpoint supplies the exact campaign name', async () =
   h.context.mockRequest=async url=>url.includes('/api/advert/v2/adverts')?{adverts:[{id:1,status:9,name:'Крылья'}]}:{cards:[]};
   const result=await h.api.fetchCampaigns('WB',null);
   assert.equal(result.campaigns[0].name,'Крылья');
+});
+
+test('explicit WB campaign settings name wins over a generic row name', () => {
+  const h=harness();
+  assert.equal(h.api.campaignApiName({name:'Скелет',settings:{name:'Крылья'}}),'Крылья');
 });
