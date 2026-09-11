@@ -40,7 +40,7 @@ function components(product) {
   return product.components.map(row => ({ productId: String(row?.productId || ''), qty: Math.max(1, Number(row?.qty) || 1) })).filter(row => row.productId);
 }
 
-function consumeProduct(state, products, product, qty, label, now) {
+function consumeProduct(state, products, product, qty, label, now, orderKey) {
   const targets = components(product).length
     ? components(product).map(row => ({ product: products.get(row.productId), qty: qty * row.qty, bundle: product.name }))
     : [{ product, qty, bundle: '' }];
@@ -56,6 +56,7 @@ function consumeProduct(state, products, product, qty, label, now) {
       id: uid('market-sale-movement', `${label}:${target.product.id}`, now),
       date: now,
       type: 'продажа',
+      externalKey: orderKey,
       productId: String(target.product.id),
       qty: -taken,
       extra: `${label} · собрано на маркетплейсе${target.bundle ? ` · набор «${target.bundle}»` : ''}${target.qty > before ? ` · нехватка ${target.qty - before} шт.` : ''}`
@@ -69,20 +70,43 @@ function restorePrematureWbSale(state, products, row, market) {
   const key = externalKey(market, row);
   const matches = state.sales.filter(sale => sale?.serverReconciled === true && String(sale?.externalKey || '') === key);
   if (!matches.length) return 0;
-  const product = products.get(String(row.product_id || ''));
-  if (!product) return 0;
   const qty = matches.reduce((sum, sale) => sum + Math.max(0, Number(sale?.qty) || 0), 0);
   if (!qty) return 0;
-  const targets = components(product).length
-    ? components(product).map(part => ({ product: products.get(part.productId), qty: qty * part.qty }))
-    : [{ product, qty }];
-  for (const target of targets) if (target.product) target.product.stock = Math.max(0, Number(target.product.stock) || 0) + target.qty;
   const label = `${market} ${String(row.code || row.order_id)}`;
+  const now = Date.now();
+  const debits = state.movements.filter(movement =>
+    movement.type === 'продажа' && !movement.stockRestoredAt &&
+    (movement.externalKey ? movement.externalKey === key :
+      String(movement.extra || '').startsWith(`${label} · собрано на маркетплейсе`))
+  );
+  // A sale quantity includes shortages; only a recorded physical debit is reversible.
+  // If old evidence has been trimmed, leave stock unchanged rather than invent units.
+  for (const movement of debits) {
+    const productId = String(movement.productId || '');
+    const product = products.get(productId);
+    const taken = Math.max(0, -(Number(movement.qty) || 0));
+    const recounted = state.movements.some(other =>
+      String(other.productId || '') === productId &&
+      String(other.type || '').toLowerCase() === 'инвентаризация' &&
+      Number(other.updatedAt || other.date) >= Number(movement.date)
+    );
+    const restoredQty = product && !recounted ? taken : 0;
+    if (restoredQty) product.stock = Math.max(0, Number(product.stock) || 0) + restoredQty;
+    movement.stockRestoredAt = now;
+    state.movements.unshift({
+      id: uid('market-sale-restore', `${key}:${movement.id}`, now),
+      date: now, type: 'возврат', productId, qty: restoredQty,
+      externalKey: key, reversesMovementId: movement.id,
+      extra: `${label} · отмена преждевременного списания · возвращено ${restoredQty} шт.${recounted ? ' · остаток уже уточнён инвентаризацией' : ''}`
+    });
+  }
+  if (!debits.length) state.movements.unshift({
+    id: uid('market-sale-restore-review', key, now), date: now,
+    type: 'возврат', productId: String(matches[0].productId || ''),
+    qty: 0, externalKey: key,
+    extra: `${label} · отмена преждевременной продажи · нет записи списания, остаток не изменён; требуется проверка`
+  });
   state.sales = state.sales.filter(sale => !(sale?.serverReconciled === true && String(sale?.externalKey || '') === key));
-  state.movements = state.movements.filter(movement => !(
-    String(movement?.type || '') === 'продажа' &&
-    String(movement?.extra || '').startsWith(`${label} · собрано на маркетплейсе`)
-  ));
   return qty;
 }
 
@@ -117,7 +141,7 @@ export async function reconcileMarketplaceSales(market) {
       const qty = Math.max(0, Number(row.qty) || 0);
       if (!product || !qty) { unlinked++; continue; }
       const label = `${market} ${String(row.code || row.order_id)}`;
-      const consumed = consumeProduct(state, products, product, qty, label, now + sold);
+      const consumed = consumeProduct(state, products, product, qty, label, now + sold, key);
       const fees = Math.max(0, Number(row.seller_delivery_cost) || 0) + Math.max(0, Number(row.marketplace_fee) || 0);
       state.sales.push({
         id: uid('market-sale', key, now), productId: String(product.id), qty,
