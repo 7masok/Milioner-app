@@ -21,7 +21,7 @@
   document.head.appendChild(kaspiStatusCompat);
 
   const ads=document.createElement('script');
-  ads.src='./kaspi-ads-v2-original.js?v=20260911-csv-paste';
+  ads.src='./kaspi-ads-v2-original.js?v=20260911-csv-paste2';
   ads.async=false;
   document.head.appendChild(ads);
 
