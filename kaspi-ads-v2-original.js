@@ -328,7 +328,7 @@
     const input = document.getElementById('kaspiAdsFile');
     let file = input?.files?.[0];
     const pastedCsv = String(document.getElementById('kaspiAdsCsvText')?.value || '').trim();
-    if (!file && pastedCsv) file = new File([pastedCsv], 'kaspi-report.csv', { type: 'text/csv' });
+    if (!file && pastedCsv) file = new File(['\uFEFF' + pastedCsv], 'kaspi-report.csv', { type: 'text/csv;charset=utf-8' });
     const campaign = String(document.getElementById('kaspiAdsCampaign')?.value || '').trim();
     const fromDate = document.getElementById('kaspiAdsFrom')?.value || '';
     const toDate = document.getElementById('kaspiAdsTo')?.value || '';
