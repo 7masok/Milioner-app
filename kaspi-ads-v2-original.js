@@ -297,6 +297,7 @@
       `<div class="two"><div class="field"><label>Дата от</label><input id="kaspiAdsFrom" type="date" value="${today}"></div><div class="field"><label>Дата до</label><input id="kaspiAdsTo" type="date" value="${today}"></div></div>` +
       `<div class="field"><label>Отчёт Kaspi (Excel/CSV)</label><input id="kaspiAdsFile" type="file" onchange="kaspiAdsGuessRange(this.files?.[0]?.name)" accept=".xlsx,.xls,.csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel,text/csv"></div>` +
       `<div class="field"><label>Или вставьте CSV</label><textarea id="kaspiAdsCsvText" rows="4" placeholder="Содержимое отчёта CSV"></textarea></div>` +
+      `<div id="kaspiAdsImportStatus" class="muted"></div>` +
       `<div class="link-note">Если в файле есть даты по строкам — используем фактические даты. Если отчёт содержит только итог за период, текущий парсер распределит сумму по дням и отметит это в истории.</div>` +
       `<button class="btn dark full" onclick="importKaspiAdsFile()">Импортировать рекламу</button>`
     );
@@ -489,19 +490,12 @@
       closeModal();
       renderReports();
 
-      alert(
-        `Реклама Kaspi импортирована.\n\n` +
-        `Импортировано: ${fmt(total)}\n` +
-        `Новых расходов: ${fmt(newAmount)}\n` +
-        `Заменено ранее загруженных: ${fmt(previous.amount)}\n` +
-        `Без привязки: ${fmt(unmatchedAmount)}\n` +
-        `Задвоений: 0` +
-        (allocation?.mode
-          ? `\n\nВнимание: в исходном файле не было дат по строкам — сумма распределена по дням периода.`
-          : '')
-      );
+      return true;
     } catch (error) {
-      alert('Не удалось импортировать рекламу Kaspi:\n' + String(error?.message || error));
+      const status = document.getElementById('kaspiAdsImportStatus');
+      if (status) status.textContent = 'Ошибка: ' + String(error?.message || error);
+      else alert('Не удалось импортировать рекламу Kaspi:\n' + String(error?.message || error));
+      return false;
     }
   };
 
