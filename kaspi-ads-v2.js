@@ -21,7 +21,7 @@
   document.head.appendChild(kaspiStatusCompat);
 
   const ads=document.createElement('script');
-  ads.src='./kaspi-ads-v2-original.js?v=20260820-low-stock-alerts';
+  ads.src='./kaspi-ads-v2-original.js?v=20260911-csv-paste';
   ads.async=false;
   document.head.appendChild(ads);
 
@@ -160,3 +160,4 @@
   }
   compactAdsCards();
 })();
+
