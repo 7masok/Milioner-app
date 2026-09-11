@@ -296,6 +296,7 @@
       `<div class="field"><label>Название кампании</label><input id="kaspiAdsCampaign" list="kaspiAdsCampaignList" placeholder="Например: Ножи XINZUO"><datalist id="kaspiAdsCampaignList">${options}</datalist><small class="muted">Для одной кампании используйте всегда одно и то же название.</small></div>` +
       `<div class="two"><div class="field"><label>Дата от</label><input id="kaspiAdsFrom" type="date" value="${today}"></div><div class="field"><label>Дата до</label><input id="kaspiAdsTo" type="date" value="${today}"></div></div>` +
       `<div class="field"><label>Отчёт Kaspi (Excel/CSV)</label><input id="kaspiAdsFile" type="file" onchange="kaspiAdsGuessRange(this.files?.[0]?.name)" accept=".xlsx,.xls,.csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel,text/csv"></div>` +
+      `<div class="field"><label>Или вставьте CSV</label><textarea id="kaspiAdsCsvText" rows="4" placeholder="Содержимое отчёта CSV"></textarea></div>` +
       `<div class="link-note">Если в файле есть даты по строкам — используем фактические даты. Если отчёт содержит только итог за период, текущий парсер распределит сумму по дням и отметит это в истории.</div>` +
       `<button class="btn dark full" onclick="importKaspiAdsFile()">Импортировать рекламу</button>`
     );
@@ -303,13 +304,15 @@
 
   window.importKaspiAdsFile = async function () {
     const input = document.getElementById('kaspiAdsFile');
-    const file = input?.files?.[0];
+    let file = input?.files?.[0];
+    const pastedCsv = String(document.getElementById('kaspiAdsCsvText')?.value || '').trim();
+    if (!file && pastedCsv) file = new File([pastedCsv], 'kaspi-report.csv', { type: 'text/csv' });
     const campaign = String(document.getElementById('kaspiAdsCampaign')?.value || '').trim();
     const fromDate = document.getElementById('kaspiAdsFrom')?.value || '';
     const toDate = document.getElementById('kaspiAdsTo')?.value || '';
 
     if (!campaign) return alert('Укажите название рекламной кампании');
-    if (!file) return alert('Выберите отчёт Kaspi');
+    if (!file) return alert('Выберите отчёт Kaspi или вставьте CSV');
 
     const fromTs = orderDayStart(fromDate);
     const toTs = orderDayStart(toDate);
@@ -604,3 +607,4 @@
     );
   };
 })();
+
