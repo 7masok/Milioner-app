@@ -281,6 +281,27 @@
     return '';
   }
 
+  async function kaspiAdsTextHash(text) {
+    const bytes = new TextEncoder().encode(String(text || ''));
+    return kaspiAdsHash(bytes.buffer);
+  }
+
+  async function kaspiAdsHash(buffer) {
+    const digest = await crypto.subtle.digest('SHA-256', buffer);
+    return [...new Uint8Array(digest)].map(x => x.toString(16).padStart(2, '0')).join('');
+  }
+
+  async function kaspiAdsParseFile(file) {
+    const buffer = await file.arrayBuffer();
+    const XLSX = await loadXlsxLibrary();
+    const workbook = XLSX.read(buffer, { type: 'array', cellDates: true });
+    const sheet = workbook.Sheets[workbook.SheetNames[0]];
+    if (!sheet) throw new Error('В отчёте нет листов');
+    const rows = XLSX.utils.sheet_to_json(sheet, { defval: '', raw: false });
+    const headers = rows.length ? Object.keys(rows[0]) : [];
+    return { buffer, rows, headers, normalized: headers.map(key => [key, adsColumn(key)]) };
+  }
+
   window.openKaspiAdsImport = function () {
     const today = localDateInputValue();
     const campaigns = [...new Set(
