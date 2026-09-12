@@ -75,14 +75,14 @@ function requestInterval(url) {
   if (url.includes('/adv/v3/fullstats')) return { key: 'stats', interval: FULLSTATS_REQUEST_INTERVAL_MS };
   if (url.startsWith(CONTENT_API)) return { key: 'content', interval: CONTENT_REQUEST_INTERVAL_MS };
   if (url.includes('/api/advert/v2/adverts')) return { key: 'campaign-list', interval: GENERAL_REQUEST_INTERVAL_MS };
-  if (url.includes('/adv/v0/')) return { key: 'campaign-action', interval: GENERAL_REQUEST_INTERVAL_MS };
+  if (url.includes('/adv/v0/')) return { key: new URL(url).pathname, interval: GENERAL_REQUEST_INTERVAL_MS };
   return { key: 'general', interval: GENERAL_REQUEST_INTERVAL_MS };
 }
 
 async function request(url, token, { method = 'GET', body } = {}) {
   // The queue is keyed by token so two configured cabinets cannot accidentally
   // exceed the same WB account limit when the same token is reused.
-  const queueKey = String(token);
+  const queueKey = String(token) + '|' + requestInterval(url).key;
   const previous = requestQueues.get(queueKey) || Promise.resolve();
   const queued = previous.catch(() => {}).then(async () => {
     const window = requestWindows.get(queueKey) || { cooldowns: {}, nextAt: {} };
@@ -92,6 +92,8 @@ async function request(url, token, { method = 'GET', body } = {}) {
     const cooldownUntil = Number(window.cooldowns[limiter.key] || 0);
     if (cooldownUntil > now) {
       const error = new Error('WB API cooldown');
+      error.status = 429;
+      error.endpoint = new URL(url).pathname;
       error.retryAt = cooldownUntil;
       throw error;
     }
@@ -130,7 +132,7 @@ async function request(url, token, { method = 'GET', body } = {}) {
             error.retryAt = window.cooldowns[limiter.key];
             error.endpoint = new URL(url).pathname;
             error.retryAfterMs = waitMs;
-            if (attempt === 0 && waitMs <= MAX_AUTO_RETRY_MS) {
+            if (false) { // Retry through the scheduler; never block the command queue.
               await delay(waitMs);
               window.cooldowns[limiter.key] = 0;
               requestWindows.set(queueKey, window);
@@ -424,6 +426,15 @@ async function inventoryFor(marketName, campaigns) {
   return campaignInventory(parseAdWarehouse(warehouse.rows[0]?.payload), orders.rows, marketName, campaigns);
 }
 
+
+function actionErrorText(error) {
+  return JSON.stringify({message:String(error?.message||error).slice(0,250),at:Date.now(),
+    retryAt:Number(error?.retryAt)||0,status:Number(error?.status)||0,endpoint:String(error?.endpoint||'')});
+}
+function actionErrorInfo(value) {
+  try { const info=JSON.parse(String(value||''));return info&&typeof info==='object'?info:null; } catch {return null;}
+}
+
 async function rules(marketName) {
   const result = await pool.query(
     'SELECT low_stock_mode AS "lowStockMode",stock_paused AS "stockPaused",campaign_id AS "campaignId",daily_limit AS "dailyLimit",enabled,schedule_enabled AS "scheduleEnabled",start_time AS "startTime",last_scheduled_start_day AS "lastScheduledStartDay",last_checked_at AS "lastCheckedAt",last_action_at AS "lastActionAt",last_action_error AS "lastActionError",auto_paused AS "autoPaused",auto_paused_day AS "autoPausedDay",manual_paused AS "manualPaused",last_action_type AS "lastActionType" FROM wb_ad_limits WHERE market=$1',
@@ -549,7 +560,7 @@ async function publicSnapshot(marketName) {
         name: overrides.get(Number(row.id)) || row.name,
         inventory: inventory.get(Number(row.id)),
         startBlocked: stockBlock(inventory.get(Number(row.id)), configured.get(Number(row.id))),
-        rule: configured.get(Number(row.id)) || { dailyLimit: 0, enabled: false, scheduleEnabled: false, startTime: '09:00', manualPaused: false },
+        rule: configured.has(Number(row.id)) ? (()=>{const rule={...configured.get(Number(row.id))},info=actionErrorInfo(rule.lastActionError);if(info){rule.lastActionError=(info.status===429?'WB ограничил запросы':info.message)+' · '+new Date(info.at).toLocaleString('ru-RU',{timeZone:'Asia/Almaty'})+(info.retryAt?' · повтор после '+new Date(info.retryAt).toLocaleTimeString('ru-RU',{timeZone:'Asia/Almaty'}):'');}return rule;})() : { dailyLimit: 0, enabled: false, scheduleEnabled: false, startTime: '09:00', manualPaused: false },
       })),
   };
 }
@@ -615,7 +626,10 @@ wbAdsRouter.post('/promotion/actions/:market/:campaignId', asyncRoute(async (req
   const token = await tokenFor(marketName);
   if (!token) throw new Error((marketName === 'WB2' ? 'WB_TOKEN_2' : 'WB_TOKEN') + ' не настроен');
   const actionPath = action === 'pause' ? '/adv/v0/pause' : action === 'start' ? '/adv/v0/start' : '/adv/v0/stop';
-  if (action !== 'pause' || currentStatus === 9) await request(ADVERT_API + actionPath + '?id=' + encodeURIComponent(id), token);
+  try { if (action !== 'pause' || currentStatus === 9) await request(ADVERT_API + actionPath + '?id=' + encodeURIComponent(id), token); } catch(error) {
+    await pool.query("UPDATE wb_ad_limits SET last_action_error=$3 WHERE market=$1 AND campaign_id=$2",[marketName,id,actionErrorText(error)]);
+    throw error;
+  }
   const status = action === 'pause' ? (currentStatus === 4 ? 4 : 11) : action === 'start' ? 9 : 7;
   const now = Date.now();
   await pool.query(
@@ -660,6 +674,8 @@ async function enforce(marketName, snapshot, { allowSchedule = true, allowStarts
   for (const rule of enabled) {
     const row = byId.get(Number(rule.campaignId));
     const now = Date.now();
+    const pendingError=actionErrorInfo(rule.lastActionError);
+    if(Number(pendingError?.retryAt)>now)continue;
     await pool.query(
       'UPDATE wb_ad_limits SET last_checked_at=$3 WHERE market=$1 AND campaign_id=$2',
       [marketName, rule.campaignId, now],
@@ -684,8 +700,8 @@ async function enforce(marketName, snapshot, { allowSchedule = true, allowStarts
           WHERE market=$1 AND campaign_id=$2`,[marketName,row.id,rule.manualPaused?'pause':'stock_pause',Date.now()]);
       } catch (error) {
         await pool.query('UPDATE wb_ad_limits SET last_action_error=$3 WHERE market=$1 AND campaign_id=$2',
-          [marketName,row.id,String(error?.message || error).slice(0,500)]);
-        if (error?.retryAt) await saveRefreshError(marketName,error);
+          [marketName,row.id,actionErrorText(error)]);
+        
       }
       continue;
     }
@@ -707,9 +723,9 @@ async function enforce(marketName, snapshot, { allowSchedule = true, allowStarts
         } catch (error) {
           await pool.query(
             'UPDATE wb_ad_limits SET last_action_error=$3 WHERE market=$1 AND campaign_id=$2',
-            [marketName, row.id, String(error?.message || error).slice(0, 500)],
+            [marketName, row.id, actionErrorText(error)],
           );
-          if (error?.retryAt) await saveRefreshError(marketName, error);
+          
           continue;
         }
         continue;
@@ -742,9 +758,9 @@ async function enforce(marketName, snapshot, { allowSchedule = true, allowStarts
       } catch (error) {
         await pool.query(
           'UPDATE wb_ad_limits SET last_action_error=$3 WHERE market=$1 AND campaign_id=$2',
-          [marketName, row.id, String(error?.message || error).slice(0, 500)],
+          [marketName, row.id, actionErrorText(error)],
         );
-        if (error?.retryAt) await saveRefreshError(marketName, error);
+        
         continue;
       }
     }
@@ -762,7 +778,7 @@ async function enforce(marketName, snapshot, { allowSchedule = true, allowStarts
     } catch (error) {
       await pool.query(
         'UPDATE wb_ad_limits SET last_checked_at=$3,last_action_error=$4 WHERE market=$1 AND campaign_id=$2',
-        [marketName, row.id, Date.now(), String(error?.message || error).slice(0, 500)],
+        [marketName, row.id, Date.now(), actionErrorText(error)],
       );
     }
   }
@@ -795,6 +811,9 @@ export function startWbAdsLimitLoop() {
       await enforce(marketName, previous, { allowSchedule: true, allowStarts: true });
       const snapshot = await refreshMarket(marketName);
       await enforce(marketName, snapshot, { allowStarts: !snapshot?.lastError });
+      const pendingRules=await rules(marketName);
+      const retries=[Number(snapshot?.nextAttemptAt||0),...[...pendingRules.values()].map(r=>Number(actionErrorInfo(r.lastActionError)?.retryAt)||0)].filter(at=>at>Date.now());
+      if(retries.length){scheduleRetry(marketName,Math.min(...retries));return;}
       if (Number(snapshot?.nextAttemptAt || 0) > Date.now()) {
         scheduleRetry(marketName, snapshot.nextAttemptAt);
         return;
