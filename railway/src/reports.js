@@ -251,9 +251,21 @@ reportsRouter.get('/wb-finance-products', asyncRoute(async (req, res) => {
     if (ids.length !== 1) { unmatchedAdvertising += amount; continue; }
     advertisingByNmId.set(ids[0], (advertisingByNmId.get(ids[0]) || 0) + amount);
   }
-  const products = result.rows.map(row => {
+  // Keep advertising even when the product has no buyouts in this period.
+  const rows = [...result.rows];
+  for (const [nmId, amount] of advertisingByNmId) {
+    if (rows.some(row => String(row.nmId || '') === nmId)) continue;
+    const identity = await pool.query(`SELECT vendor_code AS "vendorCode" FROM wb_sales_live_rows
+      WHERE market=$1 AND nm_id=$2 AND vendor_code<>'' LIMIT 1`, [selected, nmId]);
+    rows.push({ nmId, vendorCode: identity.rows[0]?.vendorCode || '', qty: 0,
+      retailAmount: 0, forPay: 0 });
+  }
+  const consumedAdvertising = new Set();
+  const products = rows.map(row => {
     const wbCharges = Number(row.acquiring || 0) + Number(row.delivery || 0) + Number(row.storage || 0) + Number(row.acceptance || 0) + Number(row.deduction || 0) + Number(row.penalty || 0) + Number(row.rebill || 0);
-    const productAdvertising = advertisingByNmId.get(String(row.nmId || '')) || 0;
+    const nmId = String(row.nmId || '');
+    const productAdvertising = consumedAdvertising.has(nmId) ? 0 : advertisingByNmId.get(nmId) || 0;
+    consumedAdvertising.add(nmId);
     const wbExpenses = Number(row.retailAmount || 0) - Number(row.forPay || 0) + wbCharges;
     return { ...row, wbCharges, wbExpenses, advertising: productAdvertising,
       netBeforeCost: Number(row.forPay || 0) - wbCharges + Number(row.additionalPayment || 0) - productAdvertising };
