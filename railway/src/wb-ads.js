@@ -286,9 +286,8 @@ async function cardCatalog(marketName, token) {
 }
 
 function campaignName(row, statRow, cards) {
-  const nmIds = [...collectNmIds(row)];
-  collectNmIds(statRow, new Set(nmIds));
-  const allNmIds = [...new Set([...nmIds, ...collectNmIds(statRow)])];
+  // Membership comes only from campaign settings, never attributed sales statistics.
+  const allNmIds = [...collectNmIds(row?.nm_settings || [])];
   const matched = allNmIds.map(id => cards.get(id)).filter(Boolean);
   const titles = [...new Set(matched.map(card => card.title).filter(Boolean))];
   const vendorCodes = [...new Set(matched.map(card => card.vendorCode).filter(Boolean))];
@@ -367,7 +366,6 @@ async function fetchCampaigns(marketName, previous) {
     const statRow = byId.get(id);
     const label = campaignName(row, statRow, cards);
     const hasFreshStats = Boolean(statRow);
-    const hasFreshProducts = label.productTitles.length > 0;
     const preservedName = prior?.nameSource === 'wb' ? String(prior.name || '') : '';
     return {
       id,
@@ -393,9 +391,10 @@ async function fetchCampaigns(marketName, previous) {
       orderRevenue: hasFreshStats ? statMetric(statRow, day, ['sum_price', 'revenue']) : (previousIsToday ? Number(prior?.orderRevenue || 0) : 0),
       views: hasFreshStats ? statMetric(statRow, day, ['views']) : (previousIsToday ? Number(prior?.views || 0) : 0),
       clicks: hasFreshStats ? statMetric(statRow, day, ['clicks']) : (previousIsToday ? Number(prior?.clicks || 0) : 0),
-      nmIds: label.nmIds.length ? label.nmIds : (prior?.nmIds || []),
-      productTitles: hasFreshProducts ? label.productTitles : (prior?.productTitles || []),
-      vendorCodes: label.vendorCodes.length ? label.vendorCodes : (prior?.vendorCodes || []),
+      membershipSource: 'wb-settings-v1',
+      nmIds: label.nmIds,
+      productTitles: label.productTitles,
+      vendorCodes: label.vendorCodes,
     };
   });
   const unique = new Map();
@@ -454,7 +453,11 @@ async function storedSnapshot(marketName) {
   return {
     market: marketName,
     day: String(payload.day || localDate()),
-    campaigns: Array.isArray(payload.campaigns) ? payload.campaigns : [],
+    // Legacy snapshots mixed statistics products into membership. Never use them
+    // for displayed inventory or stock automation while waiting for a fresh sync.
+    campaigns: (Array.isArray(payload.campaigns) ? payload.campaigns : []).map(row =>
+      row.membershipSource === 'wb-settings-v1' ? row :
+        { ...row, nmIds: [], productTitles: [], vendorCodes: [] }),
     updatedAt: Number(row.updatedAt || 0),
     lastError: String(row.lastError || ''),
     nextAttemptAt: Number(row.nextAttemptAt || 0),
