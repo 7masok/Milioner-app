@@ -427,8 +427,12 @@ async function inventoryFor(marketName, campaigns) {
 
 
 function actionErrorText(error) {
-  return JSON.stringify({message:String(error?.message||error).slice(0,250),at:Date.now(),
-    retryAt:Number(error?.retryAt)||0,status:Number(error?.status)||0,endpoint:String(error?.endpoint||'')});
+  const message = String(error?.message || error).slice(0, 250);
+  const at = Date.now();
+  // A missing campaign budget cannot be fixed by repeatedly sending start.
+  // Keep scheduled recovery, but wait 30 minutes; explicit start remains available.
+  const retryAt = Number(error?.retryAt) || (/advert has no budget|no budget/i.test(message) ? at + 30 * 60 * 1000 : 0);
+  return JSON.stringify({message, at, retryAt, status:Number(error?.status)||0, endpoint:String(error?.endpoint||'')});
 }
 function actionErrorInfo(value) {
   try { const info=JSON.parse(String(value||''));return info&&typeof info==='object'?info:null; } catch {return null;}
@@ -626,6 +630,15 @@ wbAdsRouter.post('/promotion/actions/:market/:campaignId', asyncRoute(async (req
     `INSERT INTO wb_ad_limits(market,campaign_id,daily_limit,enabled,updated_at,manual_paused)
      VALUES($1,$2,0,FALSE,$3,TRUE) ON CONFLICT(market,campaign_id)
      DO UPDATE SET manual_paused=TRUE,updated_at=EXCLUDED.updated_at`, [marketName,id,Date.now()]);
+  // Respect the persisted WB cooldown even after a deploy or repeated clicks.
+  const configuredActions = await rules(marketName);
+  const pendingAction = actionErrorInfo(configuredActions.get(id)?.lastActionError);
+  if (pendingAction?.status === 429 && Number(pendingAction.retryAt) > Date.now()) {
+    const error = new Error('WB ограничил запросы. Повтор после ' + new Date(pendingAction.retryAt).toLocaleTimeString('ru-RU', {timeZone:'Asia/Almaty'}));
+    error.status = 429;
+    error.retryAt = pendingAction.retryAt;
+    throw error;
+  }
   const token = await tokenFor(marketName);
   if (!token) throw new Error((marketName === 'WB2' ? 'WB_TOKEN_2' : 'WB_TOKEN') + ' не настроен');
   const actionPath = action === 'pause' ? '/adv/v0/pause' : action === 'start' ? '/adv/v0/start' : '/adv/v0/stop';
