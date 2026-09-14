@@ -178,9 +178,25 @@ stockRouter.get('/stock-sync-status', requireTrustedOrigin, asyncRoute(async (_r
 stockRouter.get('/kaspi-live-stock-status',asyncRoute(async (_req,res)=>{const rows=await warehouseKaspiRows();res.json({ok:true,source:'Railway warehouse state minus active reservations',linked:rows.length,positive_stock:rows.filter(row=>row.stock>0).length,zero_stock:rows.filter(row=>row.stock<=0).length})}));
 stockRouter.get('/kaspi-stock-feed-status',requireTrustedOrigin,asyncRoute(async (req,res)=>{res.json(await kaspiStockFeedStatus(req))}));
 stockRouter.get('/kaspi-catalog',requireTrustedOrigin,asyncRoute(async (_req,res)=>{
-  const [template,linkedRows]=await Promise.all([liveTemplate(),warehouseKaspiRows()]),info=templateInfo(String(template?.rawXml||'')),linkedBySku=new Map(linkedRows.map(row=>[row.sku,row.productId])),catalog=new Map();
-  for(const [sku,offer] of info.offers)catalog.set(sku,{sku,name:offer.name||sku,brand:offer.brand||'',price:offer.price||0,inXml:true,linkedProductId:linkedBySku.get(sku)||null});
-  for(const offer of KASPI_RECOVERY_OFFERS)if(!catalog.has(offer.sku))catalog.set(offer.sku,{sku:offer.sku,name:offer.model,brand:'LuxAr',price:offer.price,inXml:false,linkedProductId:linkedBySku.get(offer.sku)||null});
+  const [template,linkedRows,orderResult]=await Promise.all([
+    liveTemplate(),warehouseKaspiRows(),
+    pool.query(`SELECT DISTINCT ON (sku) sku,product_name,unit_price
+      FROM marketplace_order_lines WHERE market='Kaspi' AND btrim(sku)<>''
+      ORDER BY sku,creation_date DESC,updated_at DESC`)
+  ]);
+  const info=templateInfo(String(template?.rawXml||'')),linkedBySku=new Map(linkedRows.map(row=>[row.sku,row])),catalog=new Map();
+  const add=(sku,name,price,source,inXml=false)=>{
+    sku=String(sku||'').trim();if(!sku||catalog.has(sku))return;
+    const linked=linkedBySku.get(sku);
+    catalog.set(sku,{sku,name:name||sku,price:Number(price)||0,source,inXml,
+      linkedProductId:linked?.productId||null,linkedProductName:linked?.name||''});
+  };
+  for(const [sku,offer] of info.offers)add(sku,offer.name,offer.price,'xml',true);
+  // New seller SKUs appear in orders before the saved XML template is replaced.
+  // Order prices are historical: do not silently copy them into the live feed.
+  for(const row of orderResult.rows)add(row.sku,row.product_name,0,'orders');
+  for(const row of linkedRows)add(row.sku,row.name,row.price,'warehouse');
+  for(const offer of KASPI_RECOVERY_OFFERS)add(offer.sku,offer.model,offer.price,'recovery');
   res.json({ok:true,products:[...catalog.values()].sort((a,b)=>a.name.localeCompare(b.name,'ru'))});
 }));
 stockRouter.put('/kaspi-price-template',requireTrustedOrigin,asyncRoute(async (req,res)=>{
