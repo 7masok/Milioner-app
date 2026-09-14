@@ -46,11 +46,20 @@ renderProducts=function(){
 
 openProduct=function(pid,market='',days=30){
   const product=prod(pid);if(!isGroup(product))return originalOpenProduct(pid,market,days);
-  const totals=groupTotals(product),rows=totals.rows.slice().sort((a,b)=>String(a.variantLabel||a.name).localeCompare(String(b.variantLabel||b.name),'ru',{numeric:true}));
+  const totals=groupTotals(product),rows=totals.rows.slice().sort((a,b)=>String(a.variantLabel||a.name).localeCompare(String(b.variantLabel||b.name),'ru',{numeric:true})),freeTotal=rows.reduce((sum,row)=>sum+Math.max(0,originalAvailableStock(row)),0);
   const body=rows.map(row=>{const amount=Math.max(0,Number(row.stock)||0),free=Math.max(0,originalAvailableStock(row)),reserve=Math.max(0,originalReserved(row)),wbAmount=hasWbAmount(row)?Number(row.wbVariant.wbAmount):null;return `<button class="variant-row" onclick="openProduct('${row.id}')"><div class="grow"><b>${esc(row.variantLabel||row.name)}</b><div class="muted">Баркод: ${esc(row.wb||'—')} · chrtId: ${esc(row?.wbVariant?.chrtId||'—')}</div>${wbAmount!==null&&wbAmount!==amount?`<div class="muted" style="color:#a40000">WB: ${wbAmount} шт. · склад: ${amount} шт.</div>`:''}</div><div class="right"><b>${free} шт.</b>${reserve?`<div class="muted">резерв ${reserve}</div>`:''}</div></button>`}).join('');
-  showSheet(`<h3>${esc(product.name)}</h3><div class="item"><div class="row"><div class="grow"><div class="label">Всего размеров</div><div class="num">${rows.length}</div></div><div class="right"><div class="label">Доступно</div><div class="num">${totals.available} шт.</div></div></div></div><div class="variant-list">${body}</div><button class="btn full" onclick="syncWbRingVariants(true)">Обновить размеры и остатки WB1</button><div class="link-note">Заказ WB списывает конкретный размер по его баркоду. Общая карточка используется только для удобного просмотра.</div>`);
+  showSheet(`<h3>${esc(product.name)}</h3><div class="item"><div class="row"><div class="grow"><div class="label">Всего размеров</div><div class="num">${rows.length}</div></div><div class="right"><div class="label">Доступно</div><div class="num">${totals.available} шт.</div></div></div></div><div class="variant-list">${body}</div>${freeTotal>0?`<button class="btn dark full" onclick="delistVariantGroupAll(\'${product.id}\')">Снять все с продажи · ${freeTotal} шт.</button>`:''}<button class="btn full" onclick="syncWbRingVariants(true)">Обновить размеры и остатки WB1</button><div class="link-note">Заказ WB списывает конкретный размер по его баркоду. Общая карточка используется только для удобного просмотра.</div>`);
 };
 
+window.delistVariantGroupAll=function(pid){
+  const group=prod(pid);if(!isGroup(group))return;
+  const rows=groupTotals(group).rows,available=rows.reduce((sum,row)=>sum+Math.max(0,originalAvailableStock(row)),0);
+  if(available<=0)return alert('Нет свободных колец для снятия с продажи.');
+  if(!confirm('Снять с продажи все '+available+' шт. «'+group.name+'» по размерам? Товары останутся на складе.'))return;
+  const now=Date.now();let moved=0;
+  for(const row of rows){const qty=Math.max(0,originalAvailableStock(row));if(!qty)continue;const unitCost=Math.max(0,Number(productDisplayCost(row))||0);row.stock=Math.max(0,(Number(row.stock)||0)-qty);state.purchases.unshift({id:id(),productId:row.id,qty,remainingQty:0,unitCost,landedUnitCost:unitCost,buyTotal:0,delivery:0,status:'at_warehouse',warehouseReceivedAt:now,date:now,relocation:true});log('снятие с продажи',row.id,-qty,'в склад · кольца');refreshProductAverageCost(row);moved+=qty}
+  save();closeModal();render();alert('С продажи снято '+moved+' шт. колец. Остатки WB1 обновляются автоматически.')
+};
 function findExistingVariant(card,size){const color=colorKey(card.color+' '+card.vendorCode);return (state.products||[]).find(product=>!isGroup(product)&&colorKey(product.name)===color&&sizeKey(product.name)===String(size.size)&&norm(product.name).includes('кольцо трансформер'))||null}
 function groupName(card){return `Кольцо трансформер ${colorKey(card.color+' '+card.vendorCode)==='gold'?'золотистый':'серебристый'}`}
 function siblingCost(color){const values=(state.products||[]).filter(product=>colorKey(product.name)===color&&norm(product.name).includes('кольцо трансформер')&&Number(product.cost)>0).map(product=>Number(product.cost));return values.length?values.reduce((sum,value)=>sum+value,0)/values.length:0}
