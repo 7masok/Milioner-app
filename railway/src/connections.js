@@ -59,7 +59,7 @@ export async function configuredWbConnectionIds() {
   return [...ids];
 }
 
-async function testToken(provider, token) {
+async function testToken(provider, token, clientId = '') {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 20_000);
   try {
@@ -75,6 +75,12 @@ async function testToken(provider, token) {
         signal:controller.signal,
         headers:{ Accept:'application/vnd.api+json', 'Content-Type':'application/vnd.api+json', 'X-Auth-Token':token }
       });
+    } else if (provider === 'OZON') {
+      response = await fetch('https://api-seller.ozon.ru/v3/product/list', {
+        method:'POST', signal:controller.signal,
+        headers:{ 'Content-Type':'application/json', 'Client-Id':clientId, 'Api-Key':token },
+        body:JSON.stringify({ filter:{ visibility:'ALL' }, limit:1 })
+      });
     } else if (provider === 'OPENAI') {
       response = await fetch('https://api.openai.com/v1/models', {
         signal:controller.signal,
@@ -88,7 +94,7 @@ async function testToken(provider, token) {
       });
     }
     if (!response.ok) {
-      const body = (await response.text()).slice(0, 300);
+      const body = provider === 'OZON' ? '' : (await response.text()).slice(0, 300);
       const error = new Error('API отклонил ключ: HTTP ' + response.status + (body ? ' · ' + body : ''));
       error.status = 400;
       throw error;
@@ -135,7 +141,7 @@ connectionsRouter.get('/connections', asyncRoute(async (_req, res) => {
     providers:[
       { id:'WB', label:'Wildberries', canAdd:true, hint:'Можно добавить несколько кабинетов' },
       { id:'KASPI', label:'Kaspi', canAdd:false, hint:'Основной кабинет уже создан' },
-      { id:'OZON', label:'Ozon', canAdd:false, hint:'Серверный коннектор ещё не подключён' },
+      { id:'OZON', label:'Ozon ФБО', canAdd:true, hint:'Подключение кабинета по Client ID и API-ключу' },
       { id:'OPENAI', label:'GPT помощник', canAdd:false, hint:'Помощник для склада' }
     ]
   });
@@ -143,20 +149,21 @@ connectionsRouter.get('/connections', asyncRoute(async (_req, res) => {
 
 connectionsRouter.post('/connections', asyncRoute(async (req, res) => {
   const provider = String(req.body?.provider || '').trim().toUpperCase();
-  if (provider !== 'WB') {
+  if (!['WB','OZON'].includes(provider)) {
     const error = new Error(provider === 'KASPI' ? 'Для Kaspi уже используется основной кабинет' : 'Для этого маркетплейса серверный коннектор ещё не готов');
     error.status = 400;
     throw error;
   }
   const label = String(req.body?.label || '').trim().slice(0, 80);
   if (!label) { const error = new Error('Укажите название магазина'); error.status = 400; throw error; }
-  const rows = await pool.query("SELECT id FROM marketplace_credentials WHERE id ~ '^WB[0-9]+$'");
+  const rows = await pool.query("SELECT id FROM marketplace_credentials WHERE provider=$1", [provider]);
   const used = new Set(['WB','WB2',...rows.rows.map(row => String(row.id))]);
-  let number = 3;
-  while (used.has('WB' + number)) number++;
-  const id = 'WB' + number, now = Date.now();
-  await pool.query("INSERT INTO marketplace_credentials(id,provider,label,encrypted_token,enabled,created_at,updated_at,last_test_ok,last_error) VALUES($1,'WB',$2,NULL,1,$3,$3,0,'')", [id, label, now]);
-  res.status(201).json({ ok:true, connection:{ id, provider:'WB', label, builtin:false, enabled:true, configured:false } });
+  let number = provider === 'WB' ? 3 : 1;
+  const prefix = provider === 'WB' ? 'WB' : 'Ozon';
+  while (used.has(prefix + (number === 1 ? '' : number))) number++;
+  const id = prefix + (number === 1 ? '' : number), now = Date.now();
+  await pool.query("INSERT INTO marketplace_credentials(id,provider,label,encrypted_token,enabled,created_at,updated_at,last_test_ok,last_error) VALUES($1,$4,$2,NULL,1,$3,$3,0,'')", [id, label, now, provider]);
+  res.status(201).json({ ok:true, connection:{ id, provider, label, builtin:false, enabled:true, configured:false } });
 }));
 
 connectionsRouter.patch('/connections/:id', asyncRoute(async (req, res) => {
@@ -177,7 +184,7 @@ connectionsRouter.put('/connections/:id', asyncRoute(async (req, res) => {
   const existing = await pool.query('SELECT provider,label FROM marketplace_credentials WHERE id=$1', [id]);
   const slot = BUILTIN_CONNECTIONS[id];
   const provider = String(existing.rows[0]?.provider || slot?.provider || '');
-  if (!provider || !['KASPI','WB','OPENAI'].includes(provider)) {
+  if (!provider || !['KASPI','WB','OPENAI','OZON'].includes(provider)) {
     const error = new Error('Этот тип подключения пока не поддерживается');
     error.status = 400;
     throw error;
@@ -188,10 +195,15 @@ connectionsRouter.put('/connections/:id', asyncRoute(async (req, res) => {
     error.status = 400;
     throw error;
   }
-  await testToken(provider, token);
+  const clientId = provider === 'OZON' ? String(req.body?.clientId || '').trim() : '';
+  if (provider === 'OZON' && !/^\d{1,20}$/.test(clientId)) {
+    const error = new Error('Укажите числовой Client ID Ozon'); error.status = 400; throw error;
+  }
+  await testToken(provider, token, clientId);
+  const storedToken = provider === 'OZON' ? JSON.stringify({ clientId, apiKey:token, scheme:'FBO' }) : token;
   const now = Date.now();
   const label = String(req.body?.label || existing.rows[0]?.label || slot?.label || id).trim().slice(0, 80) || id;
-  await pool.query("INSERT INTO marketplace_credentials(id,provider,label,encrypted_token,enabled,created_at,updated_at,last_tested_at,last_test_ok,last_error) VALUES($1,$2,$3,$4,1,$5,$5,$5,1,'') ON CONFLICT(id) DO UPDATE SET provider=EXCLUDED.provider,label=EXCLUDED.label,encrypted_token=EXCLUDED.encrypted_token,enabled=1,updated_at=EXCLUDED.updated_at,last_tested_at=EXCLUDED.last_tested_at,last_test_ok=1,last_error=''", [id, provider, label, encryptToken(token), now]);
+  await pool.query("INSERT INTO marketplace_credentials(id,provider,label,encrypted_token,enabled,created_at,updated_at,last_tested_at,last_test_ok,last_error) VALUES($1,$2,$3,$4,1,$5,$5,$5,1,'') ON CONFLICT(id) DO UPDATE SET provider=EXCLUDED.provider,label=EXCLUDED.label,encrypted_token=EXCLUDED.encrypted_token,enabled=1,updated_at=EXCLUDED.updated_at,last_tested_at=EXCLUDED.last_tested_at,last_test_ok=1,last_error=''", [id, provider, label, encryptToken(storedToken), now]);
   cache.delete(id);
   res.json({ ok:true, id, label, configured:true, managedInSite:true, updatedAt:now, lastTestedAt:now, lastTestOk:true });
 }));
