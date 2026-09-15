@@ -54,7 +54,7 @@ async function load(force=false){
 }
 window.ozonFboTab=key=>{tab=key;draw();};
 window.ozonFboSync=async()=>{
- try{await apiJson(MILLIONER_API+'/api/ozon-sync-now',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'});if(data)data.syncing=true;draw();clearTimeout(pollTimer);pollTimer=setTimeout(()=>load(true),3000);}
+ try{const response=await fetch(MILLIONER_API+'/api/ozon-sync-now',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'});if(!response.ok)throw new Error('HTTP '+response.status);if(data)data.syncing=true;draw();clearTimeout(pollTimer);pollTimer=setTimeout(()=>load(true),3000);}
  catch(e){message=String(e.message||e);draw();}
 };
 renderMarketplaceOrders=function(){baseRender();const el=document.getElementById('koUnmatchedCard');if(el)el.style.display=selectedOrderMarket==='Ozon'?'none':'';if(selectedOrderMarket==='Ozon'){draw();load();}};
