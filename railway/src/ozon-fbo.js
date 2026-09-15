@@ -15,13 +15,13 @@ async function request(credentials,path,body){
  }
 }
 export async function fetchPostings(credentials,from,to){
- const rows=[];let offset=0;
+ const rows=[];let cursor='';
  for(let page=0;page<100;page++){
-  const data=await request(credentials,'/v2/posting/fbo/list',{dir:'ASC',filter:{since:from,to,status:''},limit:1000,offset,translit:false,with:{analytics_data:true,financial_data:true}});
-  const result=Array.isArray(data.result)?data.result:data.result?.postings;
-  if(!Array.isArray(result))throw new Error('Ozon: неизвестный формат отправлений ФБО');
-  rows.push(...result);if(result.length<1000)return [...new Map(rows.map(x=>[x.posting_number,x])).values()];
-  offset+=result.length;
+  const data=await request(credentials,'/v3/posting/fbo/list',{sort_dir:'asc',cursor,filter:{since:from,to},limit:1000,translit:false,with:{analytics_data:true,financial_data:true}});
+  if(!Array.isArray(data.postings))throw new Error('Ozon: неизвестный формат отправлений ФБО');
+  rows.push(...data.postings.map(p=>({...p,products:(p.products||[]).map(x=>({...x,price:typeof x.price==='object'?x.price.amount??x.price.value:x.price,currency_code:x.price?.currency||x.price?.currency_code||x.currency_code||x.currency||p.financial_data?.currency_code}))})));
+  if(!data.has_next)return [...new Map(rows.map(x=>[x.posting_number,x])).values()];
+  if(!data.cursor||data.cursor===cursor)throw new Error('Ozon: повтор курсора отправлений');cursor=data.cursor;
  }throw new Error('Ozon: превышен лимит страниц отправлений');
 }
 export async function fetchStocks(credentials){
@@ -36,21 +36,47 @@ export async function fetchStocks(credentials){
   if(next===cursor)throw new Error('Ozon: повтор курсора остатков');cursor=next;
  }throw new Error('Ozon: превышен лимит страниц остатков');
 }
-export async function fetchFinance(credentials,from,to){
- const rows=[];let start=new Date(from),end=new Date(to);
- while(start<end){
-  const next=new Date(Date.UTC(start.getUTCFullYear(),start.getUTCMonth()+1,1));
-  const stop=new Date(Math.min(next.getTime()-1,end.getTime()));
-  for(let page=1;page<=100;page++){
-   const data=await request(credentials,'/v3/finance/transaction/list',{filter:{date:{from:start.toISOString(),to:stop.toISOString()},operation_type:[],posting_number:'',transaction_type:'all'},page,page_size:1000});
-   const result=data.result;
-   if(!Array.isArray(result?.operations))throw new Error('Ozon: неизвестный формат финансов');
-   rows.push(...result.operations);
-   if(page>=Number(result.page_count||1))break;
-   if(page===100)throw new Error('Ozon: превышен лимит страниц финансов');
-  }start=next;
+export function normalizeAccruals(accruals,date,types){
+ const rows=[];
+ for(let index=0;index<accruals.length;index++){
+  const a=accruals[index],posting=a.posting||{};
+  const add=(value,name,sku,kind='service')=>{
+   if(value==null)return;
+   if(typeof value!=='object'||!Number.isFinite(Number(value.amount)))throw new Error('Ozon: неизвестный формат суммы начисления');
+   const amount=Number(value.amount);
+   rows.push({operation_id:date+':'+String(a.accrual_id??index)+':'+rows.length,operation_date:date+'T12:00:00Z',operation_type_name:name,amount,currency_code:value.currency,accruals_for_sale:kind==='sale'?amount:0,sale_commission:kind==='commission'?amount:0,posting:{posting_number:posting.posting_number||''},items:sku?[{sku}]:[]});
+  };
+  for(const p of posting.products||[]){
+   add(p.commission?.seller_price,'Продажа',p.sku,'sale');
+   add(p.commission?.sale_commission,'Комиссия Ozon',p.sku,'commission');
+   const delivery=p.delivery;
+   if(delivery?.services?.length){for(const f of delivery.services)add(f.accrued,types.get(String(f.type_id))||'Доставка · '+f.type_id,p.sku);}
+   else add(delivery?.total_accrued,'Доставка',p.sku);
+  }
+  for(const group of a.item_fees?.fees||[])for(const fee of group.fees||[])add(fee.accrued,types.get(String(fee.type_id))||'Услуга · '+fee.type_id,group.sku);
+  const fee=a.non_item_fee;if(fee)add(fee.accrued,types.get(String(fee.type_id))||'Услуга · '+fee.type_id);
+  if(!a.posting&&!a.item_fees&&!a.non_item_fee)throw new Error('Ozon: неизвестная категория начисления '+String(a.accrued_category));
  }
- return [...new Map(rows.map(x=>[String(x.operation_id),x])).values()];
+ return rows;
+}
+export async function fetchFinance(credentials,from,to){
+ const typesData=await request(credentials,'/v1/finance/accrual/types',{});
+ const types=new Map((typesData.accrual_types||[]).map(x=>[String(x.id),x.description||x.name]));
+ const rows=[];const end=to.slice(0,10);
+ for(let day=new Date(from.slice(0,10)+'T00:00:00Z');day.toISOString().slice(0,10)<=end;day.setUTCDate(day.getUTCDate()+1)){
+  const date=day.toISOString().slice(0,10);let cursor='';const raw=[];
+  for(let page=0;page<200;page++){
+   const data=await request(credentials,'/v1/finance/accrual/by-day',{date,last_id:cursor});
+   if(!Array.isArray(data.accruals))throw new Error('Ozon: неизвестный формат начислений');
+   raw.push(...data.accruals);
+   const next=data.last_id||'';if(!next||!data.accruals.length)break;
+   if(next===cursor||page===199)throw new Error('Ozon: не завершена загрузка начислений за '+date);
+   cursor=next;await new Promise(r=>setTimeout(r,300));
+  }
+  rows.push(...normalizeAccruals(raw,date,types));
+  await new Promise(r=>setTimeout(r,300));
+ }
+ return rows;
 }
 async function run(){
  await ensureTable();const results=[];
