@@ -17,11 +17,13 @@ function stockHtml(a){
 }
 function financeHtml(a){
  const rows=periodRows(a.finance?.rows||[]);
+ const codes=[...new Set(rows.map(x=>x.currency_code||x.currency).filter(x=>typeof x==='string'&&/^[A-Z]{3}$/.test(x)))];
+ const financeMoney=value=>codes.length===1?money(value,codes[0]):Number(value||0).toLocaleString('ru-RU',{minimumFractionDigits:2,maximumFractionDigits:2});
  const amount=rows.reduce((n,x)=>n+Number(x.amount||0),0);
  const sales=rows.reduce((n,x)=>n+Number(x.accruals_for_sale||0),0);
  const commission=rows.reduce((n,x)=>n+Number(x.sale_commission||0),0);
- return '<div class="item"><b>Начислено Ozon: '+money(amount)+'</b><div class="muted">После удержаний Ozon, до себестоимости товара. Это не чистая прибыль.</div><div>Начисления за продажи: '+money(sales)+'</div><div>Комиссия: '+money(commission)+'</div><div class="muted">Сумма операций уже включает услуги, возвраты и другие начисления. Повторно расходы не вычитаются.</div></div>'+
- (rows.length?rows.slice().reverse().map(x=>'<div class="item"><b>'+esc(x.operation_type_name||x.operation_type)+'</b><div>'+money(x.amount)+'</div><div class="muted">'+new Date(x.creationDate).toLocaleDateString('ru-RU')+(x.posting?.posting_number?' · '+esc(x.posting.posting_number):'')+'</div>'+(x.items||[]).map(i=>'<div>'+esc(i.name||i.sku)+'</div>').join('')+'</div>').join(''):'<div class="empty">За выбранный период финансовых операций нет.</div>');
+ return '<div class="item"><b>Начислено Ozon: '+financeMoney(amount)+'</b><div class="muted">После удержаний Ozon, до себестоимости товара. Это не чистая прибыль. Суммы в валюте финансового отчёта Ozon.</div><div>Начисления за продажи: '+financeMoney(sales)+'</div><div>Комиссия: '+financeMoney(commission)+'</div><div class="muted">Сумма операций уже включает услуги, возвраты и другие начисления. Повторно расходы не вычитаются.</div></div>'+
+ (rows.length?rows.slice().reverse().map(x=>'<div class="item"><b>'+esc(x.operation_type_name||x.operation_type)+'</b><div>'+financeMoney(x.amount)+'</div><div class="muted">'+new Date(x.creationDate).toLocaleDateString('ru-RU')+(x.posting?.posting_number?' · '+esc(x.posting.posting_number):'')+'</div>'+(x.items||[]).map(i=>'<div>'+esc(i.name||i.sku)+'</div>').join('')+'</div>').join(''):'<div class="empty">За выбранный период финансовых операций нет.</div>');
 }
 function draw(){
  if(selectedOrderMarket!=='Ozon')return;
