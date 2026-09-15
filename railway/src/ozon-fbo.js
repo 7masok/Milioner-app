@@ -10,7 +10,7 @@ async function request(credentials,path,body){
  for(let attempt=0;attempt<3;attempt++){
   const response=await fetch('https://api-seller.ozon.ru'+path,{method:'POST',headers:{'Content-Type':'application/json','Client-Id':credentials.clientId,'Api-Key':credentials.apiKey},body:JSON.stringify(body),signal:AbortSignal.timeout(30000)});
   if((response.status===429||response.status>=500)&&attempt<2){await new Promise(r=>setTimeout(r,1000*(attempt+1)));continue;}
-  if(!response.ok){const e=new Error('Ozon '+path+': HTTP '+response.status);e.status=502;throw e;}
+  if(!response.ok){const detail=await response.json().catch(()=>({}));const reason=String(detail.message||detail.error?.message||'').replaceAll(String(credentials.apiKey),'[hidden]').replaceAll(String(credentials.clientId),'[hidden]').slice(0,300);const e=new Error('Ozon '+path+': HTTP '+response.status+(reason?' · '+reason:''));e.status=502;throw e;}
   const data=await response.json();if(data.error)throw new Error('Ozon '+path+': ошибка ответа');return data;
  }
 }
