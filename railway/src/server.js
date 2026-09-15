@@ -1,3 +1,4 @@
+import { ozonRouter, startOzonSyncLoop } from './ozon-fbo.js';
 import express from 'express';
 import helmet from 'helmet';
 import path from 'node:path';
@@ -22,6 +23,7 @@ assertRuntimeConfig();
 const app = express();
 const repositoryRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const frontendFiles = Object.freeze([
+  'ozon-fbo-v1.js',
   'warehouse-insights.js',
   'cloud-sync-v3.js',
   'wb-variants-v1.js',
@@ -137,6 +139,7 @@ app.post('/api/stock-sync-now', requireTrustedOrigin, async (req, res, next) => 
   } catch (error) { next(error); }
 });
 
+app.use('/api', ozonRouter);
 app.use('/api', connectionsRouter);
 app.use('/api', wbVariantsRouter);
 app.use('/api', wbAdsRouter);
@@ -160,6 +163,7 @@ app.use((error, _req, res, _next) => {
 
 const server = app.listen(config.port, '0.0.0.0', () => {
   console.log(`millioner Railway API listening on ${config.port}`);
+  startOzonSyncLoop();
   startKaspiSyncLoop();
   startWbSyncLoop();
   startWbAdsLimitLoop();
