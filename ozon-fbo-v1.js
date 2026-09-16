@@ -1,6 +1,6 @@
 (()=>{
 let data=null,loading=false,loadedAt=0,message='',pollTimer=null;
-let fboByOffer=new Map(),ozonReportActive=String(state?.settings?.reportMarket||'')==='Ozon';
+let fboByKey=new Map(),fboTotal=0,ozonReportActive=String(state?.settings?.reportMarket||'')==='Ozon';
 const baseRenderOrders=renderMarketplaceOrders;
 const baseTransition=applyMarketplaceTransitions;
 const baseProductCard=productCard;
@@ -14,17 +14,18 @@ const money=(value,currency)=>{
 };
 const periodRows=rows=>filterMarketplaceOrdersByPeriod(rows.map(x=>({...x,creationDate:Date.parse(x.created_at||x.operation_date||'')||0})));
 function rebuildFboMap(){
- const next=new Map();
+ const next=new Map();let total=0;
  for(const account of data?.accounts||[])for(const row of account.stocks?.rows||[]){
-  const offer=String(row.offer_id||'').trim();if(!offer)continue;
   const qty=(row.stocks||[]).filter(s=>String(s.type||'').toLowerCase()==='fbo').reduce((n,s)=>n+Math.max(0,Number(s.present)||0),0);
-  next.set(offer,(next.get(offer)||0)+qty);
+  total+=qty;
+  const keys=[row.offer_id,row.product_id,...(row.stocks||[]).map(s=>s.sku)].map(x=>String(x||'').trim()).filter(Boolean);
+  for(const key of new Set(keys))next.set(key,(next.get(key)||0)+qty);
  }
- fboByOffer=next;
+ fboByKey=next;fboTotal=total;
 }
-function productOzonOffers(p){return [...new Set([p?.ozon,...(Array.isArray(p?.ozonAliases)?p.ozonAliases:[])].map(x=>String(x||'').trim()).filter(Boolean))];}
-function ozonFboQtyForProduct(p){return productOzonOffers(p).reduce((n,offer)=>n+(fboByOffer.get(offer)||0),0);}
-function updateFboMetric(){const el=document.getElementById('productFboQty');if(el)el.textContent=[...fboByOffer.values()].reduce((a,x)=>a+x,0).toLocaleString('ru-RU')+' шт.';}
+function productOzonKeys(p){return [...new Set([p?.ozon,...(Array.isArray(p?.ozonAliases)?p.ozonAliases:[])].map(x=>String(x||'').trim()).filter(Boolean))];}
+function ozonFboQtyForProduct(p){return productOzonKeys(p).reduce((n,key)=>n+(fboByKey.get(key)||0),0);}
+function updateFboMetric(){const el=document.getElementById('productFboQty');if(el)el.textContent=fboTotal.toLocaleString('ru-RU')+' шт.';}
 function orderHtml(a){
  const rows=periodRows(a.postings?.rows||[]).filter(p=>{const q=String(document.getElementById('orderSearch')?.value||'').toLowerCase();return !q||JSON.stringify([p.posting_number,...(p.products||[]).map(x=>[x.name,x.offer_id])]).toLowerCase().includes(q);});
  const statuses={awaiting_packaging:'Сборка Ozon',awaiting_deliver:'Ожидает доставки',delivering:'Доставка',delivered:'Доставлен',cancelled:'Отменён',arbitration:'Спор',client_arbitration:'Спор покупателя',driver_pickup:'У курьера'};
@@ -60,8 +61,8 @@ window.ozonFboSync=async()=>{
 renderMarketplaceOrders=function(){baseRenderOrders();const el=document.getElementById('koUnmatchedCard');if(el)el.style.display=selectedOrderMarket==='Ozon'?'none':'';if(selectedOrderMarket==='Ozon'){draw();load();}};
 applyMarketplaceTransitions=function(market,feed){if(String(market).startsWith('Ozon'))return {reservedCount:0,soldCount:0,cancelledCount:0};return baseTransition(market,feed);};
 productCard=function(p,profit,d,stock){
- let html=baseProductCard(p,profit,d,stock),qty=ozonFboQtyForProduct(p);if(!qty)return html;
- const line='<div class="muted" style="color:#1c62bb">На FBO Ozon: '+qty+' шт.</div>';
+ let html=baseProductCard(p,profit,d,stock),keys=productOzonKeys(p);if(!keys.length)return html;
+ const qty=ozonFboQtyForProduct(p),line='<div class="muted" style="color:#1c62bb;font-weight:700">FBO Ozon: '+qty+' шт.</div>';
  return html.replace('</div><div class="right" style="min-width:112px">',line+'</div><div class="right" style="min-width:112px">');
 };
 renderProducts=function(rebuildStats=false){
