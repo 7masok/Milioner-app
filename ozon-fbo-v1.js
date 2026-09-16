@@ -27,7 +27,7 @@ function ozonFboQtyForProduct(p){return productOzonKeys(p).reduce((n,key)=>n+(fb
 function updateFboMetric(){const el=document.getElementById('productFboQty');if(el)el.textContent=fboTotal.toLocaleString('ru-RU')+' шт.';}
 function populateOzonOrderFeed(){
  if(!data?.accounts)return;
- const feed=state.ozonOrderFeed||[];
+ const feed=Array.isArray(state.ozonOrderFeed)?state.ozonOrderFeed:(state.ozonOrderFeed=[]);
  const ozonKeys=new Map();
  for(const account of data.accounts){
   for(const posting of account.postings?.rows||[]){
