@@ -34,6 +34,8 @@ test('WB synchronization uses the current Finance API and paginates by rrdId', (
   assert.match(source, /rrDate/);
   assert.match(source, /paidStorage/);
   assert.match(source, /paidAcceptance/);
+  assert.match(source, /sellerOperName/);
+  assert.match(source, /deliveryService/);
   assert.doesNotMatch(source, /reportDetailByPeriod/);
   assert.match(source, /\/adv\/v1\/upd/);
   assert.match(source, /INSERT INTO wb_ad_costs/);
@@ -62,6 +64,10 @@ test('WB report period switching is UI-only and the legacy finance renderer stay
   const renderer = readFileSync(new URL('../../kaspi-report-v2.js', import.meta.url), 'utf8');
   assert.match(renderer, /\[data-report-period\]/);
   assert.match(renderer, /dataset\.reportPeriod/);
+  const marketHandler = renderer.match(/window\.setReportMarket=function\(market\)\{([^}]*)\}/);
+  assert.ok(marketHandler, 'report market handler must exist');
+  assert.doesNotMatch(marketHandler[1], /\bsave\s*\(/, 'report market tabs must not PUT the warehouse snapshot');
+  assert.match(marketHandler[1], /milioner_report_market_ui_v1/);
 
   const compat = readFileSync(new URL('../../purchase-arrival-sort-v1.js', import.meta.url), 'utf8');
   assert.doesNotMatch(compat, /wbRenderFresh|wb-dashboard-buyouts|window\.renderReports|window\.setReportPeriod/);

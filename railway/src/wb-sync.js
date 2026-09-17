@@ -15,9 +15,9 @@ const LOOKBACK_DAYS = 14;
 // WB allows only two calls of the financial report-by-period method per 12
 // hours. Orders may still refresh every ten minutes, but finance must not.
 const FINANCE_SYNC_MS = 6 * 60 * 60 * 1000 + 5 * 60 * 1000;
-// A failed finance request must not be retried by every ten-minute order sync.
-// WB commonly asks clients to wait close to an hour after HTTP 429.
-const FINANCE_FAILURE_RETRY_MS = 65 * 60 * 1000;
+// The current Finance API allows one request per minute per seller account.
+// Retry only on a later order-sync pass; never hammer the API inside the same pass.
+const FINANCE_FAILURE_RETRY_MS = 5 * 60 * 1000;
 const inFlight = new Map();
 
 function isoDate(time) {
@@ -184,10 +184,10 @@ async function upsertFinance(market, rows) {
         market, rrdId, String(value(row, 'reportId', 'realizationreport_id') || ''), timestamp(value(row, 'rrDate', 'rrDt', 'rr_dt')),
         timestamp(value(row, 'saleDt', 'sale_dt')), String(value(row, 'saName', 'vendorCode', 'sa_name') || ''),
         String(value(row, 'nmId', 'nm_id') || ''), String(value(row, 'title', 'subjectName', 'subject_name') || ''),
-        String(value(row, 'docTypeName', 'doc_type_name') || ''), String(value(row, 'supplierOperName', 'supplier_oper_name') || ''),
+        String(value(row, 'docTypeName', 'doc_type_name') || ''), String(value(row, 'sellerOperName', 'supplierOperName', 'supplier_oper_name') || ''),
         Number(value(row, 'quantity', 'qty')) || 0, Number(value(row, 'retailAmount', 'retail_amount')) || 0,
         Number(value(row, 'ppvzForPay', 'forPay', 'ppvz_for_pay')) || 0, Number(value(row, 'acquiringFee', 'acquiring_fee')) || 0,
-        Number(value(row, 'deliveryRub', 'delivery_rub')) || 0, Number(value(row, 'paidStorage', 'storageFee', 'storage', 'storage_fee')) || 0,
+        Number(value(row, 'deliveryService', 'deliveryRub', 'delivery_rub')) || 0, Number(value(row, 'paidStorage', 'storageFee', 'storage', 'storage_fee')) || 0,
         Number(value(row, 'paidAcceptance', 'acceptance', 'acceptanceFee', 'acceptance_fee')) || 0, Number(value(row, 'deduction')) || 0,
         Number(value(row, 'penalty')) || 0, Number(value(row, 'additionalPayment', 'additional_payment')) || 0,
         Number(value(row, 'rebillLogisticCost', 'rebill_logistic_cost')) || 0, JSON.stringify(row), now
