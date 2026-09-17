@@ -2,6 +2,7 @@ import { ozonRouter, startOzonSyncLoop } from './ozon-fbo.js';
 import express from 'express';
 import helmet from 'helmet';
 import path from 'node:path';
+import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { config, assertRuntimeConfig } from './config.js';
 import { pool } from './db.js';
@@ -65,6 +66,15 @@ app.use(noStore);
 app.use(express.json({ limit: '7mb', strict: true }));
 
 app.get(['/', '/index.html'], (_req, res) => res.sendFile(path.join(repositoryRoot, 'index.html')));
+app.get('/ozon-fbo-v1.js', async (_req,res,next)=>{
+  try{
+    const [base,supplies]=await Promise.all([
+      readFile(path.join(repositoryRoot,'ozon-fbo-v1.js'),'utf8'),
+      readFile(path.join(repositoryRoot,'ozon-supplies-v1.js'),'utf8')
+    ]);
+    res.type('application/javascript').send(base+'\n'+supplies);
+  }catch(error){next(error);}
+});
 for (const file of frontendFiles) {
   app.get(`/${file}`, (_req, res) => res.sendFile(path.join(repositoryRoot, file)));
 }
