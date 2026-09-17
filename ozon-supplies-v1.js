@@ -69,11 +69,17 @@ window.linkOzonFboItem=(supplyId,bundleId,sku)=>{
  const row=allLines(current.order).find(x=>String(x.s.supply_id)===supplyId&&String(x.s.bundle_id)===bundleId&&String(x.item.sku)===sku);if(!row)return;
  linkContext={...row,account:current.account};renderLinkPicker('');
 };
-function renderLinkPicker(q){
- q=String(q||'').toLowerCase();const item=linkContext.item,products=(state.products||[]).filter(p=>(p.name||'').toLowerCase().includes(q)).slice(0,50);
- const list=products.map(p=>`<button class="btn full" style="margin-top:7px;text-align:left" onclick="chooseOzonFboProduct('${encodeURIComponent(String(p.id))}')">${text(p.name)} <span class="muted">· остаток ${Number(p.stock)||0}</span></button>`).join('')||'<div class="empty">Ничего не найдено</div>';
- showSheet(`<h3>Привязать товар Ozon</h3><div class="muted">${text(item.name||'')} · SKU ${text(item.sku)}</div><input id="ozonSupplyProductSearch" class="input" style="margin-top:10px" placeholder="Найти товар склада" value="${text(q)}" oninput="renderOzonFboLinkPicker(this.value)">${list}`);
+function productPickerHtml(q){
+ q=String(q||'').toLowerCase();
+ const products=(state.products||[]).filter(p=>(p.name||'').toLowerCase().includes(q)).slice(0,50);
+ return products.map(p=>`<button class="btn full" style="margin-top:7px;text-align:left" onclick="chooseOzonFboProduct('${encodeURIComponent(String(p.id))}')">${text(p.name)} <span class="muted">· остаток ${Number(p.stock)||0}</span></button>`).join('')||'<div class="empty">Ничего не найдено</div>';
 }
+function renderLinkPicker(q){
+ q=String(q||'');const item=linkContext.item;
+ showSheet(`<h3>Привязать товар Ozon</h3><div class="muted">${text(item.name||'')} · SKU ${text(item.sku)}</div><input id="ozonSupplyProductSearch" class="input" style="margin-top:10px" placeholder="Найти товар склада" value="${text(q)}" oninput="filterOzonFboLinkPicker(this.value)"><div id="ozonSupplyProductList">${productPickerHtml(q)}</div>`);
+ const input=document.getElementById('ozonSupplyProductSearch');if(input){input.focus();input.setSelectionRange(input.value.length,input.value.length);}
+}
+window.filterOzonFboLinkPicker=q=>{const list=document.getElementById('ozonSupplyProductList');if(list)list.innerHTML=productPickerHtml(q);};
 window.renderOzonFboLinkPicker=q=>renderLinkPicker(q);
 window.chooseOzonFboProduct=pid=>{
  pid=decodeURIComponent(pid);const p=prod(pid);if(!p||!linkContext)return;
