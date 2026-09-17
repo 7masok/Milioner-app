@@ -76,6 +76,19 @@ async function auditWbReportData() {
       const latest = await pool.query(`SELECT started_at AS "startedAt",finished_at AS "finishedAt",finance_ok AS "financeOk",
         promotion_ok AS "promotionOk",finance_items AS "financeItems",ad_items AS "adItems",error
         FROM wb_finance_sync_runs WHERE market=$1 ORDER BY id DESC LIMIT 1`, [market]);
+      const freshness = await pool.query(`WITH latest_update AS (
+          SELECT COALESCE(MAX(updated_at),0) AS at FROM wb_finance_rows WHERE market=$1
+        )
+        SELECT (SELECT at FROM latest_update) AS "latestUpdatedAt",
+          COUNT(*) FILTER (WHERE updated_at < (SELECT at FROM latest_update)-60000)::bigint AS "olderRows45d",
+          COUNT(*) FILTER (WHERE rr_date >= $3 AND updated_at < (SELECT at FROM latest_update)-60000)::bigint AS "olderRows30d",
+          COUNT(*) FILTER (WHERE rr_date >= $4 AND updated_at < (SELECT at FROM latest_update)-60000)::bigint AS "olderRows7d",
+          MIN(rr_date) FILTER (WHERE updated_at < (SELECT at FROM latest_update)-60000) AS "olderMinRrDate",
+          MAX(rr_date) FILTER (WHERE updated_at < (SELECT at FROM latest_update)-60000) AS "olderMaxRrDate",
+          COALESCE(SUM(retail_amount) FILTER (WHERE rr_date >= $3 AND updated_at < (SELECT at FROM latest_update)-60000),0) AS "olderRevenue30d",
+          COUNT(DISTINCT report_id) FILTER (WHERE updated_at < (SELECT at FROM latest_update)-60000)::bigint AS "olderReportIds"
+        FROM wb_finance_rows WHERE market=$1 AND rr_date >= $2`,
+        [market, Date.now()-45*86_400_000, Date.now()-30*86_400_000, Date.now()-7*86_400_000]);
       console.info('WB report audit', JSON.stringify({
         market,
         sourceRows: Number(sourceDiff.rows || 0),
@@ -90,6 +103,7 @@ async function auditWbReportData() {
         },
         maxRawToStoredDifference: differences.length ? Math.max(...differences) : 0,
         periods,
+        rowFreshness: freshness.rows[0] || null,
         latestSync: latest.rows[0] || null
       }));
     }
