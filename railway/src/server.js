@@ -34,6 +34,7 @@ const frontendFiles = Object.freeze([
   'save-conflict-v1.js',
   'purchase-delete-v1.js',
   'purchase-plan-ignore-v1.js',
+  'purchase-arrival-sort-v1.js',
   'kaspi-status-compat-v1.js',
   'kaspi-ads-v2-original.js',
   'reservation-compat-v1.js',
