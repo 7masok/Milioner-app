@@ -36,10 +36,10 @@ export async function fetchStocks(credentials){
   if(next===cursor)throw new Error('Ozon: повтор курсора остатков');cursor=next;
  }throw new Error('Ozon: превышен лимит страниц остатков');
 }
-const SUPPLY_STATES=['ORDER_STATE_DATA_FILLING','ORDER_STATE_READY_TO_SUPPLY','ORDER_STATE_ACCEPTED_AT_SUPPLY_WAREHOUSE','ORDER_STATE_IN_TRANSIT','ORDER_STATE_ACCEPTANCE_AT_STORAGE_WAREHOUSE','ORDER_STATE_REPORTS_CONFIRMATION_AWAITING','ORDER_STATE_REPORT_REJECTED','ORDER_STATE_COMPLETED','ORDER_STATE_REJECTED_AT_SUPPLY_WAREHOUSE','ORDER_STATE_CANCELLED'];
+const SUPPLY_STATES=['DATA_FILLING','READY_TO_SUPPLY','ACCEPTED_AT_SUPPLY_WAREHOUSE','IN_TRANSIT','ACCEPTANCE_AT_STORAGE_WAREHOUSE','REPORTS_CONFIRMATION_AWAITING','REPORT_REJECTED','COMPLETED','REJECTED_AT_SUPPLY_WAREHOUSE','CANCELLED','OVERDUE','SUPPLY_VARIANTS_ARRANGING','SUPPLY_VARIANTS_CONFIRMATION','TIMESLOT_BOOKING'];
 export async function fetchSupplyOrders(credentials){
- const listed=await request(credentials,'/v2/supply-order/list',{filter:{states:SUPPLY_STATES},paging:{from_supply_order_id:0,limit:100}});
- const ids=(Array.isArray(listed.supply_order_id)?listed.supply_order_id:[]).map(String).filter(Boolean);
+ const listed=await request(credentials,'/v3/supply-order/list',{filter:{states:SUPPLY_STATES},last_id:'',limit:100,sort_by:'ORDER_CREATION',sort_dir:'DESC'});
+ const ids=(Array.isArray(listed.order_ids)?listed.order_ids:[]).map(String).filter(Boolean);
  if(!ids.length)return [];
  const rows=[];
  for(let offset=0;offset<ids.length;offset+=100){
