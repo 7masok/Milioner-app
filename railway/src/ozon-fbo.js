@@ -42,8 +42,8 @@ export async function fetchSupplyOrders(credentials){
  const ids=(Array.isArray(listed.order_ids)?listed.order_ids:[]).map(String).filter(Boolean);
  if(!ids.length)return [];
  const rows=[];
- for(let offset=0;offset<ids.length;offset+=100){
-  const data=await request(credentials,'/v3/supply-order/get',{order_ids:ids.slice(offset,offset+100)});
+ for(let offset=0;offset<ids.length;offset+=50){
+  const data=await request(credentials,'/v3/supply-order/get',{order_ids:ids.slice(offset,offset+50)});
   if(!Array.isArray(data.orders))throw new Error('Ozon: неизвестный формат заявок FBO');
   rows.push(...data.orders);
  }
