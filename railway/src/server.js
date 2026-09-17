@@ -69,10 +69,12 @@ app.use(express.json({ limit: '7mb', strict: true }));
 app.get(['/', '/index.html'], (_req, res) => res.sendFile(path.join(repositoryRoot, 'index.html')));
 app.get('/ozon-fbo-v1.js', async (_req,res,next)=>{
   try{
-    const [base,supplies]=await Promise.all([
+    const [rawBase,supplies]=await Promise.all([
       readFile(path.join(repositoryRoot,'ozon-fbo-v1.js'),'utf8'),
       readFile(path.join(repositoryRoot,'ozon-supplies-v1.js'),'utf8')
     ]);
+    const syncTimeCode="const complete=(data.accounts||[]).map(a=>[a.postings?.updatedAt,a.stocks?.updatedAt,a.finance?.updatedAt,a.supplies?.updatedAt].map(Number)).filter(x=>x.every(Boolean)).map(x=>Math.min(...x));text=complete.length===(data.accounts||[]).length&&complete.length?new Date(Math.min(...complete)).toLocaleTimeString('ru-RU',{hour:'2-digit',minute:'2-digit'}):'—';";
+    const base=rawBase.replace("text='работает';",syncTimeCode);
     res.type('application/javascript').send(base+'\n'+supplies);
   }catch(error){next(error);}
 });
