@@ -25,11 +25,16 @@ test('reads WB promotion costs and preserves the WB calendar day', () => {
   assert.equal(promotionCostDay({ updTime: null }), '');
 });
 
-test('WB synchronization uses official paginated finance and promotion cost methods', () => {
+test('WB synchronization uses the current Finance API and paginates by rrdId', () => {
   const source = readFileSync(new URL('../src/wb-sync.js', import.meta.url), 'utf8');
-  assert.match(source, /statistics-api\.wildberries\.ru/);
-  assert.match(source, /reportDetailByPeriod/);
-  assert.match(source, /rrdid/);
+  assert.match(source, /finance-api\.wildberries\.ru/);
+  assert.match(source, /\/api\/finance\/v1\/sales-reports\/detailed/);
+  assert.match(source, /method:\s*'POST'/);
+  assert.match(source, /rrdId/);
+  assert.match(source, /rrDate/);
+  assert.match(source, /paidStorage/);
+  assert.match(source, /paidAcceptance/);
+  assert.doesNotMatch(source, /reportDetailByPeriod/);
   assert.match(source, /\/adv\/v1\/upd/);
   assert.match(source, /INSERT INTO wb_ad_costs/);
   assert.match(source, /previousRun\.finance_ok/);
@@ -45,14 +50,26 @@ test('browser sync avoids five-second warehouse polling and duplicate order load
   assert.match(source, /sharedOrderCacheInFlight/);
 });
 
-test('WB report period switching is UI-only and paints the selected period', () => {
-  const source = readFileSync(new URL('../../purchase-arrival-sort-v1.js', import.meta.url), 'utf8');
-  const handler = source.match(/window\.setReportPeriod=function\(days\)\{([\s\S]*?)\n    \};/);
-  assert.ok(handler, 'custom report period handler must exist');
-  assert.doesNotMatch(handler[1], /\bsave\(\)/, 'period taps must not PUT the warehouse snapshot');
-  assert.match(handler[1], /saveLocalOnly/);
-  assert.match(source, /\[data-report-period\]/);
-  assert.match(source, /dataset\.reportPeriod/);
+test('WB report period switching is UI-only and the legacy finance renderer stays authoritative', () => {
+  const page = readFileSync(new URL('../../index.html', import.meta.url), 'utf8');
+  const handler = page.match(/function setReportPeriod\(days\)\{([^}]*)\}/);
+  assert.ok(handler, 'report period handler must exist');
+  assert.doesNotMatch(handler[1], /\bsave\s*\(/, 'period taps must not PUT the warehouse snapshot');
+  assert.doesNotMatch(handler[1], /saveLocalOnly\s*\(/, 'period taps must not serialize the whole warehouse locally');
+  assert.match(handler[1], /rememberReportPeriodUiPreference/);
+  assert.match(handler[1], /renderReports\(\)/);
+
+  const renderer = readFileSync(new URL('../../kaspi-report-v2.js', import.meta.url), 'utf8');
+  assert.match(renderer, /\[data-report-period\]/);
+  assert.match(renderer, /dataset\.reportPeriod/);
+
+  const compat = readFileSync(new URL('../../purchase-arrival-sort-v1.js', import.meta.url), 'utf8');
+  assert.doesNotMatch(compat, /wbRenderFresh|wb-dashboard-buyouts|window\.renderReports|window\.setReportPeriod/);
+
+  const reports = readFileSync(new URL('../src/reports.js', import.meta.url), 'utf8');
+  assert.match(reports, /wb_finance_rows WHERE market=\$1 AND rr_date >= \$2 AND rr_date < \$3/);
+  assert.match(reports, /WHERE f\.market=\$1 AND f\.rr_date >= \$2 AND f\.rr_date < \$3/);
+  assert.doesNotMatch(reports, /CASE WHEN trim\(f?\.?doc_type\).*sale_date/);
 });
 
 test('WB product report keeps multi-product advertising unallocated', () => {

@@ -7,7 +7,7 @@ import { financeRowsFromPayload, promotionCostDay, promotionCostRowsFromPayload 
 import { syncWbStockMarket } from './wb-stock-sync.js';
 
 const WB_API = 'https://marketplace-api.wildberries.ru';
-const WB_STATISTICS_API = 'https://statistics-api.wildberries.ru';
+const WB_FINANCE_API = 'https://finance-api.wildberries.ru';
 const WB_ADVERT_API = 'https://advert-api.wildberries.ru';
 const SYNC_MS = 10 * 60 * 1000;
 const TIMEOUT_MS = 25_000;
@@ -108,18 +108,19 @@ async function fetchOrders(market, token) {
 async function fetchFinanceRows(token) {
   const dateTo = isoDate(Date.now()), dateFrom = isoDate(Date.now() - 45 * 86_400_000);
   const rows = [];
-  let rrdid = 0;
+  let rrdId = 0;
   for (let page = 0; page < 20; page += 1) {
-    const query = new URLSearchParams({ dateFrom, dateTo, limit: '100000', rrdid: String(rrdid), period: 'weekly' });
-    const data = await requestJson(`${WB_STATISTICS_API}/api/v5/supplier/reportDetailByPeriod?${query}`, {
-      headers: { Accept: 'application/json', Authorization: token }
+    const data = await requestJson(`${WB_FINANCE_API}/api/finance/v1/sales-reports/detailed`, {
+      method: 'POST',
+      headers: { Accept: 'application/json', Authorization: token, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ dateFrom, dateTo, limit: 100000, rrdId, period: 'weekly' })
     }, 'WB Finance report');
     const batch = financeRowsFromPayload(data);
     rows.push(...batch);
     if (batch.length < 100000) break;
     const next = Number(value(batch[batch.length - 1], 'rrdId', 'rrd_id')) || 0;
-    if (!next || next === rrdid) break;
-    rrdid = next;
+    if (!next || next === rrdId) break;
+    rrdId = next;
   }
   return rows;
 }
@@ -180,14 +181,14 @@ async function upsertFinance(market, rows) {
         (market,rrd_id,report_id,rr_date,sale_date,vendor_code,nm_id,title,doc_type,operation,qty,retail_amount,for_pay,acquiring_fee,delivery_service,paid_storage,paid_acceptance,deduction,penalty,additional_payment,rebill_logistic_cost,raw_json,updated_at)
         VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23)
         ON CONFLICT(market,rrd_id) DO UPDATE SET report_id=excluded.report_id,rr_date=excluded.rr_date,sale_date=excluded.sale_date,vendor_code=excluded.vendor_code,nm_id=excluded.nm_id,title=excluded.title,doc_type=excluded.doc_type,operation=excluded.operation,qty=excluded.qty,retail_amount=excluded.retail_amount,for_pay=excluded.for_pay,acquiring_fee=excluded.acquiring_fee,delivery_service=excluded.delivery_service,paid_storage=excluded.paid_storage,paid_acceptance=excluded.paid_acceptance,deduction=excluded.deduction,penalty=excluded.penalty,additional_payment=excluded.additional_payment,rebill_logistic_cost=excluded.rebill_logistic_cost,raw_json=excluded.raw_json,updated_at=excluded.updated_at`, [
-        market, rrdId, String(value(row, 'reportId', 'realizationreport_id') || ''), timestamp(value(row, 'rrDt', 'rr_dt')),
+        market, rrdId, String(value(row, 'reportId', 'realizationreport_id') || ''), timestamp(value(row, 'rrDate', 'rrDt', 'rr_dt')),
         timestamp(value(row, 'saleDt', 'sale_dt')), String(value(row, 'saName', 'vendorCode', 'sa_name') || ''),
         String(value(row, 'nmId', 'nm_id') || ''), String(value(row, 'title', 'subjectName', 'subject_name') || ''),
         String(value(row, 'docTypeName', 'doc_type_name') || ''), String(value(row, 'supplierOperName', 'supplier_oper_name') || ''),
         Number(value(row, 'quantity', 'qty')) || 0, Number(value(row, 'retailAmount', 'retail_amount')) || 0,
         Number(value(row, 'ppvzForPay', 'forPay', 'ppvz_for_pay')) || 0, Number(value(row, 'acquiringFee', 'acquiring_fee')) || 0,
-        Number(value(row, 'deliveryRub', 'delivery_rub')) || 0, Number(value(row, 'storageFee', 'storage', 'storage_fee')) || 0,
-        Number(value(row, 'acceptance', 'acceptanceFee', 'acceptance_fee')) || 0, Number(value(row, 'deduction')) || 0,
+        Number(value(row, 'deliveryRub', 'delivery_rub')) || 0, Number(value(row, 'paidStorage', 'storageFee', 'storage', 'storage_fee')) || 0,
+        Number(value(row, 'paidAcceptance', 'acceptance', 'acceptanceFee', 'acceptance_fee')) || 0, Number(value(row, 'deduction')) || 0,
         Number(value(row, 'penalty')) || 0, Number(value(row, 'additionalPayment', 'additional_payment')) || 0,
         Number(value(row, 'rebillLogisticCost', 'rebill_logistic_cost')) || 0, JSON.stringify(row), now
       ]);

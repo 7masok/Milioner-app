@@ -204,9 +204,7 @@ reportsRouter.get('/wb-finance-summary', asyncRoute(async (req, res) => {
     COALESCE(SUM(paid_storage),0) AS storage,COALESCE(SUM(paid_acceptance),0) AS acceptance,
     COALESCE(SUM(deduction),0) AS deduction,COALESCE(SUM(penalty),0) AS penalty,
     COALESCE(SUM(additional_payment),0) AS "additionalPayment",COALESCE(SUM(rebill_logistic_cost),0) AS rebill
-    FROM wb_finance_rows WHERE market=$1
-      AND (CASE WHEN trim(doc_type) IN ('Продажа','Возврат') AND sale_date > 0 THEN sale_date ELSE rr_date END) >= $2
-      AND (CASE WHEN trim(doc_type) IN ('Продажа','Возврат') AND sale_date > 0 THEN sale_date ELSE rr_date END) < $3`, [selected, since, until]),
+    FROM wb_finance_rows WHERE market=$1 AND rr_date >= $2 AND rr_date < $3`, [selected, since, until]),
     pool.query('SELECT finished_at AS "finishedAt",finance_ok AS "financeOk",promotion_ok AS "promotionOk",finance_items AS "financeItems",ad_items AS "adItems",error FROM wb_finance_sync_runs WHERE market=$1 ORDER BY id DESC LIMIT 1',[selected]),
     pool.query('SELECT finished_at AS "lastSuccessAt",finance_items AS "lastSuccessItems" FROM wb_finance_sync_runs WHERE market=$1 AND finance_ok=1 AND finance_items>0 ORDER BY id DESC LIMIT 1',[selected])]);
   const daysList = [];
@@ -239,9 +237,7 @@ reportsRouter.get('/wb-finance-products', asyncRoute(async (req, res) => {
       WHERE pl.market=f.market AND pl.sku IN (f.vendor_code,f.nm_id)
       ORDER BY CASE WHEN pl.sku=f.vendor_code THEN 0 ELSE 1 END LIMIT 1
     ) l ON TRUE
-    WHERE f.market=$1
-      AND (CASE WHEN trim(f.doc_type) IN ('Продажа','Возврат') AND f.sale_date > 0 THEN f.sale_date ELSE f.rr_date END) >= $2
-      AND (CASE WHEN trim(f.doc_type) IN ('Продажа','Возврат') AND f.sale_date > 0 THEN f.sale_date ELSE f.rr_date END) < $3
+    WHERE f.market=$1 AND f.rr_date >= $2 AND f.rr_date < $3
     GROUP BY f.vendor_code,f.nm_id,l.product_id ORDER BY SUM(f.for_pay) DESC`, [selected, since, until]),
     daysList.length
       ? pool.query('SELECT amount,nm_ids AS "nmIds" FROM wb_ad_costs WHERE market=$1 AND day=ANY($2::text[])', [selected, daysList])
