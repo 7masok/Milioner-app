@@ -69,27 +69,36 @@ try{
   }
 }catch(error){console.warn('WB report API cache hook failed',error);}
 
-function uiOnlyCall(fn,args){
-  if(typeof fn!=='function')return;
-  const originalSave=window.save;
-  try{if(typeof originalSave==='function')window.save=()=>true;return fn.apply(window,args);}
-  finally{if(typeof originalSave==='function')window.save=originalSave;}
-}
+// Report period is a device UI preference. Never send the whole warehouse snapshot
+// when the user only switches Today / Yesterday / 7 days / 30 days.
 try{
   if(typeof window.setReportPeriod==='function'){
-    const baseSetReportPeriod=window.setReportPeriod;
-    window.setReportPeriod=function(){return uiOnlyCall(baseSetReportPeriod,arguments)};
+    window.setReportPeriod=function(days){
+      const next=Number(days);
+      if(![-1,0,1,7,30].includes(next))return;
+      reportPeriodPreset=next;
+      reportPeriod=next===0?0:next;
+      if(next===0&&typeof reportCustomBounds==='function')reportCustomBounds();
+      state.settings.reportPeriodPreset=reportPeriodPreset;
+      state.settings.reportPeriod=reportPeriod;
+      state.settings.reportCustomFrom=reportCustomFrom;
+      state.settings.reportCustomTo=reportCustomTo;
+      state.settings.reportPeriodUpdatedAt=Date.now();
+      if(typeof rememberReportPeriodUiPreference==='function')rememberReportPeriodUiPreference();
+      if(typeof saveLocalOnly==='function')saveLocalOnly();
+      if(typeof renderReportCustomRange==='function')renderReportCustomRange();
+      if(typeof renderReports==='function')renderReports();
+    };
   }
-  if(typeof window.setReportMarket==='function'){
-    const baseSetReportMarket=window.setReportMarket;
-    window.setReportMarket=function(){return uiOnlyCall(baseSetReportMarket,arguments)};
-  }
-}catch(error){console.warn('Report UI save isolation hook failed',error);}
+}catch(error){console.warn('Report period UI isolation hook failed',error);}
 
 function wbMoney(value){return typeof fmt==='function'?fmt(Number(value)||0):new Intl.NumberFormat('ru-RU',{maximumFractionDigits:0}).format(Number(value)||0)+' ₸';}
 function wbPaintFreshHeader(market){
   document.querySelectorAll('[data-report-market]').forEach(b=>b.classList.toggle('active',b.dataset.reportMarket===market));
+  document.querySelectorAll('[data-report-period]').forEach(b=>b.classList.toggle('active',Number(b.dataset.reportPeriod)===Number(reportPeriodPreset)));
+  if(typeof renderReportCustomRange==='function')renderReportCustomRange();
   const title=document.getElementById('reportMarketTitle');if(title)title.textContent=market==='WB2'?'WB 2':'WB 1';
+  const revenue=document.getElementById('rRevenueLabel');if(revenue)revenue.textContent='Выручка';
   const fees=document.getElementById('rFeesLabel');if(fees)fees.textContent='Расходы WB';
   const ads=document.getElementById('rAdsLabel');if(ads)ads.textContent='Реклама WB';
 }
