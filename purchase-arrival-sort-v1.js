@@ -37,7 +37,38 @@ sortPurchaseGroups=function(groups){
   });
 };
 
-if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',installPurchaseArrivalSort,{once:true});
-else installPurchaseArrivalSort();
+let ozonLastFullSync=0;
+function ozonFullSyncFromPayload(payload){
+  let latest=0;
+  for(const account of payload?.accounts||[]){
+    const stamps=['postings','stocks','finance','supplies'].map(key=>Number(account?.[key]?.updatedAt)||0);
+    if(stamps.every(Boolean))latest=Math.max(latest,Math.min(...stamps));
+  }
+  return latest;
+}
+function paintOzonSyncTime(){
+  if(!ozonLastFullSync)return;
+  const el=document.getElementById('ozonTopStatus');
+  if(!el)return;
+  el.textContent=new Date(ozonLastFullSync).toLocaleTimeString('ru-RU',{hour:'2-digit',minute:'2-digit'});
+}
+async function refreshOzonSyncTime(){
+  try{
+    const payload=await apiJson(MILLIONER_API+'/api/ozon-fbo');
+    const stamp=ozonFullSyncFromPayload(payload);
+    if(stamp)ozonLastFullSync=stamp;
+    paintOzonSyncTime();
+  }catch{}
+}
+function installOzonSyncTime(){
+  setTimeout(refreshOzonSyncTime,2500);
+  setInterval(paintOzonSyncTime,2000);
+  setInterval(refreshOzonSyncTime,10*60*1000);
+  document.addEventListener('visibilitychange',()=>{if(!document.hidden)refreshOzonSyncTime();});
+  window.addEventListener('focus',refreshOzonSyncTime);
+}
+
+if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',()=>{installPurchaseArrivalSort();installOzonSyncTime();},{once:true});
+else{installPurchaseArrivalSort();installOzonSyncTime();}
 window.addEventListener('load',installPurchaseArrivalSort,{once:true});
 })();
