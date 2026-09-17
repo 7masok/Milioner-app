@@ -28,7 +28,7 @@ test('over-limit pause precedes a failing scheduled start and later starts still
   await h.api.enforce('WB', { day: h.api.localDate(), campaigns: [campaign(1, 11, 0), campaign(2), campaign(3, 11, 0)] });
   assert.match(h.calls[0], /pause\?id=2$/);
   assert.ok(h.calls.some(url => /start\?id=3$/.test(url)));
-  assert.ok(h.queries.some(q => q.args?.includes('no budget')));
+  assert.ok(h.queries.some(q => q.args?.some(arg => String(arg).includes('no budget'))));
 });
 
 test('yesterday totals never pause active campaigns', async () => {
@@ -106,7 +106,8 @@ test('pending manual pause retries even without an enabled daily limit', async (
 test('campaign list and start actions have independent WB rate-limit lanes', () => {
   const h=harness();
   assert.equal(h.api.requestInterval('https://advert-api.wildberries.ru/api/advert/v2/adverts').key,'campaign-list');
-  assert.equal(h.api.requestInterval('https://advert-api.wildberries.ru/adv/v0/start?id=1').key,'campaign-action');
+  assert.equal(h.api.requestInterval('https://advert-api.wildberries.ru/adv/v0/start?id=1').key,'/adv/v0/start');
+  assert.equal(h.api.requestInterval('https://advert-api.wildberries.ru/adv/v0/pause?id=1').key,'/adv/v0/pause');
 });
 
 test('scheduler permits due starts from the stored snapshot before refresh', () => {
