@@ -20,8 +20,9 @@ const FINANCE_SYNC_MS = 6 * 60 * 60 * 1000 + 5 * 60 * 1000;
 const FINANCE_FAILURE_RETRY_MS = 5 * 60 * 1000;
 const inFlight = new Map();
 
+const MOSCOW_OFFSET_MS = 3 * 60 * 60 * 1000;
 function isoDate(time) {
-  return new Date(time).toISOString().slice(0, 10);
+  return new Date(time + MOSCOW_OFFSET_MS).toISOString().slice(0, 10);
 }
 
 function value(row, ...keys) {
@@ -204,31 +205,62 @@ async function syncFinanceReport(market, token) {
   try {
     const lock = await client.query('SELECT pg_try_advisory_lock(hashtext($1)) AS locked', [lockName]);
     locked = Boolean(lock.rows[0]?.locked);
-    if (!locked) return { financeItems: 0, financeError: '', financeSkipped: true, financeSkipReason: 'already-running' };
-    const latest = await client.query('SELECT started_at,finance_ok,promotion_ok FROM wb_finance_sync_runs WHERE market=$1 ORDER BY id DESC LIMIT 1', [market]);
+    if (!locked) return { financeItems: 0, financeError: '', financeSkipped: true, promotionSkipped: true, financeSkipReason: 'already-running' };
+
+    const latest = await client.query('SELECT started_at,finance_ok,promotion_ok,finance_items,ad_items FROM wb_finance_sync_runs WHERE market=$1 ORDER BY id DESC LIMIT 1', [market]);
     const previousRun = latest.rows[0] || {};
     const lastStartedAt = Number(previousRun.started_at || 0), now = Date.now();
-    const previousRunComplete = Number(previousRun.finance_ok) === 1 && Number(previousRun.promotion_ok) === 1;
-    const cooldownMs = previousRunComplete ? FINANCE_SYNC_MS : FINANCE_FAILURE_RETRY_MS;
-    if (lastStartedAt && now - lastStartedAt < cooldownMs) return { financeItems: 0, financeError: '', financeSkipped: true, financeSkipReason: previousRunComplete ? 'cooldown' : 'failure-cooldown', financeNextAt: lastStartedAt + cooldownMs };
-    let financeItems = 0, financeError = '', financeOk = 0;
-    let adItems = 0, promotionError = '', promotionOk = 0, adRowsWithoutDate = 0;
-    try { const rows = await fetchFinanceRows(token); financeItems = rows.length; await upsertFinance(market, rows); financeOk = 1; }
-    catch (error) { financeError = String(error?.message || error).slice(0, 1000); console.error(`WB finance sync failed (${market})`, error); }
-    try {
-      const rows = await fetchPromotionCosts(token);
-      const saved = await upsertPromotionCosts(market, rows);
-      adItems = saved.saved;
-      adRowsWithoutDate = saved.skippedWithoutDate;
-      promotionOk = 1;
-    } catch (error) {
-      promotionError = String(error?.message || error).slice(0, 1000);
-      console.error(`WB promotion cost sync failed (${market})`, error);
+    const age = lastStartedAt ? now - lastStartedAt : Number.POSITIVE_INFINITY;
+    const previousFinanceOk = Number(previousRun.finance_ok) === 1;
+    const previousPromotionOk = Number(previousRun.promotion_ok) === 1;
+
+    if (previousFinanceOk && previousPromotionOk && age < FINANCE_SYNC_MS) {
+      return { financeItems: 0, financeError: '', financeSkipped: true, promotionSkipped: true,
+        financeSkipReason: 'cooldown', financeNextAt: lastStartedAt + FINANCE_SYNC_MS };
     }
+    if ((!previousFinanceOk || !previousPromotionOk) && lastStartedAt && age < FINANCE_FAILURE_RETRY_MS) {
+      return { financeItems: 0, financeError: '', financeSkipped: previousFinanceOk, promotionSkipped: previousPromotionOk,
+        financeSkipReason: 'failure-cooldown', financeNextAt: lastStartedAt + FINANCE_FAILURE_RETRY_MS };
+    }
+
+    const reuseFinance = previousFinanceOk && age < FINANCE_SYNC_MS;
+    const reusePromotion = previousPromotionOk && age < FINANCE_SYNC_MS;
+    let financeItems = reuseFinance ? Number(previousRun.finance_items || 0) : 0, financeError = '', financeOk = reuseFinance ? 1 : 0;
+    let adItems = reusePromotion ? Number(previousRun.ad_items || 0) : 0, promotionError = '', promotionOk = reusePromotion ? 1 : 0, adRowsWithoutDate = 0;
+
+    if (!reuseFinance) {
+      try {
+        const rows = await fetchFinanceRows(token);
+        financeItems = rows.length;
+        await upsertFinance(market, rows);
+        financeOk = 1;
+      } catch (error) {
+        financeError = String(error?.message || error).slice(0, 1000);
+        console.error(`WB finance sync failed (${market})`, error);
+      }
+    }
+
+    if (!reusePromotion) {
+      try {
+        const rows = await fetchPromotionCosts(token);
+        const saved = await upsertPromotionCosts(market, rows);
+        adItems = saved.saved;
+        adRowsWithoutDate = saved.skippedWithoutDate;
+        promotionOk = 1;
+      } catch (error) {
+        promotionError = String(error?.message || error).slice(0, 1000);
+        console.error(`WB promotion cost sync failed (${market})`, error);
+      }
+    }
+
     const errorText = [financeError, promotionError].filter(Boolean).join(' · ');
+    // Partial retries keep the original cycle timestamp. This prevents a successful
+    // reused component from having its 6-hour freshness window extended forever.
+    const runStartedAt = (reuseFinance || reusePromotion) && lastStartedAt ? lastStartedAt : now;
     await client.query(`INSERT INTO wb_finance_sync_runs(market,started_at,finished_at,ok,finance_ok,promotion_ok,finance_items,ad_items,error)
-      VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9)`, [market, now, Date.now(), financeOk && promotionOk ? 1 : 0, financeOk, promotionOk, financeItems, adItems, errorText]);
-    return { financeItems, financeError, adItems, adRowsWithoutDate, promotionError, financeSkipped: false, financeNextAt: now + FINANCE_SYNC_MS };
+      VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9)`, [market, runStartedAt, Date.now(), financeOk && promotionOk ? 1 : 0, financeOk, promotionOk, financeItems, adItems, errorText]);
+    return { financeItems, financeError, adItems, adRowsWithoutDate, promotionError,
+      financeSkipped: reuseFinance, promotionSkipped: reusePromotion, financeNextAt: runStartedAt + FINANCE_SYNC_MS };
   } finally {
     if (locked) await client.query('SELECT pg_advisory_unlock(hashtext($1))', [lockName]).catch(() => {});
     client.release();

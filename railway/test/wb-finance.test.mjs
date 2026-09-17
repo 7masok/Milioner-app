@@ -42,6 +42,10 @@ test('WB synchronization uses the current Finance API and paginates by rrdId', (
   assert.match(source, /previousRun\.finance_ok/);
   assert.match(source, /previousRun\.promotion_ok/);
   assert.match(source, /FINANCE_FAILURE_RETRY_MS/);
+  assert.match(source, /MOSCOW_OFFSET_MS/);
+  assert.match(source, /reuseFinance/);
+  assert.match(source, /reusePromotion/);
+  assert.match(source, /runStartedAt/);
   assert.match(source, /failure-cooldown/);
 });
 
