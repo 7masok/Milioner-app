@@ -32,12 +32,12 @@ test('warehouse Kaspi price replaces both price formats in an existing offer', (
   assert.equal(rewriteOfferPrice('<price>990</price><cityprices><cityprice cityId="750000000">990</cityprice></cityprices>',1290),'<price>1290</price><cityprices><cityprice cityId="750000000">1290</cityprice></cityprices>');
 });
 
-test('Kaspi diagnostics exposes named offers missing from the uploaded XML', () => {
+test('Kaspi diagnostics exposes linked offers missing from the uploaded XML', () => {
   const source = readFileSync(new URL('../src/stock.js', import.meta.url), 'utf8');
   assert.match(source, /missingOffers=rows\.filter/);
   assert.match(source, /name:row\.name/);
   assert.match(source, /automaticOfferFromRow\(row,effective,primaryStoreId\)/);
-  assert.match(source, /effective\.size-info\.offers\.size/);
-  assert.match(source, /inXml:true/);
-  assert.match(source, /inXml:false/);
+  assert.match(source, /recoveredOffers:Math\.max\(0,effective\.size-info\.offers\.size\)/);
+  assert.match(source, /missingSkus/);
+  assert.match(source, /missingPrimaryStore/);
 });
