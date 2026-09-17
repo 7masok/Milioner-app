@@ -24,6 +24,7 @@ const app = express();
 const repositoryRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const frontendFiles = Object.freeze([
   'ozon-fbo-v1.js',
+  'ozon-supplies-v1.js',
   'warehouse-insights.js',
   'cloud-sync-v3.js',
   'wb-variants-v1.js',
@@ -88,105 +89,46 @@ app.get('/api/kaspi-sync-status', requireTrustedOrigin, async (_req, res, next) 
     const success = await pool.query("SELECT MAX(finished_at) AS last_success_at FROM sync_runs WHERE market='Kaspi' AND ok=1");
     const count = await pool.query("SELECT COUNT(*)::bigint AS n FROM marketplace_order_lines WHERE market='Kaspi'");
     res.json({
-      ok: true,
-      architecture: 'GitHub Pages -> Railway API -> PostgreSQL; marketplace sync: Railway -> marketplace APIs direct',
-      directTokenConfigured: Boolean(String(config.kaspiToken || '').trim()),
-      latest: latest.rows[0] || null,
-      lastSuccessAt: Number(success.rows[0]?.last_success_at || 0) || null,
-      orderLines: Number(count.rows[0]?.n || 0),
-      serverTime: Date.now()
+      ok:true,
+      configured:Boolean(config.kaspiToken),
+      latestRun:latest.rows[0]||null,
+      lastSuccessAt:Number(success.rows[0]?.last_success_at||0)||0,
+      orderLines:Number(count.rows[0]?.n||0)||0
     });
   } catch (error) { next(error); }
 });
 
-app.post('/api/kaspi-sync-now', requireTrustedOrigin, async (req, res, next) => {
-  try { res.json(await syncKaspiOrders({ days: Math.max(1, Math.min(14, Number(req.body?.days || 2) || 2)) })); }
-  catch (error) { next(error); }
-});
-
-app.post('/api/wb-sync-now', requireTrustedOrigin, async (req, res, next) => {
-  try {
-    const available = await configuredWbConnectionIds();
-    const requested = Array.isArray(req.body?.markets) ? req.body.markets : available;
-    const markets = [...new Set(requested.map(value => String(value || '').toUpperCase() === 'WB1' ? 'WB' : String(value || '').toUpperCase()).filter(value => available.includes(value)))];
-    const results = {};
-    for (const market of markets.length ? markets : available) {
-      try { results[market] = await syncWbOrders(market, { force: true }); }
-      catch (error) { results[market] = { ok: false, market, error: String(error?.message || error) }; }
-    }
-    const ok = Object.values(results).some(result => result?.ok);
-    console.log('WB order sync:', JSON.stringify({ ok, results }));
-    res.json({ ok, results });
-  } catch (error) { next(error); }
-});
-
-
-// The warehouse is the only source of truth. A stock update is allowed only
-// after every linked article has a unique WB characteristic mapping; otherwise
-// the function returns diagnostics and writes nothing to WB.
-app.post('/api/stock-sync-now', requireTrustedOrigin, async (req, res, next) => {
-  try {
-    const requested = Array.isArray(req.body?.markets) ? req.body.markets : ['WB', 'WB2'];
-    const markets = [...new Set(requested.map(value => String(value || '').toUpperCase() === 'WB1' ? 'WB' : String(value || '').toUpperCase()).filter(value => ['WB', 'WB2'].includes(value)))];
-    const results = {};
-    for (const market of markets.length ? markets : ['WB', 'WB2']) {
-      try { results[market] = await syncWbStockMarket(market, { write: true }); }
-      catch (error) { results[market] = { ok: false, market, error: String(error?.message || error) }; }
-    }
-    const ok = Object.values(results).some(result => result?.ok);
-    console.log('WB stock sync:', JSON.stringify({ ok, results }));
-    res.json({ ok, results });
-  } catch (error) { next(error); }
-});
-
-app.use('/api', ozonRouter);
-app.use('/api', connectionsRouter);
-app.use('/api', wbVariantsRouter);
-app.use('/api', wbAdsRouter);
 app.use('/api', warehouseRouter);
 app.use('/api', ordersRouter);
 app.use('/api', reportsRouter);
 app.use('/api', stockRouter);
+app.use('/api', connectionsRouter);
+app.use('/api', wbVariantsRouter);
+app.use('/api', wbAdsRouter);
 app.use('/api', aiAssistantRouter);
-// Keep every legacy path used by Kaspi automatic feeds, but serve the XML
-// from the live Railway warehouse source instead of a stale migration snapshot.
-app.get('/kaspi/price-list.xml', kaspiFeedHandler);
-app.get('/kaspi/pricelist.xml', kaspiFeedHandler);
-app.get('/kaspi/live-price-list.xml', kaspiFeedHandler);
+app.use('/api', ozonRouter);
 
-app.use((req, res) => res.status(404).json({ ok: false, error: 'Not found', path: req.path }));
 app.use((error, _req, res, _next) => {
-  console.error(error);
-  const status = Number(error?.status || 500);
-  res.status(status).json({ ok: false, error: status >= 500 ? 'Internal server error' : String(error.message || error) });
+  const status = Number(error?.status)||500;
+  const message = status >= 500 ? 'Внутренняя ошибка сервера' : String(error?.message||'Ошибка');
+  if (status >= 500) console.error(error);
+  res.status(status).json({ ok:false, error:message });
 });
 
-const server = app.listen(config.port, '0.0.0.0', () => {
+const server=app.listen(config.port, () => {
   console.log(`millioner Railway API listening on ${config.port}`);
-  startOzonSyncLoop();
+});
+
+if(config.marketSyncEnabled){
   startKaspiSyncLoop();
   startWbSyncLoop();
   startWbAdsLimitLoop();
-  let checkingLinks=false;
-  const checkLinks=async()=>{
-    if(checkingLinks)return;checkingLinks=true;
-    try{for(const market of ['WB','WB2']){
-      try{const result=await validateWbStockLinks(market);console.info('WB link validation',JSON.stringify(result));}
-      catch(error){console.warn('WB link validation failed',market,String(error.message||error));}
-    }}finally{checkingLinks=false;}
-  };
-  setTimeout(checkLinks,15000).unref();
-  setInterval(checkLinks,10*60*1000).unref();
-});
-
-async function shutdown(signal) {
-  console.log(`received ${signal}, shutting down`);
-  server.close(async () => {
-    await pool.end().catch(() => {});
-    process.exit(0);
-  });
-  setTimeout(() => process.exit(1), 10_000).unref();
+  startOzonSyncLoop();
+  setTimeout(()=>syncWbStockMarket().catch(error=>console.error('WB stock sync failed',error)),10000).unref();
+  setTimeout(()=>validateWbStockLinks().catch(error=>console.error('WB link validation failed',error)),15000).unref();
+  setInterval(()=>syncWbStockMarket().catch(error=>console.error('WB stock sync failed',error)),5*60*1000).unref();
+  setInterval(()=>validateWbStockLinks().catch(error=>console.error('WB link validation failed',error)),30*60*1000).unref();
 }
 
-process.on('SIGTERM', () => shutdown('SIGTERM'));
-process.on('SIGINT', () => shutdown('SIGINT'));
+process.on('SIGTERM',()=>server.close(()=>process.exit(0)));
+process.on('SIGINT',()=>server.close(()=>process.exit(0)));
