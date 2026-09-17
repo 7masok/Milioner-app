@@ -104,5 +104,23 @@ window.accountWholeOzonFboOrder=()=>{
  }
  save();render();renderOrder();
 };
+function roundOzonMoneyDisplay(){
+ if(String(state?.settings?.reportMarket||'')!=='Ozon')return;
+ const root=document.getElementById('reports');if(!root)return;
+ const walker=document.createTreeWalker(root,NodeFilter.SHOW_TEXT);
+ const changed=[];let node;
+ while((node=walker.nextNode())){
+  const before=node.nodeValue||'';
+  const after=before.replace(/(-?\d[\d\s\u00A0\u202F]*)([,.])(\d{1,2})\s*(KZT|₸)/g,(_m,intPart,_sep,dec,currency)=>{
+   const raw=Number(String(intPart).replace(/[\s\u00A0\u202F]/g,''))+Number(dec)/100*(String(intPart).trim().startsWith('-')?-1:1);
+   return new Intl.NumberFormat('ru-RU',{maximumFractionDigits:0}).format(Math.round(raw))+' '+currency;
+  });
+  if(after!==before)changed.push([node,after]);
+ }
+ for(const [target,value] of changed)target.nodeValue=value;
+}
+const moneyObserver=new MutationObserver(()=>queueMicrotask(roundOzonMoneyDisplay));
+if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',()=>{const root=document.getElementById('reports');if(root)moneyObserver.observe(root,{subtree:true,childList:true,characterData:true});roundOzonMoneyDisplay();},{once:true});
+else{const root=document.getElementById('reports');if(root)moneyObserver.observe(root,{subtree:true,childList:true,characterData:true});roundOzonMoneyDisplay();}
 ensureButton();setInterval(ensureButton,1000);
 })();
