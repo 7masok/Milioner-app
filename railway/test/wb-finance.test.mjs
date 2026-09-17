@@ -45,6 +45,16 @@ test('browser sync avoids five-second warehouse polling and duplicate order load
   assert.match(source, /sharedOrderCacheInFlight/);
 });
 
+test('WB report period switching is UI-only and paints the selected period', () => {
+  const source = readFileSync(new URL('../../purchase-arrival-sort-v1.js', import.meta.url), 'utf8');
+  const handler = source.match(/window\.setReportPeriod=function\(days\)\{([\s\S]*?)\n    \};/);
+  assert.ok(handler, 'custom report period handler must exist');
+  assert.doesNotMatch(handler[1], /\bsave\(\)/, 'period taps must not PUT the warehouse snapshot');
+  assert.match(handler[1], /saveLocalOnly/);
+  assert.match(source, /\[data-report-period\]/);
+  assert.match(source, /dataset\.reportPeriod/);
+});
+
 test('WB product report keeps multi-product advertising unallocated', () => {
   const source = readFileSync(new URL('../src/reports.js', import.meta.url), 'utf8');
   assert.match(source, /ids\.length !== 1/);
