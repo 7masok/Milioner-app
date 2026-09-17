@@ -38,27 +38,30 @@ export async function hydrateWarehouseMovements(client, state) {
 
 export async function persistWarehouseMovements(client, movements, now = Date.now()) {
   const rows = Array.isArray(movements) ? movements.map(normalizedMovement).filter(Boolean) : [];
-  for (const movement of rows) {
-    await client.query(`INSERT INTO warehouse_movements(
-        id,product_id,movement_date,movement_type,qty,payload,created_at,updated_at
-      ) VALUES($1,$2,$3,$4,$5,$6::jsonb,$7,$8)
-      ON CONFLICT(id) DO UPDATE SET
-        product_id=excluded.product_id,
-        movement_date=excluded.movement_date,
-        movement_type=excluded.movement_type,
-        qty=excluded.qty,
-        payload=excluded.payload,
-        updated_at=excluded.updated_at`, [
-      movement.id,
-      movement.productId,
-      movement.date,
-      movement.type,
-      movement.qty,
-      JSON.stringify(movement),
-      movement.date || now,
-      now
-    ]);
-  }
+  if (!rows.length) return 0;
+  await client.query(`
+    INSERT INTO warehouse_movements(
+      id,product_id,movement_date,movement_type,qty,payload,created_at,updated_at
+    )
+    SELECT
+      item->>'id',
+      COALESCE(item->>'productId',''),
+      CASE WHEN COALESCE(item->>'date','') ~ '^-?[0-9]+$' THEN (item->>'date')::bigint ELSE 0 END,
+      COALESCE(item->>'type',''),
+      CASE WHEN COALESCE(item->>'qty','') ~ '^-?[0-9]+([.][0-9]+)?$' THEN (item->>'qty')::double precision ELSE 0 END,
+      item,
+      CASE WHEN COALESCE(item->>'date','') ~ '^-?[0-9]+$' THEN (item->>'date')::bigint ELSE $2 END,
+      $2
+    FROM jsonb_array_elements($1::jsonb) AS item
+    WHERE COALESCE(item->>'id','') <> ''
+    ON CONFLICT(id) DO UPDATE SET
+      product_id=excluded.product_id,
+      movement_date=excluded.movement_date,
+      movement_type=excluded.movement_type,
+      qty=excluded.qty,
+      payload=excluded.payload,
+      updated_at=excluded.updated_at
+  `, [JSON.stringify(rows), now]);
   return rows.length;
 }
 
