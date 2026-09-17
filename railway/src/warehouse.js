@@ -4,6 +4,13 @@ import { pool, transaction } from './db.js';
 import { asyncRoute, requireTrustedOrigin, requireWritesEnabled } from './http.js';
 import { stockLedgerViolation } from './warehouse-ledger.js';
 import { staleWbLinkRestored, preserveWbValidation } from './wb-link-validation.js';
+import {
+  hydrateWarehouseMovements,
+  legacyCompatibleWarehousePayload,
+  parseWarehousePayload,
+  persistWarehouseMovements,
+  stripMovementsFromState
+} from './warehouse-movements.js';
 
 export const warehouseRouter = express.Router();
 const MAX_WAREHOUSE_SNAPSHOT_BYTES = 6_000_000;
@@ -11,10 +18,6 @@ const MAX_WAREHOUSE_SNAPSHOT_BYTES = 6_000_000;
 // Order feeds are canonical in their own PostgreSQL tables. They must not be
 // kept inside the warehouse document as that creates a growing duplicate cache.
 const DERIVED_CACHE_KEYS = ['kaspiOrderFeed', 'wbOrderFeed', 'ozonOrderFeed', 'kaspiOrders', 'marketOrderState', 'marketplaceLiveSince'];
-
-function parsePayload(raw) {
-  try { return JSON.parse(String(raw || '{}')); } catch { return {}; }
-}
 
 function cleanState(input) {
   const state = input && typeof input === 'object' && !Array.isArray(input) ? input : {};
@@ -82,13 +85,16 @@ async function mirrorProducts(client, products) {
 
 warehouseRouter.get('/warehouse-state', requireTrustedOrigin, asyncRoute(async (req, res) => {
   const metaOnly = req.query.meta === '1';
-  const fields = metaOnly ? 'revision,updated_at' : 'payload,revision,updated_at';
-  const result = await pool.query(`SELECT ${fields} FROM warehouse_state WHERE id=1`);
-  if (!result.rowCount) return res.json({ ok: true, exists: false, revision: 0, updatedAt: null, state: metaOnly ? undefined : null });
-  const row = result.rows[0];
-  const state = metaOnly ? undefined : parsePayload(row.payload);
-  // GET must not reinsert links from a snapshot read before a concurrent unlink.
-  // Normalized links are maintained transactionally by PUT and link validation.
+  const result = await transaction(async client => {
+    const fields = metaOnly ? 'revision,updated_at' : 'payload,revision,updated_at';
+    const stored = await client.query(`SELECT ${fields} FROM warehouse_state WHERE id=1`);
+    if (!stored.rowCount) return null;
+    const row = stored.rows[0];
+    const state = metaOnly ? undefined : await hydrateWarehouseMovements(client, parseWarehousePayload(row.payload));
+    return { row, state };
+  });
+  if (!result) return res.json({ ok: true, exists: false, revision: 0, updatedAt: null, state: metaOnly ? undefined : null });
+  const { row, state } = result;
   res.setHeader('ETag', `"${row.revision}"`);
   res.setHeader('X-Warehouse-Revision', String(row.revision));
   return res.json({
@@ -113,8 +119,9 @@ warehouseRouter.post('/warehouse-backups', requireTrustedOrigin, requireWritesEn
     const current = await client.query('SELECT payload,revision FROM warehouse_state WHERE id=1 FOR SHARE');
     if (!current.rowCount) return null;
     const createdAt = Date.now();
+    const backupPayload = await legacyCompatibleWarehousePayload(client, current.rows[0].payload);
     const inserted = await client.query(`INSERT INTO warehouse_backups(label,payload,revision,created_at)
-      VALUES($1,$2,$3,$4) RETURNING id`, [label, current.rows[0].payload, current.rows[0].revision, createdAt]);
+      VALUES($1,$2,$3,$4) RETURNING id`, [label, backupPayload, current.rows[0].revision, createdAt]);
     return { id: String(inserted.rows[0].id), revision: Number(current.rows[0].revision || 0), createdAt, label };
   });
   if (!result) return res.status(409).json({ ok: false, error: 'warehouse-state-is-empty' });
@@ -124,7 +131,8 @@ warehouseRouter.post('/warehouse-backups', requireTrustedOrigin, requireWritesEn
 warehouseRouter.put('/warehouse-state', requireTrustedOrigin, requireWritesEnabled, asyncRoute(async (req, res) => {
   const baseRevision = Number(req.body?.baseRevision || 0);
   const state = cleanState(req.body?.state);
-  let raw = JSON.stringify(state);
+  const snapshotState = stripMovementsFromState(state);
+  let raw = JSON.stringify(snapshotState);
   if (Buffer.byteLength(raw, 'utf8') > MAX_WAREHOUSE_SNAPSHOT_BYTES) return res.status(413).json({ ok: false, error: 'Warehouse snapshot is too large' });
 
   const result = await transaction(async client => {
@@ -133,13 +141,17 @@ warehouseRouter.put('/warehouse-state', requireTrustedOrigin, requireWritesEnabl
     const currentRevision = Number(current.rows[0]?.revision || 0);
     if (current.rowCount && baseRevision !== currentRevision) return { conflict: true, revision: currentRevision };
     if (current.rowCount) {
-      const violation = stockLedgerViolation(parsePayload(current.rows[0].payload), state) || staleWbLinkRestored(parsePayload(current.rows[0].payload), state);
+      const previous = await hydrateWarehouseMovements(client, parseWarehousePayload(current.rows[0].payload));
+      const violation = stockLedgerViolation(previous, state) || staleWbLinkRestored(previous, state);
       if (violation) return { conflict: true, revision: currentRevision, stockGuard: violation };
-      preserveWbValidation(parsePayload(current.rows[0].payload), state);
-      raw = JSON.stringify(state);
+      preserveWbValidation(previous, state);
     }
-    const revision = currentRevision + 1;
     const updatedAt = Date.now();
+    await persistWarehouseMovements(client, state.movements, updatedAt);
+    const persistedSnapshot = stripMovementsFromState(state);
+    raw = JSON.stringify(persistedSnapshot);
+    if (Buffer.byteLength(raw, 'utf8') > MAX_WAREHOUSE_SNAPSHOT_BYTES) return { tooLarge: true };
+    const revision = currentRevision + 1;
     await client.query(`INSERT INTO warehouse_state(id,payload,revision,updated_at) VALUES(1,$1,$2,$3)
       ON CONFLICT(id) DO UPDATE SET payload=excluded.payload,revision=excluded.revision,updated_at=excluded.updated_at`,
     [raw, revision, updatedAt]);
@@ -149,6 +161,7 @@ warehouseRouter.put('/warehouse-state', requireTrustedOrigin, requireWritesEnabl
       [revision, updatedAt, sha, 'api']);
     return { revision, updatedAt };
   });
+  if (result.tooLarge) return res.status(413).json({ ok: false, error: 'Warehouse snapshot is too large' });
   if (result.conflict) return res.status(409).json({ ok: false, error: result.stockGuard?'stock-ledger-conflict':'revision-conflict', revision: result.revision, stockGuard: result.stockGuard || undefined });
   res.setHeader('ETag', `"${result.revision}"`);
   return res.json({ ok: true, ...result, products: state.products.length });
