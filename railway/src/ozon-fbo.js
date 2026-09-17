@@ -36,8 +36,15 @@ export async function fetchStocks(credentials){
   if(next===cursor)throw new Error('Ozon: повтор курсора остатков');cursor=next;
  }throw new Error('Ozon: превышен лимит страниц остатков');
 }
+const FALLBACK_SUPPLY_STATES=['ORDER_STATE_DATA_FILLING','ORDER_STATE_READY_TO_SUPPLY','ORDER_STATE_ACCEPTED_AT_SUPPLY_WAREHOUSE','ORDER_STATE_IN_TRANSIT','ORDER_STATE_ACCEPTANCE_AT_STORAGE_WAREHOUSE','ORDER_STATE_REPORTS_CONFIRMATION_AWAITING','ORDER_STATE_REPORT_REJECTED','ORDER_STATE_COMPLETED','ORDER_STATE_REJECTED_AT_SUPPLY_WAREHOUSE','ORDER_STATE_CANCELLED'];
 export async function fetchSupplyOrders(credentials){
- const listed=await request(credentials,'/v3/supply-order/list',{filter:{},last_id:'',limit:100,sort_by:'ORDER_CREATION',sort_dir:'DESC'});
+ let states=[];
+ try{
+  const counters=await request(credentials,'/v1/supply-order/status/counter',{});
+  states=(counters.items||[]).filter(x=>Number(x?.count||0)>0).map(x=>String(x?.order_state||'')).filter(x=>x&&!x.endsWith('UNSPECIFIED'));
+ }catch{}
+ if(!states.length)states=FALLBACK_SUPPLY_STATES;
+ const listed=await request(credentials,'/v3/supply-order/list',{filter:{states},last_id:'',limit:100,sort_by:'ORDER_CREATION',sort_dir:'DESC'});
  const ids=(Array.isArray(listed.order_ids)?listed.order_ids:[]).map(String).filter(Boolean);
  if(!ids.length)return [];
  const rows=[];
