@@ -2,15 +2,18 @@ import crypto from 'node:crypto';
 import { transaction } from './db.js';
 import { kaspiOrderIsCollected } from './kaspi-status.js';
 import { wbOrderIsActive, wbOrderIsCollected } from './wb-status.js';
+import {
+  hydrateWarehouseMovements,
+  legacyCompatibleWarehousePayload,
+  parseWarehousePayload,
+  persistWarehouseMovements,
+  stripMovementsFromState
+} from './warehouse-movements.js';
 
 // The server became authoritative for marketplace orders on 24 August 2026.
 // Never backfill older rows: some of them were already written by the former
 // browser-side reconciler and do not all have a stable external key.
 const SERVER_SALE_CUTOVER = Date.UTC(2026, 7, 24, 0, 0, 0);
-
-function parsePayload(raw) {
-  try { return JSON.parse(String(raw || '{}')); } catch { return {}; }
-}
 
 function upper(value) { return String(value || '').trim().toUpperCase(); }
 
@@ -79,9 +82,6 @@ function restorePrematureWbSale(state, products, row, market) {
     (movement.externalKey ? movement.externalKey === key :
       String(movement.extra || '').startsWith(`${label} · собрано на маркетплейсе`))
   );
-  // A sale quantity includes shortages; only a recorded physical debit is reversible.
-  // Full movement history is retained, so a missing debit is treated as evidence loss
-  // and stock is left unchanged rather than inventing units.
   for (const movement of debits) {
     const productId = String(movement.productId || '');
     const product = products.get(productId);
@@ -123,9 +123,8 @@ export async function reconcileMarketplaceSales(market) {
       LEFT JOIN product_links l ON l.market=o.market AND l.sku=o.sku
       WHERE o.market=$1 AND o.creation_date >= $2
       ORDER BY o.creation_date,o.order_id,o.entry_id`, [market, SERVER_SALE_CUTOVER]);
-    const state = parsePayload(stored.rows[0].payload);
+    const state = await hydrateWarehouseMovements(client, parseWarehousePayload(stored.rows[0].payload));
     state.products = Array.isArray(state.products) ? state.products : [];
-    state.movements = Array.isArray(state.movements) ? state.movements : [];
     state.sales = Array.isArray(state.sales) ? state.sales : [];
     state.reservations = Array.isArray(state.reservations) ? state.reservations : [];
     const products = new Map(state.products.map(product => [String(product?.id || ''), product]));
@@ -164,9 +163,11 @@ export async function reconcileMarketplaceSales(market) {
       sold += qty;
     }
     if (!sold && !restored) return { changed: false, market, sold: 0, restored: 0, unlinked, revision: Number(stored.rows[0].revision || 0) };
+    const backupPayload = await legacyCompatibleWarehousePayload(client, stored.rows[0].payload);
     const backup = await client.query(`INSERT INTO warehouse_backups(label,payload,revision,created_at)
-      VALUES($1,$2,$3,$4) RETURNING id`, [`before-${market.toLowerCase()}-sale-reconcile`, stored.rows[0].payload, stored.rows[0].revision, now]);
-    const raw = JSON.stringify(state), revision = Number(stored.rows[0].revision || 0) + 1;
+      VALUES($1,$2,$3,$4) RETURNING id`, [`before-${market.toLowerCase()}-sale-reconcile`, backupPayload, stored.rows[0].revision, now]);
+    await persistWarehouseMovements(client, state.movements, now);
+    const raw = JSON.stringify(stripMovementsFromState(state)), revision = Number(stored.rows[0].revision || 0) + 1;
     await client.query('UPDATE warehouse_state SET payload=$1,revision=$2,updated_at=$3 WHERE id=1', [raw, revision, now]);
     const sha = crypto.createHash('sha256').update(raw).digest('hex').toUpperCase();
     await client.query('INSERT INTO warehouse_audit(revision,updated_at,payload_sha256,source) VALUES($1,$2,$3,$4)',
