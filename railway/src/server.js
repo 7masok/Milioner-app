@@ -21,6 +21,75 @@ import { wbAdsRouter, startWbAdsLimitLoop } from './wb-ads.js';
 import { aiAssistantRouter } from './ai-assistant.js';
 
 assertRuntimeConfig();
+
+const WB_AUDIT_ALMATY_OFFSET_MS = 5 * 60 * 60 * 1000;
+function wbAuditBounds(days) {
+  const local = new Date(Date.now() + WB_AUDIT_ALMATY_OFFSET_MS);
+  const today = Date.UTC(local.getUTCFullYear(), local.getUTCMonth(), local.getUTCDate()) - WB_AUDIT_ALMATY_OFFSET_MS;
+  if (days === -1) return { since: today - 86_400_000, until: today };
+  return { since: today - (days - 1) * 86_400_000, until: today + 86_400_000 };
+}
+function wbAuditDayKey(timestamp) {
+  return new Date(timestamp + WB_AUDIT_ALMATY_OFFSET_MS).toISOString().slice(0, 10);
+}
+async function auditWbReportData() {
+  try {
+    const markets = await configuredWbConnectionIds();
+    for (const market of markets) {
+      const integrity = await pool.query(`SELECT COUNT(*)::bigint AS rows,
+        COALESCE(SUM(ABS(retail_amount - COALESCE(NULLIF(raw_json::jsonb->>'retailAmount','')::double precision,NULLIF(raw_json::jsonb->>'retail_amount','')::double precision,0))),0) AS retail_diff,
+        COALESCE(SUM(ABS(for_pay - COALESCE(NULLIF(raw_json::jsonb->>'forPay','')::double precision,NULLIF(raw_json::jsonb->>'ppvzForPay','')::double precision,NULLIF(raw_json::jsonb->>'ppvz_for_pay','')::double precision,0))),0) AS for_pay_diff,
+        COALESCE(SUM(ABS(acquiring_fee - COALESCE(NULLIF(raw_json::jsonb->>'acquiringFee','')::double precision,NULLIF(raw_json::jsonb->>'acquiring_fee','')::double precision,0))),0) AS acquiring_diff,
+        COALESCE(SUM(ABS(delivery_service - COALESCE(NULLIF(raw_json::jsonb->>'deliveryService','')::double precision,NULLIF(raw_json::jsonb->>'deliveryRub','')::double precision,NULLIF(raw_json::jsonb->>'delivery_rub','')::double precision,0))),0) AS delivery_diff,
+        COALESCE(SUM(ABS(paid_storage - COALESCE(NULLIF(raw_json::jsonb->>'paidStorage','')::double precision,NULLIF(raw_json::jsonb->>'storageFee','')::double precision,NULLIF(raw_json::jsonb->>'storage_fee','')::double precision,0))),0) AS storage_diff,
+        COALESCE(SUM(ABS(paid_acceptance - COALESCE(NULLIF(raw_json::jsonb->>'paidAcceptance','')::double precision,NULLIF(raw_json::jsonb->>'acceptance','')::double precision,NULLIF(raw_json::jsonb->>'acceptanceFee','')::double precision,NULLIF(raw_json::jsonb->>'acceptance_fee','')::double precision,0))),0) AS acceptance_diff
+        FROM wb_finance_rows WHERE market=$1 AND rr_date >= $2`, [market, Date.now() - 45 * 86_400_000]);
+      const sourceDiff = integrity.rows[0] || {};
+      const differences = ['retail_diff','for_pay_diff','acquiring_diff','delivery_diff','storage_diff','acceptance_diff']
+        .map(key => Math.abs(Number(sourceDiff[key] || 0)));
+      const periods = {};
+      for (const days of [1, -1, 7, 30]) {
+        const { since, until } = wbAuditBounds(days);
+        const [finance, ads] = await Promise.all([
+          pool.query(`SELECT COUNT(*)::bigint AS rows,
+            COALESCE(SUM(retail_amount),0) AS revenue,COALESCE(SUM(for_pay),0) AS for_pay,
+            COALESCE(SUM(acquiring_fee),0) AS acquiring,COALESCE(SUM(delivery_service),0) AS delivery,
+            COALESCE(SUM(paid_storage),0) AS storage,COALESCE(SUM(paid_acceptance),0) AS acceptance,
+            COALESCE(SUM(deduction),0) AS deduction,COALESCE(SUM(penalty),0) AS penalty,
+            COALESCE(SUM(additional_payment),0) AS additional_payment,
+            COALESCE(SUM(rebill_logistic_cost),0) AS rebill
+            FROM wb_finance_rows WHERE market=$1 AND rr_date >= $2 AND rr_date < $3`, [market, since, until]),
+          pool.query('SELECT COALESCE(SUM(amount),0) AS advertising FROM wb_ad_costs WHERE market=$1 AND day >= $2 AND day <= $3',
+            [market, wbAuditDayKey(since), wbAuditDayKey(until - 1)])
+        ]);
+        const row = finance.rows[0] || {};
+        const revenue = Number(row.revenue || 0), forPay = Number(row.for_pay || 0);
+        const charges = ['acquiring','delivery','storage','acceptance','deduction','penalty','rebill']
+          .reduce((sum,key)=>sum+Number(row[key]||0),0);
+        const advertising = Number(ads.rows[0]?.advertising || 0);
+        periods[String(days)] = {
+          rows: Number(row.rows || 0), revenue, forPay, charges,
+          additionalPayment: Number(row.additional_payment || 0), advertising,
+          netBeforeCost: forPay + Number(row.additional_payment || 0) - charges - advertising
+        };
+      }
+      const latest = await pool.query(`SELECT started_at AS "startedAt",finished_at AS "finishedAt",finance_ok AS "financeOk",
+        promotion_ok AS "promotionOk",finance_items AS "financeItems",ad_items AS "adItems",error
+        FROM wb_finance_sync_runs WHERE market=$1 ORDER BY id DESC LIMIT 1`, [market]);
+      console.info('WB report audit', JSON.stringify({
+        market,
+        sourceRows: Number(sourceDiff.rows || 0),
+        rawToStoredIntegrity: differences.every(value => value < 0.01),
+        maxRawToStoredDifference: differences.length ? Math.max(...differences) : 0,
+        periods,
+        latestSync: latest.rows[0] || null
+      }));
+    }
+  } catch (error) {
+    console.warn('WB report audit failed', String(error?.message || error));
+  }
+}
+
 const app = express();
 const repositoryRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const frontendFiles = Object.freeze([
@@ -181,6 +250,7 @@ const server = app.listen(config.port, '0.0.0.0', () => {
   startKaspiSyncLoop();
   startWbSyncLoop();
   startWbAdsLimitLoop();
+  setTimeout(auditWbReportData, 8000).unref();
   let checkingLinks=false;
   const checkLinks=async()=>{
     if(checkingLinks)return;checkingLinks=true;
