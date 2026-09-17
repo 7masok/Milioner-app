@@ -80,7 +80,8 @@ function restorePrematureWbSale(state, products, row, market) {
       String(movement.extra || '').startsWith(`${label} · собрано на маркетплейсе`))
   );
   // A sale quantity includes shortages; only a recorded physical debit is reversible.
-  // If old evidence has been trimmed, leave stock unchanged rather than invent units.
+  // Full movement history is retained, so a missing debit is treated as evidence loss
+  // and stock is left unchanged rather than inventing units.
   for (const movement of debits) {
     const productId = String(movement.productId || '');
     const product = products.get(productId);
@@ -163,7 +164,6 @@ export async function reconcileMarketplaceSales(market) {
       sold += qty;
     }
     if (!sold && !restored) return { changed: false, market, sold: 0, restored: 0, unlinked, revision: Number(stored.rows[0].revision || 0) };
-    state.movements = state.movements.slice(0, 1000);
     const backup = await client.query(`INSERT INTO warehouse_backups(label,payload,revision,created_at)
       VALUES($1,$2,$3,$4) RETURNING id`, [`before-${market.toLowerCase()}-sale-reconcile`, stored.rows[0].payload, stored.rows[0].revision, now]);
     const raw = JSON.stringify(state), revision = Number(stored.rows[0].revision || 0) + 1;
