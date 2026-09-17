@@ -91,3 +91,12 @@ test('WB product report keeps multi-product advertising unallocated', () => {
   assert.match(ui, /Себестоимость<\/th><th>Расходы WB<\/th><th>Реклама<\/th><th>Прибыль/);
   assert.match(ui, /не распределена по товарам наугад/);
 });
+
+
+test('WB current Finance API backfill repairs camelCase logistics from raw rows', () => {
+  const source = readFileSync(new URL('../migrations/017_wb_finance_current_fields_backfill.sql', import.meta.url), 'utf8');
+  assert.match(source, /deliveryService/);
+  assert.match(source, /paidStorage/);
+  assert.match(source, /sellerOperName/);
+  assert.match(source, /raw_json::jsonb/);
+});
