@@ -80,6 +80,14 @@ async function auditWbReportData() {
         market,
         sourceRows: Number(sourceDiff.rows || 0),
         rawToStoredIntegrity: differences.every(value => value < 0.01),
+        rawToStoredDifferences: {
+          retailAmount: Number(sourceDiff.retail_diff || 0),
+          forPay: Number(sourceDiff.for_pay_diff || 0),
+          acquiring: Number(sourceDiff.acquiring_diff || 0),
+          delivery: Number(sourceDiff.delivery_diff || 0),
+          storage: Number(sourceDiff.storage_diff || 0),
+          acceptance: Number(sourceDiff.acceptance_diff || 0)
+        },
         maxRawToStoredDifference: differences.length ? Math.max(...differences) : 0,
         periods,
         latestSync: latest.rows[0] || null
