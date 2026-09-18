@@ -22,89 +22,6 @@ import { aiAssistantRouter } from './ai-assistant.js';
 
 assertRuntimeConfig();
 
-async function auditWbExpenseBreakdownOnce() {
-  try {
-    const now=Date.now();
-    const result={};
-    for(const market of ['WB','WB2']){
-      const periods={};
-      for(const [name,from] of [['7d',now-7*86_400_000],['30d',now-30*86_400_000]]){
-        const finance=(await pool.query(`
-          SELECT COUNT(*)::bigint AS rows,COUNT(DISTINCT report_id)::bigint AS reports,
-            COALESCE(SUM(retail_amount),0) AS revenue,COALESCE(SUM(for_pay),0) AS for_pay,
-            COALESCE(SUM(acquiring_fee),0) AS acquiring,
-            COALESCE(SUM(delivery_service),0) AS delivery,
-            COALESCE(SUM(paid_storage),0) AS storage,
-            COALESCE(SUM(paid_acceptance),0) AS acceptance,
-            COALESCE(SUM(deduction),0) AS deduction,
-            COALESCE(SUM(penalty),0) AS penalty,
-            COALESCE(SUM(rebill_logistic_cost),0) AS rebill,
-            COALESCE(SUM(additional_payment),0) AS additional_payment
-          FROM wb_finance_rows WHERE market=$1 AND rr_date >= $2`,[market,from])).rows[0];
-        const ads=(await pool.query(`
-          SELECT COALESCE(SUM(amount),0) AS advertising
-          FROM wb_ad_costs
-          WHERE market=$1 AND day >= to_char((to_timestamp($2/1000.0) AT TIME ZONE 'Asia/Almaty')::date,'YYYY-MM-DD')`,
-          [market,from])).rows[0];
-        periods[name]={...finance,...ads};
-      }
-      const stale=(await pool.query(`
-        WITH mx AS (SELECT MAX(updated_at) AS u FROM wb_finance_rows WHERE market=$1)
-        SELECT
-          COUNT(*) FILTER(WHERE rr_date >= $2 AND updated_at < (SELECT u FROM mx)-60000)::bigint AS stale_30d,
-          COALESCE(SUM(retail_amount) FILTER(WHERE rr_date >= $2 AND updated_at < (SELECT u FROM mx)-60000),0) AS stale_revenue_30d,
-          COALESCE(SUM(for_pay) FILTER(WHERE rr_date >= $2 AND updated_at < (SELECT u FROM mx)-60000),0) AS stale_forpay_30d
-        FROM wb_finance_rows WHERE market=$1`,[market,now-30*86_400_000])).rows[0];
-      const exactDup=(await pool.query(`
-        SELECT COUNT(*)::bigint AS groups,COALESCE(SUM(c-1),0)::bigint AS extra
-        FROM (SELECT raw_json,COUNT(*) c FROM wb_finance_rows
-          WHERE market=$1 AND raw_json<>'' GROUP BY raw_json HAVING COUNT(*)>1)x`,[market])).rows[0];
-      const businessDup=(await pool.query(`
-        WITH x AS (
-          SELECT
-            COALESCE(NULLIF(raw_json::jsonb->>'srid',''),'') srid,
-            COALESCE(NULLIF(raw_json::jsonb->>'docTypeName',''),NULLIF(raw_json::jsonb->>'doc_type_name',''),doc_type) doc,
-            COALESCE(NULLIF(raw_json::jsonb->>'saleDt',''),NULLIF(raw_json::jsonb->>'sale_dt',''),'') sale_dt,
-            COALESCE(NULLIF(raw_json::jsonb->>'retailAmount',''),NULLIF(raw_json::jsonb->>'retail_amount',''),retail_amount::text) retail,
-            COALESCE(NULLIF(raw_json::jsonb->>'forPay',''),NULLIF(raw_json::jsonb->>'ppvzForPay',''),NULLIF(raw_json::jsonb->>'ppvz_for_pay',''),for_pay::text) pay,
-            COUNT(*) c,COUNT(DISTINCT report_id) rc
-          FROM wb_finance_rows WHERE market=$1
-            AND COALESCE(NULLIF(raw_json::jsonb->>'srid',''),'')<>''
-          GROUP BY 1,2,3,4,5 HAVING COUNT(*)>1
-        )
-        SELECT COUNT(*)::bigint AS groups,COALESCE(SUM(c-1),0)::bigint AS extra,
-          COALESCE(SUM(CASE WHEN rc>1 THEN c-1 ELSE 0 END),0)::bigint AS cross_report_extra
-        FROM x`,[market])).rows[0];
-      const deductionGroups=(await pool.query(`
-        SELECT
-          COALESCE(NULLIF(raw_json::jsonb->>'sellerOperName',''),
-                   NULLIF(raw_json::jsonb->>'supplierOperName',''),
-                   NULLIF(raw_json::jsonb->>'supplier_oper_name',''),
-                   operation,'') AS operation,
-          COALESCE(NULLIF(raw_json::jsonb->>'bonusTypeName',''),
-                   NULLIF(raw_json::jsonb->>'bonus_type_name',''),'') AS bonus,
-          COUNT(*)::bigint AS rows,
-          COALESCE(SUM(deduction),0) AS deduction,
-          COALESCE(SUM(penalty),0) AS penalty
-        FROM wb_finance_rows
-        WHERE market=$1 AND rr_date >= $2 AND (deduction<>0 OR penalty<>0)
-        GROUP BY 1,2
-        ORDER BY ABS(COALESCE(SUM(deduction),0))+ABS(COALESCE(SUM(penalty),0)) DESC
-        LIMIT 30`,[market,now-7*86_400_000])).rows;
-      const adGroups=(await pool.query(`
-        SELECT payment_type AS "paymentType",COUNT(*)::bigint AS rows,COALESCE(SUM(amount),0) AS amount
-        FROM wb_ad_costs
-        WHERE market=$1 AND day >= to_char((to_timestamp($2/1000.0) AT TIME ZONE 'Asia/Almaty')::date,'YYYY-MM-DD')
-        GROUP BY payment_type ORDER BY SUM(amount) DESC`,[market,now-7*86_400_000])).rows;
-      result[market]={periods,stale,exactDup,businessDup,deductionGroups,adGroups};
-    }
-    const movements=await pool.query(`SELECT COUNT(*)::bigint AS rows,COUNT(DISTINCT id)::bigint AS distinct_ids FROM warehouse_movements`);
-    console.info('WB_EXPENSE_AUDIT',JSON.stringify({result,movements:movements.rows[0]}));
-  } catch (error) {
-    console.warn('WB_EXPENSE_AUDIT_FAILED',String(error?.stack||error));
-  }
-}
-
 const app = express();
 const repositoryRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const frontendFiles = Object.freeze([
@@ -265,7 +182,6 @@ const server = app.listen(config.port, '0.0.0.0', () => {
   startKaspiSyncLoop();
   startWbSyncLoop();
   startWbAdsLimitLoop();
-  setTimeout(auditWbExpenseBreakdownOnce, 5000).unref();
   let checkingLinks=false;
   const checkLinks=async()=>{
     if(checkingLinks)return;checkingLinks=true;

@@ -7,21 +7,20 @@ import { financeRowsFromPayload, promotionCostDay, promotionCostRowsFromPayload 
 import { syncWbStockMarket } from './wb-stock-sync.js';
 
 const WB_API = 'https://marketplace-api.wildberries.ru';
-const WB_STATISTICS_API = 'https://statistics-api.wildberries.ru';
+const WB_FINANCE_API = 'https://finance-api.wildberries.ru';
 const WB_ADVERT_API = 'https://advert-api.wildberries.ru';
 const SYNC_MS = 10 * 60 * 1000;
 const TIMEOUT_MS = 25_000;
 const LOOKBACK_DAYS = 14;
-// WB allows only two calls of the financial report-by-period method per 12
-// hours. Orders may still refresh every ten minutes, but finance must not.
-const FINANCE_SYNC_MS = 6 * 60 * 60 * 1000 + 5 * 60 * 1000;
-// A failed finance request must not be retried by every ten-minute order sync.
-// WB commonly asks clients to wait close to an hour after HTTP 429.
-const FINANCE_FAILURE_RETRY_MS = 65 * 60 * 1000;
+// Current WB Finance API allows one request per minute per seller account.
+// Keep a wider gap so background and manual refreshes do not collide.
+const FINANCE_SYNC_MS = 15 * 60 * 1000;
+const FINANCE_FAILURE_RETRY_MS = 5 * 60 * 1000;
 const inFlight = new Map();
 
+const MOSCOW_OFFSET_MS = 3 * 60 * 60 * 1000;
 function isoDate(time) {
-  return new Date(time).toISOString().slice(0, 10);
+  return new Date(time + MOSCOW_OFFSET_MS).toISOString().slice(0, 10);
 }
 
 function value(row, ...keys) {
@@ -108,18 +107,20 @@ async function fetchOrders(market, token) {
 async function fetchFinanceRows(token) {
   const dateTo = isoDate(Date.now()), dateFrom = isoDate(Date.now() - 45 * 86_400_000);
   const rows = [];
-  let rrdid = 0;
+  let rrdId = 0;
   for (let page = 0; page < 20; page += 1) {
-    const query = new URLSearchParams({ dateFrom, dateTo, limit: '100000', rrdid: String(rrdid), period: 'weekly' });
-    const data = await requestJson(`${WB_STATISTICS_API}/api/v5/supplier/reportDetailByPeriod?${query}`, {
-      headers: { Accept: 'application/json', Authorization: token }
+    const data = await requestJson(`${WB_FINANCE_API}/api/finance/v1/sales-reports/detailed`, {
+      method: 'POST',
+      headers: { Accept: 'application/json', Authorization: token, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ dateFrom, dateTo, limit: 100000, rrdId, period: 'daily' })
     }, 'WB Finance report');
     const batch = financeRowsFromPayload(data);
+    if (!batch.length) break;
     rows.push(...batch);
     if (batch.length < 100000) break;
     const next = Number(value(batch[batch.length - 1], 'rrdId', 'rrd_id')) || 0;
-    if (!next || next === rrdid) break;
-    rrdid = next;
+    if (!next || next === rrdId) break;
+    rrdId = next;
   }
   return rows;
 }
@@ -169,32 +170,80 @@ async function upsertPromotionCosts(market, rows) {
 }
 
 async function upsertFinance(market, rows) {
-  if (!rows.length) return;
-  const now = Date.now(), client = await pool.connect();
+  if (!rows.length) return { saved: 0, pruned: 0 };
+  const now = Date.now();
+  const normalized = rows.map(row => {
+    const rrdId = String(value(row, 'rrdId', 'rrd_id') || '');
+    if (!rrdId) return null;
+    return {
+      rrdId,
+      reportId: String(value(row, 'reportId', 'realizationreport_id') || ''),
+      rrDate: timestamp(value(row, 'rrDate', 'rrDt', 'rr_dt')),
+      saleDate: timestamp(value(row, 'saleDt', 'sale_dt')),
+      vendorCode: String(value(row, 'vendorCode', 'saName', 'sa_name') || ''),
+      nmId: String(value(row, 'nmId', 'nm_id') || ''),
+      title: String(value(row, 'title', 'subjectName', 'subject_name') || ''),
+      docType: String(value(row, 'docTypeName', 'doc_type_name') || ''),
+      operation: String(value(row, 'sellerOperName', 'supplierOperName', 'supplier_oper_name') || ''),
+      qty: Number(value(row, 'quantity', 'qty')) || 0,
+      retailAmount: Number(value(row, 'retailAmount', 'retail_amount')) || 0,
+      forPay: Number(value(row, 'forPay', 'ppvzForPay', 'ppvz_for_pay')) || 0,
+      acquiring: Number(value(row, 'acquiringFee', 'acquiring_fee')) || 0,
+      delivery: Number(value(row, 'deliveryService', 'deliveryRub', 'delivery_rub')) || 0,
+      storage: Number(value(row, 'paidStorage', 'storageFee', 'storage', 'storage_fee')) || 0,
+      acceptance: Number(value(row, 'paidAcceptance', 'acceptance', 'acceptanceFee', 'acceptance_fee')) || 0,
+      deduction: Number(value(row, 'deduction')) || 0,
+      penalty: Number(value(row, 'penalty')) || 0,
+      additionalPayment: Number(value(row, 'additionalPayment', 'additional_payment')) || 0,
+      rebill: Number(value(row, 'rebillLogisticCost', 'rebill_logistic_cost')) || 0,
+      raw: row
+    };
+  }).filter(Boolean);
+  if (!normalized.length) return { saved: 0, pruned: 0 };
+
+  const rrDates = normalized.map(row => row.rrDate).filter(value => Number.isFinite(value) && value > 0);
+  const minRrDate = Math.min(...rrDates), maxRrDate = Math.max(...rrDates);
+  const client = await pool.connect();
+  let pruned = 0;
   try {
     await client.query('BEGIN');
-    for (const row of rows) {
-      const rrdId = String(value(row, 'rrdId', 'rrd_id') || '');
-      if (!rrdId) continue;
-      await client.query(`INSERT INTO wb_finance_rows
-        (market,rrd_id,report_id,rr_date,sale_date,vendor_code,nm_id,title,doc_type,operation,qty,retail_amount,for_pay,acquiring_fee,delivery_service,paid_storage,paid_acceptance,deduction,penalty,additional_payment,rebill_logistic_cost,raw_json,updated_at)
-        VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23)
-        ON CONFLICT(market,rrd_id) DO UPDATE SET report_id=excluded.report_id,rr_date=excluded.rr_date,sale_date=excluded.sale_date,vendor_code=excluded.vendor_code,nm_id=excluded.nm_id,title=excluded.title,doc_type=excluded.doc_type,operation=excluded.operation,qty=excluded.qty,retail_amount=excluded.retail_amount,for_pay=excluded.for_pay,acquiring_fee=excluded.acquiring_fee,delivery_service=excluded.delivery_service,paid_storage=excluded.paid_storage,paid_acceptance=excluded.paid_acceptance,deduction=excluded.deduction,penalty=excluded.penalty,additional_payment=excluded.additional_payment,rebill_logistic_cost=excluded.rebill_logistic_cost,raw_json=excluded.raw_json,updated_at=excluded.updated_at`, [
-        market, rrdId, String(value(row, 'reportId', 'realizationreport_id') || ''), timestamp(value(row, 'rrDt', 'rr_dt')),
-        timestamp(value(row, 'saleDt', 'sale_dt')), String(value(row, 'saName', 'vendorCode', 'sa_name') || ''),
-        String(value(row, 'nmId', 'nm_id') || ''), String(value(row, 'title', 'subjectName', 'subject_name') || ''),
-        String(value(row, 'docTypeName', 'doc_type_name') || ''), String(value(row, 'supplierOperName', 'supplier_oper_name') || ''),
-        Number(value(row, 'quantity', 'qty')) || 0, Number(value(row, 'retailAmount', 'retail_amount')) || 0,
-        Number(value(row, 'ppvzForPay', 'forPay', 'ppvz_for_pay')) || 0, Number(value(row, 'acquiringFee', 'acquiring_fee')) || 0,
-        Number(value(row, 'deliveryRub', 'delivery_rub')) || 0, Number(value(row, 'storageFee', 'storage', 'storage_fee')) || 0,
-        Number(value(row, 'acceptance', 'acceptanceFee', 'acceptance_fee')) || 0, Number(value(row, 'deduction')) || 0,
-        Number(value(row, 'penalty')) || 0, Number(value(row, 'additionalPayment', 'additional_payment')) || 0,
-        Number(value(row, 'rebillLogisticCost', 'rebill_logistic_cost')) || 0, JSON.stringify(row), now
-      ]);
+    for (let start = 0; start < normalized.length; start += 500) {
+      const chunk = normalized.slice(start, start + 500);
+      await client.query(`
+        INSERT INTO wb_finance_rows
+          (market,rrd_id,report_id,rr_date,sale_date,vendor_code,nm_id,title,doc_type,operation,qty,retail_amount,for_pay,acquiring_fee,delivery_service,paid_storage,paid_acceptance,deduction,penalty,additional_payment,rebill_logistic_cost,raw_json,updated_at)
+        SELECT $1,
+          item->>'rrdId',item->>'reportId',(item->>'rrDate')::bigint,(item->>'saleDate')::bigint,
+          item->>'vendorCode',item->>'nmId',item->>'title',item->>'docType',item->>'operation',
+          (item->>'qty')::double precision,(item->>'retailAmount')::double precision,(item->>'forPay')::double precision,
+          (item->>'acquiring')::double precision,(item->>'delivery')::double precision,(item->>'storage')::double precision,
+          (item->>'acceptance')::double precision,(item->>'deduction')::double precision,(item->>'penalty')::double precision,
+          (item->>'additionalPayment')::double precision,(item->>'rebill')::double precision,(item->'raw')::text,$3
+        FROM jsonb_array_elements($2::jsonb) item
+        ON CONFLICT(market,rrd_id) DO UPDATE SET
+          report_id=excluded.report_id,rr_date=excluded.rr_date,sale_date=excluded.sale_date,vendor_code=excluded.vendor_code,
+          nm_id=excluded.nm_id,title=excluded.title,doc_type=excluded.doc_type,operation=excluded.operation,qty=excluded.qty,
+          retail_amount=excluded.retail_amount,for_pay=excluded.for_pay,acquiring_fee=excluded.acquiring_fee,
+          delivery_service=excluded.delivery_service,paid_storage=excluded.paid_storage,paid_acceptance=excluded.paid_acceptance,
+          deduction=excluded.deduction,penalty=excluded.penalty,additional_payment=excluded.additional_payment,
+          rebill_logistic_cost=excluded.rebill_logistic_cost,raw_json=excluded.raw_json,updated_at=excluded.updated_at
+      `, [market, JSON.stringify(chunk), now]);
+    }
+    if (Number.isFinite(minRrDate) && Number.isFinite(maxRrDate)) {
+      const deleted = await client.query(
+        'DELETE FROM wb_finance_rows WHERE market=$1 AND rr_date >= $2 AND rr_date <= $3 AND updated_at < $4',
+        [market, minRrDate, maxRrDate, now]
+      );
+      pruned = Number(deleted.rowCount || 0);
     }
     await client.query('COMMIT');
-  } catch (error) { await client.query('ROLLBACK').catch(() => {}); throw error; }
-  finally { client.release(); }
+    return { saved: normalized.length, pruned };
+  } catch (error) {
+    await client.query('ROLLBACK').catch(() => {});
+    throw error;
+  } finally {
+    client.release();
+  }
 }
 
 async function syncFinanceReport(market, token) {
@@ -203,31 +252,61 @@ async function syncFinanceReport(market, token) {
   try {
     const lock = await client.query('SELECT pg_try_advisory_lock(hashtext($1)) AS locked', [lockName]);
     locked = Boolean(lock.rows[0]?.locked);
-    if (!locked) return { financeItems: 0, financeError: '', financeSkipped: true, financeSkipReason: 'already-running' };
-    const latest = await client.query('SELECT started_at,finance_ok,promotion_ok FROM wb_finance_sync_runs WHERE market=$1 ORDER BY id DESC LIMIT 1', [market]);
+    if (!locked) return { financeItems: 0, financeError: '', financeSkipped: true, promotionSkipped: true, financeSkipReason: 'already-running' };
+
+    const latest = await client.query('SELECT started_at,finance_ok,promotion_ok,finance_items,ad_items FROM wb_finance_sync_runs WHERE market=$1 ORDER BY id DESC LIMIT 1', [market]);
     const previousRun = latest.rows[0] || {};
     const lastStartedAt = Number(previousRun.started_at || 0), now = Date.now();
-    const previousRunComplete = Number(previousRun.finance_ok) === 1 && Number(previousRun.promotion_ok) === 1;
-    const cooldownMs = previousRunComplete ? FINANCE_SYNC_MS : FINANCE_FAILURE_RETRY_MS;
-    if (lastStartedAt && now - lastStartedAt < cooldownMs) return { financeItems: 0, financeError: '', financeSkipped: true, financeSkipReason: previousRunComplete ? 'cooldown' : 'failure-cooldown', financeNextAt: lastStartedAt + cooldownMs };
-    let financeItems = 0, financeError = '', financeOk = 0;
-    let adItems = 0, promotionError = '', promotionOk = 0, adRowsWithoutDate = 0;
-    try { const rows = await fetchFinanceRows(token); financeItems = rows.length; await upsertFinance(market, rows); financeOk = 1; }
-    catch (error) { financeError = String(error?.message || error).slice(0, 1000); console.error(`WB finance sync failed (${market})`, error); }
-    try {
-      const rows = await fetchPromotionCosts(token);
-      const saved = await upsertPromotionCosts(market, rows);
-      adItems = saved.saved;
-      adRowsWithoutDate = saved.skippedWithoutDate;
-      promotionOk = 1;
-    } catch (error) {
-      promotionError = String(error?.message || error).slice(0, 1000);
-      console.error(`WB promotion cost sync failed (${market})`, error);
+    const age = lastStartedAt ? now - lastStartedAt : Number.POSITIVE_INFINITY;
+    const previousFinanceOk = Number(previousRun.finance_ok) === 1;
+    const previousPromotionOk = Number(previousRun.promotion_ok) === 1;
+
+    if (previousFinanceOk && previousPromotionOk && age < FINANCE_SYNC_MS) {
+      return { financeItems: Number(previousRun.finance_items || 0), financeError: '', financeSkipped: true, promotionSkipped: true,
+        financeSkipReason: 'cooldown', financeNextAt: lastStartedAt + FINANCE_SYNC_MS };
     }
+    if ((!previousFinanceOk || !previousPromotionOk) && lastStartedAt && age < FINANCE_FAILURE_RETRY_MS) {
+      return { financeItems: Number(previousRun.finance_items || 0), financeError: '', financeSkipped: previousFinanceOk, promotionSkipped: previousPromotionOk,
+        financeSkipReason: 'failure-cooldown', financeNextAt: lastStartedAt + FINANCE_FAILURE_RETRY_MS };
+    }
+
+    const reuseFinance = previousFinanceOk && age < FINANCE_SYNC_MS;
+    const reusePromotion = previousPromotionOk && age < FINANCE_SYNC_MS;
+    let financeItems = reuseFinance ? Number(previousRun.finance_items || 0) : 0, financeError = '', financeOk = reuseFinance ? 1 : 0, financePruned = 0;
+    let adItems = reusePromotion ? Number(previousRun.ad_items || 0) : 0, promotionError = '', promotionOk = reusePromotion ? 1 : 0, adRowsWithoutDate = 0;
+
+    if (!reuseFinance) {
+      try {
+        const rows = await fetchFinanceRows(token);
+        financeItems = rows.length;
+        const saved = await upsertFinance(market, rows);
+        financePruned = Number(saved.pruned || 0);
+        financeOk = 1;
+      } catch (error) {
+        financeError = String(error?.message || error).slice(0, 1000);
+        console.error(`WB finance sync failed (${market})`, error);
+      }
+    }
+
+    if (!reusePromotion) {
+      try {
+        const rows = await fetchPromotionCosts(token);
+        const saved = await upsertPromotionCosts(market, rows);
+        adItems = saved.saved;
+        adRowsWithoutDate = saved.skippedWithoutDate;
+        promotionOk = 1;
+      } catch (error) {
+        promotionError = String(error?.message || error).slice(0, 1000);
+        console.error(`WB promotion cost sync failed (${market})`, error);
+      }
+    }
+
     const errorText = [financeError, promotionError].filter(Boolean).join(' · ');
+    const runStartedAt = (reuseFinance || reusePromotion) && lastStartedAt ? lastStartedAt : now;
     await client.query(`INSERT INTO wb_finance_sync_runs(market,started_at,finished_at,ok,finance_ok,promotion_ok,finance_items,ad_items,error)
-      VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9)`, [market, now, Date.now(), financeOk && promotionOk ? 1 : 0, financeOk, promotionOk, financeItems, adItems, errorText]);
-    return { financeItems, financeError, adItems, adRowsWithoutDate, promotionError, financeSkipped: false, financeNextAt: now + FINANCE_SYNC_MS };
+      VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9)`, [market, runStartedAt, Date.now(), financeOk && promotionOk ? 1 : 0, financeOk, promotionOk, financeItems, adItems, errorText]);
+    return { financeItems, financeError, financePruned, adItems, adRowsWithoutDate, promotionError,
+      financeSkipped: reuseFinance, promotionSkipped: reusePromotion, financeNextAt: runStartedAt + FINANCE_SYNC_MS };
   } finally {
     if (locked) await client.query('SELECT pg_advisory_unlock(hashtext($1))', [lockName]).catch(() => {});
     client.release();

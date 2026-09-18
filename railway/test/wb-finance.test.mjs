@@ -25,17 +25,23 @@ test('reads WB promotion costs and preserves the WB calendar day', () => {
   assert.equal(promotionCostDay({ updTime: null }), '');
 });
 
-test('WB synchronization uses official paginated finance and promotion cost methods', () => {
+test('WB synchronization uses current Finance API, daily rows and prunes stale snapshot rows', () => {
   const source = readFileSync(new URL('../src/wb-sync.js', import.meta.url), 'utf8');
-  assert.match(source, /statistics-api\.wildberries\.ru/);
-  assert.match(source, /reportDetailByPeriod/);
-  assert.match(source, /rrdid/);
+  assert.match(source, /finance-api\.wildberries\.ru/);
+  assert.match(source, /\/api\/finance\/v1\/sales-reports\/detailed/);
+  assert.match(source, /method:\s*'POST'/);
+  assert.match(source, /period:\s*'daily'/);
+  assert.match(source, /rrdId/);
+  assert.match(source, /deliveryService/);
+  assert.match(source, /paidStorage/);
+  assert.match(source, /paidAcceptance/);
+  assert.match(source, /sellerOperName/);
+  assert.match(source, /DELETE FROM wb_finance_rows WHERE market=\$1/);
+  assert.match(source, /jsonb_array_elements/);
+  assert.doesNotMatch(source, /reportDetailByPeriod/);
   assert.match(source, /\/adv\/v1\/upd/);
-  assert.match(source, /INSERT INTO wb_ad_costs/);
-  assert.match(source, /previousRun\.finance_ok/);
-  assert.match(source, /previousRun\.promotion_ok/);
-  assert.match(source, /FINANCE_FAILURE_RETRY_MS/);
-  assert.match(source, /failure-cooldown/);
+  assert.match(source, /reuseFinance/);
+  assert.match(source, /reusePromotion/);
 });
 
 test('browser sync avoids five-second warehouse polling and duplicate order loads', () => {
@@ -53,4 +59,15 @@ test('WB product report keeps multi-product advertising unallocated', () => {
   const ui = readFileSync(new URL('../../kaspi-report-v2.js', import.meta.url), 'utf8');
   assert.match(ui, /Себестоимость<\/th><th>Расходы WB<\/th><th>Реклама<\/th><th>Прибыль/);
   assert.match(ui, /не распределена по товарам наугад/);
+});
+
+
+test('WB report excludes WB Promotion deduction because advertising is counted separately', () => {
+  const source = readFileSync(new URL('../src/reports.js', import.meta.url), 'utf8');
+  assert.match(source, /wb продвижение/);
+  assert.match(source, /promotionDeduction/);
+  assert.match(source, /THEN 0 ELSE deduction END/);
+  const ui = readFileSync(new URL('../../kaspi-report-v2.js', import.meta.url), 'utf8');
+  assert.match(ui, /Удержания \(без рекламы\)/);
+  assert.match(ui, /promotionDeduction/);
 });

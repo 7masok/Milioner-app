@@ -202,7 +202,9 @@ reportsRouter.get('/wb-finance-summary', asyncRoute(async (req, res) => {
   const [finance, sync, lastSuccess] = await Promise.all([pool.query(`SELECT COUNT(*) AS "financeRowCount",COALESCE(SUM(retail_amount),0) AS "retailAmount",COALESCE(SUM(for_pay),0) AS "forPay",
     COALESCE(SUM(acquiring_fee),0) AS acquiring,COALESCE(SUM(delivery_service),0) AS delivery,
     COALESCE(SUM(paid_storage),0) AS storage,COALESCE(SUM(paid_acceptance),0) AS acceptance,
-    COALESCE(SUM(deduction),0) AS deduction,COALESCE(SUM(penalty),0) AS penalty,
+    COALESCE(SUM(CASE WHEN lower(COALESCE(NULLIF(raw_json::jsonb->>'bonusTypeName',''),NULLIF(raw_json::jsonb->>'bonus_type_name',''),'')) LIKE '%wb продвижение%' THEN 0 ELSE deduction END),0) AS deduction,
+    COALESCE(SUM(CASE WHEN lower(COALESCE(NULLIF(raw_json::jsonb->>'bonusTypeName',''),NULLIF(raw_json::jsonb->>'bonus_type_name',''),'')) LIKE '%wb продвижение%' THEN deduction ELSE 0 END),0) AS "promotionDeduction",
+    COALESCE(SUM(penalty),0) AS penalty,
     COALESCE(SUM(additional_payment),0) AS "additionalPayment",COALESCE(SUM(rebill_logistic_cost),0) AS rebill
     FROM wb_finance_rows WHERE market=$1 AND rr_date >= $2 AND rr_date < $3`, [selected, since, until]),
     pool.query('SELECT finished_at AS "finishedAt",finance_ok AS "financeOk",promotion_ok AS "promotionOk",finance_items AS "financeItems",ad_items AS "adItems",error FROM wb_finance_sync_runs WHERE market=$1 ORDER BY id DESC LIMIT 1',[selected]),
@@ -230,7 +232,9 @@ reportsRouter.get('/wb-finance-products', asyncRoute(async (req, res) => {
     SUM(CASE WHEN trim(f.doc_type)='Продажа' THEN f.qty WHEN trim(f.doc_type)='Возврат' THEN -f.qty ELSE 0 END) AS qty,
     SUM(f.retail_amount) AS "retailAmount",SUM(f.for_pay) AS "forPay",SUM(f.acquiring_fee) AS acquiring,
     SUM(f.delivery_service) AS delivery,SUM(f.paid_storage) AS storage,SUM(f.paid_acceptance) AS acceptance,
-    SUM(f.deduction) AS deduction,SUM(f.penalty) AS penalty,SUM(f.additional_payment) AS "additionalPayment",
+    SUM(CASE WHEN lower(COALESCE(NULLIF(f.raw_json::jsonb->>'bonusTypeName',''),NULLIF(f.raw_json::jsonb->>'bonus_type_name',''),'')) LIKE '%wb продвижение%' THEN 0 ELSE f.deduction END) AS deduction,
+    SUM(CASE WHEN lower(COALESCE(NULLIF(f.raw_json::jsonb->>'bonusTypeName',''),NULLIF(f.raw_json::jsonb->>'bonus_type_name',''),'')) LIKE '%wb продвижение%' THEN f.deduction ELSE 0 END) AS "promotionDeduction",
+    SUM(f.penalty) AS penalty,SUM(f.additional_payment) AS "additionalPayment",
     SUM(f.rebill_logistic_cost) AS rebill FROM wb_finance_rows f
     LEFT JOIN LATERAL (
       SELECT pl.product_id FROM product_links pl
