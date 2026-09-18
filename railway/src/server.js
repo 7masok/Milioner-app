@@ -70,7 +70,27 @@ async function verifyWbReportsOnce() {
       const exactDup=(await pool.query(`
         SELECT COUNT(*)::bigint AS groups,COALESCE(SUM(c-1),0)::bigint AS extra
         FROM (SELECT raw_json,COUNT(*) c FROM wb_finance_rows WHERE market=$1 AND raw_json<>'' GROUP BY raw_json HAVING COUNT(*)>1)x`,[market])).rows[0];
-      out[market]={periods,stale,exactDup};
+      const livePeriods={};
+      for(const days of [1,7,30]){
+        const {since,until}=wbVerifyBounds(days);
+        livePeriods[days]=(await pool.query(`
+          SELECT COUNT(*)::bigint AS rows,
+            COALESCE(SUM(CASE WHEN is_return=1 THEN -1 ELSE 1 END),0) AS qty,
+            COALESCE(SUM(CASE WHEN is_return=1 THEN -finished_price ELSE finished_price END),0) AS revenue,
+            COALESCE(SUM(CASE WHEN is_return=1 THEN -for_pay ELSE for_pay END),0) AS for_pay,
+            MIN(sale_date)::bigint AS min_sale,MAX(sale_date)::bigint AS max_sale
+          FROM wb_sales_live_rows WHERE market=$1 AND sale_date >= $2 AND sale_date < $3`,
+          [market,since,until])).rows[0];
+      }
+      const tracker=(await pool.query(`
+        SELECT
+          COUNT(*) FILTER(WHERE sold_at >= $2 AND sold_at < $3)::bigint AS sales_7d,
+          COUNT(*) FILTER(WHERE returned_at >= $2 AND returned_at < $3)::bigint AS returns_7d,
+          COALESCE(SUM(CASE WHEN sold_at >= $2 AND sold_at < $3 THEN unit_price ELSE 0 END),0)
+          - COALESCE(SUM(CASE WHEN returned_at >= $2 AND returned_at < $3 THEN unit_price ELSE 0 END),0) AS revenue_7d
+        FROM wb_realized_status_tracker WHERE market=$1`,
+        [market,wbVerifyBounds(7).since,wbVerifyBounds(7).until])).rows[0];
+      out[market]={periods,stale,exactDup,livePeriods,tracker};
     }
     const mv=(await pool.query('SELECT COUNT(*)::bigint AS rows,COUNT(DISTINCT id)::bigint AS distinct_ids FROM warehouse_movements')).rows[0];
     console.info('WB_FINAL_VERIFY',JSON.stringify({out,movements:mv}));
