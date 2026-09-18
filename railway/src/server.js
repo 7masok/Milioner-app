@@ -171,8 +171,9 @@ app.get('/kaspi/live-price-list.xml', kaspiFeedHandler);
 
 app.use((req, res) => res.status(404).json({ ok: false, error: 'Not found', path: req.path }));
 app.use((error, _req, res, _next) => {
-  console.error(error);
   const status = Number(error?.status || 500);
+  const clientAbort=error?.code==='ECONNABORTED'||error?.type==='request.aborted'||status===400&&/aborted/i.test(String(error?.message||''));
+  if(!clientAbort)console.error(error);
   res.status(status).json({ ok: false, error: status >= 500 ? 'Internal server error' : String(error.message || error) });
 });
 
@@ -186,7 +187,7 @@ const server = app.listen(config.port, '0.0.0.0', () => {
   const checkLinks=async()=>{
     if(checkingLinks)return;checkingLinks=true;
     try{for(const market of ['WB','WB2']){
-      try{const result=await validateWbStockLinks(market);console.info('WB link validation',JSON.stringify(result));}
+      try{const result=await validateWbStockLinks(market);if(Number(result?.detached||0)>0)console.info('WB link validation',JSON.stringify(result));}
       catch(error){console.warn('WB link validation failed',market,String(error.message||error));}
     }}finally{checkingLinks=false;}
   };

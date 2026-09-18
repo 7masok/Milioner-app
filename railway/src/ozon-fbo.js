@@ -127,7 +127,7 @@ async function run(){
   }
   await pool.query('INSERT INTO ozon_fbo_cache(account,payload,updated_at) VALUES($1,$2::jsonb,$3) ON CONFLICT(account) DO UPDATE SET payload=EXCLUDED.payload,updated_at=EXCLUDED.updated_at',[account.id,JSON.stringify(payload),Date.now()]);
   const result={account:account.id,postings:payload.postings?.rows?.length||0,stocks:payload.stocks?.rows?.length||0,finance:payload.finance?.rows?.length||0,supplies:payload.supplies?.rows?.length||0,errors:payload.errors};
-  results.push(result);console.info('Ozon FBO sync',JSON.stringify(result));
+  results.push(result);if(result.error||Object.keys(result.errors||{}).length)console.warn('Ozon FBO sync issue',JSON.stringify(result));
  }
  return {ok:results.every(x=>!x.error&&!Object.keys(x.errors||{}).length),results};
 }
