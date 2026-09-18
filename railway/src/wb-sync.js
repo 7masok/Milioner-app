@@ -15,11 +15,11 @@ const TIMEOUT_MS = 25_000;
 const LOOKBACK_DAYS = 14;
 const LIVE_SALES_LOOKBACK_DAYS = 45;
 const LIVE_SALES_SYNC_MS = 30 * 60 * 1000;
-const LIVE_SALES_RETRY_MS = 5 * 60 * 1000;
+const LIVE_SALES_RETRY_MS = 65 * 60 * 1000;
 // Current WB Finance API allows one request per minute per seller account.
 // Keep a wider gap so background and manual refreshes do not collide.
 const FINANCE_SYNC_MS = 15 * 60 * 1000;
-const FINANCE_FAILURE_RETRY_MS = 5 * 60 * 1000;
+const FINANCE_FAILURE_RETRY_MS = 65 * 60 * 1000;
 const inFlight = new Map();
 
 const MOSCOW_OFFSET_MS = 3 * 60 * 60 * 1000;
@@ -44,6 +44,26 @@ function timestamp(value) {
   return Number.isFinite(parsed) ? parsed : Date.now();
 }
 
+function retryAtFromValue(raw, now = Date.now()) {
+  const value = String(raw || '').trim();
+  if (!value) return 0;
+  const numeric = Number(value);
+  if (Number.isFinite(numeric) && numeric > 0) {
+    if (numeric > 1e12) return Math.floor(numeric);
+    if (numeric > 1e9) return Math.floor(numeric * 1000);
+    return now + Math.ceil(numeric * 1000);
+  }
+  const parsed = Date.parse(value);
+  return Number.isFinite(parsed) && parsed > now ? parsed : 0;
+}
+
+function retryAtFromHeaders(headers, now = Date.now()) {
+  return Math.max(
+    retryAtFromValue(headers?.get?.('x-ratelimit-retry'), now),
+    retryAtFromValue(headers?.get?.('retry-after'), now)
+  );
+}
+
 async function requestJson(url, options, label) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
@@ -56,6 +76,7 @@ async function requestJson(url, options, label) {
       const detail = String(data?.message || data?.errorText || data?.error || data?.detail || '').trim();
       const error = new Error(`${label} HTTP ${response.status}${detail ? `: ${detail}` : ''}`);
       error.status = response.status;
+      error.retryAt = response.status === 429 ? retryAtFromHeaders(response.headers) : 0;
       throw error;
     }
     return data || {};
@@ -192,18 +213,20 @@ async function syncLiveSales(market, token) {
   const lastSuccessAt = Number(state.last_success_at || 0);
   const lastError = String(state.last_error || '');
   const cooldown = lastError ? LIVE_SALES_RETRY_MS : LIVE_SALES_SYNC_MS;
-  if (lastAttemptAt && now - lastAttemptAt < cooldown) {
+  const persistedNextAllowedAt = Number(state.next_allowed_at || 0);
+  const nextAllowedAt = Math.max(persistedNextAllowedAt, lastAttemptAt ? lastAttemptAt + cooldown : 0);
+  if (nextAllowedAt && now < nextAllowedAt) {
     return {
       liveSalesSkipped: true,
       liveSalesItems: 0,
       liveSalesError: lastError,
-      liveSalesNextAt: lastAttemptAt + cooldown,
+      liveSalesNextAt: nextAllowedAt,
       liveSalesLastSuccessAt: lastSuccessAt || null
     };
   }
 
-  await pool.query(`INSERT INTO wb_sales_live_state(market,last_attempt_at,last_success_at,last_change_date,last_error,updated_at)
-    VALUES($1,$2,$3,$4,'',$2)
+  await pool.query(`INSERT INTO wb_sales_live_state(market,last_attempt_at,last_success_at,last_change_date,last_error,next_allowed_at,updated_at)
+    VALUES($1,$2,$3,$4,'',0,$2)
     ON CONFLICT(market) DO UPDATE SET last_attempt_at=excluded.last_attempt_at,updated_at=excluded.updated_at`,
     [market, now, lastSuccessAt, Number(state.last_change_date || 0)]);
 
@@ -217,12 +240,13 @@ async function syncLiveSales(market, token) {
     const rows = await fetchLiveSalesRows(token, dateFrom);
     const saved = await upsertLiveSales(market, rows);
     const maxLastChangeDate = Math.max(cursor, Number(saved.maxLastChangeDate || 0));
-    await pool.query(`INSERT INTO wb_sales_live_state(market,last_attempt_at,last_success_at,last_change_date,last_error,updated_at)
-      VALUES($1,$2,$2,$3,'',$2)
+    await pool.query(`INSERT INTO wb_sales_live_state(market,last_attempt_at,last_success_at,last_change_date,last_error,next_allowed_at,updated_at)
+      VALUES($1,$2,$2,$3,'',$4,$2)
       ON CONFLICT(market) DO UPDATE SET
         last_attempt_at=excluded.last_attempt_at,last_success_at=excluded.last_success_at,
         last_change_date=GREATEST(wb_sales_live_state.last_change_date,excluded.last_change_date),
-        last_error='',updated_at=excluded.updated_at`, [market, now, maxLastChangeDate]);
+        last_error='',next_allowed_at=excluded.next_allowed_at,updated_at=excluded.updated_at`,
+      [market, now, maxLastChangeDate, now + LIVE_SALES_SYNC_MS]);
     return {
       liveSalesSkipped: false,
       liveSalesItems: Number(saved.saved || 0),
@@ -232,17 +256,20 @@ async function syncLiveSales(market, token) {
     };
   } catch (error) {
     const message = String(error?.message || error).slice(0, 1000);
-    await pool.query(`INSERT INTO wb_sales_live_state(market,last_attempt_at,last_success_at,last_change_date,last_error,updated_at)
-      VALUES($1,$2,$3,$4,$5,$2)
-      ON CONFLICT(market) DO UPDATE SET last_attempt_at=excluded.last_attempt_at,last_error=excluded.last_error,updated_at=excluded.updated_at`,
-      [market, now, lastSuccessAt, Number(state.last_change_date || 0), message]).catch(() => {});
+    const retryAt = Math.max(now + LIVE_SALES_RETRY_MS, Number(error?.retryAt || 0));
+    await pool.query(`INSERT INTO wb_sales_live_state(market,last_attempt_at,last_success_at,last_change_date,last_error,next_allowed_at,updated_at)
+      VALUES($1,$2,$3,$4,$5,$6,$2)
+      ON CONFLICT(market) DO UPDATE SET
+        last_attempt_at=excluded.last_attempt_at,last_error=excluded.last_error,
+        next_allowed_at=excluded.next_allowed_at,updated_at=excluded.updated_at`,
+      [market, now, lastSuccessAt, Number(state.last_change_date || 0), message, retryAt]).catch(() => {});
     console.error(`WB live sales sync failed (${market})`, error);
     return {
       liveSalesSkipped: false,
       liveSalesItems: 0,
       liveSalesError: message,
       liveSalesLastSuccessAt: lastSuccessAt || null,
-      liveSalesNextAt: now + LIVE_SALES_RETRY_MS
+      liveSalesNextAt: retryAt
     };
   }
 }
@@ -397,26 +424,28 @@ async function syncFinanceReport(market, token) {
     locked = Boolean(lock.rows[0]?.locked);
     if (!locked) return { financeItems: 0, financeError: '', financeSkipped: true, promotionSkipped: true, financeSkipReason: 'already-running' };
 
-    const latest = await client.query('SELECT started_at,finance_ok,promotion_ok,finance_items,ad_items FROM wb_finance_sync_runs WHERE market=$1 ORDER BY id DESC LIMIT 1', [market]);
+    const latest = await client.query('SELECT started_at,finance_ok,promotion_ok,finance_items,ad_items,retry_at FROM wb_finance_sync_runs WHERE market=$1 ORDER BY id DESC LIMIT 1', [market]);
     const previousRun = latest.rows[0] || {};
     const lastStartedAt = Number(previousRun.started_at || 0), now = Date.now();
     const age = lastStartedAt ? now - lastStartedAt : Number.POSITIVE_INFINITY;
     const previousFinanceOk = Number(previousRun.finance_ok) === 1;
     const previousPromotionOk = Number(previousRun.promotion_ok) === 1;
+    const previousRetryAt = Number(previousRun.retry_at || 0);
 
     if (previousFinanceOk && previousPromotionOk && age < FINANCE_SYNC_MS) {
       return { financeItems: Number(previousRun.finance_items || 0), financeError: '', financeSkipped: true, promotionSkipped: true,
         financeSkipReason: 'cooldown', financeNextAt: lastStartedAt + FINANCE_SYNC_MS };
     }
-    if ((!previousFinanceOk || !previousPromotionOk) && lastStartedAt && age < FINANCE_FAILURE_RETRY_MS) {
+    const failureNextAt = Math.max(previousRetryAt, lastStartedAt ? lastStartedAt + FINANCE_FAILURE_RETRY_MS : 0);
+    if ((!previousFinanceOk || !previousPromotionOk) && failureNextAt && now < failureNextAt) {
       return { financeItems: Number(previousRun.finance_items || 0), financeError: '', financeSkipped: previousFinanceOk, promotionSkipped: previousPromotionOk,
-        financeSkipReason: 'failure-cooldown', financeNextAt: lastStartedAt + FINANCE_FAILURE_RETRY_MS };
+        financeSkipReason: 'failure-cooldown', financeNextAt: failureNextAt };
     }
 
     const reuseFinance = previousFinanceOk && age < FINANCE_SYNC_MS;
     const reusePromotion = previousPromotionOk && age < FINANCE_SYNC_MS;
-    let financeItems = reuseFinance ? Number(previousRun.finance_items || 0) : 0, financeError = '', financeOk = reuseFinance ? 1 : 0, financePruned = 0;
-    let adItems = reusePromotion ? Number(previousRun.ad_items || 0) : 0, promotionError = '', promotionOk = reusePromotion ? 1 : 0, adRowsWithoutDate = 0;
+    let financeItems = reuseFinance ? Number(previousRun.finance_items || 0) : 0, financeError = '', financeOk = reuseFinance ? 1 : 0, financePruned = 0, financeRetryAt = 0;
+    let adItems = reusePromotion ? Number(previousRun.ad_items || 0) : 0, promotionError = '', promotionOk = reusePromotion ? 1 : 0, adRowsWithoutDate = 0, promotionRetryAt = 0;
 
     if (!reuseFinance) {
       try {
@@ -427,6 +456,7 @@ async function syncFinanceReport(market, token) {
         financeOk = 1;
       } catch (error) {
         financeError = String(error?.message || error).slice(0, 1000);
+        financeRetryAt = Number(error?.retryAt || 0);
         console.error(`WB finance sync failed (${market})`, error);
       }
     }
@@ -440,16 +470,23 @@ async function syncFinanceReport(market, token) {
         promotionOk = 1;
       } catch (error) {
         promotionError = String(error?.message || error).slice(0, 1000);
+        promotionRetryAt = Number(error?.retryAt || 0);
         console.error(`WB promotion cost sync failed (${market})`, error);
       }
     }
 
     const errorText = [financeError, promotionError].filter(Boolean).join(' · ');
-    const runStartedAt = (reuseFinance || reusePromotion) && lastStartedAt ? lastStartedAt : now;
-    await client.query(`INSERT INTO wb_finance_sync_runs(market,started_at,finished_at,ok,finance_ok,promotion_ok,finance_items,ad_items,error)
-      VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9)`, [market, runStartedAt, Date.now(), financeOk && promotionOk ? 1 : 0, financeOk, promotionOk, financeItems, adItems, errorText]);
+    const attemptedRequest = !reuseFinance || !reusePromotion;
+    const runStartedAt = attemptedRequest ? now : lastStartedAt;
+    const retryAt = financeOk && promotionOk
+      ? 0
+      : Math.max(financeRetryAt, promotionRetryAt, now + FINANCE_FAILURE_RETRY_MS);
+    await client.query(`INSERT INTO wb_finance_sync_runs(market,started_at,finished_at,ok,finance_ok,promotion_ok,finance_items,ad_items,error,retry_at)
+      VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
+      [market, runStartedAt, Date.now(), financeOk && promotionOk ? 1 : 0, financeOk, promotionOk, financeItems, adItems, errorText, retryAt]);
     return { financeItems, financeError, financePruned, adItems, adRowsWithoutDate, promotionError,
-      financeSkipped: reuseFinance, promotionSkipped: reusePromotion, financeNextAt: runStartedAt + FINANCE_SYNC_MS };
+      financeSkipped: reuseFinance, promotionSkipped: reusePromotion,
+      financeNextAt: retryAt || runStartedAt + FINANCE_SYNC_MS };
   } finally {
     if (locked) await client.query('SELECT pg_advisory_unlock(hashtext($1))', [lockName]).catch(() => {});
     client.release();
