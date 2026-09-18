@@ -130,7 +130,9 @@ warehouseRouter.post('/warehouse-backups', requireTrustedOrigin, requireWritesEn
 
 warehouseRouter.put('/warehouse-state', requireTrustedOrigin, requireWritesEnabled, asyncRoute(async (req, res) => {
   const baseRevision = Number(req.body?.baseRevision || 0);
-  const state = cleanState(req.body?.state);
+  const incomingState = req.body?.state;
+  const movementsProvided = Array.isArray(incomingState?.movements);
+  const state = cleanState(incomingState);
   const snapshotState = stripMovementsFromState(state);
   let raw = JSON.stringify(snapshotState);
   if (Buffer.byteLength(raw, 'utf8') > MAX_WAREHOUSE_SNAPSHOT_BYTES) return res.status(413).json({ ok: false, error: 'Warehouse snapshot is too large' });
@@ -142,12 +144,13 @@ warehouseRouter.put('/warehouse-state', requireTrustedOrigin, requireWritesEnabl
     if (current.rowCount && baseRevision !== currentRevision) return { conflict: true, revision: currentRevision };
     if (current.rowCount) {
       const previous = await hydrateWarehouseMovements(client, parseWarehousePayload(current.rows[0].payload));
+      if (!movementsProvided) state.movements = previous.movements;
       const violation = stockLedgerViolation(previous, state) || staleWbLinkRestored(previous, state);
       if (violation) return { conflict: true, revision: currentRevision, stockGuard: violation };
       preserveWbValidation(previous, state);
     }
     const updatedAt = Date.now();
-    await persistWarehouseMovements(client, state.movements, updatedAt);
+    if (movementsProvided) await persistWarehouseMovements(client, state.movements, updatedAt);
     const persistedSnapshot = stripMovementsFromState(state);
     raw = JSON.stringify(persistedSnapshot);
     if (Buffer.byteLength(raw, 'utf8') > MAX_WAREHOUSE_SNAPSHOT_BYTES) return { tooLarge: true };
