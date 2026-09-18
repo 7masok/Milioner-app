@@ -22,6 +22,61 @@ import { aiAssistantRouter } from './ai-assistant.js';
 
 assertRuntimeConfig();
 
+const WB_VERIFY_ALMATY_OFFSET = 5 * 60 * 60 * 1000;
+function wbVerifyBounds(days) {
+  const local = new Date(Date.now() + WB_VERIFY_ALMATY_OFFSET);
+  const today = Date.UTC(local.getUTCFullYear(), local.getUTCMonth(), local.getUTCDate()) - WB_VERIFY_ALMATY_OFFSET;
+  return { since: today - (days - 1) * 86_400_000, until: today + 86_400_000 };
+}
+function wbVerifyDay(ts) {
+  return new Date(ts + WB_VERIFY_ALMATY_OFFSET).toISOString().slice(0,10);
+}
+async function verifyWbReportsOnce() {
+  try {
+    const out={};
+    for(const market of ['WB','WB2']){
+      const periods={};
+      for(const days of [7,30]){
+        const {since,until}=wbVerifyBounds(days);
+        const finance=(await pool.query(`
+          SELECT COUNT(*)::bigint AS rows,COUNT(DISTINCT report_id)::bigint AS reports,
+            COALESCE(SUM(retail_amount),0) AS revenue,COALESCE(SUM(for_pay),0) AS for_pay,
+            COALESCE(SUM(acquiring_fee),0) AS acquiring,
+            COALESCE(SUM(delivery_service),0) AS delivery,
+            COALESCE(SUM(paid_storage),0) AS storage,
+            COALESCE(SUM(paid_acceptance),0) AS acceptance,
+            COALESCE(SUM(CASE WHEN lower(COALESCE(NULLIF(raw_json::jsonb->>'bonusTypeName',''),NULLIF(raw_json::jsonb->>'bonus_type_name',''),'')) LIKE '%wb продвижение%' THEN 0 ELSE deduction END),0) AS deduction_other,
+            COALESCE(SUM(CASE WHEN lower(COALESCE(NULLIF(raw_json::jsonb->>'bonusTypeName',''),NULLIF(raw_json::jsonb->>'bonus_type_name',''),'')) LIKE '%wb продвижение%' THEN deduction ELSE 0 END),0) AS promotion_deduction,
+            COALESCE(SUM(penalty),0) AS penalty,
+            COALESCE(SUM(rebill_logistic_cost),0) AS rebill,
+            COALESCE(SUM(additional_payment),0) AS additional_payment
+          FROM wb_finance_rows WHERE market=$1 AND rr_date >= $2 AND rr_date < $3`,[market,since,until])).rows[0];
+        const daysList=[];for(let t=since;t<until;t+=86_400_000)daysList.push(wbVerifyDay(t));
+        const ads=(await pool.query(`
+          SELECT COALESCE(SUM(amount),0) AS advertising
+          FROM wb_ad_costs WHERE market=$1 AND day=ANY($2::text[])`,[market,daysList])).rows[0];
+        const f={...finance,...ads};
+        const revenue=Number(f.revenue||0),forPay=Number(f.for_pay||0);
+        const commission=Math.max(0,revenue-forPay);
+        const expenses=commission+Number(f.acquiring||0)+Number(f.delivery||0)+Number(f.storage||0)+Number(f.acceptance||0)+Number(f.deduction_other||0)+Number(f.penalty||0)+Number(f.rebill||0);
+        periods[days]={...f,commission,expenses,net_before_cost:revenue+Number(f.additional_payment||0)-expenses-Number(f.advertising||0)};
+      }
+      const latestUpdate=(await pool.query('SELECT MAX(updated_at) AS u FROM wb_finance_rows WHERE market=$1',[market])).rows[0]?.u||0;
+      const {since:since30}=wbVerifyBounds(30);
+      const stale=(await pool.query(`
+        SELECT COUNT(*)::bigint AS rows,COALESCE(SUM(retail_amount),0) AS revenue
+        FROM wb_finance_rows WHERE market=$1 AND rr_date >= $2 AND updated_at < $3`,
+        [market,since30,Number(latestUpdate)-60000])).rows[0];
+      const exactDup=(await pool.query(`
+        SELECT COUNT(*)::bigint AS groups,COALESCE(SUM(c-1),0)::bigint AS extra
+        FROM (SELECT raw_json,COUNT(*) c FROM wb_finance_rows WHERE market=$1 AND raw_json<>'' GROUP BY raw_json HAVING COUNT(*)>1)x`,[market])).rows[0];
+      out[market]={periods,stale,exactDup};
+    }
+    const mv=(await pool.query('SELECT COUNT(*)::bigint AS rows,COUNT(DISTINCT id)::bigint AS distinct_ids FROM warehouse_movements')).rows[0];
+    console.info('WB_FINAL_VERIFY',JSON.stringify({out,movements:mv}));
+  }catch(error){console.warn('WB_FINAL_VERIFY_FAILED',String(error?.stack||error))}
+}
+
 const app = express();
 const repositoryRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const frontendFiles = Object.freeze([
@@ -182,6 +237,7 @@ const server = app.listen(config.port, '0.0.0.0', () => {
   startKaspiSyncLoop();
   startWbSyncLoop();
   startWbAdsLimitLoop();
+  setTimeout(verifyWbReportsOnce, 5000).unref();
   let checkingLinks=false;
   const checkLinks=async()=>{
     if(checkingLinks)return;checkingLinks=true;
