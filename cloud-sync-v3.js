@@ -37,7 +37,19 @@ function setReadOnlyCache(on){
 }
 warehouseSnapshot=function(){return serverSnapshot(state)};
 applyWarehouseSnapshot=function(remote){
+  // Marketplace order feeds live in their own PostgreSQL tables and are intentionally
+  // absent from warehouse-state. Preserve the already loaded read-only feeds when a
+  // newer warehouse snapshot replaces state, otherwise the 20s cloud watcher makes
+  // Kaspi/WB orders disappear until /api/orders is loaded again.
+  const orderFeeds={
+    kaspiOrderFeed:Array.isArray(state?.kaspiOrderFeed)?state.kaspiOrderFeed:[],
+    wbOrderFeed:Array.isArray(state?.wbOrderFeed)?state.wbOrderFeed:[],
+    ozonOrderFeed:Array.isArray(state?.ozonOrderFeed)?state.ozonOrderFeed:[]
+  };
   state=serverSnapshot(remote);
+  state.kaspiOrderFeed=orderFeeds.kaspiOrderFeed;
+  state.wbOrderFeed=orderFeeds.wbOrderFeed;
+  state.ozonOrderFeed=orderFeeds.ozonOrderFeed;
   const persistedReportPeriod=Number(state.settings?.reportPeriodPreset);
   const serverReportPeriodUpdatedAt=Number(state.settings?.reportPeriodUpdatedAt||0);
   const localReportPeriodUpdatedAt=Number(reportPeriodUiPreference?.updatedAt||0);
