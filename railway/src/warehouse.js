@@ -106,6 +106,27 @@ warehouseRouter.get('/warehouse-state', requireTrustedOrigin, asyncRoute(async (
   });
 }));
 
+warehouseRouter.get('/warehouse-state-size-audit', requireTrustedOrigin, asyncRoute(async (_req, res) => {
+  const stored = await pool.query('SELECT payload,revision,updated_at FROM warehouse_state WHERE id=1');
+  if (!stored.rowCount) return res.json({ ok: true, exists: false });
+  const row = stored.rows[0];
+  const state = parseWarehousePayload(row.payload);
+  const measure = value => Buffer.byteLength(JSON.stringify(value ?? null), 'utf8');
+  const sections = Object.fromEntries(Object.entries(state).map(([key, value]) => [key, {
+    bytes: measure(value),
+    type: Array.isArray(value) ? 'array' : (value === null ? 'null' : typeof value),
+    count: Array.isArray(value) ? value.length : (value && typeof value === 'object' ? Object.keys(value).length : null)
+  }]).sort((a, b) => b[1].bytes - a[1].bytes));
+  return res.json({
+    ok: true,
+    exists: true,
+    revision: Number(row.revision || 0),
+    updatedAt: Number(row.updated_at || 0),
+    payloadBytes: measure(state),
+    sections
+  });
+}));
+
 warehouseRouter.get('/warehouse-backups', requireTrustedOrigin, asyncRoute(async (_req, res) => {
   const result = await pool.query(`SELECT id,label,revision,created_at AS "createdAt"
     FROM warehouse_backups ORDER BY created_at DESC LIMIT 50`);
