@@ -161,6 +161,7 @@ async function load(force=false){
  }
  return data;
 }
+window.ozonFboRefreshStatus=async()=>{await load();updateOzonHeaderIndicator();return data;};
 window.ozonFboSync=async()=>{
  try{
   const response=await fetch(MILLIONER_API+'/api/ozon-sync-now',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'});
