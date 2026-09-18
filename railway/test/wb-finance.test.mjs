@@ -71,3 +71,17 @@ test('WB report excludes WB Promotion deduction because advertising is counted s
   assert.match(ui, /Удержания \(без рекламы\)/);
   assert.match(ui, /promotionDeduction/);
 });
+
+
+test('WB live sales cache is populated from the operational sales and returns API', () => {
+  const source = readFileSync(new URL('../src/wb-sync.js', import.meta.url), 'utf8');
+  assert.match(source, /statistics-api\.wildberries\.ru/);
+  assert.match(source, /\/api\/v1\/supplier\/sales/);
+  assert.match(source, /LIVE_SALES_SYNC_MS = 30 \* 60 \* 1000/);
+  assert.match(source, /INSERT INTO wb_sales_live_rows/);
+  assert.match(source, /ON CONFLICT\(market,sale_id\)/);
+  assert.match(source, /wb_sales_live_state/);
+  assert.match(source, /lastChangeDate/);
+  assert.match(source, /syncLiveSales\(market, token\)/);
+  assert.match(source, /Promise\.all\(\[/);
+});

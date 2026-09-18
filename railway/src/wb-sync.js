@@ -8,10 +8,14 @@ import { syncWbStockMarket } from './wb-stock-sync.js';
 
 const WB_API = 'https://marketplace-api.wildberries.ru';
 const WB_FINANCE_API = 'https://finance-api.wildberries.ru';
+const WB_STATISTICS_API = 'https://statistics-api.wildberries.ru';
 const WB_ADVERT_API = 'https://advert-api.wildberries.ru';
 const SYNC_MS = 10 * 60 * 1000;
 const TIMEOUT_MS = 25_000;
 const LOOKBACK_DAYS = 14;
+const LIVE_SALES_LOOKBACK_DAYS = 45;
+const LIVE_SALES_SYNC_MS = 30 * 60 * 1000;
+const LIVE_SALES_RETRY_MS = 5 * 60 * 1000;
 // Current WB Finance API allows one request per minute per seller account.
 // Keep a wider gap so background and manual refreshes do not collide.
 const FINANCE_SYNC_MS = 15 * 60 * 1000;
@@ -102,6 +106,145 @@ async function fetchOrders(market, token) {
       qty: 1, unitPrice: price, totalPrice: price, raw: { order, status, identity: { barcode, article, nmId: String(order?.nmId || ''), chrtId: Number(order?.chrtId || 0), size, hasVariantSize } }
     };
   });
+}
+
+
+function liveSaleTimestamp(input) {
+  const numeric = Number(input);
+  if (Number.isFinite(numeric) && numeric > 0) return numeric < 1e12 ? numeric * 1000 : numeric;
+  const parsed = Date.parse(String(input || ''));
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+async function fetchLiveSalesRows(token, dateFromMs) {
+  const from = new Date(Math.max(0, Number(dateFromMs) || 0)).toISOString();
+  const query = new URLSearchParams({ dateFrom: from, flag: '0' });
+  const data = await requestJson(`${WB_STATISTICS_API}/api/v1/supplier/sales?${query}`, {
+    headers: { Accept: 'application/json', Authorization: token }
+  }, 'WB live sales');
+  return Array.isArray(data) ? data : [];
+}
+
+async function upsertLiveSales(market, rows) {
+  if (!rows.length) return { saved: 0, maxLastChangeDate: 0 };
+  const normalized = rows.map((row, index) => {
+    const saleDate = liveSaleTimestamp(value(row, 'date', 'saleDate', 'sale_date'));
+    const lastChangeDate = liveSaleTimestamp(value(row, 'lastChangeDate', 'last_change_date')) || saleDate;
+    const srid = String(value(row, 'srid') || '').trim();
+    const rawSaleId = String(value(row, 'saleID', 'saleId', 'sale_id') || '').trim();
+    const isReturn = /^R/i.test(rawSaleId) ? 1 : 0;
+    const vendorCode = String(value(row, 'supplierArticle', 'vendorCode', 'sa_name') || '').trim();
+    const nmId = String(value(row, 'nmId', 'nm_id') || '').trim();
+    const barcode = String(value(row, 'barcode') || '').trim();
+    const fallbackId = [srid, saleDate || lastChangeDate, isReturn, vendorCode || nmId || barcode, index].join(':');
+    const saleId = rawSaleId || fallbackId;
+    if (!saleId || !saleDate) return null;
+    return {
+      saleId, srid, saleDate, lastChangeDate, vendorCode, nmId, barcode, isReturn,
+      finishedPrice: Number(value(row, 'finishedPrice', 'finished_price')) || 0,
+      priceWithDisc: Number(value(row, 'priceWithDisc', 'price_with_disc')) || 0,
+      forPay: Number(value(row, 'forPay', 'for_pay')) || 0,
+      raw: row
+    };
+  }).filter(Boolean);
+  if (!normalized.length) return { saved: 0, maxLastChangeDate: 0 };
+
+  const now = Date.now(), client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    for (let start = 0; start < normalized.length; start += 500) {
+      const chunk = normalized.slice(start, start + 500);
+      await client.query(`
+        INSERT INTO wb_sales_live_rows
+          (market,sale_id,srid,sale_date,last_change_date,vendor_code,nm_id,barcode,is_return,finished_price,price_with_disc,for_pay,raw_json,updated_at)
+        SELECT $1,item->>'saleId',item->>'srid',(item->>'saleDate')::bigint,(item->>'lastChangeDate')::bigint,
+          item->>'vendorCode',item->>'nmId',item->>'barcode',(item->>'isReturn')::integer,
+          (item->>'finishedPrice')::double precision,(item->>'priceWithDisc')::double precision,
+          (item->>'forPay')::double precision,(item->'raw')::text,$3
+        FROM jsonb_array_elements($2::jsonb) item
+        ON CONFLICT(market,sale_id) DO UPDATE SET
+          srid=excluded.srid,sale_date=excluded.sale_date,last_change_date=excluded.last_change_date,
+          vendor_code=excluded.vendor_code,nm_id=excluded.nm_id,barcode=excluded.barcode,is_return=excluded.is_return,
+          finished_price=excluded.finished_price,price_with_disc=excluded.price_with_disc,for_pay=excluded.for_pay,
+          raw_json=excluded.raw_json,updated_at=excluded.updated_at
+      `, [market, JSON.stringify(chunk), now]);
+    }
+    // The operational API guarantees at most 90 days. Keep a little less locally;
+    // 45 days are enough for the 30-day report plus boundary corrections.
+    await client.query('DELETE FROM wb_sales_live_rows WHERE market=$1 AND sale_date < $2', [market, now - LIVE_SALES_LOOKBACK_DAYS * 86_400_000]);
+    await client.query('COMMIT');
+  } catch (error) {
+    await client.query('ROLLBACK').catch(() => {});
+    throw error;
+  } finally {
+    client.release();
+  }
+  return {
+    saved: normalized.length,
+    maxLastChangeDate: Math.max(...normalized.map(row => Number(row.lastChangeDate) || 0))
+  };
+}
+
+async function syncLiveSales(market, token) {
+  const state = (await pool.query('SELECT * FROM wb_sales_live_state WHERE market=$1', [market])).rows[0] || {};
+  const now = Date.now();
+  const lastAttemptAt = Number(state.last_attempt_at || 0);
+  const lastSuccessAt = Number(state.last_success_at || 0);
+  const lastError = String(state.last_error || '');
+  const cooldown = lastError ? LIVE_SALES_RETRY_MS : LIVE_SALES_SYNC_MS;
+  if (lastAttemptAt && now - lastAttemptAt < cooldown) {
+    return {
+      liveSalesSkipped: true,
+      liveSalesItems: 0,
+      liveSalesError: lastError,
+      liveSalesNextAt: lastAttemptAt + cooldown,
+      liveSalesLastSuccessAt: lastSuccessAt || null
+    };
+  }
+
+  await pool.query(`INSERT INTO wb_sales_live_state(market,last_attempt_at,last_success_at,last_change_date,last_error,updated_at)
+    VALUES($1,$2,$3,$4,'',$2)
+    ON CONFLICT(market) DO UPDATE SET last_attempt_at=excluded.last_attempt_at,updated_at=excluded.updated_at`,
+    [market, now, lastSuccessAt, Number(state.last_change_date || 0)]);
+
+  try {
+    // Re-read the last few minutes because WB can asynchronously fill price fields.
+    // Primary key (market,sale_id) makes this overlap idempotent.
+    const cursor = Number(state.last_change_date || 0);
+    const dateFrom = cursor > 0
+      ? Math.max(now - LIVE_SALES_LOOKBACK_DAYS * 86_400_000, cursor - 5 * 60 * 1000)
+      : now - LIVE_SALES_LOOKBACK_DAYS * 86_400_000;
+    const rows = await fetchLiveSalesRows(token, dateFrom);
+    const saved = await upsertLiveSales(market, rows);
+    const maxLastChangeDate = Math.max(cursor, Number(saved.maxLastChangeDate || 0));
+    await pool.query(`INSERT INTO wb_sales_live_state(market,last_attempt_at,last_success_at,last_change_date,last_error,updated_at)
+      VALUES($1,$2,$2,$3,'',$2)
+      ON CONFLICT(market) DO UPDATE SET
+        last_attempt_at=excluded.last_attempt_at,last_success_at=excluded.last_success_at,
+        last_change_date=GREATEST(wb_sales_live_state.last_change_date,excluded.last_change_date),
+        last_error='',updated_at=excluded.updated_at`, [market, now, maxLastChangeDate]);
+    return {
+      liveSalesSkipped: false,
+      liveSalesItems: Number(saved.saved || 0),
+      liveSalesError: '',
+      liveSalesLastSuccessAt: now,
+      liveSalesNextAt: now + LIVE_SALES_SYNC_MS
+    };
+  } catch (error) {
+    const message = String(error?.message || error).slice(0, 1000);
+    await pool.query(`INSERT INTO wb_sales_live_state(market,last_attempt_at,last_success_at,last_change_date,last_error,updated_at)
+      VALUES($1,$2,$3,$4,$5,$2)
+      ON CONFLICT(market) DO UPDATE SET last_attempt_at=excluded.last_attempt_at,last_error=excluded.last_error,updated_at=excluded.updated_at`,
+      [market, now, lastSuccessAt, Number(state.last_change_date || 0), message]).catch(() => {});
+    console.error(`WB live sales sync failed (${market})`, error);
+    return {
+      liveSalesSkipped: false,
+      liveSalesItems: 0,
+      liveSalesError: message,
+      liveSalesLastSuccessAt: lastSuccessAt || null,
+      liveSalesNextAt: now + LIVE_SALES_RETRY_MS
+    };
+  }
 }
 
 async function fetchFinanceRows(token) {
@@ -354,7 +497,10 @@ export async function syncWbOrders(market, { force = false } = {}) {
     try {
       const rows = await fetchOrders(market, token);
       await upsert(market, rows);
-      const finance = await syncFinanceReport(market, token);
+      const [finance, liveSales] = await Promise.all([
+        syncFinanceReport(market, token),
+        syncLiveSales(market, token)
+      ]);
       let reservationReconcile = null;
       try {
         reservationReconcile = await reconcileWbReservations(market, now);
@@ -371,7 +517,7 @@ export async function syncWbOrders(market, { force = false } = {}) {
       }
       const finishedAt = Date.now();
       await pool.query("UPDATE sync_runs SET finished_at=$1,ok=1,items=$2,error='' WHERE id=$3", [finishedAt, rows.length, runId]);
-      return { ok: true, market, items: rows.length, ...finance, reservationReconcile, saleReconcile, stockSync, finishedAt, nextSyncAt: finishedAt + SYNC_MS };
+      return { ok: true, market, items: rows.length, ...finance, ...liveSales, reservationReconcile, saleReconcile, stockSync, finishedAt, nextSyncAt: finishedAt + SYNC_MS };
     } catch (error) {
       const message = String(error?.message || error).slice(0, 2000);
       await pool.query('UPDATE sync_runs SET finished_at=$1,ok=0,error=$2 WHERE id=$3', [Date.now(), message, runId]).catch(() => {});
