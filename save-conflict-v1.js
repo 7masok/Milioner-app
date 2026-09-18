@@ -101,6 +101,11 @@ async function refreshOzonCompactStatus(){
   ensureOzonCompactRow();
   const dot=document.getElementById('dotOzonTop'),status=document.getElementById('ozonTopStatus');
   if(!dot||!status)return;
+  // ozon-fbo-v1 owns the canonical browser cache and already refreshes the
+  // header indicator. Do not issue a second protected /api/ozon-fbo request.
+  if(typeof window.ozonFboRefreshStatus==='function'){
+    try{return await window.ozonFboRefreshStatus()}catch{}
+  }
   try{
     const response=await fetch(MILLIONER_API+'/api/ozon-fbo',{cache:'no-store',headers:{Accept:'application/json'}});
     if(!response.ok)throw new Error('HTTP '+response.status);
