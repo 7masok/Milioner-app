@@ -75,7 +75,28 @@ async function auditWbExpenseBreakdownOnce() {
         SELECT COUNT(*)::bigint AS groups,COALESCE(SUM(c-1),0)::bigint AS extra,
           COALESCE(SUM(CASE WHEN rc>1 THEN c-1 ELSE 0 END),0)::bigint AS cross_report_extra
         FROM x`,[market])).rows[0];
-      result[market]={periods,stale,exactDup,businessDup};
+      const deductionGroups=(await pool.query(`
+        SELECT
+          COALESCE(NULLIF(raw_json::jsonb->>'sellerOperName',''),
+                   NULLIF(raw_json::jsonb->>'supplierOperName',''),
+                   NULLIF(raw_json::jsonb->>'supplier_oper_name',''),
+                   operation,'') AS operation,
+          COALESCE(NULLIF(raw_json::jsonb->>'bonusTypeName',''),
+                   NULLIF(raw_json::jsonb->>'bonus_type_name',''),'') AS bonus,
+          COUNT(*)::bigint AS rows,
+          COALESCE(SUM(deduction),0) AS deduction,
+          COALESCE(SUM(penalty),0) AS penalty
+        FROM wb_finance_rows
+        WHERE market=$1 AND rr_date >= $2 AND (deduction<>0 OR penalty<>0)
+        GROUP BY 1,2
+        ORDER BY ABS(COALESCE(SUM(deduction),0))+ABS(COALESCE(SUM(penalty),0)) DESC
+        LIMIT 30`,[market,now-7*86_400_000])).rows;
+      const adGroups=(await pool.query(`
+        SELECT payment_type AS "paymentType",COUNT(*)::bigint AS rows,COALESCE(SUM(amount),0) AS amount
+        FROM wb_ad_costs
+        WHERE market=$1 AND day >= to_char((to_timestamp($2/1000.0) AT TIME ZONE 'Asia/Almaty')::date,'YYYY-MM-DD')
+        GROUP BY payment_type ORDER BY SUM(amount) DESC`,[market,now-7*86_400_000])).rows;
+      result[market]={periods,stale,exactDup,businessDup,deductionGroups,adGroups};
     }
     const movements=await pool.query(`SELECT COUNT(*)::bigint AS rows,COUNT(DISTINCT id)::bigint AS distinct_ids FROM warehouse_movements`);
     console.info('WB_EXPENSE_AUDIT',JSON.stringify({result,movements:movements.rows[0]}));
