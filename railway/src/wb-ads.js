@@ -10,7 +10,7 @@ const CONTENT_API = 'https://content-api.wildberries.ru';
 // WB order sync starts immediately and performs the heaviest import after a deploy.
 // Run promotion sync in the quiet half of the order-sync cycle so both jobs do not
 // hit the seller-wide WB limiter at the same time.
-const CHECK_MS = 5 * 60 * 1000;
+const CHECK_MS = 15 * 60 * 1000;
 const STARTUP_DELAY_MS = 2 * 60 * 1000;
 const RATE_LIMIT_TTL_MS = 60 * 1000;
 const MAX_AUTO_RETRY_MS = 2 * 60 * 1000;
@@ -307,21 +307,6 @@ async function fetchCampaigns(marketName, previous) {
   const list = campaignRows(await request(
     ADVERT_API + '/api/advert/v2/adverts?statuses=4,9,11', token,
   )).filter(row => MANAGEABLE_CAMPAIGN_STATUSES.has(Number(row?.status ?? row?.statusId ?? 0)));
-  // Log only title fields, never the full response or credentials, once per process.
-  if (!verifiedSnapshots.has(marketName)) {
-    console.info('WB ads API name fields', marketName, JSON.stringify(list.map(row => ({
-      id: campaignId(row),
-      name: row?.name,
-      settingsName: row?.settings?.name,
-      campaignName: row?.campaignName,
-      campaign_name: row?.campaign_name,
-      paramsName: row?.params?.name,
-      advertName: row?.advertName,
-      advert_name: row?.advert_name,
-      nestedAdvertName: row?.advert?.name,
-      selected: campaignApiName(row),
-    }))));
-  }
   const unresolvedNames = list.filter(row => !campaignApiName(row));
   if (unresolvedNames.length) {
     console.warn('WB ads campaign names missing', marketName, unresolvedNames.map(row => ({
@@ -835,7 +820,11 @@ export function startWbAdsLimitLoop() {
       }
 
     } catch (error) {
-      console.error('WB ads refresh', marketName, error);
+      if (Number(error?.status) === 429) {
+        console.warn('WB ads rate limited', marketName, error?.endpoint || '', error?.retryAt ? new Date(Number(error.retryAt)).toISOString() : '');
+      } else {
+        console.error('WB ads refresh', marketName, error);
+      }
       scheduleRetry(marketName, error?.retryAt);
     } finally {
       running.delete(marketName);
