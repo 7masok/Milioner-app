@@ -42,6 +42,11 @@ test('WB synchronization uses current Finance API, daily rows and prunes stale s
   assert.match(source, /\/adv\/v1\/upd/);
   assert.match(source, /reuseFinance/);
   assert.match(source, /reusePromotion/);
+  assert.match(source, /x-ratelimit-retry/i);
+  assert.match(source, /retry_at/);
+  assert.match(source, /FINANCE_FAILURE_RETRY_MS = 65 \* 60 \* 1000/);
+  assert.match(source, /LIVE_SALES_RETRY_MS = 65 \* 60 \* 1000/);
+  assert.match(source, /next_allowed_at/);
 });
 
 test('browser sync avoids five-second warehouse polling and duplicate order loads', () => {
