@@ -18,7 +18,7 @@ const LIVE_SALES_SYNC_MS = 6 * 60 * 60 * 1000 + 35 * 60 * 1000;
 const LIVE_SALES_RETRY_MS = 65 * 60 * 1000;
 // Keep finance on the conservative cadence that was stable before the report work.
 // Orders may still refresh every ten minutes; finance must not.
-const FINANCE_SYNC_MS = 6 * 60 * 60 * 1000 + 5 * 60 * 1000;
+const FINANCE_SYNC_MS = 2 * 60 * 60 * 1000;
 const FINANCE_FAILURE_RETRY_MS = 65 * 60 * 1000;
 const inFlight = new Map();
 
