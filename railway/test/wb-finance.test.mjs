@@ -44,6 +44,7 @@ test('WB synchronization uses current Finance API, daily rows and prunes stale s
   assert.match(source, /reusePromotion/);
   assert.match(source, /x-ratelimit-retry/i);
   assert.match(source, /retry_at/);
+  assert.match(source, /FINANCE_SYNC_MS = 6 \* 60 \* 60 \* 1000 \+ 5 \* 60 \* 1000/);
   assert.match(source, /FINANCE_FAILURE_RETRY_MS = 65 \* 60 \* 1000/);
   assert.match(source, /LIVE_SALES_RETRY_MS = 65 \* 60 \* 1000/);
   assert.match(source, /next_allowed_at/);
@@ -82,11 +83,12 @@ test('WB live sales cache is populated from the operational sales and returns AP
   const source = readFileSync(new URL('../src/wb-sync.js', import.meta.url), 'utf8');
   assert.match(source, /statistics-api\.wildberries\.ru/);
   assert.match(source, /\/api\/v1\/supplier\/sales/);
-  assert.match(source, /LIVE_SALES_SYNC_MS = 30 \* 60 \* 1000/);
+  assert.match(source, /LIVE_SALES_SYNC_MS = 6 \* 60 \* 60 \* 1000 \+ 35 \* 60 \* 1000/);
   assert.match(source, /INSERT INTO wb_sales_live_rows/);
   assert.match(source, /ON CONFLICT\(market,sale_id\)/);
   assert.match(source, /wb_sales_live_state/);
   assert.match(source, /lastChangeDate/);
-  assert.match(source, /syncLiveSales\(market, token\)/);
-  assert.match(source, /Promise\.all\(\[/);
+  assert.match(source, /liveSalesDisabled:\s*true/);
+  assert.doesNotMatch(source, /const \[finance, liveSales\] = await Promise\.all/);
+  assert.match(source, /void run\(false\)/);
 });
