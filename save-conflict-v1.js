@@ -10,10 +10,14 @@ pushWarehouseToServer=async function(){
   try{
     const sentSnap=normalizeWarehouseSnapshot(warehouseSnapshot());
     const sentText=JSON.stringify(sentSnap);
+    const previousMovements=normalizeWarehouseSnapshot(warehouseLastCloudSnapshot||{}).movements;
+    const movementsChanged=JSON.stringify(sentSnap.movements)!==JSON.stringify(previousMovements);
+    const wireSnap=movementsChanged?sentSnap:{...sentSnap};
+    if(!movementsChanged)delete wireSnap.movements;
     const response=await fetch(MILLIONER_API+'/api/warehouse-state',{
       method:'PUT',
       headers:{'Content-Type':'application/json',Accept:'application/json'},
-      body:JSON.stringify({baseRevision:warehouseRemoteRevision,state:sentSnap})
+      body:JSON.stringify({baseRevision:warehouseRemoteRevision,state:wireSnap})
     });
     let data={};
     try{data=await response.json()}catch{}
