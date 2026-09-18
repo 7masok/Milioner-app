@@ -164,7 +164,12 @@ bootstrapWarehouseFromServer=async function(){
     warehouseLastCloudSnapshot=serverSnapshot(remote.state);warehouseLastSyncedText=snapshotText(remote.state);applyWarehouseSnapshot(remote.state);
     clearWarehouseDirty();warehouseRemoteReady=true;setReadOnlyCache(false);reportPeriodUiPendingServerSave=false;
     writeFastCache(remote.state,warehouseRemoteRevision,warehouseRemoteUpdatedAt);
-    render();setTimeout(restoreOrderMarketUi,0);cloudStatus('сервер подключён','ok');return {mode:'server-authoritative',revision:warehouseRemoteRevision};
+    render();setTimeout(restoreOrderMarketUi,0);cloudStatus('сервер подключён','ok');
+    // Initial order requests can race the session bootstrap and return 401.
+    // Once the authenticated warehouse bootstrap succeeds, reload the canonical
+    // marketplace feeds so Kaspi/WB status and orders cannot remain blank.
+    setTimeout(()=>window.loadSharedOrderCache?.({silent:true}).catch(()=>{}),0);
+    return {mode:'server-authoritative',revision:warehouseRemoteRevision};
   }catch(error){warehouseRemoteReady=false;clearWarehouseDirty();setReadOnlyCache(Boolean(fastCached?.state));console.error('server bootstrap failed',error);cloudStatus(fastCached?.state?'сервер недоступен · показаны последние данные':'нет связи с сервером · изменения заблокированы','warn');return {mode:'server-unavailable',error:String(error?.message||error)}}
 };
 startWarehouseServerWatcher=function(){
