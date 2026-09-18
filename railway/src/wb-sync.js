@@ -14,11 +14,11 @@ const SYNC_MS = 10 * 60 * 1000;
 const TIMEOUT_MS = 25_000;
 const LOOKBACK_DAYS = 14;
 const LIVE_SALES_LOOKBACK_DAYS = 45;
-const LIVE_SALES_SYNC_MS = 30 * 60 * 1000;
+const LIVE_SALES_SYNC_MS = 6 * 60 * 60 * 1000 + 35 * 60 * 1000;
 const LIVE_SALES_RETRY_MS = 65 * 60 * 1000;
-// Current WB Finance API allows one request per minute per seller account.
-// Keep a wider gap so background and manual refreshes do not collide.
-const FINANCE_SYNC_MS = 15 * 60 * 1000;
+// Keep finance on the conservative cadence that was stable before the report work.
+// Orders may still refresh every ten minutes; finance must not.
+const FINANCE_SYNC_MS = 6 * 60 * 60 * 1000 + 5 * 60 * 1000;
 const FINANCE_FAILURE_RETRY_MS = 65 * 60 * 1000;
 const inFlight = new Map();
 
@@ -534,10 +534,15 @@ export async function syncWbOrders(market, { force = false } = {}) {
     try {
       const rows = await fetchOrders(market, token);
       await upsert(market, rows);
-      const [finance, liveSales] = await Promise.all([
-        syncFinanceReport(market, token),
-        syncLiveSales(market, token)
-      ]);
+      const finance = await syncFinanceReport(market, token);
+      // Live sales was added only as a diagnostic cross-check. It is not used by
+      // the production report, so do not spend another WB API lane on every sync.
+      const liveSales = {
+        liveSalesSkipped: true,
+        liveSalesItems: 0,
+        liveSalesError: '',
+        liveSalesDisabled: true
+      };
       let reservationReconcile = null;
       try {
         reservationReconcile = await reconcileWbReservations(market, now);
@@ -577,7 +582,8 @@ export function startWbSyncLoop() {
       })
     );
   };
-  void run(true);
+  // A deploy/restart must not create an extra forced WB burst.
+  void run(false);
   const timer = setInterval(run, SYNC_MS);
   timer.unref();
   return timer;
