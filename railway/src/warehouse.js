@@ -106,6 +106,14 @@ warehouseRouter.get('/warehouse-state', requireTrustedOrigin, asyncRoute(async (
   });
 }));
 
+async function pruneWarehouseBackups(client) {
+  // Backups contain a full warehouse snapshot and otherwise grow forever.
+  // Keep the newest 100 safety points plus anything created in the last 90 days.
+  await client.query(`DELETE FROM warehouse_backups
+    WHERE id NOT IN (SELECT id FROM warehouse_backups ORDER BY created_at DESC LIMIT 100)
+      AND created_at < $1`, [Date.now() - 90 * 24 * 60 * 60 * 1000]);
+}
+
 warehouseRouter.get('/warehouse-backups', requireTrustedOrigin, asyncRoute(async (_req, res) => {
   const result = await pool.query(`SELECT id,label,revision,created_at AS "createdAt"
     FROM warehouse_backups ORDER BY created_at DESC LIMIT 50`);
@@ -122,6 +130,7 @@ warehouseRouter.post('/warehouse-backups', requireTrustedOrigin, requireWritesEn
     const backupPayload = await legacyCompatibleWarehousePayload(client, current.rows[0].payload);
     const inserted = await client.query(`INSERT INTO warehouse_backups(label,payload,revision,created_at)
       VALUES($1,$2,$3,$4) RETURNING id`, [label, backupPayload, current.rows[0].revision, createdAt]);
+    await pruneWarehouseBackups(client);
     return { id: String(inserted.rows[0].id), revision: Number(current.rows[0].revision || 0), createdAt, label };
   });
   if (!result) return res.status(409).json({ ok: false, error: 'warehouse-state-is-empty' });
