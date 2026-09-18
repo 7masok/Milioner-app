@@ -521,7 +521,6 @@ async function refreshMarket(marketName) {
       const saved = await saveSnapshot(marketName, { market: marketName, day: localDate(), campaigns });
       if (!verifiedSnapshots.has(marketName)) {
         verifiedSnapshots.add(marketName);
-        console.info('WB ads snapshot updated', marketName, campaigns.map(row => ({ id: row.id, name: row.name, status: row.status })));
       }
       if (statsError) {
         await saveRefreshError(marketName, statsError);
