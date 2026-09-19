@@ -1,5 +1,6 @@
 import crypto from 'node:crypto';
 import express from 'express';
+import pdfParse from 'pdf-parse';
 import { pool } from './db.js';
 import { credentialFor } from './connections.js';
 import { asyncRoute, requireTrustedOrigin } from './http.js';
@@ -86,15 +87,16 @@ function normalizeStatementResult(raw, sourceHash, filename) {
     const type = String(row?.type || '').toLowerCase();
     const amount = Math.abs(Number(row?.amount) || 0);
     const date = normalizeStatementDate(row?.date);
-    if (!['income','expense'].includes(type) || !amount || !date) continue;
+    if (!['income','expense','transfer'].includes(type) || !amount || !date) continue;
     const title = String(row?.title || row?.description || 'Операция').replace(/\s+/g,' ').trim().slice(0,240);
     const note = String(row?.note || '').replace(/\s+/g,' ').trim().slice(0,500);
     const categoryName = String(row?.categoryName || '').trim().slice(0,120);
-    const signature = [date,type,amount.toFixed(2),title.toLowerCase(),note.toLowerCase()].join('|');
+    const transferDirection = ['in','out'].includes(String(row?.transferDirection||'')) ? String(row.transferDirection) : '';
+    const signature = [date,type,transferDirection,amount.toFixed(2),title.toLowerCase(),note.toLowerCase()].join('|');
     const occurrence = (seen.get(signature) || 0) + 1;
     seen.set(signature, occurrence);
     const statementFingerprint = crypto.createHash('sha256').update(sourceHash+'|'+signature+'|'+occurrence).digest('hex');
-    transactions.push({ date, type, amount, title, note, categoryName, statementFingerprint });
+    transactions.push({ date, type, amount, title, note, categoryName, transferDirection, statementFingerprint });
   }
   return {
     statement: {
@@ -110,13 +112,63 @@ function normalizeStatementResult(raw, sourceHash, filename) {
   };
 }
 
+function cleanPdfText(value) {
+  return String(value || '').replace(/\u00a0/g,' ').replace(/\r/g,'').replace(/[ \t]+/g,' ');
+}
+
+function kaspiOperationRows(text) {
+  const clean=cleanPdfText(text);
+  const headerIndex=Math.max(clean.lastIndexOf('Дата Сумма Операция Детали'),clean.lastIndexOf('Дата\nСумма\nОперация\nДетали'));
+  const section=headerIndex>=0?clean.slice(headerIndex):clean;
+  const rx=/(\d{2}\.\d{2}\.\d{2,4})\s*([+-])\s*([\d\s]+,\d{2})\s*₸?\s*([\s\S]*?)(?=(?:\d{2}\.\d{2}\.\d{2,4}\s*[+-]\s*[\d\s]+,\d{2})|(?:\n\s*-\s*Сумма заблокирована)|$)/g;
+  const rows=[];
+  for(const m of section.matchAll(rx)){
+    const amount=Number(String(m[3]).replace(/\s+/g,'').replace(',','.'));
+    let rest=String(m[4]||'').replace(/\s+/g,' ').trim();
+    rest=rest.replace(/-\s*Сумма заблокирована.*$/i,'').trim();
+    if(!Number.isFinite(amount)||amount<=0||!rest)continue;
+    rows.push({date:m[1],sign:m[2],amount,rest});
+  }
+  return rows;
+}
+
+function parseKaspiStatement(text, sourceHash, filename) {
+  const clean=cleanPdfText(text);
+  if(!/Kaspi\s+Gold/i.test(clean)||!/ВЫПИСКА/i.test(clean))return null;
+  const period=clean.match(/за период с\s*(\d{2}\.\d{2}\.\d{2,4})\s*по\s*(\d{2}\.\d{2}\.\d{2,4})/i);
+  const account=clean.match(/Номер счета:\s*([A-Z0-9]+)/i);
+  const card=clean.match(/Номер карты:\s*([^\s]+)/i);
+  const raw={bank:'Kaspi Bank',accountName:card?'Kaspi Gold '+card[1]:'Kaspi Gold',currency:'KZT',periodStart:period?.[1]||'',periodEnd:period?.[2]||'',transactions:[]};
+  for(const row of kaspiOperationRows(clean)){
+    const lower=row.rest.toLowerCase();
+    let type=row.sign==='-'?'expense':'income',transferDirection='',title=row.rest,note='';
+    if(/поступление со своего счета|со своего счета в kaspi pay|перевод на свои счета/i.test(lower)){
+      type='transfer';transferDirection=row.sign==='+'?'in':'out';
+      const detail=row.rest.replace(/поступление со своего счета/i,'').replace(/перевод на свои счета/i,'').replace(/^со своего\s+/i,'').trim();
+      title=detail||'Перевод между своими счетами';
+      note='Перевод между своими счетами';
+    }else if(/^перевод\b/i.test(row.rest)){
+      title=row.rest.replace(/^перевод\s*/i,'').trim()||'Перевод';
+      note='Перевод';
+    }else if(/^покупка\b/i.test(row.rest)){
+      title=row.rest.replace(/^покупка\s*/i,'').trim()||'Покупка';
+      note='Покупка';
+    }else if(/^поступление\b/i.test(row.rest)){
+      title=row.rest.replace(/^поступление\s*/i,'').trim()||'Поступление';
+      note='Поступление';
+    }
+    raw.transactions.push({date:row.date,type,transferDirection,amount:row.amount,title,note,categoryName:''});
+  }
+  const normalized=normalizeStatementResult(raw,sourceHash,filename);
+  if(account?.[1])normalized.statement.accountNumber=account[1];
+  return normalized.transactions.length?normalized:null;
+}
+
 aiAssistantRouter.get('/assistant/status', requireTrustedOrigin, asyncRoute(async (_req,res)=>{
   res.json({ok:true,configured:Boolean(await credentialFor('OPENAI')),model:MODEL});
 }));
 
 aiAssistantRouter.post('/assistant/finance-statement', requireTrustedOrigin, asyncRoute(async (req,res)=>{
-  const key=await credentialFor('OPENAI');
-  if(!key){const error=new Error('Для разбора PDF подключите API-ключ OpenAI');error.status=503;throw error}
   const filename=String(req.body?.filename||'statement.pdf').replace(/[\r\n]/g,' ').slice(0,180);
   const fileData=String(req.body?.fileData||'').trim();
   if(!fileData){const error=new Error('Файл не передан');error.status=400;throw error}
@@ -126,72 +178,11 @@ aiAssistantRouter.post('/assistant/finance-statement', requireTrustedOrigin, asy
   try{buffer=Buffer.from(fileData,'base64')}catch{const error=new Error('Не удалось прочитать PDF');error.status=400;throw error}
   if(!buffer.length||buffer.length>4_800_000){const error=new Error('PDF пустой или слишком большой');error.status=400;throw error}
   const sourceHash=crypto.createHash('sha256').update(buffer).digest('hex');
-  const prompt=[
-    'Извлеки ВСЕ реальные денежные операции из банковской PDF-выписки.',
-    'Это импорт в личный финансовый учет. Не включай строки итогов, входящий/исходящий остаток, справочные обороты, лимиты и прочие неоперационные суммы.',
-    'Для каждой операции определи направление: expense = списание/расход, income = поступление/доход. amount всегда положительное число.',
-    'date верни строго YYYY-MM-DD. title — короткое понятное название получателя/отправителя или назначения. note — остальные полезные детали без повторения title.',
-    'Категорию не определяй: categoryName всегда оставляй пустой строкой. Категоризация выполняется отдельно на клиенте по собственной истории пользователя.',
-    'Не придумывай операции и не объединяй разные строки выписки.',
-    'Верни только JSON без markdown по схеме:',
-    '{"bank":"","accountName":"","currency":"KZT","periodStart":"YYYY-MM-DD","periodEnd":"YYYY-MM-DD","transactions":[{"date":"YYYY-MM-DD","type":"expense|income","amount":123.45,"title":"","note":"","categoryName":""}]}',
-    'categoryName в каждой строке должен быть пустой строкой.'
-  ].join('\n');
-  const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),90_000);
-  let uploadedFileId='';
-  try{
-    const form=new FormData();
-    form.append('purpose','user_data');
-    form.append('file',new Blob([buffer],{type:'application/pdf'}),filename);
-    const upload=await fetch('https://api.openai.com/v1/files',{
-      method:'POST',signal:controller.signal,
-      headers:{Authorization:'Bearer '+key},
-      body:form
-    });
-    const uploaded=await upload.json().catch(()=>({}));
-    if(!upload.ok||!uploaded?.id){
-      const message=String(uploaded?.error?.message||('OpenAI file upload HTTP '+upload.status));
-      const error=new Error(message.includes('Invalid')?'Не удалось передать PDF на распознавание':message);
-      error.status=upload.status===429?429:422;
-      throw error;
-    }
-    uploadedFileId=String(uploaded.id);
-    const response=await fetch('https://api.openai.com/v1/responses',{
-      method:'POST',signal:controller.signal,
-      headers:{Authorization:'Bearer '+key,'Content-Type':'application/json'},
-      body:JSON.stringify({
-        model:MODEL,
-        store:false,
-        max_output_tokens:14000,
-        reasoning:{effort:'low'},
-        text:{verbosity:'low'},
-        input:[{role:'user',content:[
-          {type:'input_file',file_id:uploadedFileId},
-          {type:'input_text',text:prompt}
-        ]}]
-      })
-    });
-    const data=await response.json().catch(()=>({}));
-    if(!response.ok){
-      const message=String(data?.error?.message||('OpenAI HTTP '+response.status));
-      const error=new Error(message);
-      error.status=response.status===429?429:(response.status>=400&&response.status<500?422:502);
-      throw error;
-    }
-    const parsed=parseJsonObject(outputText(data));
-    if(!parsed){const error=new Error('Не удалось распознать структуру выписки. Попробуйте другой PDF.');error.status=422;throw error}
-    const normalized=normalizeStatementResult(parsed,sourceHash,filename);
-    if(!normalized.transactions.length){const error=new Error('В выписке не найдено операций для импорта');error.status=422;throw error}
-    res.json({ok:true,...normalized,model:MODEL});
-  }finally{
-    clearTimeout(timer);
-    if(uploadedFileId){
-      fetch('https://api.openai.com/v1/files/'+encodeURIComponent(uploadedFileId),{
-        method:'DELETE',
-        headers:{Authorization:'Bearer '+key}
-      }).catch(()=>{});
-    }
-  }
+  let parsed;
+  try{parsed=await pdfParse(buffer)}catch{const error=new Error('Не удалось прочитать текст PDF');error.status=422;throw error}
+  const result=parseKaspiStatement(parsed?.text||'',sourceHash,filename);
+  if(!result){const error=new Error('Сейчас автоматически поддерживаются текстовые выписки Kaspi Gold. В этом PDF операции не распознаны.');error.status=422;throw error}
+  res.json({ok:true,...result,parser:'kaspi-local'});
 }));
 
 aiAssistantRouter.post('/assistant/chat', requireTrustedOrigin, asyncRoute(async (req,res)=>{
