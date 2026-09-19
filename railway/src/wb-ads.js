@@ -376,6 +376,7 @@ async function fetchCampaigns(marketName, previous) {
       orderRevenue: hasFreshStats ? statMetric(statRow, day, ['sum_price', 'revenue']) : (previousIsToday ? Number(prior?.orderRevenue || 0) : 0),
       views: hasFreshStats ? statMetric(statRow, day, ['views']) : (previousIsToday ? Number(prior?.views || 0) : 0),
       clicks: hasFreshStats ? statMetric(statRow, day, ['clicks']) : (previousIsToday ? Number(prior?.clicks || 0) : 0),
+      cartAdds: hasFreshStats ? statMetric(statRow, day, ['atbs', 'addToCart', 'add_to_cart']) : (previousIsToday ? Number(prior?.cartAdds || 0) : 0),
       membershipSource: 'wb-settings-v1',
       nmIds: label.nmIds,
       productTitles: label.productTitles,
