@@ -1,3 +1,4 @@
+import crypto from 'node:crypto';
 import express from 'express';
 import { pool } from './db.js';
 import { credentialFor } from './connections.js';
@@ -49,8 +50,119 @@ function outputText(data) {
   return (Array.isArray(data?.output) ? data.output : []).flatMap(item=>Array.isArray(item?.content)?item.content:[]).map(part=>part?.text||'').join('').trim();
 }
 
+function cleanStatementCategories(value) {
+  return (Array.isArray(value) ? value : []).slice(0, 150).map(row => ({
+    name: String(row?.name || '').trim().slice(0, 120),
+    kind: ['income','expense','both'].includes(String(row?.kind || '')) ? String(row.kind) : 'both'
+  })).filter(row => row.name);
+}
+
+function parseJsonObject(text) {
+  const raw = String(text || '').trim().replace(/^\`\`\`(?:json)?\s*/i, '').replace(/\s*\`\`\`$/,'').trim();
+  try { return JSON.parse(raw); } catch {}
+  const start = raw.indexOf('{'), end = raw.lastIndexOf('}');
+  if (start >= 0 && end > start) {
+    try { return JSON.parse(raw.slice(start, end + 1)); } catch {}
+  }
+  return null;
+}
+
+function normalizeStatementDate(value) {
+  const text = String(value || '').trim();
+  if (/^\d{4}-\d{2}-\d{2}$/.test(text)) return text;
+  const m = text.match(/^(\d{1,2})[.\/-](\d{1,2})[.\/-](\d{2,4})$/);
+  if (!m) return '';
+  const year = Number(m[3]) < 100 ? 2000 + Number(m[3]) : Number(m[3]);
+  const month = Number(m[2]), day = Number(m[1]);
+  if (!year || month < 1 || month > 12 || day < 1 || day > 31) return '';
+  return String(year).padStart(4,'0')+'-'+String(month).padStart(2,'0')+'-'+String(day).padStart(2,'0');
+}
+
+function normalizeStatementResult(raw, sourceHash, filename) {
+  const txs = Array.isArray(raw?.transactions) ? raw.transactions : [];
+  const seen = new Map();
+  const transactions = [];
+  for (const row of txs.slice(0, 2000)) {
+    const type = String(row?.type || '').toLowerCase();
+    const amount = Math.abs(Number(row?.amount) || 0);
+    const date = normalizeStatementDate(row?.date);
+    if (!['income','expense'].includes(type) || !amount || !date) continue;
+    const title = String(row?.title || row?.description || 'Операция').replace(/\s+/g,' ').trim().slice(0,240);
+    const note = String(row?.note || '').replace(/\s+/g,' ').trim().slice(0,500);
+    const categoryName = String(row?.categoryName || '').trim().slice(0,120);
+    const signature = [date,type,amount.toFixed(2),title.toLowerCase(),note.toLowerCase()].join('|');
+    const occurrence = (seen.get(signature) || 0) + 1;
+    seen.set(signature, occurrence);
+    const statementFingerprint = crypto.createHash('sha256').update(sourceHash+'|'+signature+'|'+occurrence).digest('hex');
+    transactions.push({ date, type, amount, title, note, categoryName, statementFingerprint });
+  }
+  return {
+    statement: {
+      sourceHash,
+      filename,
+      bank: String(raw?.bank || '').trim().slice(0,120),
+      accountName: String(raw?.accountName || '').trim().slice(0,160),
+      currency: String(raw?.currency || 'KZT').trim().toUpperCase().slice(0,8) || 'KZT',
+      periodStart: normalizeStatementDate(raw?.periodStart),
+      periodEnd: normalizeStatementDate(raw?.periodEnd)
+    },
+    transactions
+  };
+}
+
 aiAssistantRouter.get('/assistant/status', requireTrustedOrigin, asyncRoute(async (_req,res)=>{
   res.json({ok:true,configured:Boolean(await credentialFor('OPENAI')),model:MODEL});
+}));
+
+aiAssistantRouter.post('/assistant/finance-statement', requireTrustedOrigin, asyncRoute(async (req,res)=>{
+  const key=await credentialFor('OPENAI');
+  if(!key){const error=new Error('Для разбора PDF подключите API-ключ OpenAI');error.status=503;throw error}
+  const filename=String(req.body?.filename||'statement.pdf').replace(/[\r\n]/g,' ').slice(0,180);
+  const fileData=String(req.body?.fileData||'').trim();
+  if(!fileData){const error=new Error('Файл не передан');error.status=400;throw error}
+  const estimatedBytes=Math.floor(fileData.length*3/4);
+  if(estimatedBytes>4_800_000){const error=new Error('PDF слишком большой. Максимум 4,8 МБ');error.status=413;throw error}
+  let buffer;
+  try{buffer=Buffer.from(fileData,'base64')}catch{const error=new Error('Не удалось прочитать PDF');error.status=400;throw error}
+  if(!buffer.length||buffer.length>4_800_000){const error=new Error('PDF пустой или слишком большой');error.status=400;throw error}
+  const sourceHash=crypto.createHash('sha256').update(buffer).digest('hex');
+  const categories=cleanStatementCategories(req.body?.categories);
+  const prompt=[
+    'Извлеки ВСЕ реальные денежные операции из банковской PDF-выписки.',
+    'Это импорт в личный финансовый учет. Не включай строки итогов, входящий/исходящий остаток, справочные обороты, лимиты и прочие неоперационные суммы.',
+    'Для каждой операции определи направление: expense = списание/расход, income = поступление/доход. amount всегда положительное число.',
+    'date верни строго YYYY-MM-DD. title — короткое понятное название получателя/отправителя или назначения. note — остальные полезные детали без повторения title.',
+    'Категорию выбирай ТОЛЬКО из переданного списка категорий и только если соответствие очевидно. Если не уверен — categoryName оставь пустой строкой.',
+    'Не придумывай операции и не объединяй разные строки выписки.',
+    'Верни только JSON без markdown по схеме:',
+    '{"bank":"","accountName":"","currency":"KZT","periodStart":"YYYY-MM-DD","periodEnd":"YYYY-MM-DD","transactions":[{"date":"YYYY-MM-DD","type":"expense|income","amount":123.45,"title":"","note":"","categoryName":""}]}',
+    'Доступные категории: '+JSON.stringify(categories)
+  ].join('\n');
+  const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),90_000);
+  try{
+    const response=await fetch('https://api.openai.com/v1/responses',{
+      method:'POST',signal:controller.signal,
+      headers:{Authorization:'Bearer '+key,'Content-Type':'application/json'},
+      body:JSON.stringify({
+        model:MODEL,
+        store:false,
+        max_output_tokens:14000,
+        reasoning:{effort:'low'},
+        text:{verbosity:'low'},
+        input:[{role:'user',content:[
+          {type:'input_file',filename,file_data:fileData},
+          {type:'input_text',text:prompt}
+        ]}]
+      })
+    });
+    const data=await response.json().catch(()=>({}));
+    if(!response.ok){const error=new Error(String(data?.error?.message||('OpenAI HTTP '+response.status)));error.status=response.status===429?429:502;throw error}
+    const parsed=parseJsonObject(outputText(data));
+    if(!parsed){const error=new Error('Не удалось распознать структуру выписки. Попробуйте другой PDF.');error.status=422;throw error}
+    const normalized=normalizeStatementResult(parsed,sourceHash,filename);
+    if(!normalized.transactions.length){const error=new Error('В выписке не найдено операций для импорта');error.status=422;throw error}
+    res.json({ok:true,...normalized,model:MODEL});
+  }finally{clearTimeout(timer)}
 }));
 
 aiAssistantRouter.post('/assistant/chat', requireTrustedOrigin, asyncRoute(async (req,res)=>{
