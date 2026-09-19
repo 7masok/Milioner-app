@@ -423,6 +423,9 @@ function render(){
   }else if(activeView==='ads'){
     renderAds();
   }
+  else if(activeView==='finance'){
+    renderFinance();
+  }
   const lastSync=document.getElementById('lastSync');if(lastSync)lastSync.textContent=state.settings.lastSync?new Date(state.settings.lastSync).toLocaleTimeString('ru-RU',{hour:'2-digit',minute:'2-digit'}):'—';
   const ab=document.getElementById('autoBackup');if(ab)ab.checked=state.settings.autoBackup!==false;
   renderIntegrationStatus();
