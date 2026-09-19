@@ -118,8 +118,9 @@ function cleanPdfText(value) {
 
 function kaspiOperationRows(text) {
   const clean=cleanPdfText(text);
-  const headerIndex=Math.max(clean.lastIndexOf('Дата Сумма Операция Детали'),clean.lastIndexOf('Дата\nСумма\nОперация\nДетали'));
-  const section=headerIndex>=0?clean.slice(headerIndex):clean;
+  const header=/Дата\s*Сумма\s*Операция\s*Детали/i.exec(clean);
+  if(!header)return [];
+  const section=clean.slice(header.index+header[0].length);
   const rx=/(\d{2}\.\d{2}\.\d{2,4})\s*([+-])\s*([\d\s]+,\d{2})\s*₸?\s*([\s\S]*?)(?=(?:\d{2}\.\d{2}\.\d{2,4}\s*[+-]\s*[\d\s]+,\d{2})|(?:\n\s*-\s*Сумма заблокирована)|$)/g;
   const rows=[];
   for(const m of section.matchAll(rx)){
@@ -127,6 +128,7 @@ function kaspiOperationRows(text) {
     let rest=String(m[4]||'').replace(/\s+/g,' ').trim();
     rest=rest.replace(/-\s*Сумма заблокирована.*$/i,'').trim();
     if(!Number.isFinite(amount)||amount<=0||!rest)continue;
+    if(/^доступно\b/i.test(rest)||/^остаток\b/i.test(rest)||/^итого\b/i.test(rest))continue;
     rows.push({date:m[1],sign:m[2],amount,rest});
   }
   return rows;
