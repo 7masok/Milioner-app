@@ -74,7 +74,7 @@ function safeNameFallback(row, products) {
 
 ordersRouter.get('/orders', asyncRoute(async (req, res) => {
   const selected = market(req.query.market);
-  const limit = Math.max(1, Math.min(5000, Number(req.query.limit || 1000) || 1000));
+  const limit = Math.max(1, Math.min(15000, Number(req.query.limit || 1000) || 1000));
   const params = [];
   const where = selected ? `WHERE o.market=$${params.push(selected)}` : '';
   params.push(limit);
