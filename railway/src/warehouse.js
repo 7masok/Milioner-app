@@ -3,6 +3,7 @@ import express from 'express';
 import { pool, transaction } from './db.js';
 import { asyncRoute, requireTrustedOrigin, requireWritesEnabled } from './http.js';
 import { stockLedgerViolation } from './warehouse-ledger.js';
+import { pruneWarehouseBackups } from './warehouse-backups.js';
 import { staleWbLinkRestored, preserveWbValidation } from './wb-link-validation.js';
 import {
   hydrateWarehouseMovements,
@@ -105,14 +106,6 @@ warehouseRouter.get('/warehouse-state', requireTrustedOrigin, asyncRoute(async (
     state
   });
 }));
-
-async function pruneWarehouseBackups(client) {
-  // Backups contain a full warehouse snapshot and otherwise grow forever.
-  // Keep the newest 100 safety points plus anything created in the last 90 days.
-  await client.query(`DELETE FROM warehouse_backups
-    WHERE id NOT IN (SELECT id FROM warehouse_backups ORDER BY created_at DESC LIMIT 100)
-      AND created_at < $1`, [Date.now() - 90 * 24 * 60 * 60 * 1000]);
-}
 
 warehouseRouter.get('/warehouse-backups', requireTrustedOrigin, asyncRoute(async (_req, res) => {
   const result = await pool.query(`SELECT id,label,revision,created_at AS "createdAt"

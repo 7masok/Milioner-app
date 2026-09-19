@@ -1,4 +1,5 @@
 import { pool, transaction } from './db.js';
+import { pruneWarehouseBackups } from './warehouse-backups.js';
 import { linkFingerprint, validateWbLink, applyLinkObservation } from './wb-link-validation.js';
 import { config } from './config.js';
 import { credentialFor } from './connections.js';
@@ -75,7 +76,10 @@ export async function validateWbStockLinks(market) {
       const product=(state.products||[]).find(p=>String(p.id)===observation.id);
       if(!product||linkFingerprint(product,field)!==observation.fingerprint)continue;
       if(!observation.result.valid){
-        if(!detached)await client.query('INSERT INTO warehouse_backups(label,payload,revision,created_at) VALUES($1,$2,$3,$4)',['Before WB article unlink '+id,current.rows[0].payload,current.rows[0].revision,now]);
+        if(!detached){
+          await client.query('INSERT INTO warehouse_backups(label,payload,revision,created_at) VALUES($1,$2,$3,$4)',['Before WB article unlink '+id,current.rows[0].payload,current.rows[0].revision,now]);
+          await pruneWarehouseBackups(client);
+        }
         await client.query('DELETE FROM product_links WHERE product_id=$1 AND market=$2',[observation.id,id]);
         detached++;
       }

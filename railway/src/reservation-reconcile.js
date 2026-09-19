@@ -1,5 +1,6 @@
 import crypto from 'node:crypto';
 import { transaction } from './db.js';
+import { pruneWarehouseBackups } from './warehouse-backups.js';
 import { wbOrderIsActive } from './wb-status.js';
 
 function parsePayload(raw) {
@@ -122,6 +123,7 @@ export async function reconcileWbReservations(market, _syncedSince) {
     if (needsSafetyBackup) {
       const backup = await client.query(`INSERT INTO warehouse_backups(label,payload,revision,created_at)
         VALUES($1,$2,$3,$4) RETURNING id`, ['before-wb-reservation-complete-restore-v1', stored.rows[0].payload, stored.rows[0].revision, now]);
+      await pruneWarehouseBackups(client);
       state.settings.wbReservationCompleteRestoreV1 = { at: now, market, backupId: String(backup.rows[0].id), revision: Number(stored.rows[0].revision || 0) };
     }
     state.reservations = next;

@@ -1,5 +1,6 @@
 import crypto from 'node:crypto';
 import { transaction } from './db.js';
+import { pruneWarehouseBackups } from './warehouse-backups.js';
 import { kaspiOrderIsCollected } from './kaspi-status.js';
 import { wbOrderIsActive, wbOrderIsCollected } from './wb-status.js';
 import {
@@ -166,6 +167,7 @@ export async function reconcileMarketplaceSales(market) {
     const backupPayload = await legacyCompatibleWarehousePayload(client, stored.rows[0].payload);
     const backup = await client.query(`INSERT INTO warehouse_backups(label,payload,revision,created_at)
       VALUES($1,$2,$3,$4) RETURNING id`, [`before-${market.toLowerCase()}-sale-reconcile`, backupPayload, stored.rows[0].revision, now]);
+    await pruneWarehouseBackups(client);
     await persistWarehouseMovements(client, state.movements, now);
     const raw = JSON.stringify(stripMovementsFromState(state)), revision = Number(stored.rows[0].revision || 0) + 1;
     await client.query('UPDATE warehouse_state SET payload=$1,revision=$2,updated_at=$3 WHERE id=1', [raw, revision, now]);
