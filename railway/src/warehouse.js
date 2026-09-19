@@ -146,9 +146,15 @@ warehouseRouter.put('/warehouse-state', requireTrustedOrigin, requireWritesEnabl
   let raw = JSON.stringify(snapshotState);
   if (Buffer.byteLength(raw, 'utf8') > MAX_WAREHOUSE_SNAPSHOT_BYTES) return res.status(413).json({ ok: false, error: 'Warehouse snapshot is too large' });
 
+  const putStartedAt = Date.now();
+  const timing = {};
   const result = await transaction(async client => {
+    let stepStartedAt = Date.now();
     await client.query('SELECT pg_advisory_xact_lock($1)', [730021]);
+    timing.lockMs = Date.now() - stepStartedAt;
+    stepStartedAt = Date.now();
     const current = await client.query('SELECT payload,revision FROM warehouse_state WHERE id=1 FOR UPDATE');
+    timing.readMs = Date.now() - stepStartedAt;
     const currentRevision = Number(current.rows[0]?.revision || 0);
     if (current.rowCount && baseRevision !== currentRevision) return { conflict: true, revision: currentRevision };
     let productsChanged = true;
@@ -166,20 +172,26 @@ warehouseRouter.put('/warehouse-state', requireTrustedOrigin, requireWritesEnabl
       preserveWbValidation(previous, state);
     }
     const updatedAt = Date.now();
-    if (movementsProvided) await persistWarehouseMovements(client, state.movements, updatedAt);
+    if (movementsProvided) { const t = Date.now(); await persistWarehouseMovements(client, state.movements, updatedAt); timing.movementsMs = Date.now() - t; }
     const persistedSnapshot = stripMovementsFromState(state);
     raw = JSON.stringify(persistedSnapshot);
     if (Buffer.byteLength(raw, 'utf8') > MAX_WAREHOUSE_SNAPSHOT_BYTES) return { tooLarge: true };
     const revision = currentRevision + 1;
+    stepStartedAt = Date.now();
     await client.query(`INSERT INTO warehouse_state(id,payload,revision,updated_at) VALUES(1,$1,$2,$3)
       ON CONFLICT(id) DO UPDATE SET payload=excluded.payload,revision=excluded.revision,updated_at=excluded.updated_at`,
     [raw, revision, updatedAt]);
-    if (productsChanged) await mirrorProducts(client, state.products);
+    timing.stateWriteMs = Date.now() - stepStartedAt;
+    if (productsChanged) { const t = Date.now(); await mirrorProducts(client, state.products); timing.mirrorMs = Date.now() - t; }
     const sha = crypto.createHash('sha256').update(raw).digest('hex').toUpperCase();
+    stepStartedAt = Date.now();
     await client.query('INSERT INTO warehouse_audit(revision,updated_at,payload_sha256,source) VALUES($1,$2,$3,$4)',
       [revision, updatedAt, sha, 'api']);
+    timing.auditMs = Date.now() - stepStartedAt;
     return { revision, updatedAt };
   });
+  const totalMs = Date.now() - putStartedAt;
+  if (totalMs >= 1000) console.info('[warehouse-put-timing]', JSON.stringify({ totalMs, productsChanged: timing.mirrorMs != null, movementsProvided, ...timing }));
   if (result.tooLarge) return res.status(413).json({ ok: false, error: 'Warehouse snapshot is too large' });
   if (result.conflict) return res.status(409).json({ ok: false, error: result.stockGuard?'stock-ledger-conflict':'revision-conflict', revision: result.revision, stockGuard: result.stockGuard || undefined });
   res.setHeader('ETag', `"${result.revision}"`);
