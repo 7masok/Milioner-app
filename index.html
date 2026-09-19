@@ -979,11 +979,10 @@ async function loadSharedOrderCache({silent=true}={}){
     return status;
   }).catch(e=>{console.warn('Market status update failed',e);return {ok:false,markets:[],error:e}});
   try{
-    const [kdResult,w1Result,w2Result]=await Promise.allSettled([
-      apiJson(MILLIONER_API+'/api/orders?market=Kaspi&limit=5000'),
-      apiJson(MILLIONER_API+'/api/orders?market=WB&limit=5000'),
-      apiJson(MILLIONER_API+'/api/orders?market=WB2&limit=5000')
-    ]);
+    const allOrdersResult=await Promise.allSettled([apiJson(MILLIONER_API+'/api/orders?limit=15000')]);
+    const allOrders=allOrdersResult[0];
+    const resultFor=market=>allOrders.status==='fulfilled'?{status:'fulfilled',value:{orders:(allOrders.value.orders||[]).filter(row=>String(row.market||'')===market)}}:{status:'rejected',reason:allOrders.reason};
+    const kdResult=resultFor('Kaspi'),w1Result=resultFor('WB'),w2Result=resultFor('WB2');
     let k=[],w1=[],w2=[],warnings=[];
     if(kdResult.status==='fulfilled'){
       k=normalizeServerFeed(kdResult.value.orders,'Kaspi');
