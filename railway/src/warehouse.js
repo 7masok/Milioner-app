@@ -155,8 +155,12 @@ warehouseRouter.put('/warehouse-state', requireTrustedOrigin, requireWritesEnabl
     if (current.rowCount) {
       const previousStored = parseWarehousePayload(current.rows[0].payload);
       productsChanged = JSON.stringify(previousStored.products || []) !== JSON.stringify(state.products || []);
-      const previous = await hydrateWarehouseMovements(client, previousStored);
-      if (!movementsProvided) state.movements = previous.movements;
+      // Routine saves omit movements when the audit trail did not change.
+      // In that case an empty movement delta is sufficient for the stock guard:
+      // any stock change without a supplied movement is still rejected, while we
+      // avoid reading and parsing the entire movement history on every save.
+      const previous = movementsProvided ? await hydrateWarehouseMovements(client, previousStored) : { ...previousStored, movements: [] };
+      if (!movementsProvided) state.movements = [];
       const violation = stockLedgerViolation(previous, state) || staleWbLinkRestored(previous, state);
       if (violation) return { conflict: true, revision: currentRevision, stockGuard: violation };
       preserveWbValidation(previous, state);
