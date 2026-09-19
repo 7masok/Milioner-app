@@ -126,17 +126,16 @@ aiAssistantRouter.post('/assistant/finance-statement', requireTrustedOrigin, asy
   try{buffer=Buffer.from(fileData,'base64')}catch{const error=new Error('Не удалось прочитать PDF');error.status=400;throw error}
   if(!buffer.length||buffer.length>4_800_000){const error=new Error('PDF пустой или слишком большой');error.status=400;throw error}
   const sourceHash=crypto.createHash('sha256').update(buffer).digest('hex');
-  const categories=cleanStatementCategories(req.body?.categories);
   const prompt=[
     'Извлеки ВСЕ реальные денежные операции из банковской PDF-выписки.',
     'Это импорт в личный финансовый учет. Не включай строки итогов, входящий/исходящий остаток, справочные обороты, лимиты и прочие неоперационные суммы.',
     'Для каждой операции определи направление: expense = списание/расход, income = поступление/доход. amount всегда положительное число.',
     'date верни строго YYYY-MM-DD. title — короткое понятное название получателя/отправителя или назначения. note — остальные полезные детали без повторения title.',
-    'Категорию выбирай ТОЛЬКО из переданного списка категорий и только если соответствие очевидно. Если не уверен — categoryName оставь пустой строкой.',
+    'Категорию не определяй: categoryName всегда оставляй пустой строкой. Категоризация выполняется отдельно на клиенте по собственной истории пользователя.',
     'Не придумывай операции и не объединяй разные строки выписки.',
     'Верни только JSON без markdown по схеме:',
     '{"bank":"","accountName":"","currency":"KZT","periodStart":"YYYY-MM-DD","periodEnd":"YYYY-MM-DD","transactions":[{"date":"YYYY-MM-DD","type":"expense|income","amount":123.45,"title":"","note":"","categoryName":""}]}',
-    'Доступные категории: '+JSON.stringify(categories)
+    'categoryName в каждой строке должен быть пустой строкой.'
   ].join('\n');
   const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),90_000);
   try{
