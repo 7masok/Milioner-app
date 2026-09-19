@@ -138,7 +138,24 @@ aiAssistantRouter.post('/assistant/finance-statement', requireTrustedOrigin, asy
     'categoryName в каждой строке должен быть пустой строкой.'
   ].join('\n');
   const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),90_000);
+  let uploadedFileId='';
   try{
+    const form=new FormData();
+    form.append('purpose','user_data');
+    form.append('file',new Blob([buffer],{type:'application/pdf'}),filename);
+    const upload=await fetch('https://api.openai.com/v1/files',{
+      method:'POST',signal:controller.signal,
+      headers:{Authorization:'Bearer '+key},
+      body:form
+    });
+    const uploaded=await upload.json().catch(()=>({}));
+    if(!upload.ok||!uploaded?.id){
+      const message=String(uploaded?.error?.message||('OpenAI file upload HTTP '+upload.status));
+      const error=new Error(message.includes('Invalid')?'Не удалось передать PDF на распознавание':message);
+      error.status=upload.status===429?429:422;
+      throw error;
+    }
+    uploadedFileId=String(uploaded.id);
     const response=await fetch('https://api.openai.com/v1/responses',{
       method:'POST',signal:controller.signal,
       headers:{Authorization:'Bearer '+key,'Content-Type':'application/json'},
@@ -149,19 +166,32 @@ aiAssistantRouter.post('/assistant/finance-statement', requireTrustedOrigin, asy
         reasoning:{effort:'low'},
         text:{verbosity:'low'},
         input:[{role:'user',content:[
-          {type:'input_file',filename,file_data:fileData},
+          {type:'input_file',file_id:uploadedFileId},
           {type:'input_text',text:prompt}
         ]}]
       })
     });
     const data=await response.json().catch(()=>({}));
-    if(!response.ok){const error=new Error(String(data?.error?.message||('OpenAI HTTP '+response.status)));error.status=response.status===429?429:502;throw error}
+    if(!response.ok){
+      const message=String(data?.error?.message||('OpenAI HTTP '+response.status));
+      const error=new Error(message);
+      error.status=response.status===429?429:(response.status>=400&&response.status<500?422:502);
+      throw error;
+    }
     const parsed=parseJsonObject(outputText(data));
     if(!parsed){const error=new Error('Не удалось распознать структуру выписки. Попробуйте другой PDF.');error.status=422;throw error}
     const normalized=normalizeStatementResult(parsed,sourceHash,filename);
     if(!normalized.transactions.length){const error=new Error('В выписке не найдено операций для импорта');error.status=422;throw error}
     res.json({ok:true,...normalized,model:MODEL});
-  }finally{clearTimeout(timer)}
+  }finally{
+    clearTimeout(timer);
+    if(uploadedFileId){
+      fetch('https://api.openai.com/v1/files/'+encodeURIComponent(uploadedFileId),{
+        method:'DELETE',
+        headers:{Authorization:'Bearer '+key}
+      }).catch(()=>{});
+    }
+  }
 }));
 
 aiAssistantRouter.post('/assistant/chat', requireTrustedOrigin, asyncRoute(async (req,res)=>{
