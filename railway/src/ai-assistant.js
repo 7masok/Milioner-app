@@ -144,11 +144,10 @@ function parseKaspiStatement(text, sourceHash, filename) {
   for(const row of kaspiOperationRows(clean)){
     const lower=row.rest.toLowerCase();
     let type=row.sign==='-'?'expense':'income',transferDirection='',title=row.rest,note='';
-    if(/поступление со своего счета|со своего счета в kaspi pay|перевод на свои счета/i.test(lower)){
-      type='transfer';transferDirection=row.sign==='+'?'in':'out';
-      const detail=row.rest.replace(/поступление со своего счета/i,'').replace(/перевод на свои счета/i,'').replace(/^со своего\s+/i,'').trim();
-      title=detail||'Перевод между своими счетами';
-      note='Перевод между своими счетами';
+    if(/поступление со своего счета|со своего счета в kaspi pay|перевод на сво(?:й|и) счета?/i.test(lower)){
+      const detail=row.rest.replace(/поступление со своего счета/i,'').replace(/перевод на сво(?:й|и) счета?/i,'').replace(/^со своего\s+/i,'').trim();
+      title=detail||(type==='income'?'Поступление со своего счета':'Перевод на свой счет');
+      note=type==='income'?'Поступление со своего счета':'Перевод на свой счет';
     }else if(/^перевод\b/i.test(row.rest)){
       title=row.rest.replace(/^перевод\s*/i,'').trim()||'Перевод';
       note='Перевод';
