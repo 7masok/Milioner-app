@@ -151,8 +151,11 @@ warehouseRouter.put('/warehouse-state', requireTrustedOrigin, requireWritesEnabl
     const current = await client.query('SELECT payload,revision FROM warehouse_state WHERE id=1 FOR UPDATE');
     const currentRevision = Number(current.rows[0]?.revision || 0);
     if (current.rowCount && baseRevision !== currentRevision) return { conflict: true, revision: currentRevision };
+    let productsChanged = true;
     if (current.rowCount) {
-      const previous = await hydrateWarehouseMovements(client, parseWarehousePayload(current.rows[0].payload));
+      const previousStored = parseWarehousePayload(current.rows[0].payload);
+      productsChanged = JSON.stringify(previousStored.products || []) !== JSON.stringify(state.products || []);
+      const previous = await hydrateWarehouseMovements(client, previousStored);
       if (!movementsProvided) state.movements = previous.movements;
       const violation = stockLedgerViolation(previous, state) || staleWbLinkRestored(previous, state);
       if (violation) return { conflict: true, revision: currentRevision, stockGuard: violation };
@@ -167,7 +170,7 @@ warehouseRouter.put('/warehouse-state', requireTrustedOrigin, requireWritesEnabl
     await client.query(`INSERT INTO warehouse_state(id,payload,revision,updated_at) VALUES(1,$1,$2,$3)
       ON CONFLICT(id) DO UPDATE SET payload=excluded.payload,revision=excluded.revision,updated_at=excluded.updated_at`,
     [raw, revision, updatedAt]);
-    await mirrorProducts(client, state.products);
+    if (productsChanged) await mirrorProducts(client, state.products);
     const sha = crypto.createHash('sha256').update(raw).digest('hex').toUpperCase();
     await client.query('INSERT INTO warehouse_audit(revision,updated_at,payload_sha256,source) VALUES($1,$2,$3,$4)',
       [revision, updatedAt, sha, 'api']);
