@@ -190,8 +190,12 @@ export function parseBccStatement(text, sourceHash, filename) {
     transactions:[]
   };
 
+  const tableText = posted.replace(
+    /(\d{4}-\d{2}-\d{2}\s+\d{4}-\d{2}-\d{2}\s+.+?\s+[\d ]+\.\d{2})\s+([+-]?[\d ]+\.\d)\s+(0\.00 KZT\s+0\.00KZT)\n\s*KZT\s+0 KZT/g,
+    '$1 KZT $20 KZT $3'
+  );
   const rowRx = /^\s*(\d{4}-\d{2}(?:-\d{2}|-)?)\s+(\d{4}-\d{2}-\d{2})\s+(.+?)\s+([\d ]+\.\d{2})\s*(?:[A-Z]{3})?\s+([+-]?[\d ]+\.\d{2})(?:\s*(?:[A-Z]{3}))?(?:\s|$)/gmi;
-  for (const m of posted.matchAll(rowRx)) {
+  for (const m of tableText.matchAll(rowRx)) {
     const operationDate = /^\d{4}-\d{2}-\d{2}$/.test(m[1]) ? m[1] : m[2];
     const accountAmount = Number(String(m[5]).replace(/\s+/g,''));
     if (!Number.isFinite(accountAmount) || accountAmount===0) continue;
