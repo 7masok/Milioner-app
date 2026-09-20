@@ -106,7 +106,14 @@ function normalizeStatementResult(raw, sourceHash, filename) {
     const occurrence = (seen.get(signature) || 0) + 1;
     seen.set(signature, occurrence);
     const statementFingerprint = crypto.createHash('sha256').update(sourceHash+'|'+signature+'|'+occurrence).digest('hex');
-    transactions.push({ date, time, type, amount, title, note, categoryName, transferDirection, statementFingerprint });
+    transactions.push({
+      date, time, type, amount, title, note, categoryName, transferDirection, statementFingerprint,
+      bankOperationKey:String(row?.bankOperationKey||'').slice(0,96),
+      bankStatus:String(row?.bankStatus||'').slice(0,32),
+      originalAmount:Math.abs(Number(row?.originalAmount)||0),
+      originalCurrency:String(row?.originalCurrency||'').trim().toUpperCase().slice(0,8),
+      amountEstimated:Boolean(row?.amountEstimated)
+    });
   }
   return {
     statement: {
@@ -117,7 +124,8 @@ function normalizeStatementResult(raw, sourceHash, filename) {
       currency: String(raw?.currency || 'KZT').trim().toUpperCase().slice(0,8) || 'KZT',
       periodStart: normalizeStatementDate(raw?.periodStart),
       periodEnd: normalizeStatementDate(raw?.periodEnd),
-      pendingCount: Math.max(0,Number(raw?.pendingCount)||0)
+      pendingCount: Math.max(0,Number(raw?.pendingCount)||0),
+      blockedImportedCount: Math.max(0,Number(raw?.blockedImportedCount)||0)
     },
     transactions
   };
@@ -162,6 +170,86 @@ async function renderPdfLayoutPage(pageData) {
   return rows.map(row=>row.items.sort((a,b)=>a.x-b.x).map(x=>x.text).join(' ')).join('\n');
 }
 
+function bccStableTitle(value){
+  return String(value||'')
+    .replace(/^(?:Аударым|Перевод|Transfer|Төлем|Платеж|Платёж|Payment|Сатып алу|Покупка|Purchase)\s*/i,'')
+    .replace(/[^a-zа-яё0-9]+/gi,' ')
+    .trim()
+    .toLowerCase();
+}
+function bccOperationKey(date,title,originalAmount,originalCurrency,occurrence=1){
+  const base=[String(date||''),bccStableTitle(title),Math.abs(Number(originalAmount)||0).toFixed(2),String(originalCurrency||'').toUpperCase(),occurrence].join('|');
+  return crypto.createHash('sha256').update('bcc|'+base).digest('hex').slice(0,48);
+}
+function bccDateIso(value){
+  const m=String(value||'').match(/^(\d{2})\.(\d{2})\.(\d{4})$/);
+  return m?m[3]+'-'+m[2]+'-'+m[1]:'';
+}
+function bccMedian(values){
+  const rows=(Array.isArray(values)?values:[]).filter(Number.isFinite).sort((a,b)=>a-b);
+  if(!rows.length)return 0;
+  const mid=Math.floor(rows.length/2);
+  return rows.length%2?rows[mid]:(rows[mid-1]+rows[mid])/2;
+}
+function parseBccBlockedRows(pending, accountCurrency='KZT'){
+  const status='(?:ожидается|ожидает|в\\s+ожидании|күтілуде|pending|on\\s+hold)';
+  const blockRx=new RegExp('^\\s*(\\d{2}\\.\\d{2}\\.\\d{4})\\s+'+status+'([\\s\\S]*?)(?=^\\s*\\d{2}\\.\\d{2}\\.\\d{4}\\s+'+status+'|$)','gmi');
+  const rows=[];
+  for(const m of String(pending||'').matchAll(blockRx)){
+    const date=bccDateIso(m[1]),body=String(m[2]||'');
+    const time=(body.match(/\b(\d{2}:\d{2}:\d{2})\b/)||[])[1]||'';
+    const amountMatch=/([\d ]+\.\d{2})/.exec(body);
+    if(!date||!amountMatch)continue;
+    const originalAmount=Number(String(amountMatch[1]).replace(/\s+/g,''));
+    if(!Number.isFinite(originalAmount)||originalAmount<=0)continue;
+    const before=body.slice(0,amountMatch.index).replace(/\s+/g,' ').trim();
+    const after=body.slice(amountMatch.index+amountMatch[0].length);
+    const originalCurrency=((body.match(/\b(KZT|USD|EUR|CNY|RUB|GBP|AED|TRY)\b/i)||[])[1]||accountCurrency).toUpperCase();
+    const numbers=[...after.matchAll(/\b(\d+(?:\.\d+)?)\b/g)].map(x=>Number(x[1])).filter(Number.isFinite);
+    const cashback=Number(numbers[2])||0;
+    const explicitRate=(numbers.slice(3).find(x=>x>=100&&x<=5000))||0;
+    const continuation=body.split(/\n+/).slice(1).map(line=>String(line||'')
+      .replace(/\b\d{2}:\d{2}:\d{2}\b/g,' ')
+      .replace(/\b(?:KZT|USD|EUR|CNY|RUB|GBP|AED|TRY)\b/gi,' ')
+      .replace(/\b\d+(?:\.\d+)?\b/g,' ')
+      .replace(/\s+/g,' ').trim()).filter(Boolean).join(' ');
+    const title=(before+' '+continuation).replace(/\s+/g,' ').trim()||'Операция';
+    rows.push({date,time,title,originalAmount,originalCurrency,cashback,explicitRate});
+  }
+  const factors=rows.filter(x=>x.originalCurrency!==accountCurrency&&x.explicitRate>0&&x.cashback>0)
+    .map(x=>x.cashback/(x.originalAmount*x.explicitRate)).filter(x=>x>.001&&x<.1);
+  const cashbackFactor=bccMedian(factors);
+  const rateByCurrency=new Map();
+  for(const row of rows){
+    if(row.explicitRate>0){
+      const list=rateByCurrency.get(row.originalCurrency)||[];
+      list.push(row.explicitRate);rateByCurrency.set(row.originalCurrency,list);
+    }
+  }
+  const occurrence=new Map(),out=[];
+  for(const row of rows){
+    let amount=0,amountEstimated=false;
+    if(row.originalCurrency===accountCurrency)amount=row.originalAmount;
+    else if(row.explicitRate>0)amount=row.originalAmount*row.explicitRate;
+    else if(cashbackFactor>0&&row.cashback>0){amount=row.cashback/cashbackFactor;amountEstimated=true}
+    else{
+      const fallback=bccMedian(rateByCurrency.get(row.originalCurrency)||[]);
+      if(fallback>0){amount=row.originalAmount*fallback;amountEstimated=true}
+    }
+    amount=Math.round(amount*100)/100;
+    if(!amount)continue;
+    const base=[row.date,bccStableTitle(row.title),row.originalAmount.toFixed(2),row.originalCurrency].join('|');
+    const n=(occurrence.get(base)||0)+1;occurrence.set(base,n);
+    out.push({
+      date:row.date,time:row.time,type:'expense',amount,title:row.title,
+      note:'BCC · в блоке',categoryName:'',
+      bankStatus:'blocked',bankOperationKey:bccOperationKey(row.date,row.title,row.originalAmount,row.originalCurrency,n),
+      originalAmount:row.originalAmount,originalCurrency:row.originalCurrency,amountEstimated
+    });
+  }
+  return out;
+}
+
 export function parseBccStatement(text, sourceHash, filename) {
   const clean = cleanPdfText(text);
   const bankMatch = /(Банк\s+ЦентрКредит|Bank\s+CenterCredit|centercredit|KCJBKZKX)/i.test(clean);
@@ -187,6 +275,7 @@ export function parseBccStatement(text, sourceHash, filename) {
     periodStart:period?.[1] || '',
     periodEnd:period?.[2] || '',
     pendingCount,
+    blockedImportedCount:0,
     transactions:[]
   };
 
@@ -194,10 +283,12 @@ export function parseBccStatement(text, sourceHash, filename) {
     /(\d{4}-\d{2}-\d{2}\s+\d{4}-\d{2}-\d{2}\s+.+?\s+[\d ]+\.\d{2})\s+([+-]?[\d ]+\.\d)\s+(0\.00 KZT\s+0\.00KZT)\n\s*KZT\s+0 KZT/g,
     (_all,prefix,accountAmount,tail)=>prefix+' KZT '+accountAmount+'0 KZT '+tail
   );
-  const rowRx = /^\s*(\d{4}-\d{2}(?:-\d{2}|-)?)\s+(\d{4}-\d{2}-\d{2})\s+(.+?)\s+([\d ]+\.\d{2})\s*(?:[A-Z]{3})?\s+([+-]?[\d ]+\.\d{2})(?:\s*(?:[A-Z]{3}))?(?:\s|$)/gmi;
+  const rowRx = /^\s*(\d{4}-\d{2}(?:-\d{2}|-)?)\s+(\d{4}-\d{2}-\d{2})\s+(.+?)\s+([\d ]+\.\d{2})\s*([A-Z]{3})?\s+([+-]?[\d ]+\.\d{2})(?:\s*(?:[A-Z]{3}))?(?:\s|$)/gmi;
+  const postedOccurrence=new Map();
   for (const m of tableText.matchAll(rowRx)) {
     const operationDate = /^\d{4}-\d{2}-\d{2}$/.test(m[1]) ? m[1] : m[2];
-    const accountAmount = Number(String(m[5]).replace(/\s+/g,''));
+    const originalAmount=Number(String(m[4]).replace(/\s+/g,'')),originalCurrency=String(m[5]||raw.currency||'KZT').toUpperCase();
+    const accountAmount = Number(String(m[6]).replace(/\s+/g,''));
     if (!Number.isFinite(accountAmount) || accountAmount===0) continue;
 
     let title = String(m[3]||'Операция').replace(/\s+/g,' ').trim();
@@ -209,6 +300,8 @@ export function parseBccStatement(text, sourceHash, filename) {
     else if (/^(Сатып алу|Покупка|Purchase)(?:\s|$)/i.test(title)) note='Покупка';
     else if (/(Foreign currency purchase|Покупка иностранной валюты|Шетел валютасын сатып алу)/i.test(title)) note='Конвертация';
 
+    const base=[operationDate,bccStableTitle(title),Math.abs(originalAmount||0).toFixed(2),originalCurrency].join('|');
+    const occurrence=(postedOccurrence.get(base)||0)+1;postedOccurrence.set(base,occurrence);
     raw.transactions.push({
       date:operationDate,
       time:'',
@@ -216,9 +309,17 @@ export function parseBccStatement(text, sourceHash, filename) {
       amount:Math.abs(accountAmount),
       title,
       note,
-      categoryName:''
+      categoryName:'',
+      bankStatus:'posted',
+      bankOperationKey:bccOperationKey(operationDate,title,originalAmount,originalCurrency,occurrence),
+      originalAmount,
+      originalCurrency
     });
   }
+
+  const blockedRows=parseBccBlockedRows(pending,raw.currency);
+  raw.blockedImportedCount=blockedRows.length;
+  raw.transactions.push(...blockedRows);
 
   const normalized = normalizeStatementResult(raw,sourceHash,filename);
   if (account?.[1]) normalized.statement.accountNumber=account[1];
