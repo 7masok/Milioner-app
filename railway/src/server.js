@@ -18,6 +18,7 @@ import { syncWbStockMarket, validateWbStockLinks } from './wb-stock-sync.js';
 import { authConfig, login, requireAppSession } from './auth.js';
 import { configuredWbConnectionIds, connectionsRouter } from './connections.js';
 import { wbVariantsRouter } from './wb-variants.js';
+import { wbReturnsRouter } from './wb-returns.js';
 import { wbAdsRouter, startWbAdsLimitLoop } from './wb-ads.js';
 import { aiAssistantRouter } from './ai-assistant.js';
 
@@ -183,6 +184,7 @@ app.post('/api/stock-sync-now', requireTrustedOrigin, async (req, res, next) => 
 app.use('/api', ozonRouter);
 app.use('/api', connectionsRouter);
 app.use('/api', wbVariantsRouter);
+app.use('/api', wbReturnsRouter);
 app.use('/api', wbAdsRouter);
 app.use('/api', warehouseRouter);
 app.use('/api', financeRouter);
