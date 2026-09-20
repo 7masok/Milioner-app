@@ -277,6 +277,69 @@ async function upsertImports(client, imports) {
   `, [JSON.stringify(imports), Date.now()]);
 }
 
+async function pruneFinanceBackups(client) {
+  await client.query(`DELETE FROM finance_backups
+    WHERE id NOT IN (SELECT id FROM finance_backups ORDER BY created_at DESC LIMIT 20)
+      AND created_at < $1`, [Date.now() - 90 * 24 * 60 * 60 * 1000]);
+}
+
+financeRouter.get('/finance-backups', requireTrustedOrigin, asyncRoute(async (_req, res) => {
+  const result = await pool.query(`
+    SELECT id,label,revision,created_at AS "createdAt",
+      jsonb_array_length(accounts) AS accounts,
+      jsonb_array_length(categories) AS categories,
+      jsonb_array_length(transactions) AS transactions
+    FROM finance_backups
+    ORDER BY created_at DESC
+    LIMIT 20
+  `);
+  res.json({ ok:true, backups:result.rows.map(row=>({
+    ...row,
+    id:String(row.id),
+    revision:Number(row.revision||0),
+    createdAt:Number(row.createdAt||0),
+    accounts:Number(row.accounts||0),
+    categories:Number(row.categories||0),
+    transactions:Number(row.transactions||0)
+  })) });
+}));
+
+financeRouter.post('/finance-backups', requireTrustedOrigin, requireWritesEnabled, asyncRoute(async (req, res) => {
+  const label = String(req.body?.label || 'manual').trim().slice(0,160) || 'manual';
+  const result = await transaction(async client => {
+    await client.query('SELECT pg_advisory_xact_lock($1)', [730024]);
+    const state = await readFinanceState(client);
+    const createdAt = Date.now();
+    const inserted = await client.query(`
+      INSERT INTO finance_backups(label,accounts,categories,transactions,imports,revision,created_at)
+      VALUES($1,$2::jsonb,$3::jsonb,$4::jsonb,$5::jsonb,$6,$7)
+      RETURNING id
+    `, [
+      label,
+      JSON.stringify(state.accounts),
+      JSON.stringify(state.categories),
+      JSON.stringify(state.transactions),
+      JSON.stringify(state.imports),
+      state.revision,
+      createdAt
+    ]);
+    await pruneFinanceBackups(client);
+    return {
+      id:String(inserted.rows[0].id),
+      label,
+      revision:state.revision,
+      createdAt,
+      counts:{
+        accounts:state.accounts.length,
+        categories:state.categories.length,
+        transactions:state.transactions.length,
+        imports:Object.keys(state.imports).length
+      }
+    };
+  });
+  res.status(201).json({ ok:true, backup:result });
+}));
+
 financeRouter.get('/finance-state', requireTrustedOrigin, asyncRoute(async (req, res) => {
   const metaOnly = req.query.meta === '1';
   if (metaOnly) {
