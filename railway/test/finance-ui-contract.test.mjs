@@ -92,3 +92,28 @@ test('local finance balance effects are reversible',()=>{
     afterExpenseDelete:[100000,10000]
   });
 });
+
+test('initialized empty local finance database remains authoritative',()=>{
+  assert.ok(html.includes("FINANCE_LOCAL_READY_KEY='milioner-finance-local-ready-v1'"));
+  assert.ok(html.includes("localStorage.getItem(FINANCE_LOCAL_READY_KEY)==='1'"));
+  assert.ok(html.includes("localStorage.setItem(FINANCE_LOCAL_READY_KEY,'1')"));
+});
+
+test('bank statement import commits locally before server sync',()=>{
+  const start=html.indexOf('async function financeImportStatementDraft(){');
+  assert.ok(start>=0);
+  const end=html.indexOf('\nasync function financeProcessStatementFile',start);
+  const fn=html.slice(start,end>start?end:start+30000);
+  assert.ok(fn.includes('financeRunLocalMutation(()=>financeLocalImportBatch(transactions)'));
+  assert.ok(fn.includes("financeCommand('/api/finance/transactions/batch'"));
+  assert.equal(fn.includes('await financeLedgerMutate'),false);
+});
+
+test('automatic finance background flow never reloads server snapshot over local data',()=>{
+  const watcherStart=html.indexOf('function startFinanceServerWatcher(){');
+  const watcherEnd=html.indexOf('\nfunction ',watcherStart+10);
+  const watcher=html.slice(watcherStart,watcherEnd>watcherStart?watcherEnd:watcherStart+3000);
+  assert.ok(watcher.includes('financeSyncOutbox()'));
+  assert.equal(watcher.includes('fetchFinanceCloud(false)'),false);
+  assert.equal(watcher.includes('financeReloadFromServer'),false);
+});
