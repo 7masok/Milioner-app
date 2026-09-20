@@ -117,3 +117,25 @@ test('automatic finance background flow never reloads server snapshot over local
   assert.equal(watcher.includes('fetchFinanceCloud(false)'),false);
   assert.equal(watcher.includes('financeReloadFromServer'),false);
 });
+
+
+test('statement merge identity is scoped to the finance account',()=>{
+  const src=extractFunction('financeStatementIdentity');
+  const make=new Function(src+'; return financeStatementIdentity;')();
+  assert.notEqual(
+    make({bankOperationKey:'same-op',statementAccountId:'account-a'}),
+    make({bankOperationKey:'same-op',statementAccountId:'account-b'})
+  );
+});
+
+test('statement import reveals its own period and account in the journal',()=>{
+  const reveal=extractFunction('financeRevealStatementRows');
+  assert.ok(reveal.includes("financeHistoryPeriodOverride={start:from.getTime(),end:to.getTime(),label:'Период выписки'}"));
+  assert.ok(reveal.includes("panel.open=true"));
+  assert.ok(reveal.includes("account.value=[...account.options].some"));
+  const start=html.indexOf('async function financeImportStatementDraft(){');
+  const end=html.indexOf('\\nasync function financeProcessStatementFile',start);
+  const fn=html.slice(start,end>start?end:start+30000);
+  assert.ok(fn.includes('financeRevealStatementRows(accountId,transactions)'));
+  assert.ok(fn.includes('баланс повторно не менялся'));
+});
