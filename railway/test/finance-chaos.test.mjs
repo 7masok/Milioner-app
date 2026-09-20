@@ -274,7 +274,7 @@ test('10000 randomized local ledger mutations match an independent reference mod
 
 
 test('analytics handles income expense transit transfer refund and exclusions consistently',()=>{
-  const names=['financeTransactionType','financeTransactionAmount','financeTransactionDefaultAmount','financeCountsInIncomeExpense','financeAnalyticsEntry'];
+  const names=['financeTransactionType','financeTransactionAmount','financeTransactionDefaultAmount','financeCountsInIncomeExpense','financeEffectiveCategory','financeAnalyticsEntry'];
   const src=names.map(extractFunction).join('\n');
   const run=new Function(src+`
     const all=[{id:'e1',type:'expense',amount:100,defaultAmount:100,categoryId:'food',category:'Еда'}];
@@ -354,7 +354,7 @@ test('account and category creates rely on idempotent server ACKs, not swallowed
 });
 
 test('journal filters keep incoming transfers visible on the destination account',()=>{
-  const names=['financeTransactionType','financeTransactionTime','financeFilteredTransactions'];
+  const names=['financeTransactionType','financeTransactionTime','financeEffectiveCategory','financeFilteredTransactions'];
   const src=names.map(extractFunction).join('\n');
   const run=new Function(src+`
     const rows=[
@@ -371,6 +371,24 @@ test('journal filters keep incoming transfers visible on the destination account
     return financeFilteredTransactions().map(x=>x.id);
   `);
   assert.deepEqual(run(),['x1','t1','i1']);
+});
+
+test('expense/category journal filters include linked refunds',()=>{
+  const names=['financeTransactionType','financeTransactionTime','financeEffectiveCategory','financeFilteredTransactions'];
+  const src=names.map(extractFunction).join('\n');
+  const run=new Function(src+`
+    const rows=[
+      {id:'e1',type:'expense',accountId:'a',categoryId:'food',category:'Еда',amount:100,createdAt:100},
+      {id:'r1',type:'income',accountId:'a',amount:30,createdAt:200,refundOfId:'e1',refundCategoryId:'old',refundCategory:'Старая'}
+    ];
+    function financeTransactions(){return rows}
+    function financePeriodBounds(){return {start:1,end:1000}}
+    let financeHistoryPeriodOverride={start:1,end:1000};
+    const values={financePeriodFilter:'all',financeTypeFilter:'expense',financeAccountFilter:'all',financeCategoryFilter:'food'};
+    const document={getElementById:id=>({value:values[id]||''})};
+    return financeFilteredTransactions().map(x=>x.id);
+  `);
+  assert.deepEqual(run(),['r1','e1']);
 });
 
 test('10000 randomized KZT and USD ledger mutations preserve balance and default balance',()=>{
