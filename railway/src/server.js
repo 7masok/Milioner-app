@@ -204,8 +204,55 @@ app.use((error, _req, res, _next) => {
   res.status(status).json({ ok: false, error: status >= 500 ? 'Internal server error' : String(error.message || error) });
 });
 
+async function verifyBackupRestoreReadiness() {
+  try {
+    const [warehouse, accounts, categories, transactions, imports] = await Promise.all([
+      pool.query('SELECT payload,revision FROM warehouse_state WHERE id=1'),
+      pool.query('SELECT payload FROM finance_accounts ORDER BY sort_order,id'),
+      pool.query('SELECT payload FROM finance_categories ORDER BY sort_order,id'),
+      pool.query('SELECT payload FROM finance_transactions ORDER BY sort_order,id'),
+      pool.query('SELECT backup_hash,payload FROM finance_imports ORDER BY imported_at,backup_hash')
+    ]);
+    if (!warehouse.rowCount) return console.warn('BACKUP_RESTORE_DRY_RUN', JSON.stringify({ ok:false, error:'warehouse_state_missing' }));
+    const raw = warehouse.rows[0].payload;
+    const state = typeof raw === 'string' ? JSON.parse(raw) : raw;
+    const backupState = JSON.parse(JSON.stringify(state || {}));
+    backupState.settings ||= {};
+    for (const key of ['personalFinanceAccounts','personalFinanceTransactions','personalFinanceCategories','personalFinanceLegacyImports']) delete backupState.settings[key];
+    const finance = {
+      accounts: accounts.rows.map(row => row.payload),
+      categories: categories.rows.map(row => row.payload),
+      transactions: transactions.rows.map(row => row.payload),
+      imports: Object.fromEntries(imports.rows.map(row => [String(row.backup_hash), row.payload]))
+    };
+    const encoded = JSON.stringify({ format:'millioner-warehouse-backup',version:6,createdAt:Date.now(),state:backupState,finance });
+    const decoded = JSON.parse(encoded);
+    const ok = Array.isArray(decoded.state?.products)
+      && Array.isArray(decoded.finance?.accounts)
+      && Array.isArray(decoded.finance?.categories)
+      && Array.isArray(decoded.finance?.transactions)
+      && decoded.finance.accounts.length === finance.accounts.length
+      && decoded.finance.categories.length === finance.categories.length
+      && decoded.finance.transactions.length === finance.transactions.length;
+    console.info('BACKUP_RESTORE_DRY_RUN', JSON.stringify({
+      ok,
+      bytes:Buffer.byteLength(encoded,'utf8'),
+      warehouseRevision:Number(warehouse.rows[0].revision||0),
+      products:decoded.state?.products?.length||0,
+      purchases:decoded.state?.purchases?.length||0,
+      accounts:decoded.finance.accounts.length,
+      categories:decoded.finance.categories.length,
+      transactions:decoded.finance.transactions.length,
+      imports:Object.keys(decoded.finance.imports||{}).length
+    }));
+  } catch (error) {
+    console.warn('BACKUP_RESTORE_DRY_RUN', JSON.stringify({ ok:false,error:String(error?.message||error) }));
+  }
+}
+
 const server = app.listen(config.port, '0.0.0.0', () => {
   console.log(`millioner Railway API listening on ${config.port}`);
+  setTimeout(()=>verifyBackupRestoreReadiness(),4000).unref();
   startOzonSyncLoop();
   startKaspiSyncLoop();
   startWbSyncLoop();
