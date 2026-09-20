@@ -139,3 +139,8 @@ test('statement import reveals its own period and account in the journal',()=>{
   assert.ok(fn.includes('financeRevealStatementRows(accountId,transactions)'));
   assert.ok(fn.includes('баланс повторно не менялся'));
 });
+
+
+test('finance journal defaults to current month',()=>{
+  assert.match(html,/id="financePeriodFilter"[^>]*><option value="day">Сегодня<\/option><option value="month" selected>Этот месяц<\/option>/);
+});
