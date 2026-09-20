@@ -18,7 +18,7 @@ test('GPT context tolerates an invalid warehouse payload', () => {
 });
 
 
-test('BCC statement parser reads posted operations and skips blocked ones', () => {
+test('BCC statement parser includes blocked operations as spent', () => {
   const text = `
 "Банк ЦентрКредит" АҚ
 БИК: KCJBKZKX
@@ -43,8 +43,9 @@ test('BCC statement parser reads posted operations and skips blocked ones', () =
   assert.equal(result.statement.bank,'Bank CenterCredit');
   assert.equal(result.statement.currency,'KZT');
   assert.equal(result.statement.pendingCount,2);
-  assert.equal(result.transactions.length,3);
-  assert.equal(result.transactions.reduce((sum,x)=>sum+x.amount,0),52673.21);
+  assert.equal(result.statement.blockedImportedCount,2);
+  assert.equal(result.transactions.length,5);
+  assert.equal(result.transactions.reduce((sum,x)=>sum+x.amount,0),56038.21);
   assert.equal(result.transactions[0].type,'expense');
   assert.equal(result.transactions[0].title,'Аударым Тимур К.');
 });
@@ -74,7 +75,8 @@ Transactions on hold
   assert.equal(result.statement.periodStart,'2026-09-13');
   assert.equal(result.statement.periodEnd,'2026-09-20');
   assert.equal(result.statement.pendingCount,2);
-  assert.equal(result.transactions.length,3);
+  assert.equal(result.statement.blockedImportedCount,2);
+  assert.equal(result.transactions.length,5);
   assert.equal(result.transactions[0].date,'2026-09-20');
   assert.equal(result.transactions[0].note,'Перевод');
   assert.equal(result.transactions[2].type,'income');
@@ -100,7 +102,8 @@ test('BCC Russian statement parser accepts Russian headings and blocked section'
   assert.ok(result);
   assert.equal(result.statement.language,'ru');
   assert.equal(result.statement.pendingCount,1);
-  assert.equal(result.transactions.length,3);
+  assert.equal(result.statement.blockedImportedCount,1);
+  assert.equal(result.transactions.length,4);
   assert.equal(result.transactions[1].note,'Покупка');
   assert.equal(result.transactions[2].type,'income');
 });
@@ -121,4 +124,31 @@ Statement period 13.09.2026 - 20.09.2026
   assert.equal(result.transactions.length,1);
   assert.equal(result.transactions[0].amount,153000);
   assert.equal(result.transactions[0].type,'expense');
+});
+
+
+test('BCC blocked foreign-currency rows use an explicit rate/cashback anchor and keep original currency', () => {
+  const text = `
+Банк ЦентрКредит
+БИК: KCJBKZKX
+Выписка по счету KZ088562204150156670
+Валюта счета KZT
+Период выписки 18.09.2026 - 20.09.2026
+Транзакции в блоке
+18.09.2026 ожидается 1688.com 29.20 USD 0.00 0.00 131.95 451.9
+21:25:37
+18.09.2026 ожидается 1688.com 5.69 USD 0.00 0.00 26.67
+22:38:38
+`;
+  const result = parseBccStatement(text,'source-hash-usd','bcc-usd.pdf');
+  assert.ok(result);
+  assert.equal(result.statement.pendingCount,2);
+  assert.equal(result.statement.blockedImportedCount,2);
+  assert.equal(result.transactions.length,2);
+  assert.equal(result.transactions[0].originalCurrency,'USD');
+  assert.equal(result.transactions[0].bankStatus,'blocked');
+  assert.ok(result.transactions[0].amount > 13000 && result.transactions[0].amount < 13250);
+  assert.equal(result.transactions[1].amountEstimated,true);
+  assert.ok(result.transactions[1].amount > 2600 && result.transactions[1].amount < 2750);
+  assert.ok(result.transactions[0].bankOperationKey);
 });
