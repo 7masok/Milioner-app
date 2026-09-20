@@ -116,7 +116,8 @@ function normalizeStatementResult(raw, sourceHash, filename) {
       accountName: String(raw?.accountName || '').trim().slice(0,160),
       currency: String(raw?.currency || 'KZT').trim().toUpperCase().slice(0,8) || 'KZT',
       periodStart: normalizeStatementDate(raw?.periodStart),
-      periodEnd: normalizeStatementDate(raw?.periodEnd)
+      periodEnd: normalizeStatementDate(raw?.periodEnd),
+      pendingCount: Math.max(0,Number(raw?.pendingCount)||0)
     },
     transactions
   };
@@ -142,6 +143,67 @@ function kaspiOperationRows(text) {
     rows.push({date:m[1],time:m[2]||'',sign:m[3],amount,rest});
   }
   return rows;
+}
+
+
+async function renderPdfLayoutPage(pageData) {
+  const content = await pageData.getTextContent({ normalizeWhitespace:false, disableCombineTextItems:false });
+  const rows = [];
+  for (const item of Array.isArray(content?.items) ? content.items : []) {
+    const text = String(item?.str || '').trim();
+    if (!text) continue;
+    const transform = Array.isArray(item?.transform) ? item.transform : [];
+    const x = Number(transform[4]) || 0, y = Number(transform[5]) || 0;
+    let row = rows.find(r => Math.abs(r.y - y) < 1.8);
+    if (!row) { row = { y, items:[] }; rows.push(row); }
+    row.items.push({ x, text });
+  }
+  rows.sort((a,b)=>b.y-a.y);
+  return rows.map(row=>row.items.sort((a,b)=>a.x-b.x).map(x=>x.text).join(' ')).join('\n');
+}
+
+export function parseBccStatement(text, sourceHash, filename) {
+  const clean = cleanPdfText(text);
+  if (!/(Банк\s+ЦентрКредит|centercredit|KCJBKZKX)/i.test(clean) || !/(Шот бойынша үзінді|выписка)/i.test(clean)) return null;
+  const period = clean.match(/Кезеңі\s+(\d{2}\.\d{2}\.\d{4})\s*-\s*(\d{2}\.\d{2}\.\d{4})/i);
+  const account = clean.match(/Шот бойынша үзінді\s+([A-Z0-9]+)/i);
+  const card = clean.match(/Карта\s+([0-9*]+)/i);
+  const currency = clean.match(/Валюта\s+([A-Z]{3})/i);
+  const blockedSplit = clean.split(/Блоктағы транзакциялар/i);
+  const posted = blockedSplit[0] || clean;
+  const pending = blockedSplit[1] || '';
+  const pendingCount = (pending.match(/^\s*\d{2}\.\d{2}\.\d{4}\s+(?:күтілуде|ожидает|в ожидании)\b/gmi) || []).length;
+  const raw = {
+    bank:'Bank CenterCredit',
+    accountName:card ? 'BCC '+card[1] : '#bccpay',
+    currency:currency?.[1] || 'KZT',
+    periodStart:period?.[1] || '',
+    periodEnd:period?.[2] || '',
+    pendingCount,
+    transactions:[]
+  };
+  const rowRx = /^\s*\d{4}-\d{2}-\s+(\d{4}-\d{2}-\d{2})\s+(.+?)\s+([\d ]+\.\d{2})\s+([+-]?[\d ]+\.\d{2})(?:\s|$)/gmi;
+  for (const m of posted.matchAll(rowRx)) {
+    const accountAmount = Number(String(m[4]).replace(/\s+/g,''));
+    if (!Number.isFinite(accountAmount) || accountAmount===0) continue;
+    const title = String(m[2]||'Операция').replace(/\s+/g,' ').trim();
+    const type = accountAmount < 0 ? 'expense' : 'income';
+    let note = '';
+    if (/^Аударым\b/i.test(title)) note='Аударым';
+    else if (/^Төлем\b/i.test(title)) note='Төлем';
+    raw.transactions.push({
+      date:m[1],
+      time:'',
+      type,
+      amount:Math.abs(accountAmount),
+      title,
+      note,
+      categoryName:''
+    });
+  }
+  const normalized = normalizeStatementResult(raw,sourceHash,filename);
+  if (account?.[1]) normalized.statement.accountNumber=account[1];
+  return normalized.transactions.length ? normalized : null;
 }
 
 function parseKaspiStatement(text, sourceHash, filename) {
@@ -191,9 +253,20 @@ aiAssistantRouter.post('/assistant/finance-statement', requireTrustedOrigin, asy
   const sourceHash=crypto.createHash('sha256').update(buffer).digest('hex');
   let parsed;
   try{parsed=await pdfParse(buffer)}catch{const error=new Error('Не удалось прочитать текст PDF');error.status=422;throw error}
-  const result=parseKaspiStatement(parsed?.text||'',sourceHash,filename);
-  if(!result){const error=new Error('Сейчас автоматически поддерживаются текстовые выписки Kaspi Gold. В этом PDF операции не распознаны.');error.status=422;throw error}
-  res.json({ok:true,...result,parser:'kaspi-local'});
+  let result=parseKaspiStatement(parsed?.text||'',sourceHash,filename),parser='kaspi-local';
+  if(!result){
+    result=parseBccStatement(parsed?.text||'',sourceHash,filename);
+    parser='bcc-local';
+  }
+  if(!result&&/(Банк\s+ЦентрКредит|centercredit|KCJBKZKX)/i.test(String(parsed?.text||''))){
+    try{
+      const layoutParsed=await pdfParse(buffer,{pagerender:renderPdfLayoutPage});
+      result=parseBccStatement(layoutParsed?.text||'',sourceHash,filename);
+      parser='bcc-local';
+    }catch{}
+  }
+  if(!result){const error=new Error('Сейчас автоматически поддерживаются текстовые выписки Kaspi Gold и BCC. В этом PDF операции не распознаны.');error.status=422;throw error}
+  res.json({ok:true,...result,parser});
 }));
 
 aiAssistantRouter.post('/assistant/chat', requireTrustedOrigin, asyncRoute(async (req,res)=>{
