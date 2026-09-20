@@ -521,6 +521,55 @@ financeLedgerRouter.post('/finance/accounts/:id/adjust-balance', requireTrustedO
   res.status(201).json({ok:true,...result});
 }));
 
+financeLedgerRouter.post('/finance/accounts/:id/move-operations', requireTrustedOrigin, requireWritesEnabled, asyncRoute(async (req,res)=>{
+  const sourceId=String(req.params.id),targetId=cleanText(req.body?.targetId,220),deleteSource=Boolean(req.body?.deleteSource);
+  if(!targetId||targetId===sourceId) throw httpError('Choose another destination account');
+  const result=await transaction(async client=>{
+    await lockFinance(client);
+    const ids=[sourceId,targetId].sort();
+    const locked=await client.query(`
+      SELECT id,name,balance,balance_default,currency,archived,payload,updated_at
+      FROM finance_accounts WHERE id=ANY($1::text[]) ORDER BY id FOR UPDATE
+    `,[ids]);
+    const map=new Map(locked.rows.map(row=>[String(row.id),row])),source=map.get(sourceId),target=map.get(targetId);
+    if(!source||!target) throw httpError('Finance account not found',404);
+    if(String(source.currency||'KZT')!==String(target.currency||'KZT')) throw httpError('Accounts must use the same currency');
+    if(deleteSource&&Math.abs(Number(source.balance||0))>.0000001) throw httpError('Move the remaining account balance before deleting the source account',409);
+
+    const rows=await client.query(`
+      SELECT id,sort_order,type,account_id,to_account_id,category_id,amount,default_amount,currency,
+        transaction_date,created_at,updated_at,statement_fingerprint,payload
+      FROM finance_transactions
+      WHERE account_id=$1 OR to_account_id=$1
+      ORDER BY sort_order,id
+      FOR UPDATE
+    `,[sourceId]);
+    let moved=0,removedInternal=0;const now=Date.now();
+    for(const row of rows.rows){
+      const before=transactionPayload(row),next={...before};
+      if(String(next.accountId)===sourceId){next.accountId=targetId;next.accountName=String(target.name||'');}
+      if(String(next.toAccountId)===sourceId){next.toAccountId=targetId;next.toAccountName=String(target.name||'');}
+      if(financeTransactionType(next)==='transfer'&&String(next.accountId)===String(next.toAccountId)){
+        await client.query('DELETE FROM finance_transactions WHERE id=$1',[row.id]);
+        await addAudit(client,'transaction',row.id,'delete-internal-after-account-move',before,null,now);
+        removedInternal++;
+        continue;
+      }
+      next.updatedAt=now;
+      await storeTransaction(client,next,row);
+      await addAudit(client,'transaction',row.id,'move-account',before,next,now);
+      moved++;
+    }
+    if(deleteSource){
+      await client.query('DELETE FROM finance_accounts WHERE id=$1',[sourceId]);
+      await addAudit(client,'account',sourceId,'delete-after-move',accountPayload(source),null,now);
+    }
+    const meta=await bumpRevision(client);
+    return {...meta,moved,removedInternal,deletedSource:deleteSource};
+  });
+  res.json({ok:true,...result});
+}));
+
 financeLedgerRouter.post('/finance/categories', requireTrustedOrigin, requireWritesEnabled, asyncRoute(async (req,res)=>{
   const result=await transaction(async client=>{
     await lockFinance(client);
