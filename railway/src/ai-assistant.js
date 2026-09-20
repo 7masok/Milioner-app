@@ -162,7 +162,7 @@ async function renderPdfLayoutPage(pageData) {
   return rows.map(row=>row.items.sort((a,b)=>a.x-b.x).map(x=>x.text).join(' ')).join('\n');
 }
 
-function parseBccStatement(text, sourceHash, filename) {
+export function parseBccStatement(text, sourceHash, filename) {
   const clean = cleanPdfText(text);
   if (!/(Банк\s+ЦентрКредит|centercredit|KCJBKZKX)/i.test(clean) || !/(Шот бойынша үзінді|выписка)/i.test(clean)) return null;
   const period = clean.match(/Кезеңі\s+(\d{2}\.\d{2}\.\d{4})\s*-\s*(\d{2}\.\d{2}\.\d{4})/i);
