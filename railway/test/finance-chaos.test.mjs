@@ -70,6 +70,15 @@ test('finance cache read failure is not treated as an authoritative empty databa
   assert.ok(html.includes("if(financeCacheReadFailed){try{const data=await fetchFinanceCloud(false)"));
 });
 
+test('legacy outbox create commands cannot swallow HTTP 409 anymore',()=>{
+  const src=extractFunction('financeNormalizeOutboxCommand');
+  const normalize=new Function(src+';return financeNormalizeOutboxCommand')();
+  assert.deepEqual(normalize({path:'/api/finance/transactions',method:'POST',acceptStatuses:[409,404]}).acceptStatuses,[404]);
+  assert.deepEqual(normalize({path:'/api/finance/accounts',method:'POST',acceptStatuses:[409]}).acceptStatuses,[]);
+  assert.deepEqual(normalize({path:'/api/finance/categories',method:'POST',acceptStatuses:[409]}).acceptStatuses,[]);
+  assert.deepEqual(normalize({path:'/api/finance/accounts/a/adjust-balance',method:'POST',acceptStatuses:[409]}).acceptStatuses,[409]);
+});
+
 test('outbox ACK is applied locally before the command is deleted',()=>{
   const sync=extractFunction('financeSyncOutbox');
   assert.match(sync,/await financeApplyServerAck\(data,cmd\);await financeOutboxDelete\(cmd.id\)/);
@@ -294,6 +303,22 @@ test('deleting an original transaction also queues deletion of linked refunds',(
   assert.match(src,/linkedRefunds=financeTransactions\(\)\.filter/);
   assert.match(src,/for\(const refund of linkedRefunds\)/);
   assert.match(src,/deleted\.map\(id=>financeCommand\('\/api\/finance\/transactions\//);
+});
+
+test('stable bank keys avoid fuzzy false positives but still protect legacy unkeyed history',()=>{
+  const names=['financeTransactionType','financeTransactionAmount','financeTransactionTime','financeStatementDateIsoFromTransaction','financeStatementNormalizeText','financeStatementTokens','financeStatementExactDuplicate','financeStatementLikelyDuplicate'];
+  const src=names.map(extractFunction).join('\n');
+  const run=new Function(src+`
+    const ts=new Date('2026-09-20T12:00:00').getTime();
+    let rows=[{id:'old-new-format',type:'expense',amount:100,title:'SHOP',createdAt:ts,bankOperationKey:'different-key'}];
+    function financeTransactions(){return rows}
+    const incoming={type:'expense',amount:100,title:'SHOP',date:'2026-09-20',bankOperationKey:'new-key'};
+    const againstKeyed=financeStatementLikelyDuplicate(incoming);
+    rows=[{id:'legacy',type:'expense',amount:100,title:'SHOP',createdAt:ts,source:'bank_statement'}];
+    const againstLegacy=financeStatementLikelyDuplicate(incoming);
+    return {againstKeyed,againstLegacy};
+  `);
+  assert.deepEqual(run(),{againstKeyed:false,againstLegacy:true});
 });
 
 test('statement-created account uses opening balance, not the ending balance twice',()=>{
