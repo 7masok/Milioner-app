@@ -316,18 +316,34 @@ async function storeTransaction(client, tx, existingRow = null) {
 async function createTransactionLocked(client, raw, { allowStatementDuplicate = true } = {}) {
   const tx = await canonicalTransaction(client, raw, null);
   const sameId = await getTransactionRow(client, tx.id, true);
-  if (sameId) throw httpError('Finance transaction already exists', 409);
+  if (sameId) {
+    const before = transactionPayload(sameId);
+    return { transaction: before, accountIds:[], repaired:false, skipped:true, idempotent:true };
+  }
 
   if (allowStatementDuplicate && (tx.statementFingerprint || tx.bankOperationKey)) {
     const duplicate = await findStatementDuplicate(client, tx);
     if (duplicate) {
       const before = transactionPayload(duplicate);
-      if (before.affectsBalance === false && tx.affectsBalance !== false) {
+      const repairBalance = before.affectsBalance === false && tx.affectsBalance !== false;
+      const promotePosted =
+        before.source === 'bank_statement' &&
+        tx.source === 'bank_statement' &&
+        String(before.bankStatus || '') === 'blocked' &&
+        String(tx.bankStatus || '') === 'posted';
+      if (repairBalance || promotePosted) {
+        const reversedIds = await applyEffects(client, before, -1);
         const repaired = await canonicalTransaction(client, { ...tx, id: before.id, createdAt: before.createdAt }, duplicate);
-        const accountIds = await applyEffects(client, repaired, 1);
+        const appliedIds = await applyEffects(client, repaired, 1);
         await storeTransaction(client, repaired, duplicate);
-        await addAudit(client, 'transaction', repaired.id, 'repair', before, repaired, repaired.updatedAt);
-        return { transaction: repaired, accountIds, repaired:true, skipped:false };
+        await addAudit(client, 'transaction', repaired.id, promotePosted ? 'promote-statement' : 'repair', before, repaired, repaired.updatedAt);
+        return {
+          transaction: repaired,
+          accountIds: [...new Set([...reversedIds, ...appliedIds])],
+          repaired:true,
+          promoted:promotePosted,
+          skipped:false
+        };
       }
       return { transaction: before, accountIds:[], repaired:false, skipped:true };
     }
