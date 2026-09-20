@@ -98,6 +98,11 @@ async function bumpRevision(client) {
   return { revision, updatedAt };
 }
 
+async function currentRevision(client) {
+  const meta = await client.query('SELECT revision,updated_at FROM finance_state_meta WHERE id=1');
+  return { revision:Number(meta.rows[0]?.revision||0), updatedAt:Number(meta.rows[0]?.updated_at||0) };
+}
+
 async function addAudit(client, entityType, entityId, action, beforePayload, afterPayload, createdAt = Date.now()) {
   const result = await client.query(`
     INSERT INTO finance_audit(entity_type,entity_id,action,before_payload,after_payload,created_at)
@@ -616,7 +621,7 @@ financeLedgerRouter.post('/finance/transactions', requireTrustedOrigin, requireW
     await lockFinance(client);
     const created=await createTransactionLocked(client,req.body?.transaction||req.body);
     if(created.skipped){
-      const meta=await bumpRevision(client);
+      const meta=await currentRevision(client);
       return {...meta,...created,accounts:[]};
     }
     const meta=await bumpRevision(client);
@@ -660,7 +665,7 @@ financeLedgerRouter.post('/finance/transactions/batch', requireTrustedOrigin, re
   const result=await transaction(async client=>{
     await lockFinance(client);
     const changedIds=new Set(),transactions=[],skipped=[];
-    let repaired=0;
+    let repaired=0,changed=0;
     for(const raw of rows){
       const id=cleanText(raw?.id,220);
       const existing=id?await getTransactionRow(client,id,true):null;
@@ -669,15 +674,17 @@ financeLedgerRouter.post('/finance/transactions/batch', requireTrustedOrigin, re
         item=await updateTransactionLocked(client,id,raw);
         transactions.push(item.transaction);
         item.accountIds.forEach(x=>changedIds.add(x));
+        changed++;
         continue;
       }
       item=await createTransactionLocked(client,raw,{allowStatementDuplicate:true});
       if(item.skipped){skipped.push(String(item.transaction?.id||''));continue}
       if(item.repaired)repaired++;
       transactions.push(item.transaction);
+      changed++;
       item.accountIds.forEach(x=>changedIds.add(x));
     }
-    const meta=await bumpRevision(client);
+    const meta=changed?await bumpRevision(client):await currentRevision(client);
     const accounts=await readChangedAccounts(client,[...changedIds]);
     return {...meta,transactions,accounts,skipped,repaired};
   });
