@@ -18,3 +18,8 @@ test('finance render isolates analytics and journal panels',()=>{
 test('finance journal empty state is controlled by renderer',()=>{
   assert.match(html,/По выбранным фильтрам операций нет/);
 });
+
+test('uncategorized income and expenses still count in analytics',()=>{
+  assert.match(html,/function financeCountsInIncomeExpense\(x\).*return true}/s);
+  assert.match(html,/value="__uncategorized__">Без категории/);
+});
