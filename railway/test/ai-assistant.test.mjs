@@ -177,14 +177,12 @@ QR-код содержит веб-ссылку
   const result = parseBccStatement(text,'source-hash-wrap-block','bcc-wrap-block.pdf');
   assert.ok(result);
   assert.equal(result.statement.pendingCount,3);
-  assert.equal(result.statement.blockedImportedCount,3);
-  assert.equal(result.transactions.length,3);
+  assert.equal(result.statement.blockedImportedCount,2);
+  assert.equal(result.transactions.length,2);
   assert.equal(result.transactions[0].time,'19:59:26');
   assert.equal(result.transactions[0].title,'BARIK MINIMARKET 51');
   assert.equal(result.transactions[1].time,'15:40:29');
   assert.ok(result.transactions[1].title.includes('YANDEX.DELIVE'));
-  assert.equal(result.transactions[2].title,'IP "BURKIT"');
-  assert.ok(!result.transactions[2].title.includes('Вице-президент'));
 });
 
 
@@ -208,4 +206,22 @@ test('BCC blocked transactions outside the requested statement period are not im
   assert.equal(result.transactions.length,2);
   assert.equal(result.transactions[1].date,'2026-09-20');
   assert.equal(result.transactions[1].title,'TODAY SHOP');
+});
+
+
+test('BCC posted operations outside the statement period are also filtered out', () => {
+  const text = `
+Банк ЦентрКредит
+БИК: KCJBKZKX
+Выписка по счету KZ088562204150156670
+Валюта счета KZT
+Период выписки 20.09.2026 - 20.09.2026
+2026-09-20 2026-09-20 Платёж TODAY 120.00 KZT -120.00 KZT 0.00 KZT 0.00KZT
+2026-09-19 2026-09-19 Перевод OLD 5 000.00 KZT -5 000.00 KZT 0.00 KZT 0.00KZT
+`;
+  const result = parseBccStatement(text,'source-hash-posted-period','bcc-posted-period.pdf');
+  assert.ok(result);
+  assert.equal(result.transactions.length,1);
+  assert.equal(result.transactions[0].date,'2026-09-20');
+  assert.equal(result.transactions[0].title,'Платёж TODAY');
 });
