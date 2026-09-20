@@ -182,6 +182,17 @@ function bccOperationKey(date,title,originalAmount,originalCurrency,occurrence=1
   const base=[String(date||''),bccStableTitle(title),Math.abs(Number(originalAmount)||0).toFixed(2),String(originalCurrency||'').toUpperCase(),occurrence].join('|');
   return crypto.createHash('sha256').update('bcc|'+base).digest('hex').slice(0,48);
 }
+function statementOperationKey(prefix,date,time,type,amount,title,occurrence=1){
+  const base=[
+    normalizeStatementDate(date),
+    normalizeStatementTime(time),
+    String(type||'').toLowerCase(),
+    Math.abs(Number(amount)||0).toFixed(2),
+    bccStableTitle(title),
+    occurrence
+  ].join('|');
+  return crypto.createHash('sha256').update(String(prefix||'bank')+'|'+base).digest('hex').slice(0,48);
+}
 function bccDateIso(value){
   const m=String(value||'').match(/^(\d{2})\.(\d{2})\.(\d{4})$/);
   return m?m[3]+'-'+m[2]+'-'+m[1]:'';
@@ -340,13 +351,14 @@ export function parseBccStatement(text, sourceHash, filename) {
   return normalized.transactions.length ? normalized : null;
 }
 
-function parseKaspiStatement(text, sourceHash, filename) {
+export function parseKaspiStatement(text, sourceHash, filename) {
   const clean=cleanPdfText(text);
   if(!/Kaspi\s+Gold/i.test(clean)||!/ВЫПИСКА/i.test(clean))return null;
   const period=clean.match(/за период с\s*(\d{2}\.\d{2}\.\d{2,4})\s*по\s*(\d{2}\.\d{2}\.\d{2,4})/i);
   const account=clean.match(/Номер счета:\s*([A-Z0-9]+)/i);
   const card=clean.match(/Номер карты:\s*([^\s]+)/i);
   const raw={bank:'Kaspi Bank',accountName:card?'Kaspi Gold '+card[1]:'Kaspi Gold',currency:'KZT',periodStart:period?.[1]||'',periodEnd:period?.[2]||'',transactions:[]};
+  const occurrence=new Map();
   for(const row of kaspiOperationRows(clean)){
     const lower=row.rest.toLowerCase();
     let type=row.sign==='-'?'expense':'income',transferDirection='',title=row.rest,note='';
@@ -364,7 +376,19 @@ function parseKaspiStatement(text, sourceHash, filename) {
       title=row.rest.replace(/^поступление\s*/i,'').trim()||'Поступление';
       note='Поступление';
     }
-    raw.transactions.push({date:row.date,time:row.time,type,transferDirection,amount:row.amount,title,note,categoryName:''});
+    const base=[
+      normalizeStatementDate(row.date),
+      normalizeStatementTime(row.time),
+      type,
+      Number(row.amount).toFixed(2),
+      bccStableTitle(title)
+    ].join('|');
+    const n=(occurrence.get(base)||0)+1;occurrence.set(base,n);
+    raw.transactions.push({
+      date:row.date,time:row.time,type,transferDirection,amount:row.amount,title,note,categoryName:'',
+      bankStatus:'posted',
+      bankOperationKey:statementOperationKey('kaspi',row.date,row.time,type,row.amount,title,n)
+    });
   }
   const normalized=normalizeStatementResult(raw,sourceHash,filename);
   if(account?.[1])normalized.statement.accountNumber=account[1];
