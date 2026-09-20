@@ -48,3 +48,59 @@ test('BCC statement parser reads posted operations and skips blocked ones', () =
   assert.equal(result.transactions[0].type,'expense');
   assert.equal(result.transactions[0].title,'Аударым Тимур К.');
 });
+
+
+test('BCC English statement parser reads the English app language format', () => {
+  const text = `
+Bank CenterCredit JSC
+BIC: KCJBKZKX
+Account statement KZ088562204150156670
+Account currency KZT
+Account type #bccpay
+Payment card number 489993******2297
+Statement period 13.09.2026 - 20.09.2026
+2026-09-20 2026-09-20 Transfer to Тимур К. 45 000.00 KZT -45 000.00 KZT 0.00 KZT 0.00KZT
+2026-09-20 2026-09-20 Payment 120.00 KZT -120.00 KZT 0.00 KZT 0.00KZT
+2026-09-14 2026-09-14 Transfer 77 000.00 KZT 77 000.00 KZT 0.00 KZT 0.00KZT
+Transactions on hold
+20.09.2026 19:59:26 pending BARIK MINIMARKET 51 1 565.00 KZT pending 0.00 KZT
+19.09.2026 18:16:06 pending ZERDE PHARMA LLP 1 800.00 KZT pending 0.00 KZT
+`;
+  const result = parseBccStatement(text,'source-hash-en','bcc-en.pdf');
+  assert.ok(result);
+  assert.equal(result.statement.language,'en');
+  assert.equal(result.statement.accountNumber,'KZ088562204150156670');
+  assert.equal(result.statement.accountName,'BCC 489993******2297');
+  assert.equal(result.statement.periodStart,'2026-09-13');
+  assert.equal(result.statement.periodEnd,'2026-09-20');
+  assert.equal(result.statement.pendingCount,2);
+  assert.equal(result.transactions.length,3);
+  assert.equal(result.transactions[0].date,'2026-09-20');
+  assert.equal(result.transactions[0].note,'Перевод');
+  assert.equal(result.transactions[2].type,'income');
+  assert.equal(result.transactions[2].amount,77000);
+});
+
+test('BCC Russian statement parser accepts Russian headings and blocked section', () => {
+  const text = `
+Банк ЦентрКредит
+БИК: KCJBKZKX
+Выписка по счету KZ088562204150156670
+Валюта счета KZT
+Тип счета #bccpay
+Номер платежной карты 489993******2297
+Период выписки 13.09.2026 - 20.09.2026
+2026-09-20 2026-09-20 Перевод Тимур К. 45 000.00 KZT -45 000.00 KZT 0.00 KZT 0.00KZT
+2026-09-18 2026-09-19 Покупка YANDEX.DELIVERY 1 910.00 KZT -1 910.00 KZT 0.00 KZT 19.10KZT
+2026-09-14 2026-09-14 Перевод 77 000.00 KZT 77 000.00 KZT 0.00 KZT 0.00KZT
+Заблокированные транзакции
+20.09.2026 19:59:26 ожидает BARIK MINIMARKET 51 1 565.00 KZT
+`;
+  const result = parseBccStatement(text,'source-hash-ru','bcc-ru.pdf');
+  assert.ok(result);
+  assert.equal(result.statement.language,'ru');
+  assert.equal(result.statement.pendingCount,1);
+  assert.equal(result.transactions.length,3);
+  assert.equal(result.transactions[1].note,'Покупка');
+  assert.equal(result.transactions[2].type,'income');
+});
