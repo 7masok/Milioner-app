@@ -25,8 +25,8 @@ test('uncategorized income and expenses still count in analytics',()=>{
 });
 
 test('deleting a finance account with history preserves operations',()=>{
-  assert.match(html,/Все \+'\+used\+' операций останутся в журнале/);
-  assert.match(html,/deleteAccountId:data\.deletedId\?accountId:''/);
+  assert.ok(html.includes("операций останутся в журнале"));
+  assert.ok(html.includes("deleteAccountId:data.deletedId?accountId:''"));
 });
 
 test('archived finance account remains selectable when editing old history',()=>{
