@@ -5,6 +5,7 @@ import { reconcileMarketplaceSales } from './marketplace-sale-reconcile.js';
 import { configuredWbConnectionIds, credentialFor } from './connections.js';
 import { financeRowsFromPayload, promotionCostDay, promotionCostRowsFromPayload } from './wb-finance.js';
 import { syncWbStockMarket } from './wb-stock-sync.js';
+import { cacheWbOrderStickers } from './wb-returns.js';
 
 const WB_API = 'https://marketplace-api.wildberries.ru';
 const WB_FINANCE_API = 'https://finance-api.wildberries.ru';
@@ -533,6 +534,9 @@ export async function syncWbOrders(market, { force = false } = {}) {
     const runId = created.rows[0].id;
     try {
       const rows = await fetchOrders(market, token);
+      let stickerCache = null;
+      try { stickerCache = await cacheWbOrderStickers(market, token, rows); }
+      catch (error) { console.warn(`WB sticker cache failed (${market})`, String(error?.message || error)); }
       await upsert(market, rows);
       const finance = await syncFinanceReport(market, token);
       // Live sales was added only as a diagnostic cross-check. It is not used by
@@ -559,7 +563,7 @@ export async function syncWbOrders(market, { force = false } = {}) {
       }
       const finishedAt = Date.now();
       await pool.query("UPDATE sync_runs SET finished_at=$1,ok=1,items=$2,error='' WHERE id=$3", [finishedAt, rows.length, runId]);
-      return { ok: true, market, items: rows.length, ...finance, ...liveSales, reservationReconcile, saleReconcile, stockSync, finishedAt, nextSyncAt: finishedAt + SYNC_MS };
+      return { ok: true, market, items: rows.length, stickerCache, ...finance, ...liveSales, reservationReconcile, saleReconcile, stockSync, finishedAt, nextSyncAt: finishedAt + SYNC_MS };
     } catch (error) {
       const message = String(error?.message || error).slice(0, 2000);
       await pool.query('UPDATE sync_runs SET finished_at=$1,ok=0,error=$2 WHERE id=$3', [Date.now(), message, runId]).catch(() => {});
