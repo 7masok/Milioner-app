@@ -125,7 +125,8 @@ function normalizeStatementResult(raw, sourceHash, filename) {
       periodStart: normalizeStatementDate(raw?.periodStart),
       periodEnd: normalizeStatementDate(raw?.periodEnd),
       pendingCount: Math.max(0,Number(raw?.pendingCount)||0),
-      blockedImportedCount: Math.max(0,Number(raw?.blockedImportedCount)||0)
+      blockedImportedCount: Math.max(0,Number(raw?.blockedImportedCount)||0),
+      currentBalance: Number.isFinite(Number(raw?.currentBalance)) ? Number(raw.currentBalance) : null
     },
     transactions
   };
@@ -261,6 +262,7 @@ export function parseBccStatement(text, sourceHash, filename) {
   const card = clean.match(/(?:Карта|Номер\s+(?:платежной\s+)?карты|Payment\s+card\s+number)\s*[:№#-]?\s*([0-9*]{8,})/i);
   const currency = clean.match(/(?:Валюта(?:\s+сч[её]та)?|Шот\s+валютасы|Account\s+currency)\s*[:\-]?\s*([A-Z]{3})/i);
   const accountType = clean.match(/(?:Тип\s+сч[её]та|Шот\s+түрі|Account\s+type)\s*[:\-]?\s*([^\n]+)/i);
+  const currentBalanceMatch = clean.match(/(?:Текущий\s+остаток|Ағымдағы\s+қалдық|Current\s+balance)\s*[:\-]?\s*([\d ]+\.\d{2})\s*([A-Z]{3})?/i);
 
   const blockedRx = /(?:Блоктағы транзакциялар|Заблокированные\s+(?:операции|транзакции)|Транзакции\s+в\s+блоке|Операции\s+в\s+блоке|Transactions\s+on\s+hold)/i;
   const blockedMatch = blockedRx.exec(clean);
@@ -277,6 +279,7 @@ export function parseBccStatement(text, sourceHash, filename) {
     periodEnd:period?.[2] || '',
     pendingCount,
     blockedImportedCount:0,
+    currentBalance: currentBalanceMatch ? Number(String(currentBalanceMatch[1]).replace(/\s+/g,'')) : null,
     transactions:[]
   };
 
@@ -323,6 +326,9 @@ export function parseBccStatement(text, sourceHash, filename) {
   const blockedRows=blockedRowsAll.filter(row=>(!periodStartIso||row.date>=periodStartIso)&&(!periodEndIso||row.date<=periodEndIso));
   raw.blockedImportedCount=blockedRows.length;
   raw.transactions.push(...blockedRows);
+  if(periodStartIso||periodEndIso){
+    raw.transactions=raw.transactions.filter(row=>(!periodStartIso||String(row.date||'')>=periodStartIso)&&(!periodEndIso||String(row.date||'')<=periodEndIso));
+  }
 
   const normalized = normalizeStatementResult(raw,sourceHash,filename);
   if (account?.[1]) normalized.statement.accountNumber=account[1];
