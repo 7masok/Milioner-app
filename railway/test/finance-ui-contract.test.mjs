@@ -23,3 +23,12 @@ test('uncategorized income and expenses still count in analytics',()=>{
   assert.match(html,/function financeCountsInIncomeExpense\(x\).*return true}/s);
   assert.match(html,/value="__uncategorized__">Без категории/);
 });
+
+test('deleting a finance account with history preserves operations',()=>{
+  assert.match(html,/Все \+'\+used\+' операций останутся в журнале/);
+  assert.match(html,/deleteAccountId:data\.deletedId\?accountId:''/);
+});
+
+test('archived finance account remains selectable when editing old history',()=>{
+  assert.match(html,/x\.archived\?' · удалённый':'/);
+});

@@ -490,12 +490,22 @@ financeLedgerRouter.delete('/finance/accounts/:id', requireTrustedOrigin, requir
     const row=await getAccountRow(client,req.params.id,true);
     if(!row) throw httpError('Finance account not found',404);
     const used=await client.query('SELECT COUNT(*)::bigint AS n FROM finance_transactions WHERE account_id=$1 OR to_account_id=$1',[req.params.id]);
-    if(Number(used.rows[0]?.n||0)>0) throw httpError('Account is used by finance transactions',409);
-    const before=accountPayload(row),now=Date.now();
+    const usageCount=Number(used.rows[0]?.n||0),before=accountPayload(row),now=Date.now();
+    if(usageCount>0){
+      const account={...before,archived:true,ignoreInBalance:true,updatedAt:now};
+      delete account._syncUpdatedAt;
+      await client.query(
+        'UPDATE finance_accounts SET archived=true,payload=$2::jsonb,updated_at=$3 WHERE id=$1',
+        [req.params.id,JSON.stringify(account),now]
+      );
+      await addAudit(client,'account',req.params.id,'archive-keep-history',before,account,now);
+      const meta=await bumpRevision(client);
+      return {...meta,account,archived:true,usageCount};
+    }
     await client.query('DELETE FROM finance_accounts WHERE id=$1',[req.params.id]);
     await addAudit(client,'account',req.params.id,'delete',before,null,now);
     const meta=await bumpRevision(client);
-    return {...meta,deletedId:String(req.params.id)};
+    return {...meta,deletedId:String(req.params.id),archived:false,usageCount:0};
   });
   res.json({ok:true,...result});
 }));
