@@ -43,9 +43,9 @@ test('BCC statement parser includes blocked operations as spent', () => {
   assert.equal(result.statement.bank,'Bank CenterCredit');
   assert.equal(result.statement.currency,'KZT');
   assert.equal(result.statement.pendingCount,2);
-  assert.equal(result.statement.blockedImportedCount,2);
-  assert.equal(result.transactions.length,5);
-  assert.equal(result.transactions.reduce((sum,x)=>sum+x.amount,0),56038.21);
+  assert.equal(result.statement.blockedImportedCount,1);
+  assert.equal(result.transactions.length,4);
+  assert.equal(result.transactions.reduce((sum,x)=>sum+x.amount,0),54238.21);
   assert.equal(result.transactions[0].type,'expense');
   assert.equal(result.transactions[0].title,'Аударым Тимур К.');
 });
@@ -185,4 +185,27 @@ QR-код содержит веб-ссылку
   assert.ok(result.transactions[1].title.includes('YANDEX.DELIVE'));
   assert.equal(result.transactions[2].title,'IP "BURKIT"');
   assert.ok(!result.transactions[2].title.includes('Вице-президент'));
+});
+
+
+test('BCC blocked transactions outside the requested statement period are not imported', () => {
+  const text = `
+Банк ЦентрКредит
+БИК: KCJBKZKX
+Выписка по счету KZ088562204150156670
+Валюта счета KZT
+Период выписки 20.09.2026 - 20.09.2026
+2026-09-20 2026-09-20 Платёж 120.00 KZT -120.00 KZT 0.00 KZT 0.00KZT
+Транзакции в блоке
+20.09.2026 ожидается TODAY SHOP 1 000.00 KZT 0.00 0.00 10.00
+19.09.2026 ожидается YESTERDAY SHOP 2 000.00 KZT 0.00 0.00 20.00
+18.09.2026 ожидается OLD SHOP 3 000.00 KZT 0.00 0.00 30.00
+`;
+  const result = parseBccStatement(text,'source-hash-period','bcc-period.pdf');
+  assert.ok(result);
+  assert.equal(result.statement.pendingCount,3);
+  assert.equal(result.statement.blockedImportedCount,1);
+  assert.equal(result.transactions.length,2);
+  assert.equal(result.transactions[1].date,'2026-09-20');
+  assert.equal(result.transactions[1].title,'TODAY SHOP');
 });

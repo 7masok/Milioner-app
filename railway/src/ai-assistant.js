@@ -318,7 +318,9 @@ export function parseBccStatement(text, sourceHash, filename) {
     });
   }
 
-  const blockedRows=parseBccBlockedRows(pending,raw.currency);
+  const periodStartIso=normalizeStatementDate(raw.periodStart),periodEndIso=normalizeStatementDate(raw.periodEnd);
+  const blockedRowsAll=parseBccBlockedRows(pending,raw.currency);
+  const blockedRows=blockedRowsAll.filter(row=>(!periodStartIso||row.date>=periodStartIso)&&(!periodEndIso||row.date<=periodEndIso));
   raw.blockedImportedCount=blockedRows.length;
   raw.transactions.push(...blockedRows);
 
