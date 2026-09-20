@@ -394,7 +394,10 @@ financeRouter.get('/finance-state', requireTrustedOrigin, asyncRoute(async (req,
       updatedAt: Number(meta.rows[0]?.updated_at || 0)
     });
   }
-  const state = await transaction(client => readFinanceState(client));
+  const state = await transaction(async client => {
+    await client.query('SELECT pg_advisory_xact_lock($1)', [730024]);
+    return readFinanceState(client);
+  });
   const exists = state.revision > 0 || state.accounts.length > 0 || state.categories.length > 0 || state.transactions.length > 0 || Object.keys(state.imports).length > 0;
   return res.json({ ok: true, exists, ...state });
 }));
