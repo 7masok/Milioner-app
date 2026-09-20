@@ -225,3 +225,33 @@ test('BCC posted operations outside the statement period are also filtered out',
   assert.equal(result.transactions[0].date,'2026-09-20');
   assert.equal(result.transactions[0].title,'Платёж TODAY');
 });
+
+
+test('BCC blocked and later posted form of the same operation keep one stable bank key', () => {
+  const blockedText = `
+Банк ЦентрКредит
+БИК: KCJBKZKX
+Выписка по счету KZ088562204150156670
+Валюта счета KZT
+Период выписки 20.09.2026 - 20.09.2026
+Транзакции в блоке
+20.09.2026 ожидается BARIK MINIMARKET 51 1 565.00 KZT 0.00 0.00 15.65
+19:59:26
+`;
+  const postedText = `
+Банк ЦентрКредит
+БИК: KCJBKZKX
+Выписка по счету KZ088562204150156670
+Валюта счета KZT
+Период выписки 20.09.2026 - 20.09.2026
+2026-09-20 2026-09-20 Покупка BARIK MINIMARKET 51 1 565.00 KZT -1 565.00 KZT 0.00 KZT 15.65KZT
+`;
+  const blocked=parseBccStatement(blockedText,'blocked-file-hash','blocked.pdf');
+  const posted=parseBccStatement(postedText,'posted-file-hash','posted.pdf');
+  assert.ok(blocked?.transactions?.length===1);
+  assert.ok(posted?.transactions?.length===1);
+  assert.equal(blocked.transactions[0].bankStatus,'blocked');
+  assert.equal(posted.transactions[0].bankStatus,'posted');
+  assert.equal(blocked.transactions[0].bankOperationKey,posted.transactions[0].bankOperationKey);
+  assert.notEqual(blocked.transactions[0].statementFingerprint,posted.transactions[0].statementFingerprint);
+});
