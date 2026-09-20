@@ -27,7 +27,9 @@ export function financeTransactionEffects(transaction) {
   if (type === 'adjustment') {
     const signed = financeNumber(tx.amount, NaN);
     if (!Number.isFinite(signed) || Math.abs(signed) < 0.0000001) throw Object.assign(new Error('Adjustment amount must be non-zero'), { status: 400 });
-    return [{ accountId, delta: signed, defaultDelta: financeNumber(tx.defaultAmount, NaN) }];
+    const rawDefault = financeNumber(tx.defaultAmount, NaN);
+    const defaultDelta = Number.isFinite(rawDefault) ? Math.abs(rawDefault) * Math.sign(signed) : NaN;
+    return [{ accountId, delta: signed, defaultDelta }];
   }
 
   if (!(amount > 0)) throw Object.assign(new Error('Finance transaction amount must be greater than zero'), { status: 400 });
