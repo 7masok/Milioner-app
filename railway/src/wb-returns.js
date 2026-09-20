@@ -74,15 +74,23 @@ export async function cacheWbOrderStickers(market,token,orders){
 
 function lookupVariants(value){
   const raw=String(value||'').trim();
-  const compact=raw.replace(/\s+/g,'');
-  const alnum=raw.replace(/[^a-zA-Z0-9!@#$%^&*()_+\-=.:/]+/g,'');
-  const digits=raw.replace(/\D+/g,'');
-  return [...new Set([raw,compact,alnum,digits].filter(Boolean))];
+  const values=new Set();
+  const add=v=>{v=String(v||'').trim();if(v)values.add(v)};
+  add(raw);
+  try{add(decodeURIComponent(raw))}catch{}
+  for(const token of raw.split(/[\s;|,?&#=:/]+/))add(token);
+  for(const source of [...values]){
+    add(source.replace(/\s+/g,''));
+    add(source.replace(/[^a-zA-Z0-9!@#$%^&*()_+\-=.:/]+/g,''));
+    add(source.replace(/\D+/g,''));
+  }
+  return [...values].filter(Boolean).slice(0,60);
 }
 
 wbReturnsRouter.get('/wb-return-lookup',requireTrustedOrigin,asyncRoute(async(req,res)=>{
-  const market=normalizeMarket(req.query.market);
-  if(!/^WB(?:[2-9]\d*|1\d+)?$/.test(market))return res.status(400).json({ok:false,error:'Некорректный WB-магазин'});
+  const requestedMarket=normalizeMarket(req.query.market);
+  const markets=requestedMarket==='ALL'?['WB','WB2']:[requestedMarket];
+  if(!markets.every(market=>/^WB(?:[2-9]\d*|1\d+)?$/.test(market)))return res.status(400).json({ok:false,error:'Некорректный WB-магазин'});
   const code=String(req.query.code||'').trim();
   if(!code)return res.status(400).json({ok:false,error:'Введите или отсканируйте код'});
   const variants=lookupVariants(code);
@@ -94,24 +102,27 @@ wbReturnsRouter.get('/wb-return-lookup',requireTrustedOrigin,asyncRoute(async(re
     FROM marketplace_order_lines o
     LEFT JOIN product_links pl ON pl.market=o.market AND pl.sku=o.sku
     LEFT JOIN wb_order_stickers s ON s.market=o.market AND s.order_id=o.order_id
-    WHERE o.market=$1 AND (
+    WHERE o.market = ANY($1::text[]) AND (
       o.order_id = ANY($2::text[]) OR o.code = ANY($2::text[]) OR o.entry_id = ANY($2::text[])
       OR s.barcode = ANY($2::text[])
+      OR s.part_a = ANY($2::text[]) OR s.part_b = ANY($2::text[])
       OR (s.part_a || s.part_b) = ANY($2::text[])
+      OR (s.part_a || '-' || s.part_b) = ANY($2::text[])
     )
     ORDER BY o.creation_date DESC
-    LIMIT 10
-  `,[market,variants]);
+    LIMIT 20
+  `,[markets,variants]);
 
   if(!rows.rowCount)return res.status(404).json({
     ok:false,
-    error:'WB-заказ по этому коду не найден. Для старых заказов, созданных до сохранения WB-стикеров, введите номер сборочного задания вручную.'
+    error:'WB-заказ по этому QR/коду не найден. Если это старый стикер, связь могла ещё не сохраниться; попробуйте номер сборочного задания.'
   });
 
   const unique=new Map();
-  for(const row of rows.rows)unique.set(String(row.orderId),row);
-  if(unique.size>1)return res.status(409).json({ok:false,error:'По этому коду найдено несколько WB-заказов. Введите номер сборочного задания.'});
+  for(const row of rows.rows)unique.set(String(row.market)+':'+String(row.orderId),row);
+  if(unique.size>1)return res.status(409).json({ok:false,error:'По этому QR/коду найдено несколько WB-заказов. Выберите WB1/WB2 и введите номер сборочного задания.'});
   const row=[...unique.values()][0];
+  const market=String(row.market);
   const externalKey=market+':'+String(row.orderId)+':'+String(row.entryId);
   const sold=await pool.query(`
     SELECT 1
