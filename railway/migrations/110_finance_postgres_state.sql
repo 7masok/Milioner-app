@@ -105,7 +105,7 @@ BEGIN
     CASE WHEN COALESCE(item->>'balance','') ~ '^-?[0-9]+([.][0-9]+)?$' THEN (item->>'balance')::numeric ELSE 0 END,
     CASE WHEN COALESCE(item->>'balanceDefault','') ~ '^-?[0-9]+([.][0-9]+)?$' THEN (item->>'balanceDefault')::numeric ELSE NULL END,
     COALESCE(NULLIF(item->>'currency',''),'KZT'),
-    COALESCE((item->>'archived')::boolean,false),
+    CASE WHEN lower(COALESCE(item->>'archived','false'))='true' THEN true ELSE false END,
     item,
     CASE
       WHEN COALESCE(item->>'updatedAt','') ~ '^[0-9]+$' THEN (item->>'updatedAt')::bigint
@@ -175,7 +175,7 @@ BEGIN
   IF jsonb_array_length(accounts_json) > 0
      OR jsonb_array_length(categories_json) > 0
      OR jsonb_array_length(transactions_json) > 0
-     OR jsonb_object_length(imports_json) > 0 THEN
+     OR imports_json <> '{}'::jsonb THEN
     INSERT INTO finance_state_meta(id,revision,updated_at)
     VALUES(1,1,now_ms)
     ON CONFLICT(id) DO NOTHING;
