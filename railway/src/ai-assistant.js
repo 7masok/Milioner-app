@@ -265,7 +265,8 @@ export function parseBccStatement(text, sourceHash, filename) {
   const blockedRx = /(?:Блоктағы транзакциялар|Заблокированные\s+(?:операции|транзакции)|Транзакции\s+в\s+блоке|Операции\s+в\s+блоке|Transactions\s+on\s+hold)/i;
   const blockedMatch = blockedRx.exec(clean);
   const posted = blockedMatch ? clean.slice(0,blockedMatch.index) : clean;
-  const pending = blockedMatch ? clean.slice(blockedMatch.index + blockedMatch[0].length) : '';
+  const pendingRaw = blockedMatch ? clean.slice(blockedMatch.index + blockedMatch[0].length) : '';
+  const pending = pendingRaw.split(/(?:Вице-президент|Vice\s+President|QR-код|QR\s*code)/i)[0] || '';
   const pendingCount = (pending.match(/\b\d{2}\.\d{2}\.\d{4}\b/g) || []).length;
 
   const raw = {
