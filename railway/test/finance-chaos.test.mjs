@@ -49,7 +49,8 @@ function extractFunction(name){
 test('all finance mutation entrypoints are local-first',()=>{
   const localFirst=[
     'saveFinanceAdjustment','saveFinanceAccount','financeDeleteAccount',
-    'financeExecuteMoveAccountOperations','saveFinanceCategory','financeDeleteCategory',
+    'financeSetAccountIncludedInTotal','financeExecuteMoveAccountOperations',
+    'saveFinanceCategory','financeDeleteCategory','financeSetCategoryIncludedInTotal',
     'saveFinanceTransaction','saveFinanceTransfer','saveFinanceAdjustmentTransaction',
     'financeDeleteTransaction','financeStatementRememberAccount',
     'financeStatementCreateAccountFromStatement','financeImportStatementDraft'
@@ -73,6 +74,14 @@ test('outbox ACK is applied locally before the command is deleted',()=>{
   const sync=extractFunction('financeSyncOutbox');
   assert.match(sync,/await financeApplyServerAck\(data,cmd\);await financeOutboxDelete\(cmd.id\)/);
   assert.match(sync,/await financeReconcileFromServer\(\)/);
+});
+
+test('idle reconciliation checks revision before downloading the full ledger',()=>{
+  const src=extractFunction('financeReconcileFromServer');
+  assert.match(src,/fetchFinanceCloud\(true\)/);
+  assert.match(src,/revision<=financeRemoteRevision/);
+  const sync=extractFunction('financeSyncOutbox');
+  assert.match(sync,/financeReconcileFromServer\(\{force:true\}\)/);
 });
 
 test('server reconciliation adds remote-only rows without deleting local-only rows',()=>{
