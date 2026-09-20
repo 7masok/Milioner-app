@@ -164,35 +164,53 @@ async function renderPdfLayoutPage(pageData) {
 
 export function parseBccStatement(text, sourceHash, filename) {
   const clean = cleanPdfText(text);
-  if (!/(Банк\s+ЦентрКредит|centercredit|KCJBKZKX)/i.test(clean) || !/(Шот бойынша үзінді|выписка)/i.test(clean)) return null;
-  const period = clean.match(/Кезеңі\s+(\d{2}\.\d{2}\.\d{4})\s*-\s*(\d{2}\.\d{2}\.\d{4})/i);
-  const account = clean.match(/Шот бойынша үзінді\s+([A-Z0-9]+)/i);
-  const card = clean.match(/Карта\s+([0-9*]+)/i);
-  const currency = clean.match(/Валюта\s+([A-Z]{3})/i);
-  const blockedSplit = clean.split(/Блоктағы транзакциялар/i);
-  const posted = blockedSplit[0] || clean;
-  const pending = blockedSplit[1] || '';
-  const pendingCount = (pending.match(/\d{2}\.\d{2}\.\d{4}/g) || []).length;
+  const bankMatch = /(Банк\s+ЦентрКредит|Bank\s+CenterCredit|centercredit|KCJBKZKX)/i.test(clean);
+  const statementMatch = /(Шот бойынша үзінді|Выписка\s+по\s+сч[её]ту|Выписка|Account\s+statement)/i.test(clean);
+  if (!bankMatch || !statementMatch) return null;
+
+  const period = clean.match(/(?:Кезеңі|Период(?:\s+выписки)?|Statement\s+period)\s*[:\-]?\s*(\d{2}\.\d{2}\.\d{4})\s*[-–—]\s*(\d{2}\.\d{2}\.\d{4})/i);
+  const account = clean.match(/(?:Шот бойынша үзінді|Выписка\s+по\s+сч[её]ту|Account\s+statement)\s*[:№#-]?\s*([A-Z]{2}\d{10,})/i);
+  const card = clean.match(/(?:Карта|Номер\s+(?:платежной\s+)?карты|Payment\s+card\s+number)\s*[:№#-]?\s*([0-9*]{8,})/i);
+  const currency = clean.match(/(?:Валюта(?:\s+сч[её]та)?|Шот\s+валютасы|Account\s+currency)\s*[:\-]?\s*([A-Z]{3})/i);
+  const accountType = clean.match(/(?:Тип\s+сч[её]та|Шот\s+түрі|Account\s+type)\s*[:\-]?\s*([^\n]+)/i);
+
+  const blockedRx = /(?:Блоктағы транзакциялар|Заблокированные\s+(?:операции|транзакции)|Транзакции\s+в\s+блоке|Операции\s+в\s+блоке|Transactions\s+on\s+hold)/i;
+  const blockedMatch = blockedRx.exec(clean);
+  const posted = blockedMatch ? clean.slice(0,blockedMatch.index) : clean;
+  const pending = blockedMatch ? clean.slice(blockedMatch.index + blockedMatch[0].length) : '';
+  const pendingCount = (pending.match(/\b\d{2}\.\d{2}\.\d{4}\b/g) || []).length;
+
   const raw = {
     bank:'Bank CenterCredit',
-    accountName:card ? 'BCC '+card[1] : '#bccpay',
+    accountName:card ? 'BCC '+card[1] : (accountType?.[1]?.trim() || '#bccpay'),
     currency:currency?.[1] || 'KZT',
     periodStart:period?.[1] || '',
     periodEnd:period?.[2] || '',
     pendingCount,
     transactions:[]
   };
-  const rowRx = /^\s*\d{4}-\d{2}-\s+(\d{4}-\d{2}-\d{2})\s+(.+?)\s+([\d ]+\.\d{2})\s+([+-]?[\d ]+\.\d{2})(?:\s|$)/gmi;
-  for (const m of posted.matchAll(rowRx)) {
-    const accountAmount = Number(String(m[4]).replace(/\s+/g,''));
+
+  const tableText = posted.replace(
+    /(\d{4}-\d{2}-\d{2}\s+\d{4}-\d{2}-\d{2}\s+.+?\s+[\d ]+\.\d{2})\s+([+-]?[\d ]+\.\d)\s+(0\.00 KZT\s+0\.00KZT)\n\s*KZT\s+0 KZT/g,
+    (_all,prefix,accountAmount,tail)=>prefix+' KZT '+accountAmount+'0 KZT '+tail
+  );
+  const rowRx = /^\s*(\d{4}-\d{2}(?:-\d{2}|-)?)\s+(\d{4}-\d{2}-\d{2})\s+(.+?)\s+([\d ]+\.\d{2})\s*(?:[A-Z]{3})?\s+([+-]?[\d ]+\.\d{2})(?:\s*(?:[A-Z]{3}))?(?:\s|$)/gmi;
+  for (const m of tableText.matchAll(rowRx)) {
+    const operationDate = /^\d{4}-\d{2}-\d{2}$/.test(m[1]) ? m[1] : m[2];
+    const accountAmount = Number(String(m[5]).replace(/\s+/g,''));
     if (!Number.isFinite(accountAmount) || accountAmount===0) continue;
-    const title = String(m[2]||'Операция').replace(/\s+/g,' ').trim();
+
+    let title = String(m[3]||'Операция').replace(/\s+/g,' ').trim();
     const type = accountAmount < 0 ? 'expense' : 'income';
     let note = '';
-    if (/^Аударым\b/i.test(title)) note='Аударым';
-    else if (/^Төлем\b/i.test(title)) note='Төлем';
+
+    if (/^(Аударым|Перевод|Transfer)\b/i.test(title)) note='Перевод';
+    else if (/^(Төлем|Платеж|Платёж|Payment)\b/i.test(title)) note='Платёж';
+    else if (/^(Сатып алу|Покупка|Purchase)\b/i.test(title)) note='Покупка';
+    else if (/(Foreign currency purchase|Покупка иностранной валюты|Шетел валютасын сатып алу)/i.test(title)) note='Конвертация';
+
     raw.transactions.push({
-      date:m[1],
+      date:operationDate,
       time:'',
       type,
       amount:Math.abs(accountAmount),
@@ -201,8 +219,14 @@ export function parseBccStatement(text, sourceHash, filename) {
       categoryName:''
     });
   }
+
   const normalized = normalizeStatementResult(raw,sourceHash,filename);
   if (account?.[1]) normalized.statement.accountNumber=account[1];
+  normalized.statement.language =
+    /Account\s+statement/i.test(clean) ? 'en' :
+    /Выписка/i.test(clean) ? 'ru' :
+    /Шот бойынша үзінді/i.test(clean) ? 'kk' : '';
+
   return normalized.transactions.length ? normalized : null;
 }
 
@@ -254,16 +278,16 @@ aiAssistantRouter.post('/assistant/finance-statement', requireTrustedOrigin, asy
   let parsed;
   try{parsed=await pdfParse(buffer)}catch{const error=new Error('Не удалось прочитать текст PDF');error.status=422;throw error}
   let result=parseKaspiStatement(parsed?.text||'',sourceHash,filename),parser='kaspi-local';
-  if(!result){
-    result=parseBccStatement(parsed?.text||'',sourceHash,filename);
-    parser='bcc-local';
-  }
-  if(!result&&/(Банк\s+ЦентрКредит|centercredit|KCJBKZKX)/i.test(String(parsed?.text||''))){
+  const parsedText=String(parsed?.text||''),looksLikeBcc=/(Банк\s+ЦентрКредит|Bank\s+CenterCredit|centercredit|KCJBKZKX)/i.test(parsedText);
+  if(!result&&looksLikeBcc){
+    const plainBcc=parseBccStatement(parsedText,sourceHash,filename);
+    let layoutBcc=null;
     try{
       const layoutParsed=await pdfParse(buffer,{pagerender:renderPdfLayoutPage});
-      result=parseBccStatement(layoutParsed?.text||'',sourceHash,filename);
-      parser='bcc-local';
+      layoutBcc=parseBccStatement(layoutParsed?.text||'',sourceHash,filename);
     }catch{}
+    result=(layoutBcc?.transactions?.length||0)>(plainBcc?.transactions?.length||0)?layoutBcc:plainBcc;
+    parser='bcc-local';
   }
   if(!result){const error=new Error('Сейчас автоматически поддерживаются текстовые выписки Kaspi Gold и BCC. В этом PDF операции не распознаны.');error.status=422;throw error}
   res.json({ok:true,...result,parser});
