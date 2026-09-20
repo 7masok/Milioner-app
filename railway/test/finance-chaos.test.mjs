@@ -46,6 +46,12 @@ function extractFunction(name){
   throw new Error('unclosed '+name);
 }
 
+test('inline application scripts still parse after finance changes',()=>{
+  const scripts=[...html.matchAll(/<script(?![^>]*\bsrc=)[^>]*>([\s\S]*?)<\/script>/gi)].map(x=>x[1]).filter(x=>x.trim());
+  assert.ok(scripts.length>0);
+  for(const code of scripts)assert.doesNotThrow(()=>new Function(code));
+});
+
 test('all finance mutation entrypoints are local-first',()=>{
   const localFirst=[
     'saveFinanceAdjustment','saveFinanceAccount','financeDeleteAccount',
