@@ -14,8 +14,23 @@ function extractFunction(name){
   let start=-1;
   for(const marker of markers){const p=html.indexOf(marker);if(p>=0&&(start<0||p<start))start=p}
   assert.ok(start>=0,`missing ${name}`);
-  const brace=html.indexOf('{',start);
-  let depth=0,quote='',escaped=false;
+  const open=html.indexOf('(',start);
+  let parens=0,quote='',escaped=false,close=-1;
+  for(let i=open;i<html.length;i++){
+    const c=html[i];
+    if(quote){
+      if(escaped){escaped=false;continue}
+      if(c==='\\\\'){escaped=true;continue}
+      if(c===quote)quote='';
+      continue;
+    }
+    if(c==="'"||c==='"'||c==='`'){quote=c;continue}
+    if(c==='(')parens++;
+    else if(c===')'){parens--;if(parens===0){close=i;break}}
+  }
+  assert.ok(close>open,`unclosed params ${name}`);
+  const brace=html.indexOf('{',close);
+  let depth=0;quote='';escaped=false;
   for(let i=brace;i<html.length;i++){
     const c=html[i];
     if(quote){
