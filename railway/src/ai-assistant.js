@@ -172,7 +172,7 @@ export function parseBccStatement(text, sourceHash, filename) {
   const blockedSplit = clean.split(/Блоктағы транзакциялар/i);
   const posted = blockedSplit[0] || clean;
   const pending = blockedSplit[1] || '';
-  const pendingCount = (pending.match(/^\s*\d{2}\.\d{2}\.\d{4}\s+(?:күтілуде|ожидает|в ожидании)\b/gmi) || []).length;
+  const pendingCount = (pending.match(/\d{2}\.\d{2}\.\d{4}/g) || []).length;
   const raw = {
     bank:'Bank CenterCredit',
     accountName:card ? 'BCC '+card[1] : '#bccpay',
