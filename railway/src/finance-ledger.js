@@ -507,7 +507,8 @@ financeLedgerRouter.post('/finance/accounts/:id/adjust-balance', requireTrustedO
     const now=Date.now();
     const raw={
       id:cleanText(req.body?.id||('fin-adj-'+randomUUID()),220),
-      type:'adjustment',kind:'adjustment',accountId:String(row.id),amount:delta,defaultAmount:Math.abs(delta),
+      type:'adjustment',kind:'adjustment',accountId:String(row.id),amount:delta,
+      ...(String(row.currency||'KZT')==='KZT'?{defaultAmount:Math.abs(delta)}:(Number.isFinite(Number(req.body?.defaultAmount))?{defaultAmount:Math.abs(Number(req.body.defaultAmount))}:{})),
       currency:String(row.currency||'KZT'),title:'Изменение баланса · '+String(row.name||'Счёт'),
       note:String(req.body?.note||'').slice(0,4000),date:cleanText(req.body?.date,40),
       createdAt:now,updatedAt:now,excludedFromAnalytics:true,affectsBalance:true,
@@ -596,7 +597,7 @@ financeLedgerRouter.delete('/finance/categories/:id', requireTrustedOrigin, requ
     const row=await getCategoryRow(client,req.params.id,true);
     if(!row) throw httpError('Finance category not found',404);
     const before=categoryPayload(row),now=Date.now();
-    const used=await client.query('SELECT COUNT(*)::bigint AS n FROM finance_transactions WHERE category_id=$1',[req.params.id]);
+    const used=await client.query("SELECT COUNT(*)::bigint AS n FROM finance_transactions WHERE category_id=$1 OR lower(COALESCE(payload->>'category',''))=lower($2)",[req.params.id,String(row.name||'')]);
     if(Number(used.rows[0]?.n||0)>0){
       const category=await updateCategoryLocked(client,req.params.id,{...before,archived:true});
       const meta=await bumpRevision(client);
