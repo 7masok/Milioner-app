@@ -402,62 +402,22 @@ financeRouter.get('/finance-state', requireTrustedOrigin, asyncRoute(async (req,
   return res.json({ ok: true, exists, ...state });
 }));
 
-financeRouter.patch('/finance-state', requireTrustedOrigin, requireWritesEnabled, asyncRoute(async (req, res) => {
-  const patch = asObject(req.body?.patch);
-  const accounts = cleanRows(patch.accounts, MAX_ACCOUNTS, 'finance accounts patch');
-  const categories = cleanRows(patch.categories, MAX_CATEGORIES, 'finance categories patch');
-  const transactions = cleanRows(patch.transactions, MAX_TRANSACTIONS, 'finance transactions patch');
-  const imports = cleanImports(patch.imports);
-  const deleteAccounts = cleanIds(patch.deleteAccounts, MAX_ACCOUNTS, 'finance account deletes');
-  const deleteCategories = cleanIds(patch.deleteCategories, MAX_CATEGORIES, 'finance category deletes');
-  const deleteTransactions = cleanIds(patch.deleteTransactions, MAX_TRANSACTIONS, 'finance transaction deletes');
-  const deleteImports = cleanIds(patch.deleteImports, MAX_IMPORTS, 'finance import deletes');
-  const baseRevision = Number(req.body?.baseRevision || 0);
-
-  const result = await transaction(async client => {
-    await client.query('SELECT pg_advisory_xact_lock($1)', [730024]);
-    const current = await client.query('SELECT revision FROM finance_state_meta WHERE id=1 FOR UPDATE');
-    const currentRevision = Number(current.rows[0]?.revision || 0);
-    if (current.rowCount && baseRevision !== currentRevision) {
-      return { conflict: true, revision: currentRevision };
-    }
-
-    if (deleteTransactions.length) await client.query('DELETE FROM finance_transactions WHERE id = ANY($1::text[])', [deleteTransactions]);
-    if (deleteAccounts.length) await client.query('DELETE FROM finance_accounts WHERE id = ANY($1::text[])', [deleteAccounts]);
-    if (deleteCategories.length) await client.query('DELETE FROM finance_categories WHERE id = ANY($1::text[])', [deleteCategories]);
-    if (deleteImports.length) await client.query('DELETE FROM finance_imports WHERE backup_hash = ANY($1::text[])', [deleteImports]);
-
-    await upsertAccounts(client, accounts);
-    await upsertCategories(client, categories);
-    await upsertTransactions(client, transactions);
-    await upsertImports(client, imports);
-
-    const revision = currentRevision + 1;
-    const updatedAt = Date.now();
-    await client.query(`
-      INSERT INTO finance_state_meta(id,revision,updated_at) VALUES(1,$1,$2)
-      ON CONFLICT(id) DO UPDATE SET revision=excluded.revision,updated_at=excluded.updated_at
-    `, [revision, updatedAt]);
-    return { revision, updatedAt };
-  });
-
-  if (result.conflict) {
-    return res.status(409).json({ ok: false, error: 'finance-revision-conflict', revision: result.revision });
-  }
-  return res.json({
-    ok: true,
-    ...result,
-    counts: {
-      accounts: accounts.length,
-      categories: categories.length,
-      transactions: transactions.length,
-      imports: Object.keys(imports).length,
-      deleted: deleteAccounts.length + deleteCategories.length + deleteTransactions.length + deleteImports.length
-    }
+financeRouter.patch('/finance-state', requireTrustedOrigin, requireWritesEnabled, asyncRoute(async (_req, res) => {
+  return res.status(410).json({
+    ok:false,
+    error:'finance-snapshot-patch-disabled',
+    message:'Finance uses local-first command sync. Snapshot PATCH is disabled to protect transaction history.'
   });
 }));
 
 financeRouter.put('/finance-state', requireTrustedOrigin, requireWritesEnabled, asyncRoute(async (req, res) => {
+  if (String(req.get('x-finance-full-replace') || '') !== 'explicit-restore') {
+    return res.status(409).json({
+      ok:false,
+      error:'finance-full-replace-requires-explicit-restore',
+      message:'Full finance replacement is allowed only for an explicit backup restore.'
+    });
+  }
   const accounts = cleanRows(req.body?.accounts, MAX_ACCOUNTS, 'finance accounts');
   const categories = cleanRows(req.body?.categories, MAX_CATEGORIES, 'finance categories');
   const transactions = cleanRows(req.body?.transactions, MAX_TRANSACTIONS, 'finance transactions');
