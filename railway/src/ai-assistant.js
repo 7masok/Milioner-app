@@ -205,13 +205,13 @@ function parseBccBlockedRows(pending, accountCurrency='KZT'){
     const before=body.slice(0,amountMatch.index).replace(/\s+/g,' ').trim();
     const after=body.slice(amountMatch.index+amountMatch[0].length);
     const originalCurrency=((body.match(/\b(KZT|USD|EUR|CNY|RUB|GBP|AED|TRY)\b/i)||[])[1]||accountCurrency).toUpperCase();
-    const numbers=[...after.matchAll(/\b(\d+(?:\.\d+)?)\b/g)].map(x=>Number(x[1])).filter(Number.isFinite);
+    const numbers=[...after.matchAll(/\b(\d+\.\d+)\b/g)].map(x=>Number(x[1])).filter(Number.isFinite);
     const cashback=Number(numbers[2])||0;
     const explicitRate=(numbers.slice(3).find(x=>x>=100&&x<=5000))||0;
     const continuation=body.split(/\n+/).slice(1).map(line=>String(line||'')
       .replace(/\b\d{2}:\d{2}:\d{2}\b/g,' ')
       .replace(/\b(?:KZT|USD|EUR|CNY|RUB|GBP|AED|TRY)\b/gi,' ')
-      .replace(/\b\d+(?:\.\d+)?\b/g,' ')
+      .replace(/\b\d+\.\d+\b/g,' ')
       .replace(/\s+/g,' ').trim()).filter(Boolean).join(' ');
     const title=(before+' '+continuation).replace(/\s+/g,' ').trim()||'Операция';
     rows.push({date,time,title,originalAmount,originalCurrency,cashback,explicitRate});
