@@ -204,9 +204,9 @@ export function parseBccStatement(text, sourceHash, filename) {
     const type = accountAmount < 0 ? 'expense' : 'income';
     let note = '';
 
-    if (/^(Аударым|Перевод|Transfer)\b/i.test(title)) note='Перевод';
-    else if (/^(Төлем|Платеж|Платёж|Payment)\b/i.test(title)) note='Платёж';
-    else if (/^(Сатып алу|Покупка|Purchase)\b/i.test(title)) note='Покупка';
+    if (/^(Аударым|Перевод|Transfer)(?:\s|$)/i.test(title)) note='Перевод';
+    else if (/^(Төлем|Платеж|Платёж|Payment)(?:\s|$)/i.test(title)) note='Платёж';
+    else if (/^(Сатып алу|Покупка|Purchase)(?:\s|$)/i.test(title)) note='Покупка';
     else if (/(Foreign currency purchase|Покупка иностранной валюты|Шетел валютасын сатып алу)/i.test(title)) note='Конвертация';
 
     raw.transactions.push({
