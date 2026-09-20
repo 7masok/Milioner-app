@@ -51,3 +51,32 @@ test('negative adjustment also decreases default-currency balance', () => {
     {accountId:'a',delta:-5,defaultDelta:-2500}
   ]);
 });
+
+
+test('10000 randomized server ledger effects match an independent reference model', () => {
+  let seed=246813579;
+  function rnd(){seed=(seed*1664525+1013904223)>>>0;return seed/4294967296}
+  const ids=['a','b','c'],types=['income','expense','transit_in','transit_out','adjustment','transfer'];
+  for(let i=0;i<10000;i++){
+    const type=types[Math.floor(rnd()*types.length)],accountId=ids[Math.floor(rnd()*ids.length)],amount=Math.floor(rnd()*100000)+1,defaultAmount=Math.floor(rnd()*500000)+1,affectsBalance=rnd()>.08;
+    let tx={type,accountId,amount,defaultAmount,affectsBalance};
+    if(type==='adjustment')tx.amount=rnd()<.5?-amount:amount;
+    if(type==='transfer'){
+      let toAccountId=ids[Math.floor(rnd()*ids.length)];
+      if(toAccountId===accountId)toAccountId=ids[(ids.indexOf(accountId)+1)%ids.length];
+      tx={...tx,toAccountId,toAmount:amount+Math.floor(rnd()*1000),toDefaultAmount:defaultAmount+Math.floor(rnd()*2000)};
+    }
+    const actual=financeTransactionEffects(tx);
+    let expected=[];
+    if(affectsBalance){
+      if(type==='income'||type==='transit_in')expected=[{accountId,delta:amount,defaultDelta:defaultAmount}];
+      else if(type==='expense'||type==='transit_out')expected=[{accountId,delta:-amount,defaultDelta:-defaultAmount}];
+      else if(type==='adjustment')expected=[{accountId,delta:tx.amount,defaultDelta:Math.sign(tx.amount)*defaultAmount}];
+      else if(type==='transfer')expected=[
+        {accountId,delta:-amount,defaultDelta:-defaultAmount},
+        {accountId:tx.toAccountId,delta:tx.toAmount,defaultDelta:tx.toDefaultAmount}
+      ];
+    }
+    assert.deepEqual(actual,expected,`mismatch at randomized server ledger step ${i}`);
+  }
+});
