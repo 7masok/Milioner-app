@@ -52,9 +52,9 @@ function cleanImports(value) {
 
 async function readFinanceState(client) {
   const [accounts, categories, transactions, imports, meta] = await Promise.all([
-    client.query("SELECT payload || jsonb_build_object('id',id,'_syncUpdatedAt',updated_at) AS payload FROM finance_accounts ORDER BY sort_order,id"),
-    client.query("SELECT payload || jsonb_build_object('id',id,'name',name,'kind',kind,'_syncUpdatedAt',updated_at) AS payload FROM finance_categories ORDER BY sort_order,id"),
-    client.query("SELECT payload || jsonb_build_object('id',id,'_syncUpdatedAt',updated_at) AS payload FROM finance_transactions ORDER BY sort_order,id"),
+    client.query("SELECT payload || jsonb_build_object('id',id,'name',name,'balance',balance,'balanceDefault',balance_default,'currency',currency,'archived',archived,'updatedAt',updated_at,'_syncUpdatedAt',updated_at) AS payload FROM finance_accounts ORDER BY sort_order,id"),
+    client.query("SELECT payload || jsonb_build_object('id',id,'name',name,'kind',kind,'archived',archived,'updatedAt',updated_at,'_syncUpdatedAt',updated_at) AS payload FROM finance_categories ORDER BY sort_order,id"),
+    client.query("SELECT payload || jsonb_build_object('id',id,'type',type,'accountId',account_id,'toAccountId',to_account_id,'categoryId',category_id,'amount',amount,'defaultAmount',default_amount,'currency',currency,'date',transaction_date,'createdAt',created_at,'updatedAt',updated_at,'statementFingerprint',statement_fingerprint,'_syncUpdatedAt',updated_at) AS payload FROM finance_transactions ORDER BY sort_order,id"),
     client.query('SELECT backup_hash,payload FROM finance_imports ORDER BY imported_at,backup_hash'),
     client.query('SELECT revision,updated_at FROM finance_state_meta WHERE id=1')
   ]);
