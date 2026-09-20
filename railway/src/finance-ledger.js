@@ -481,13 +481,22 @@ financeLedgerRouter.get('/finance/audit', requireTrustedOrigin, asyncRoute(async
 }));
 
 financeLedgerRouter.post('/finance/accounts', requireTrustedOrigin, requireWritesEnabled, asyncRoute(async (req,res)=>{
+  const raw=req.body?.account||req.body;
   const result=await transaction(async client=>{
     await lockFinance(client);
-    const account=await createAccountLocked(client,req.body?.account||req.body);
+    const requestedId=cleanText(raw?.id,220);
+    if(requestedId){
+      const existing=await getAccountRow(client,requestedId,true);
+      if(existing){
+        const meta=await currentRevision(client);
+        return {...meta,account:accountPayload(existing),idempotent:true};
+      }
+    }
+    const account=await createAccountLocked(client,raw);
     const meta=await bumpRevision(client);
-    return {...meta,account};
+    return {...meta,account,idempotent:false};
   });
-  res.status(201).json({ok:true,...result});
+  res.status(result.idempotent?200:201).json({ok:true,...result});
 }));
 
 financeLedgerRouter.put('/finance/accounts/:id', requireTrustedOrigin, requireWritesEnabled, asyncRoute(async (req,res)=>{
@@ -637,13 +646,22 @@ financeLedgerRouter.post('/finance/accounts/:id/move-operations', requireTrusted
 }));
 
 financeLedgerRouter.post('/finance/categories', requireTrustedOrigin, requireWritesEnabled, asyncRoute(async (req,res)=>{
+  const raw=req.body?.category||req.body;
   const result=await transaction(async client=>{
     await lockFinance(client);
-    const category=await createCategoryLocked(client,req.body?.category||req.body);
+    const requestedId=cleanText(raw?.id,220);
+    if(requestedId){
+      const existing=await getCategoryRow(client,requestedId,true);
+      if(existing){
+        const meta=await currentRevision(client);
+        return {...meta,category:categoryPayload(existing),idempotent:true};
+      }
+    }
+    const category=await createCategoryLocked(client,raw);
     const meta=await bumpRevision(client);
-    return {...meta,category};
+    return {...meta,category,idempotent:false};
   });
-  res.status(201).json({ok:true,...result});
+  res.status(result.idempotent?200:201).json({ok:true,...result});
 }));
 
 financeLedgerRouter.put('/finance/categories/:id', requireTrustedOrigin, requireWritesEnabled, asyncRoute(async (req,res)=>{
