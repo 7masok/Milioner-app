@@ -619,6 +619,9 @@ financeLedgerRouter.post('/finance/accounts/:id/move-operations', requireTrusted
         continue;
       }
       next.updatedAt=now;
+      next.balanceDetached=true;
+      next.balanceDetachedAt=now;
+      next.affectsBalance=false;
       await storeTransaction(client,next,row);
       await addAudit(client,'transaction',row.id,'move-account',before,next,now);
       moved++;
