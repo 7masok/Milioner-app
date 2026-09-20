@@ -428,9 +428,6 @@ financeRouter.put('/finance-state', requireTrustedOrigin, requireWritesEnabled, 
     await client.query('SELECT pg_advisory_xact_lock($1)', [730024]);
     const current = await client.query('SELECT revision FROM finance_state_meta WHERE id=1 FOR UPDATE');
     const currentRevision = Number(current.rows[0]?.revision || 0);
-    if (current.rowCount && baseRevision !== currentRevision) {
-      return { conflict: true, revision: currentRevision };
-    }
 
     await replaceAccounts(client, accounts);
     await replaceCategories(client, categories);
@@ -447,9 +444,6 @@ financeRouter.put('/finance-state', requireTrustedOrigin, requireWritesEnabled, 
     return { revision, updatedAt };
   });
 
-  if (result.conflict) {
-    return res.status(409).json({ ok: false, error: 'finance-revision-conflict', revision: result.revision });
-  }
   return res.json({
     ok: true,
     ...result,
