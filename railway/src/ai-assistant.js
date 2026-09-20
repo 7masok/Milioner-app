@@ -198,7 +198,7 @@ function parseBccBlockedRows(pending, accountCurrency='KZT'){
   for(const m of String(pending||'').matchAll(blockRx)){
     const date=bccDateIso(m[1]),body=String(m[3]||'');
     const time=String(m[2]||((body.match(/\b(\d{2}:\d{2}:\d{2})\b/)||[])[1]||''));
-    const amountMatch=/([\d ]+\.\d{2})/.exec(body);
+    const amountMatch=/(\d{1,3}(?: \d{3})*\.\d{2}|\d+\.\d{2})/.exec(body);
     if(!date||!amountMatch)continue;
     const originalAmount=Number(String(amountMatch[1]).replace(/\s+/g,''));
     if(!Number.isFinite(originalAmount)||originalAmount<=0)continue;
