@@ -190,7 +190,7 @@ export function parseBccStatement(text, sourceHash, filename) {
     transactions:[]
   };
 
-  const rowRx = /^\s*(\d{4}-\d{2}(?:-\d{2})?)\s+(\d{4}-\d{2}-\d{2})\s+(.+?)\s+([\d ]+\.\d{2})\s*(?:[A-Z]{3})?\s+([+-]?[\d ]+\.\d{2})(?:\s*(?:[A-Z]{3}))?(?:\s|$)/gmi;
+  const rowRx = /^\s*(\d{4}-\d{2}(?:-\d{2}|-)?)\s+(\d{4}-\d{2}-\d{2})\s+(.+?)\s+([\d ]+\.\d{2})\s*(?:[A-Z]{3})?\s+([+-]?[\d ]+\.\d{2})(?:\s*(?:[A-Z]{3}))?(?:\s|$)/gmi;
   for (const m of posted.matchAll(rowRx)) {
     const operationDate = /^\d{4}-\d{2}-\d{2}$/.test(m[1]) ? m[1] : m[2];
     const accountAmount = Number(String(m[5]).replace(/\s+/g,''));
@@ -274,16 +274,16 @@ aiAssistantRouter.post('/assistant/finance-statement', requireTrustedOrigin, asy
   let parsed;
   try{parsed=await pdfParse(buffer)}catch{const error=new Error('Не удалось прочитать текст PDF');error.status=422;throw error}
   let result=parseKaspiStatement(parsed?.text||'',sourceHash,filename),parser='kaspi-local';
-  if(!result){
-    result=parseBccStatement(parsed?.text||'',sourceHash,filename);
-    parser='bcc-local';
-  }
-  if(!result&&/(Банк\s+ЦентрКредит|centercredit|KCJBKZKX)/i.test(String(parsed?.text||''))){
+  const parsedText=String(parsed?.text||''),looksLikeBcc=/(Банк\s+ЦентрКредит|Bank\s+CenterCredit|centercredit|KCJBKZKX)/i.test(parsedText);
+  if(!result&&looksLikeBcc){
+    const plainBcc=parseBccStatement(parsedText,sourceHash,filename);
+    let layoutBcc=null;
     try{
       const layoutParsed=await pdfParse(buffer,{pagerender:renderPdfLayoutPage});
-      result=parseBccStatement(layoutParsed?.text||'',sourceHash,filename);
-      parser='bcc-local';
+      layoutBcc=parseBccStatement(layoutParsed?.text||'',sourceHash,filename);
     }catch{}
+    result=(layoutBcc?.transactions?.length||0)>(plainBcc?.transactions?.length||0)?layoutBcc:plainBcc;
+    parser='bcc-local';
   }
   if(!result){const error=new Error('Сейчас автоматически поддерживаются текстовые выписки Kaspi Gold и BCC. В этом PDF операции не распознаны.');error.status=422;throw error}
   res.json({ok:true,...result,parser});
