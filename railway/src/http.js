@@ -10,7 +10,7 @@ export function exactCors(req, res, next) {
   if (origin === config.corsOrigin) {
     res.setHeader('Access-Control-Allow-Origin', origin);
     res.setHeader('Vary', 'Origin');
-    res.setHeader('Access-Control-Allow-Methods', 'GET,PUT,POST,OPTIONS');
+    res.setHeader('Access-Control-Allow-Methods', 'GET,PUT,PATCH,POST,OPTIONS');
     res.setHeader('Access-Control-Allow-Headers', 'Content-Type,Authorization,If-Match');
     res.setHeader('Access-Control-Expose-Headers', 'ETag,X-Warehouse-Revision');
   }
