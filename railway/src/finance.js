@@ -52,9 +52,9 @@ function cleanImports(value) {
 
 async function readFinanceState(client) {
   const [accounts, categories, transactions, imports, meta] = await Promise.all([
-    client.query("SELECT payload || jsonb_build_object('id',id,'_syncUpdatedAt',updated_at) AS payload FROM finance_accounts ORDER BY sort_order,id"),
-    client.query("SELECT payload || jsonb_build_object('id',id,'name',name,'kind',kind,'_syncUpdatedAt',updated_at) AS payload FROM finance_categories ORDER BY sort_order,id"),
-    client.query("SELECT payload || jsonb_build_object('id',id,'_syncUpdatedAt',updated_at) AS payload FROM finance_transactions ORDER BY sort_order,id"),
+    client.query("SELECT payload || jsonb_strip_nulls(jsonb_build_object('id',id,'name',name,'balance',balance,'balanceDefault',balance_default,'currency',currency,'archived',archived,'updatedAt',updated_at,'_syncUpdatedAt',updated_at)) AS payload FROM finance_accounts ORDER BY sort_order,id"),
+    client.query("SELECT payload || jsonb_build_object('id',id,'name',name,'kind',kind,'archived',archived,'updatedAt',updated_at,'_syncUpdatedAt',updated_at) AS payload FROM finance_categories ORDER BY sort_order,id"),
+    client.query("SELECT payload || jsonb_strip_nulls(jsonb_build_object('id',id,'type',type,'accountId',account_id,'toAccountId',to_account_id,'categoryId',category_id,'amount',amount,'defaultAmount',default_amount,'currency',currency,'date',transaction_date,'createdAt',created_at,'updatedAt',updated_at,'statementFingerprint',statement_fingerprint,'_syncUpdatedAt',updated_at)) AS payload FROM finance_transactions ORDER BY sort_order,id"),
     client.query('SELECT backup_hash,payload FROM finance_imports ORDER BY imported_at,backup_hash'),
     client.query('SELECT revision,updated_at FROM finance_state_meta WHERE id=1')
   ]);
@@ -340,6 +340,49 @@ financeRouter.post('/finance-backups', requireTrustedOrigin, requireWritesEnable
   res.status(201).json({ ok:true, backup:result });
 }));
 
+financeRouter.post('/finance-backups/:id/restore', requireTrustedOrigin, requireWritesEnabled, asyncRoute(async (req,res)=>{
+  const backupId=String(req.params.id||'').trim();
+  if(!/^\d+$/.test(backupId)){const error=new Error('Invalid finance backup id');error.status=400;throw error}
+  const result=await transaction(async client=>{
+    await client.query('SELECT pg_advisory_xact_lock($1)',[730024]);
+    const backup=(await client.query(`
+      SELECT id,label,accounts,categories,transactions,imports,revision,created_at
+      FROM finance_backups WHERE id=$1 FOR UPDATE
+    `,[backupId])).rows[0];
+    if(!backup){const error=new Error('Finance backup not found');error.status=404;throw error}
+    const current=await readFinanceState(client),safetyAt=Date.now();
+    await client.query(`
+      INSERT INTO finance_backups(label,accounts,categories,transactions,imports,revision,created_at)
+      VALUES($1,$2::jsonb,$3::jsonb,$4::jsonb,$5::jsonb,$6,$7)
+    `,[
+      'before restore '+backupId,
+      JSON.stringify(current.accounts),JSON.stringify(current.categories),JSON.stringify(current.transactions),
+      JSON.stringify(current.imports),current.revision,safetyAt
+    ]);
+    await replaceAccounts(client,Array.isArray(backup.accounts)?backup.accounts:[]);
+    await replaceCategories(client,Array.isArray(backup.categories)?backup.categories:[]);
+    await replaceTransactions(client,Array.isArray(backup.transactions)?backup.transactions:[]);
+    await replaceImports(client,backup.imports&&typeof backup.imports==='object'?backup.imports:{});
+    const revision=current.revision+1,updatedAt=Date.now();
+    await client.query(`
+      INSERT INTO finance_state_meta(id,revision,updated_at) VALUES(1,$1,$2)
+      ON CONFLICT(id) DO UPDATE SET revision=excluded.revision,updated_at=excluded.updated_at
+    `,[revision,updatedAt]);
+    await client.query(`
+      INSERT INTO finance_audit(entity_type,entity_id,action,before_payload,after_payload,created_at)
+      VALUES('system',$1,'restore-backup',$2::jsonb,$3::jsonb,$4)
+    `,[
+      backupId,
+      JSON.stringify({revision:current.revision,accounts:current.accounts.length,categories:current.categories.length,transactions:current.transactions.length}),
+      JSON.stringify({backupRevision:Number(backup.revision||0),label:String(backup.label||''),accounts:Array.isArray(backup.accounts)?backup.accounts.length:0,categories:Array.isArray(backup.categories)?backup.categories.length:0,transactions:Array.isArray(backup.transactions)?backup.transactions.length:0}),
+      updatedAt
+    ]);
+    await pruneFinanceBackups(client);
+    return {revision,updatedAt,restoredBackup:{id:String(backup.id),label:String(backup.label||''),createdAt:Number(backup.created_at||0)},counts:{accounts:Array.isArray(backup.accounts)?backup.accounts.length:0,categories:Array.isArray(backup.categories)?backup.categories.length:0,transactions:Array.isArray(backup.transactions)?backup.transactions.length:0,imports:Object.keys(backup.imports||{}).length}};
+  });
+  res.json({ok:true,...result});
+}));
+
 financeRouter.get('/finance-state', requireTrustedOrigin, asyncRoute(async (req, res) => {
   const metaOnly = req.query.meta === '1';
   if (metaOnly) {
@@ -351,7 +394,10 @@ financeRouter.get('/finance-state', requireTrustedOrigin, asyncRoute(async (req,
       updatedAt: Number(meta.rows[0]?.updated_at || 0)
     });
   }
-  const state = await transaction(client => readFinanceState(client));
+  const state = await transaction(async client => {
+    await client.query('SELECT pg_advisory_xact_lock($1)', [730024]);
+    return readFinanceState(client);
+  });
   const exists = state.revision > 0 || state.accounts.length > 0 || state.categories.length > 0 || state.transactions.length > 0 || Object.keys(state.imports).length > 0;
   return res.json({ ok: true, exists, ...state });
 }));
