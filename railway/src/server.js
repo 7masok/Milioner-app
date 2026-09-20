@@ -27,6 +27,9 @@ assertRuntimeConfig();
 const app = express();
 const repositoryRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const frontendFiles = Object.freeze([
+  'manifest.webmanifest',
+  'sw.js',
+  'app-icon.svg',
   'ozon-fbo-v1.js',
   'ozon-supplies-v1.js',
   'warehouse-insights.js',
