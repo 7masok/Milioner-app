@@ -251,7 +251,7 @@ test('analytics handles income expense transit transfer refund and exclusions co
     ];
   `);
   assert.deepEqual(run(),[
-    {mode:'expense',amount:100,categoryId:'food',category:''},
+    {mode:'expense',amount:100,categoryId:'food',category:'Еда'},
     {mode:'income',amount:250,categoryId:'',category:''},
     null,
     null,
@@ -265,6 +265,20 @@ test('deleting an original transaction also queues deletion of linked refunds',(
   assert.match(src,/linkedRefunds=financeTransactions\(\)\.filter/);
   assert.match(src,/for\(const refund of linkedRefunds\)/);
   assert.match(src,/deleted\.map\(id=>financeCommand\('\/api\/finance\/transactions\//);
+});
+
+test('statement-created account uses opening balance, not the ending balance twice',()=>{
+  const src=extractFunction('financeStatementCreateAccountFromStatement');
+  assert.match(src,/statementNet=uniqueRows\.reduce/);
+  assert.match(src,/balance=Number\.isFinite\(rawBalance\)\?rawBalance-statementNet:0/);
+  assert.match(src,/bankOperationKey\|\|row\?\.statementFingerprint/);
+});
+
+test('account and category creates rely on idempotent server ACKs, not swallowed 409s',()=>{
+  assert.equal(html.includes("financeCommand('/api/finance/accounts',{method:'POST',body:{account},acceptStatuses:[409]})"),false);
+  assert.equal(html.includes("financeCommand('/api/finance/categories',{method:'POST',body:{category},acceptStatuses:[409]})"),false);
+  assert.match(ledger,/requestedId[\s\S]*accountPayload\(existing\)[\s\S]*idempotent:true/);
+  assert.match(ledger,/requestedId[\s\S]*categoryPayload\(existing\)[\s\S]*idempotent:true/);
 });
 
 test('journal filters keep incoming transfers visible on the destination account',()=>{
