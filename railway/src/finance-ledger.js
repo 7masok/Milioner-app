@@ -527,6 +527,37 @@ financeLedgerRouter.post('/finance/accounts/:id/adjust-balance', requireTrustedO
   res.status(201).json({ok:true,...result});
 }));
 
+financeLedgerRouter.post('/finance/accounts/:id/bind-statement', requireTrustedOrigin, requireWritesEnabled, asyncRoute(async (req,res)=>{
+  const accountId=String(req.params.id),key=cleanText(req.body?.key,500),accountNumber=cleanText(req.body?.accountNumber,180),bank=cleanText(req.body?.bank,100);
+  if(!key) throw httpError('Statement binding key is required');
+  const result=await transaction(async client=>{
+    await lockFinance(client);
+    const rows=await client.query(`
+      SELECT id,name,balance,balance_default,currency,archived,payload,updated_at
+      FROM finance_accounts ORDER BY id FOR UPDATE
+    `);
+    if(!rows.rows.some(row=>String(row.id)===accountId)) throw httpError('Finance account not found',404);
+    const changed=[],now=Date.now();
+    for(const row of rows.rows){
+      const before=accountPayload(row),keys=Array.isArray(before.bankStatementKeys)?before.bankStatementKeys.map(String):[],selected=String(row.id)===accountId,next={...before};let dirty=false;
+      if(selected){
+        if(!keys.includes(key)){next.bankStatementKeys=[...keys,key];dirty=true}
+        if(String(before.bankStatementAccountNumber||'')!==accountNumber){next.bankStatementAccountNumber=accountNumber;dirty=true}
+        if(String(before.bankStatementBank||'')!==bank){next.bankStatementBank=bank;dirty=true}
+      }else if(keys.includes(key)){next.bankStatementKeys=keys.filter(x=>x!==key);dirty=true}
+      if(!dirty)continue;
+      next.updatedAt=now;delete next._syncUpdatedAt;
+      await client.query('UPDATE finance_accounts SET payload=$2::jsonb,updated_at=$3 WHERE id=$1',[row.id,JSON.stringify(next),now]);
+      await addAudit(client,'account',row.id,'bind-statement',before,next,now);
+      changed.push(String(row.id));
+    }
+    const meta=changed.length?await bumpRevision(client):await currentRevision(client);
+    const accounts=await readChangedAccounts(client,changed);
+    return {...meta,accounts,changed:changed.length};
+  });
+  res.json({ok:true,...result});
+}));
+
 financeLedgerRouter.post('/finance/accounts/:id/move-operations', requireTrustedOrigin, requireWritesEnabled, asyncRoute(async (req,res)=>{
   const sourceId=String(req.params.id),targetId=cleanText(req.body?.targetId,220),deleteSource=Boolean(req.body?.deleteSource);
   if(!targetId||targetId===sourceId) throw httpError('Choose another destination account');
