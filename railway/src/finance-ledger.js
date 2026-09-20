@@ -147,17 +147,26 @@ async function getTransactionRow(client, id, forUpdate = false) {
 async function findStatementDuplicate(client, tx) {
   const fingerprint = cleanText(tx?.statementFingerprint, 500);
   const bankOperationKey = cleanText(tx?.bankOperationKey, 500);
+  const statementAccountId = cleanText(tx?.statementAccountId || tx?.accountId, 180);
   if (!fingerprint && !bankOperationKey) return null;
   const result = await client.query(`
     SELECT id,sort_order,type,account_id,to_account_id,category_id,amount,default_amount,currency,
       transaction_date,created_at,updated_at,statement_fingerprint,payload
     FROM finance_transactions
-    WHERE ($1 <> '' AND statement_fingerprint=$1)
-       OR ($2 <> '' AND payload->>'bankOperationKey'=$2)
+    WHERE (
+      ($1 <> '' AND statement_fingerprint=$1)
+      OR ($2 <> '' AND payload->>'bankOperationKey'=$2)
+    )
+      AND (
+        $3 = ''
+        OR account_id=$3
+        OR to_account_id=$3
+        OR payload->>'statementAccountId'=$3
+      )
     ORDER BY updated_at DESC,id
     LIMIT 1
     FOR UPDATE
-  `, [fingerprint, bankOperationKey]);
+  `, [fingerprint, bankOperationKey, statementAccountId]);
   return result.rows[0] || null;
 }
 
