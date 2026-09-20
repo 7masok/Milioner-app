@@ -192,7 +192,7 @@ export function parseBccStatement(text, sourceHash, filename) {
 
   const tableText = posted.replace(
     /(\d{4}-\d{2}-\d{2}\s+\d{4}-\d{2}-\d{2}\s+.+?\s+[\d ]+\.\d{2})\s+([+-]?[\d ]+\.\d)\s+(0\.00 KZT\s+0\.00KZT)\n\s*KZT\s+0 KZT/g,
-    '$1 KZT $20 KZT $3'
+    (_all,prefix,accountAmount,tail)=>prefix+' KZT '+accountAmount+'0 KZT '+tail
   );
   const rowRx = /^\s*(\d{4}-\d{2}(?:-\d{2}|-)?)\s+(\d{4}-\d{2}-\d{2})\s+(.+?)\s+([\d ]+\.\d{2})\s*(?:[A-Z]{3})?\s+([+-]?[\d ]+\.\d{2})(?:\s*(?:[A-Z]{3}))?(?:\s|$)/gmi;
   for (const m of tableText.matchAll(rowRx)) {
