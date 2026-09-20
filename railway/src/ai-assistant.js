@@ -79,6 +79,15 @@ function normalizeStatementDate(value) {
   return String(year).padStart(4,'0')+'-'+String(month).padStart(2,'0')+'-'+String(day).padStart(2,'0');
 }
 
+function normalizeStatementTime(value) {
+  const text = String(value || '').trim();
+  const m = text.match(/^(\d{1,2}):(\d{2})(?::(\d{2}))?$/);
+  if (!m) return '';
+  const hour = Number(m[1]), minute = Number(m[2]), second = m[3] === undefined ? null : Number(m[3]);
+  if (hour < 0 || hour > 23 || minute < 0 || minute > 59 || (second !== null && (second < 0 || second > 59))) return '';
+  return String(hour).padStart(2,'0')+':'+String(minute).padStart(2,'0')+(second === null ? '' : ':'+String(second).padStart(2,'0'));
+}
+
 function normalizeStatementResult(raw, sourceHash, filename) {
   const txs = Array.isArray(raw?.transactions) ? raw.transactions : [];
   const seen = new Map();
@@ -87,16 +96,17 @@ function normalizeStatementResult(raw, sourceHash, filename) {
     const type = String(row?.type || '').toLowerCase();
     const amount = Math.abs(Number(row?.amount) || 0);
     const date = normalizeStatementDate(row?.date);
+    const time = normalizeStatementTime(row?.time);
     if (!['income','expense','transfer'].includes(type) || !amount || !date) continue;
     const title = String(row?.title || row?.description || 'Операция').replace(/\s+/g,' ').trim().slice(0,240);
     const note = String(row?.note || '').replace(/\s+/g,' ').trim().slice(0,500);
     const categoryName = String(row?.categoryName || '').trim().slice(0,120);
     const transferDirection = ['in','out'].includes(String(row?.transferDirection||'')) ? String(row.transferDirection) : '';
-    const signature = [date,type,transferDirection,amount.toFixed(2),title.toLowerCase(),note.toLowerCase()].join('|');
+    const signature = [date,time,type,transferDirection,amount.toFixed(2),title.toLowerCase(),note.toLowerCase()].join('|');
     const occurrence = (seen.get(signature) || 0) + 1;
     seen.set(signature, occurrence);
     const statementFingerprint = crypto.createHash('sha256').update(sourceHash+'|'+signature+'|'+occurrence).digest('hex');
-    transactions.push({ date, type, amount, title, note, categoryName, transferDirection, statementFingerprint });
+    transactions.push({ date, time, type, amount, title, note, categoryName, transferDirection, statementFingerprint });
   }
   return {
     statement: {
@@ -121,15 +131,15 @@ function kaspiOperationRows(text) {
   const header=/Дата\s*Сумма\s*Операция\s*Детали/i.exec(clean);
   if(!header)return [];
   const section=clean.slice(header.index+header[0].length);
-  const rx=/(\d{2}\.\d{2}\.\d{2,4})\s*([+-])\s*([\d\s]+,\d{2})\s*₸?\s*([\s\S]*?)(?=(?:\d{2}\.\d{2}\.\d{2,4}\s*[+-]\s*[\d\s]+,\d{2})|(?:\n\s*-\s*Сумма заблокирована)|$)/g;
+  const rx=/(\d{2}\.\d{2}\.\d{2,4})(?:\s+(\d{1,2}:\d{2}(?::\d{2})?))?\s*([+-])\s*([\d\s]+,\d{2})\s*₸?\s*([\s\S]*?)(?=(?:\d{2}\.\d{2}\.\d{2,4})(?:\s+\d{1,2}:\d{2}(?::\d{2})?)?\s*[+-]\s*[\d\s]+,\d{2}|(?:\n\s*-\s*Сумма заблокирована)|$)/g;
   const rows=[];
   for(const m of section.matchAll(rx)){
-    const amount=Number(String(m[3]).replace(/\s+/g,'').replace(',','.'));
-    let rest=String(m[4]||'').replace(/\s+/g,' ').trim();
+    const amount=Number(String(m[4]).replace(/\s+/g,'').replace(',','.'));
+    let rest=String(m[5]||'').replace(/\s+/g,' ').trim();
     rest=rest.replace(/-\s*Сумма заблокирована.*$/i,'').trim();
     if(!Number.isFinite(amount)||amount<=0||!rest)continue;
     if(/^доступно\b/i.test(rest)||/^остаток\b/i.test(rest)||/^итого\b/i.test(rest))continue;
-    rows.push({date:m[1],sign:m[2],amount,rest});
+    rows.push({date:m[1],time:m[2]||'',sign:m[3],amount,rest});
   }
   return rows;
 }
@@ -158,7 +168,7 @@ function parseKaspiStatement(text, sourceHash, filename) {
       title=row.rest.replace(/^поступление\s*/i,'').trim()||'Поступление';
       note='Поступление';
     }
-    raw.transactions.push({date:row.date,type,transferDirection,amount:row.amount,title,note,categoryName:''});
+    raw.transactions.push({date:row.date,time:row.time,type,transferDirection,amount:row.amount,title,note,categoryName:''});
   }
   const normalized=normalizeStatementResult(raw,sourceHash,filename);
   if(account?.[1])normalized.statement.accountNumber=account[1];
