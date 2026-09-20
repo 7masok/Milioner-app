@@ -118,20 +118,29 @@ BEGIN
 
   INSERT INTO finance_categories(id,sort_order,name,kind,archived,color,payload,updated_at)
   SELECT
-    COALESCE(NULLIF(item->>'id',''), 'legacy-category-' || ord::text),
-    (ord - 1)::integer,
-    COALESCE(item->>'name','Без названия'),
-    CASE WHEN item->>'kind' IN ('income','expense','both') THEN item->>'kind' ELSE 'both' END,
-    COALESCE((item->>'archived')::boolean,false),
-    CASE WHEN COALESCE(item->>'color','') ~ '^-?[0-9]+$' THEN (item->>'color')::bigint ELSE NULL END,
-    item,
     CASE
-      WHEN COALESCE(item->>'updatedAt','') ~ '^[0-9]+$' THEN (item->>'updatedAt')::bigint
-      WHEN COALESCE(item->>'createdAt','') ~ '^[0-9]+$' THEN (item->>'createdAt')::bigint
+      WHEN jsonb_typeof(item)='object' THEN COALESCE(NULLIF(item->>'id',''), 'legacy-category-' || ord::text)
+      ELSE 'legacy-category-' || ord::text
+    END,
+    (ord - 1)::integer,
+    CASE
+      WHEN jsonb_typeof(item)='object' THEN COALESCE(NULLIF(item->>'name',''),'Без названия')
+      ELSE COALESCE(NULLIF(trim(both '"' from item::text),''),'Без названия')
+    END,
+    CASE WHEN jsonb_typeof(item)='object' AND item->>'kind' IN ('income','expense','both') THEN item->>'kind' ELSE 'both' END,
+    CASE WHEN jsonb_typeof(item)='object' AND lower(COALESCE(item->>'archived','false'))='true' THEN true ELSE false END,
+    CASE WHEN jsonb_typeof(item)='object' AND COALESCE(item->>'color','') ~ '^-?[0-9]+$' THEN (item->>'color')::bigint ELSE NULL END,
+    CASE
+      WHEN jsonb_typeof(item)='object' THEN item
+      ELSE jsonb_build_object('id','legacy-category-' || ord::text,'name',trim(both '"' from item::text),'kind','both','legacy',true)
+    END,
+    CASE
+      WHEN jsonb_typeof(item)='object' AND COALESCE(item->>'updatedAt','') ~ '^[0-9]+$' THEN (item->>'updatedAt')::bigint
+      WHEN jsonb_typeof(item)='object' AND COALESCE(item->>'createdAt','') ~ '^[0-9]+$' THEN (item->>'createdAt')::bigint
       ELSE now_ms
     END
   FROM jsonb_array_elements(categories_json) WITH ORDINALITY AS x(item,ord)
-  WHERE jsonb_typeof(item) = 'object'
+  WHERE jsonb_typeof(item) IN ('object','string')
   ON CONFLICT(id) DO NOTHING;
 
   INSERT INTO finance_transactions(
