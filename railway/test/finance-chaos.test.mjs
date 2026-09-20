@@ -321,6 +321,24 @@ test('stable bank keys avoid fuzzy false positives but still protect legacy unke
   assert.deepEqual(run(),{againstKeyed:false,againstLegacy:true});
 });
 
+test('statement duplicate detection is scoped to the selected finance account',()=>{
+  const localNames=['financeLocalStatementExisting'];
+  const localSrc=localNames.map(extractFunction).join('\n');
+  const localRun=new Function(localSrc+`
+    let rows=[{id:'b1',type:'expense',accountId:'b',amount:100,bankOperationKey:'same'}];
+    function financeTransactions(){return rows}
+    return {
+      other:financeLocalStatementExisting({type:'expense',accountId:'a',amount:100,bankOperationKey:'same'}),
+      same:financeLocalStatementExisting({type:'expense',accountId:'b',amount:100,bankOperationKey:'same'})?.id||''
+    };
+  `);
+  assert.deepEqual(localRun(),{other:null,same:'b1'});
+  assert.match(ledger,/statementAccountId[\s\S]*account_id=\$3[\s\S]*to_account_id=\$3/);
+  const main=extractFunction('financeStatementMainAccountChanged');
+  assert.match(main,/financeStatementExactDuplicate\(row,current\)/);
+  assert.match(main,/financeStatementLikelyDuplicate\(row,current\)/);
+});
+
 test('statement-created account uses opening balance, not the ending balance twice',()=>{
   const src=extractFunction('financeStatementCreateAccountFromStatement');
   assert.match(src,/statementNet=uniqueRows\.reduce/);
