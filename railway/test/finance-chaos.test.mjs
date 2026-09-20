@@ -239,12 +239,14 @@ test('analytics handles income expense transit transfer refund and exclusions co
   const names=['financeTransactionType','financeTransactionAmount','financeTransactionDefaultAmount','financeCountsInIncomeExpense','financeAnalyticsEntry'];
   const src=names.map(extractFunction).join('\n');
   const run=new Function(src+`
+    const all=[{id:'e1',type:'expense',amount:100,defaultAmount:100,categoryId:'food',category:'Еда'}];
+    function financeTransactions(){return all}
     return [
-      financeAnalyticsEntry({type:'expense',amount:100,defaultAmount:100,categoryId:'food'}),
+      financeAnalyticsEntry(all[0]),
       financeAnalyticsEntry({type:'income',amount:250,defaultAmount:250}),
       financeAnalyticsEntry({type:'transit_out',amount:40,defaultAmount:40,excludedFromAnalytics:true}),
       financeAnalyticsEntry({type:'transfer',amount:50,defaultAmount:50,excludedFromAnalytics:true}),
-      financeAnalyticsEntry({type:'income',amount:30,defaultAmount:30,refundOfId:'e1',refundCategoryId:'food',refundCategory:'Еда'}),
+      financeAnalyticsEntry({type:'income',amount:30,defaultAmount:30,refundOfId:'e1',refundCategoryId:'old',refundCategory:'Старая'}),
       financeAnalyticsEntry({type:'expense',amount:10,defaultAmount:10,excludedFromAnalytics:true})
     ];
   `);
@@ -256,6 +258,13 @@ test('analytics handles income expense transit transfer refund and exclusions co
     {mode:'expense',amount:-30,categoryId:'food',category:'Еда'},
     null
   ]);
+});
+
+test('deleting an original transaction also queues deletion of linked refunds',()=>{
+  const src=extractFunction('financeDeleteTransaction');
+  assert.match(src,/linkedRefunds=financeTransactions\(\)\.filter/);
+  assert.match(src,/for\(const refund of linkedRefunds\)/);
+  assert.match(src,/deleted\.map\(id=>financeCommand\('\/api\/finance\/transactions\//);
 });
 
 test('journal filters keep incoming transfers visible on the destination account',()=>{
