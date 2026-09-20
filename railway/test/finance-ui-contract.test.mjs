@@ -24,11 +24,71 @@ test('uncategorized income and expenses still count in analytics',()=>{
   assert.match(html,/value="__uncategorized__">Без категории/);
 });
 
-test('deleting a finance account with history preserves operations',()=>{
+test('deleting a finance account with history preserves operations locally',()=>{
   assert.ok(html.includes("операций останутся в журнале"));
-  assert.ok(html.includes("deleteAccountId:data.deletedId?accountId:''"));
+  assert.ok(html.includes("account.archived=true;account.ignoreInBalance=true"));
+  assert.ok(html.includes("financeCommand('/api/finance/accounts/'+encodeURIComponent(accountId),{method:'DELETE',acceptStatuses:[404]})"));
 });
 
 test('archived finance account remains selectable when editing old history',()=>{
   assert.match(html,/x\.archived\?' · удалённый':'/);
+});
+
+
+test('finance is local-first with a durable IndexedDB outbox',()=>{
+  assert.ok(html.includes("FINANCE_OUTBOX_STORE='outbox',FINANCE_CACHE_VERSION=2"));
+  assert.ok(html.includes('async function financeLocalPersist(commands=[]'));
+  assert.ok(html.includes('async function financeSyncOutbox()'));
+  assert.ok(html.includes("financeCommandSequence=0"));
+  assert.ok(html.includes("applyFinanceSnapshot(financeLocalBefore);try{await bootstrapWarehouseFromServer()"));
+});
+
+test('normal finance flow no longer uses snapshot PATCH',()=>{
+  assert.equal(html.includes("/api/finance-state',{method:'PATCH'"),false);
+  assert.ok(html.includes("financeRunLocalMutation(()=>old?financeLocalUpdateTransaction"));
+  assert.ok(html.includes("financeRunLocalMutation(()=>financeLocalImportBatch(transactions)"));
+});
+
+test('finance background watcher only drains the outbox',()=>{
+  assert.ok(html.includes("setInterval(()=>financeSyncOutbox(),15000)"));
+  assert.equal(html.includes("setInterval(()=>pullFinanceFromServer(),30000)"),false);
+});
+
+function extractFunction(name){
+  const markers=[`function ${name}(`,`async function ${name}(`];
+  let start=-1;
+  for(const marker of markers){const p=html.indexOf(marker);if(p>=0&&(start<0||p<start))start=p}
+  assert.ok(start>=0,`missing ${name}`);
+  const candidates=[html.indexOf('\nfunction ',start+10),html.indexOf('\nasync function ',start+10)].filter(x=>x>start);
+  const end=candidates.length?Math.min(...candidates):html.length;
+  return html.slice(start,end);
+}
+
+test('local finance balance effects are reversible',()=>{
+  const names=['financeTransactionType','financeLocalTouchAccount','financeLocalApplyTransactionEffect','financeLocalApplyTransactionEffectSigned','financeLocalCreateTransaction','financeLocalUpdateTransaction','financeLocalDeleteTransaction'];
+  const src=names.map(extractFunction).join('\n');
+  const run=new Function(`
+    let accounts=[{id:'a',balance:100000,balanceDefault:100000,currency:'KZT'},{id:'b',balance:10000,balanceDefault:10000,currency:'KZT'}],transactions=[];
+    function financeAccounts(){return accounts}
+    function financeTransactions(){return transactions}
+    ${src}
+    const created=financeLocalCreateTransaction({id:'t1',type:'transfer',accountId:'a',toAccountId:'b',amount:45000,toAmount:45000,currency:'KZT',toCurrency:'KZT',defaultAmount:45000,affectsBalance:true,createdAt:1});
+    const afterCreate=accounts.map(x=>x.balance);
+    financeLocalUpdateTransaction('t1',{...created,amount:40000,toAmount:40000,defaultAmount:40000});
+    const afterEdit=accounts.map(x=>x.balance);
+    financeLocalDeleteTransaction('t1');
+    const afterDelete=accounts.map(x=>x.balance);
+    financeLocalCreateTransaction({id:'e1',type:'expense',accountId:'a',amount:5000,defaultAmount:5000,currency:'KZT',affectsBalance:true,createdAt:2});
+    const afterExpense=accounts.map(x=>x.balance);
+    financeLocalDeleteTransaction('e1');
+    const afterExpenseDelete=accounts.map(x=>x.balance);
+    return {afterCreate,afterEdit,afterDelete,afterExpense,afterExpenseDelete};
+  `);
+  assert.deepEqual(run(),{
+    afterCreate:[55000,55000],
+    afterEdit:[60000,50000],
+    afterDelete:[100000,10000],
+    afterExpense:[95000,10000],
+    afterExpenseDelete:[100000,10000]
+  });
 });
