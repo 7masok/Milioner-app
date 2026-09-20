@@ -181,7 +181,103 @@ async function upsertAccounts(client, rows) {
       item->>'id',
       (base.max_order+ord)::integer,
       COALESCE(item->>'name',''),
-      CASE WHEN COALESCE(item->>'balance','') ~ '^-?[0-9]+([.][0-9]+)?
+      CASE WHEN COALESCE(item->>'balance','') ~ '^-?[0-9]+([.][0-9]+)?$' THEN (item->>'balance')::numeric ELSE 0 END,
+      CASE WHEN COALESCE(item->>'balanceDefault','') ~ '^-?[0-9]+([.][0-9]+)?$' THEN (item->>'balanceDefault')::numeric ELSE NULL END,
+      COALESCE(NULLIF(item->>'currency',''),'KZT'),
+      CASE WHEN lower(COALESCE(item->>'archived','false'))='true' THEN true ELSE false END,
+      item,
+      CASE
+        WHEN COALESCE(item->>'updatedAt','') ~ '^[0-9]+$' THEN (item->>'updatedAt')::bigint
+        WHEN COALESCE(item->>'createdAt','') ~ '^[0-9]+$' THEN (item->>'createdAt')::bigint
+        ELSE $2
+      END
+    FROM incoming CROSS JOIN base
+    ON CONFLICT(id) DO UPDATE SET
+      name=excluded.name,balance=excluded.balance,balance_default=excluded.balance_default,
+      currency=excluded.currency,archived=excluded.archived,payload=excluded.payload,updated_at=excluded.updated_at
+  `, [JSON.stringify(rows), Date.now()]);
+}
+
+async function upsertCategories(client, rows) {
+  if (!rows.length) return;
+  await client.query(`
+    WITH base AS (SELECT COALESCE(MAX(sort_order),-1) AS max_order FROM finance_categories),
+    incoming AS (SELECT item,ord FROM jsonb_array_elements($1::jsonb) WITH ORDINALITY AS x(item,ord))
+    INSERT INTO finance_categories(id,sort_order,name,kind,archived,color,payload,updated_at)
+    SELECT
+      item->>'id',
+      (base.max_order+ord)::integer,
+      COALESCE(item->>'name','Без названия'),
+      CASE WHEN item->>'kind' IN ('income','expense','both') THEN item->>'kind' ELSE 'both' END,
+      CASE WHEN lower(COALESCE(item->>'archived','false'))='true' THEN true ELSE false END,
+      CASE WHEN COALESCE(item->>'color','') ~ '^-?[0-9]+$' THEN (item->>'color')::bigint ELSE NULL END,
+      item,
+      CASE
+        WHEN COALESCE(item->>'updatedAt','') ~ '^[0-9]+$' THEN (item->>'updatedAt')::bigint
+        WHEN COALESCE(item->>'createdAt','') ~ '^[0-9]+$' THEN (item->>'createdAt')::bigint
+        ELSE $2
+      END
+    FROM incoming CROSS JOIN base
+    ON CONFLICT(id) DO UPDATE SET
+      name=excluded.name,kind=excluded.kind,archived=excluded.archived,color=excluded.color,
+      payload=excluded.payload,updated_at=excluded.updated_at
+  `, [JSON.stringify(rows), Date.now()]);
+}
+
+async function upsertTransactions(client, rows) {
+  if (!rows.length) return;
+  await client.query(`
+    WITH base AS (SELECT COALESCE(MAX(sort_order),-1) AS max_order FROM finance_transactions),
+    incoming AS (SELECT item,ord FROM jsonb_array_elements($1::jsonb) WITH ORDINALITY AS x(item,ord))
+    INSERT INTO finance_transactions(
+      id,sort_order,type,account_id,to_account_id,category_id,amount,default_amount,currency,
+      transaction_date,created_at,updated_at,statement_fingerprint,payload
+    )
+    SELECT
+      item->>'id',
+      (base.max_order+ord)::integer,
+      COALESCE(item->>'type',''),
+      COALESCE(item->>'accountId',''),
+      COALESCE(item->>'toAccountId',''),
+      COALESCE(item->>'categoryId',''),
+      CASE WHEN COALESCE(item->>'amount','') ~ '^-?[0-9]+([.][0-9]+)?$' THEN (item->>'amount')::numeric ELSE 0 END,
+      CASE WHEN COALESCE(item->>'defaultAmount','') ~ '^-?[0-9]+([.][0-9]+)?$' THEN (item->>'defaultAmount')::numeric ELSE NULL END,
+      COALESCE(NULLIF(item->>'currency',''),'KZT'),
+      COALESCE(item->>'date',''),
+      CASE WHEN COALESCE(item->>'createdAt','') ~ '^[0-9]+$' THEN (item->>'createdAt')::bigint ELSE 0 END,
+      CASE
+        WHEN COALESCE(item->>'updatedAt','') ~ '^[0-9]+$' THEN (item->>'updatedAt')::bigint
+        WHEN COALESCE(item->>'createdAt','') ~ '^[0-9]+$' THEN (item->>'createdAt')::bigint
+        ELSE $2
+      END,
+      COALESCE(item->>'statementFingerprint',''),
+      item
+    FROM incoming CROSS JOIN base
+    ON CONFLICT(id) DO UPDATE SET
+      type=excluded.type,account_id=excluded.account_id,to_account_id=excluded.to_account_id,
+      category_id=excluded.category_id,amount=excluded.amount,default_amount=excluded.default_amount,
+      currency=excluded.currency,transaction_date=excluded.transaction_date,created_at=excluded.created_at,
+      updated_at=excluded.updated_at,statement_fingerprint=excluded.statement_fingerprint,payload=excluded.payload
+  `, [JSON.stringify(rows), Date.now()]);
+}
+
+async function upsertImports(client, imports) {
+  if (!Object.keys(imports).length) return;
+  await client.query(`
+    INSERT INTO finance_imports(backup_hash,payload,imported_at)
+    SELECT
+      key,
+      value,
+      CASE
+        WHEN COALESCE(value->>'importedAt','') ~ '^[0-9]+$' THEN (value->>'importedAt')::bigint
+        ELSE $2
+      END
+    FROM jsonb_each($1::jsonb)
+    ON CONFLICT(backup_hash) DO UPDATE SET payload=excluded.payload,imported_at=excluded.imported_at
+  `, [JSON.stringify(imports), Date.now()]);
+}
+
+financeRouter.get('/finance-state', requireTrustedOrigin, asyncRoute(async (req, res) => {
   const metaOnly = req.query.meta === '1';
   if (metaOnly) {
     const meta = await pool.query('SELECT revision,updated_at FROM finance_state_meta WHERE id=1');
@@ -250,883 +346,6 @@ financeRouter.patch('/finance-state', requireTrustedOrigin, requireWritesEnabled
       deleted: deleteAccounts.length + deleteCategories.length + deleteTransactions.length + deleteImports.length
     }
   });
-}));
-
-financeRouter.put('/finance-state', requireTrustedOrigin, requireWritesEnabled, asyncRoute(async (req, res) => {
-  const accounts = cleanRows(req.body?.accounts, MAX_ACCOUNTS, 'finance accounts');
-  const categories = cleanRows(req.body?.categories, MAX_CATEGORIES, 'finance categories');
-  const transactions = cleanRows(req.body?.transactions, MAX_TRANSACTIONS, 'finance transactions');
-  const imports = cleanImports(req.body?.imports);
-  const baseRevision = Number(req.body?.baseRevision || 0);
-
-  const result = await transaction(async client => {
-    await client.query('SELECT pg_advisory_xact_lock($1)', [730024]);
-    const current = await client.query('SELECT revision FROM finance_state_meta WHERE id=1 FOR UPDATE');
-    const currentRevision = Number(current.rows[0]?.revision || 0);
-    if (current.rowCount && baseRevision !== currentRevision) {
-      return { conflict: true, revision: currentRevision };
-    }
-
-    await replaceAccounts(client, accounts);
-    await replaceCategories(client, categories);
-    await replaceTransactions(client, transactions);
-    await replaceImports(client, imports);
-
-    const revision = currentRevision + 1;
-    const updatedAt = Date.now();
-    await client.query(`
-      INSERT INTO finance_state_meta(id,revision,updated_at) VALUES(1,$1,$2)
-      ON CONFLICT(id) DO UPDATE SET revision=excluded.revision,updated_at=excluded.updated_at
-    `, [revision, updatedAt]);
-
-    return { revision, updatedAt };
-  });
-
-  if (result.conflict) {
-    return res.status(409).json({ ok: false, error: 'finance-revision-conflict', revision: result.revision });
-  }
-  return res.json({
-    ok: true,
-    ...result,
-    counts: {
-      accounts: accounts.length,
-      categories: categories.length,
-      transactions: transactions.length,
-      imports: Object.keys(imports).length
-    }
-  });
-}));
- THEN (item->>'balance')::numeric ELSE 0 END,
-      CASE WHEN COALESCE(item->>'balanceDefault','') ~ '^-?[0-9]+([.][0-9]+)?
-  const metaOnly = req.query.meta === '1';
-  if (metaOnly) {
-    const meta = await pool.query('SELECT revision,updated_at FROM finance_state_meta WHERE id=1');
-    return res.json({
-      ok: true,
-      exists: Boolean(meta.rowCount),
-      revision: Number(meta.rows[0]?.revision || 0),
-      updatedAt: Number(meta.rows[0]?.updated_at || 0)
-    });
-  }
-  const state = await transaction(client => readFinanceState(client));
-  const exists = state.revision > 0 || state.accounts.length > 0 || state.categories.length > 0 || state.transactions.length > 0 || Object.keys(state.imports).length > 0;
-  return res.json({ ok: true, exists, ...state });
-}));
-
-financeRouter.put('/finance-state', requireTrustedOrigin, requireWritesEnabled, asyncRoute(async (req, res) => {
-  const accounts = cleanRows(req.body?.accounts, MAX_ACCOUNTS, 'finance accounts');
-  const categories = cleanRows(req.body?.categories, MAX_CATEGORIES, 'finance categories');
-  const transactions = cleanRows(req.body?.transactions, MAX_TRANSACTIONS, 'finance transactions');
-  const imports = cleanImports(req.body?.imports);
-  const baseRevision = Number(req.body?.baseRevision || 0);
-
-  const result = await transaction(async client => {
-    await client.query('SELECT pg_advisory_xact_lock($1)', [730024]);
-    const current = await client.query('SELECT revision FROM finance_state_meta WHERE id=1 FOR UPDATE');
-    const currentRevision = Number(current.rows[0]?.revision || 0);
-    if (current.rowCount && baseRevision !== currentRevision) {
-      return { conflict: true, revision: currentRevision };
-    }
-
-    await replaceAccounts(client, accounts);
-    await replaceCategories(client, categories);
-    await replaceTransactions(client, transactions);
-    await replaceImports(client, imports);
-
-    const revision = currentRevision + 1;
-    const updatedAt = Date.now();
-    await client.query(`
-      INSERT INTO finance_state_meta(id,revision,updated_at) VALUES(1,$1,$2)
-      ON CONFLICT(id) DO UPDATE SET revision=excluded.revision,updated_at=excluded.updated_at
-    `, [revision, updatedAt]);
-
-    return { revision, updatedAt };
-  });
-
-  if (result.conflict) {
-    return res.status(409).json({ ok: false, error: 'finance-revision-conflict', revision: result.revision });
-  }
-  return res.json({
-    ok: true,
-    ...result,
-    counts: {
-      accounts: accounts.length,
-      categories: categories.length,
-      transactions: transactions.length,
-      imports: Object.keys(imports).length
-    }
-  });
-}));
- THEN (item->>'balanceDefault')::numeric ELSE NULL END,
-      COALESCE(NULLIF(item->>'currency',''),'KZT'),
-      CASE WHEN lower(COALESCE(item->>'archived','false'))='true' THEN true ELSE false END,
-      item,
-      CASE
-        WHEN COALESCE(item->>'updatedAt','') ~ '^[0-9]+
-  const metaOnly = req.query.meta === '1';
-  if (metaOnly) {
-    const meta = await pool.query('SELECT revision,updated_at FROM finance_state_meta WHERE id=1');
-    return res.json({
-      ok: true,
-      exists: Boolean(meta.rowCount),
-      revision: Number(meta.rows[0]?.revision || 0),
-      updatedAt: Number(meta.rows[0]?.updated_at || 0)
-    });
-  }
-  const state = await transaction(client => readFinanceState(client));
-  const exists = state.revision > 0 || state.accounts.length > 0 || state.categories.length > 0 || state.transactions.length > 0 || Object.keys(state.imports).length > 0;
-  return res.json({ ok: true, exists, ...state });
-}));
-
-financeRouter.put('/finance-state', requireTrustedOrigin, requireWritesEnabled, asyncRoute(async (req, res) => {
-  const accounts = cleanRows(req.body?.accounts, MAX_ACCOUNTS, 'finance accounts');
-  const categories = cleanRows(req.body?.categories, MAX_CATEGORIES, 'finance categories');
-  const transactions = cleanRows(req.body?.transactions, MAX_TRANSACTIONS, 'finance transactions');
-  const imports = cleanImports(req.body?.imports);
-  const baseRevision = Number(req.body?.baseRevision || 0);
-
-  const result = await transaction(async client => {
-    await client.query('SELECT pg_advisory_xact_lock($1)', [730024]);
-    const current = await client.query('SELECT revision FROM finance_state_meta WHERE id=1 FOR UPDATE');
-    const currentRevision = Number(current.rows[0]?.revision || 0);
-    if (current.rowCount && baseRevision !== currentRevision) {
-      return { conflict: true, revision: currentRevision };
-    }
-
-    await replaceAccounts(client, accounts);
-    await replaceCategories(client, categories);
-    await replaceTransactions(client, transactions);
-    await replaceImports(client, imports);
-
-    const revision = currentRevision + 1;
-    const updatedAt = Date.now();
-    await client.query(`
-      INSERT INTO finance_state_meta(id,revision,updated_at) VALUES(1,$1,$2)
-      ON CONFLICT(id) DO UPDATE SET revision=excluded.revision,updated_at=excluded.updated_at
-    `, [revision, updatedAt]);
-
-    return { revision, updatedAt };
-  });
-
-  if (result.conflict) {
-    return res.status(409).json({ ok: false, error: 'finance-revision-conflict', revision: result.revision });
-  }
-  return res.json({
-    ok: true,
-    ...result,
-    counts: {
-      accounts: accounts.length,
-      categories: categories.length,
-      transactions: transactions.length,
-      imports: Object.keys(imports).length
-    }
-  });
-}));
- THEN (item->>'updatedAt')::bigint
-        WHEN COALESCE(item->>'createdAt','') ~ '^[0-9]+
-  const metaOnly = req.query.meta === '1';
-  if (metaOnly) {
-    const meta = await pool.query('SELECT revision,updated_at FROM finance_state_meta WHERE id=1');
-    return res.json({
-      ok: true,
-      exists: Boolean(meta.rowCount),
-      revision: Number(meta.rows[0]?.revision || 0),
-      updatedAt: Number(meta.rows[0]?.updated_at || 0)
-    });
-  }
-  const state = await transaction(client => readFinanceState(client));
-  const exists = state.revision > 0 || state.accounts.length > 0 || state.categories.length > 0 || state.transactions.length > 0 || Object.keys(state.imports).length > 0;
-  return res.json({ ok: true, exists, ...state });
-}));
-
-financeRouter.put('/finance-state', requireTrustedOrigin, requireWritesEnabled, asyncRoute(async (req, res) => {
-  const accounts = cleanRows(req.body?.accounts, MAX_ACCOUNTS, 'finance accounts');
-  const categories = cleanRows(req.body?.categories, MAX_CATEGORIES, 'finance categories');
-  const transactions = cleanRows(req.body?.transactions, MAX_TRANSACTIONS, 'finance transactions');
-  const imports = cleanImports(req.body?.imports);
-  const baseRevision = Number(req.body?.baseRevision || 0);
-
-  const result = await transaction(async client => {
-    await client.query('SELECT pg_advisory_xact_lock($1)', [730024]);
-    const current = await client.query('SELECT revision FROM finance_state_meta WHERE id=1 FOR UPDATE');
-    const currentRevision = Number(current.rows[0]?.revision || 0);
-    if (current.rowCount && baseRevision !== currentRevision) {
-      return { conflict: true, revision: currentRevision };
-    }
-
-    await replaceAccounts(client, accounts);
-    await replaceCategories(client, categories);
-    await replaceTransactions(client, transactions);
-    await replaceImports(client, imports);
-
-    const revision = currentRevision + 1;
-    const updatedAt = Date.now();
-    await client.query(`
-      INSERT INTO finance_state_meta(id,revision,updated_at) VALUES(1,$1,$2)
-      ON CONFLICT(id) DO UPDATE SET revision=excluded.revision,updated_at=excluded.updated_at
-    `, [revision, updatedAt]);
-
-    return { revision, updatedAt };
-  });
-
-  if (result.conflict) {
-    return res.status(409).json({ ok: false, error: 'finance-revision-conflict', revision: result.revision });
-  }
-  return res.json({
-    ok: true,
-    ...result,
-    counts: {
-      accounts: accounts.length,
-      categories: categories.length,
-      transactions: transactions.length,
-      imports: Object.keys(imports).length
-    }
-  });
-}));
- THEN (item->>'createdAt')::bigint
-        ELSE $2
-      END
-    FROM incoming CROSS JOIN base
-    ON CONFLICT(id) DO UPDATE SET
-      name=excluded.name,balance=excluded.balance,balance_default=excluded.balance_default,
-      currency=excluded.currency,archived=excluded.archived,payload=excluded.payload,updated_at=excluded.updated_at
-  `, [JSON.stringify(rows), Date.now()]);
-}
-
-async function upsertCategories(client, rows) {
-  if (!rows.length) return;
-  await client.query(`
-    WITH base AS (SELECT COALESCE(MAX(sort_order),-1) AS max_order FROM finance_categories),
-    incoming AS (SELECT item,ord FROM jsonb_array_elements($1::jsonb) WITH ORDINALITY AS x(item,ord))
-    INSERT INTO finance_categories(id,sort_order,name,kind,archived,color,payload,updated_at)
-    SELECT
-      item->>'id',
-      (base.max_order+ord)::integer,
-      COALESCE(item->>'name','Без названия'),
-      CASE WHEN item->>'kind' IN ('income','expense','both') THEN item->>'kind' ELSE 'both' END,
-      CASE WHEN lower(COALESCE(item->>'archived','false'))='true' THEN true ELSE false END,
-      CASE WHEN COALESCE(item->>'color','') ~ '^-?[0-9]+
-  const metaOnly = req.query.meta === '1';
-  if (metaOnly) {
-    const meta = await pool.query('SELECT revision,updated_at FROM finance_state_meta WHERE id=1');
-    return res.json({
-      ok: true,
-      exists: Boolean(meta.rowCount),
-      revision: Number(meta.rows[0]?.revision || 0),
-      updatedAt: Number(meta.rows[0]?.updated_at || 0)
-    });
-  }
-  const state = await transaction(client => readFinanceState(client));
-  const exists = state.revision > 0 || state.accounts.length > 0 || state.categories.length > 0 || state.transactions.length > 0 || Object.keys(state.imports).length > 0;
-  return res.json({ ok: true, exists, ...state });
-}));
-
-financeRouter.put('/finance-state', requireTrustedOrigin, requireWritesEnabled, asyncRoute(async (req, res) => {
-  const accounts = cleanRows(req.body?.accounts, MAX_ACCOUNTS, 'finance accounts');
-  const categories = cleanRows(req.body?.categories, MAX_CATEGORIES, 'finance categories');
-  const transactions = cleanRows(req.body?.transactions, MAX_TRANSACTIONS, 'finance transactions');
-  const imports = cleanImports(req.body?.imports);
-  const baseRevision = Number(req.body?.baseRevision || 0);
-
-  const result = await transaction(async client => {
-    await client.query('SELECT pg_advisory_xact_lock($1)', [730024]);
-    const current = await client.query('SELECT revision FROM finance_state_meta WHERE id=1 FOR UPDATE');
-    const currentRevision = Number(current.rows[0]?.revision || 0);
-    if (current.rowCount && baseRevision !== currentRevision) {
-      return { conflict: true, revision: currentRevision };
-    }
-
-    await replaceAccounts(client, accounts);
-    await replaceCategories(client, categories);
-    await replaceTransactions(client, transactions);
-    await replaceImports(client, imports);
-
-    const revision = currentRevision + 1;
-    const updatedAt = Date.now();
-    await client.query(`
-      INSERT INTO finance_state_meta(id,revision,updated_at) VALUES(1,$1,$2)
-      ON CONFLICT(id) DO UPDATE SET revision=excluded.revision,updated_at=excluded.updated_at
-    `, [revision, updatedAt]);
-
-    return { revision, updatedAt };
-  });
-
-  if (result.conflict) {
-    return res.status(409).json({ ok: false, error: 'finance-revision-conflict', revision: result.revision });
-  }
-  return res.json({
-    ok: true,
-    ...result,
-    counts: {
-      accounts: accounts.length,
-      categories: categories.length,
-      transactions: transactions.length,
-      imports: Object.keys(imports).length
-    }
-  });
-}));
- THEN (item->>'color')::bigint ELSE NULL END,
-      item,
-      CASE
-        WHEN COALESCE(item->>'updatedAt','') ~ '^[0-9]+
-  const metaOnly = req.query.meta === '1';
-  if (metaOnly) {
-    const meta = await pool.query('SELECT revision,updated_at FROM finance_state_meta WHERE id=1');
-    return res.json({
-      ok: true,
-      exists: Boolean(meta.rowCount),
-      revision: Number(meta.rows[0]?.revision || 0),
-      updatedAt: Number(meta.rows[0]?.updated_at || 0)
-    });
-  }
-  const state = await transaction(client => readFinanceState(client));
-  const exists = state.revision > 0 || state.accounts.length > 0 || state.categories.length > 0 || state.transactions.length > 0 || Object.keys(state.imports).length > 0;
-  return res.json({ ok: true, exists, ...state });
-}));
-
-financeRouter.put('/finance-state', requireTrustedOrigin, requireWritesEnabled, asyncRoute(async (req, res) => {
-  const accounts = cleanRows(req.body?.accounts, MAX_ACCOUNTS, 'finance accounts');
-  const categories = cleanRows(req.body?.categories, MAX_CATEGORIES, 'finance categories');
-  const transactions = cleanRows(req.body?.transactions, MAX_TRANSACTIONS, 'finance transactions');
-  const imports = cleanImports(req.body?.imports);
-  const baseRevision = Number(req.body?.baseRevision || 0);
-
-  const result = await transaction(async client => {
-    await client.query('SELECT pg_advisory_xact_lock($1)', [730024]);
-    const current = await client.query('SELECT revision FROM finance_state_meta WHERE id=1 FOR UPDATE');
-    const currentRevision = Number(current.rows[0]?.revision || 0);
-    if (current.rowCount && baseRevision !== currentRevision) {
-      return { conflict: true, revision: currentRevision };
-    }
-
-    await replaceAccounts(client, accounts);
-    await replaceCategories(client, categories);
-    await replaceTransactions(client, transactions);
-    await replaceImports(client, imports);
-
-    const revision = currentRevision + 1;
-    const updatedAt = Date.now();
-    await client.query(`
-      INSERT INTO finance_state_meta(id,revision,updated_at) VALUES(1,$1,$2)
-      ON CONFLICT(id) DO UPDATE SET revision=excluded.revision,updated_at=excluded.updated_at
-    `, [revision, updatedAt]);
-
-    return { revision, updatedAt };
-  });
-
-  if (result.conflict) {
-    return res.status(409).json({ ok: false, error: 'finance-revision-conflict', revision: result.revision });
-  }
-  return res.json({
-    ok: true,
-    ...result,
-    counts: {
-      accounts: accounts.length,
-      categories: categories.length,
-      transactions: transactions.length,
-      imports: Object.keys(imports).length
-    }
-  });
-}));
- THEN (item->>'updatedAt')::bigint
-        WHEN COALESCE(item->>'createdAt','') ~ '^[0-9]+
-  const metaOnly = req.query.meta === '1';
-  if (metaOnly) {
-    const meta = await pool.query('SELECT revision,updated_at FROM finance_state_meta WHERE id=1');
-    return res.json({
-      ok: true,
-      exists: Boolean(meta.rowCount),
-      revision: Number(meta.rows[0]?.revision || 0),
-      updatedAt: Number(meta.rows[0]?.updated_at || 0)
-    });
-  }
-  const state = await transaction(client => readFinanceState(client));
-  const exists = state.revision > 0 || state.accounts.length > 0 || state.categories.length > 0 || state.transactions.length > 0 || Object.keys(state.imports).length > 0;
-  return res.json({ ok: true, exists, ...state });
-}));
-
-financeRouter.put('/finance-state', requireTrustedOrigin, requireWritesEnabled, asyncRoute(async (req, res) => {
-  const accounts = cleanRows(req.body?.accounts, MAX_ACCOUNTS, 'finance accounts');
-  const categories = cleanRows(req.body?.categories, MAX_CATEGORIES, 'finance categories');
-  const transactions = cleanRows(req.body?.transactions, MAX_TRANSACTIONS, 'finance transactions');
-  const imports = cleanImports(req.body?.imports);
-  const baseRevision = Number(req.body?.baseRevision || 0);
-
-  const result = await transaction(async client => {
-    await client.query('SELECT pg_advisory_xact_lock($1)', [730024]);
-    const current = await client.query('SELECT revision FROM finance_state_meta WHERE id=1 FOR UPDATE');
-    const currentRevision = Number(current.rows[0]?.revision || 0);
-    if (current.rowCount && baseRevision !== currentRevision) {
-      return { conflict: true, revision: currentRevision };
-    }
-
-    await replaceAccounts(client, accounts);
-    await replaceCategories(client, categories);
-    await replaceTransactions(client, transactions);
-    await replaceImports(client, imports);
-
-    const revision = currentRevision + 1;
-    const updatedAt = Date.now();
-    await client.query(`
-      INSERT INTO finance_state_meta(id,revision,updated_at) VALUES(1,$1,$2)
-      ON CONFLICT(id) DO UPDATE SET revision=excluded.revision,updated_at=excluded.updated_at
-    `, [revision, updatedAt]);
-
-    return { revision, updatedAt };
-  });
-
-  if (result.conflict) {
-    return res.status(409).json({ ok: false, error: 'finance-revision-conflict', revision: result.revision });
-  }
-  return res.json({
-    ok: true,
-    ...result,
-    counts: {
-      accounts: accounts.length,
-      categories: categories.length,
-      transactions: transactions.length,
-      imports: Object.keys(imports).length
-    }
-  });
-}));
- THEN (item->>'createdAt')::bigint
-        ELSE $2
-      END
-    FROM incoming CROSS JOIN base
-    ON CONFLICT(id) DO UPDATE SET
-      name=excluded.name,kind=excluded.kind,archived=excluded.archived,color=excluded.color,
-      payload=excluded.payload,updated_at=excluded.updated_at
-  `, [JSON.stringify(rows), Date.now()]);
-}
-
-async function upsertTransactions(client, rows) {
-  if (!rows.length) return;
-  await client.query(`
-    WITH base AS (SELECT COALESCE(MAX(sort_order),-1) AS max_order FROM finance_transactions),
-    incoming AS (SELECT item,ord FROM jsonb_array_elements($1::jsonb) WITH ORDINALITY AS x(item,ord))
-    INSERT INTO finance_transactions(
-      id,sort_order,type,account_id,to_account_id,category_id,amount,default_amount,currency,
-      transaction_date,created_at,updated_at,statement_fingerprint,payload
-    )
-    SELECT
-      item->>'id',
-      (base.max_order+ord)::integer,
-      COALESCE(item->>'type',''),
-      COALESCE(item->>'accountId',''),
-      COALESCE(item->>'toAccountId',''),
-      COALESCE(item->>'categoryId',''),
-      CASE WHEN COALESCE(item->>'amount','') ~ '^-?[0-9]+([.][0-9]+)?
-  const metaOnly = req.query.meta === '1';
-  if (metaOnly) {
-    const meta = await pool.query('SELECT revision,updated_at FROM finance_state_meta WHERE id=1');
-    return res.json({
-      ok: true,
-      exists: Boolean(meta.rowCount),
-      revision: Number(meta.rows[0]?.revision || 0),
-      updatedAt: Number(meta.rows[0]?.updated_at || 0)
-    });
-  }
-  const state = await transaction(client => readFinanceState(client));
-  const exists = state.revision > 0 || state.accounts.length > 0 || state.categories.length > 0 || state.transactions.length > 0 || Object.keys(state.imports).length > 0;
-  return res.json({ ok: true, exists, ...state });
-}));
-
-financeRouter.put('/finance-state', requireTrustedOrigin, requireWritesEnabled, asyncRoute(async (req, res) => {
-  const accounts = cleanRows(req.body?.accounts, MAX_ACCOUNTS, 'finance accounts');
-  const categories = cleanRows(req.body?.categories, MAX_CATEGORIES, 'finance categories');
-  const transactions = cleanRows(req.body?.transactions, MAX_TRANSACTIONS, 'finance transactions');
-  const imports = cleanImports(req.body?.imports);
-  const baseRevision = Number(req.body?.baseRevision || 0);
-
-  const result = await transaction(async client => {
-    await client.query('SELECT pg_advisory_xact_lock($1)', [730024]);
-    const current = await client.query('SELECT revision FROM finance_state_meta WHERE id=1 FOR UPDATE');
-    const currentRevision = Number(current.rows[0]?.revision || 0);
-    if (current.rowCount && baseRevision !== currentRevision) {
-      return { conflict: true, revision: currentRevision };
-    }
-
-    await replaceAccounts(client, accounts);
-    await replaceCategories(client, categories);
-    await replaceTransactions(client, transactions);
-    await replaceImports(client, imports);
-
-    const revision = currentRevision + 1;
-    const updatedAt = Date.now();
-    await client.query(`
-      INSERT INTO finance_state_meta(id,revision,updated_at) VALUES(1,$1,$2)
-      ON CONFLICT(id) DO UPDATE SET revision=excluded.revision,updated_at=excluded.updated_at
-    `, [revision, updatedAt]);
-
-    return { revision, updatedAt };
-  });
-
-  if (result.conflict) {
-    return res.status(409).json({ ok: false, error: 'finance-revision-conflict', revision: result.revision });
-  }
-  return res.json({
-    ok: true,
-    ...result,
-    counts: {
-      accounts: accounts.length,
-      categories: categories.length,
-      transactions: transactions.length,
-      imports: Object.keys(imports).length
-    }
-  });
-}));
- THEN (item->>'amount')::numeric ELSE 0 END,
-      CASE WHEN COALESCE(item->>'defaultAmount','') ~ '^-?[0-9]+([.][0-9]+)?
-  const metaOnly = req.query.meta === '1';
-  if (metaOnly) {
-    const meta = await pool.query('SELECT revision,updated_at FROM finance_state_meta WHERE id=1');
-    return res.json({
-      ok: true,
-      exists: Boolean(meta.rowCount),
-      revision: Number(meta.rows[0]?.revision || 0),
-      updatedAt: Number(meta.rows[0]?.updated_at || 0)
-    });
-  }
-  const state = await transaction(client => readFinanceState(client));
-  const exists = state.revision > 0 || state.accounts.length > 0 || state.categories.length > 0 || state.transactions.length > 0 || Object.keys(state.imports).length > 0;
-  return res.json({ ok: true, exists, ...state });
-}));
-
-financeRouter.put('/finance-state', requireTrustedOrigin, requireWritesEnabled, asyncRoute(async (req, res) => {
-  const accounts = cleanRows(req.body?.accounts, MAX_ACCOUNTS, 'finance accounts');
-  const categories = cleanRows(req.body?.categories, MAX_CATEGORIES, 'finance categories');
-  const transactions = cleanRows(req.body?.transactions, MAX_TRANSACTIONS, 'finance transactions');
-  const imports = cleanImports(req.body?.imports);
-  const baseRevision = Number(req.body?.baseRevision || 0);
-
-  const result = await transaction(async client => {
-    await client.query('SELECT pg_advisory_xact_lock($1)', [730024]);
-    const current = await client.query('SELECT revision FROM finance_state_meta WHERE id=1 FOR UPDATE');
-    const currentRevision = Number(current.rows[0]?.revision || 0);
-    if (current.rowCount && baseRevision !== currentRevision) {
-      return { conflict: true, revision: currentRevision };
-    }
-
-    await replaceAccounts(client, accounts);
-    await replaceCategories(client, categories);
-    await replaceTransactions(client, transactions);
-    await replaceImports(client, imports);
-
-    const revision = currentRevision + 1;
-    const updatedAt = Date.now();
-    await client.query(`
-      INSERT INTO finance_state_meta(id,revision,updated_at) VALUES(1,$1,$2)
-      ON CONFLICT(id) DO UPDATE SET revision=excluded.revision,updated_at=excluded.updated_at
-    `, [revision, updatedAt]);
-
-    return { revision, updatedAt };
-  });
-
-  if (result.conflict) {
-    return res.status(409).json({ ok: false, error: 'finance-revision-conflict', revision: result.revision });
-  }
-  return res.json({
-    ok: true,
-    ...result,
-    counts: {
-      accounts: accounts.length,
-      categories: categories.length,
-      transactions: transactions.length,
-      imports: Object.keys(imports).length
-    }
-  });
-}));
- THEN (item->>'defaultAmount')::numeric ELSE NULL END,
-      COALESCE(NULLIF(item->>'currency',''),'KZT'),
-      COALESCE(item->>'date',''),
-      CASE WHEN COALESCE(item->>'createdAt','') ~ '^[0-9]+
-  const metaOnly = req.query.meta === '1';
-  if (metaOnly) {
-    const meta = await pool.query('SELECT revision,updated_at FROM finance_state_meta WHERE id=1');
-    return res.json({
-      ok: true,
-      exists: Boolean(meta.rowCount),
-      revision: Number(meta.rows[0]?.revision || 0),
-      updatedAt: Number(meta.rows[0]?.updated_at || 0)
-    });
-  }
-  const state = await transaction(client => readFinanceState(client));
-  const exists = state.revision > 0 || state.accounts.length > 0 || state.categories.length > 0 || state.transactions.length > 0 || Object.keys(state.imports).length > 0;
-  return res.json({ ok: true, exists, ...state });
-}));
-
-financeRouter.put('/finance-state', requireTrustedOrigin, requireWritesEnabled, asyncRoute(async (req, res) => {
-  const accounts = cleanRows(req.body?.accounts, MAX_ACCOUNTS, 'finance accounts');
-  const categories = cleanRows(req.body?.categories, MAX_CATEGORIES, 'finance categories');
-  const transactions = cleanRows(req.body?.transactions, MAX_TRANSACTIONS, 'finance transactions');
-  const imports = cleanImports(req.body?.imports);
-  const baseRevision = Number(req.body?.baseRevision || 0);
-
-  const result = await transaction(async client => {
-    await client.query('SELECT pg_advisory_xact_lock($1)', [730024]);
-    const current = await client.query('SELECT revision FROM finance_state_meta WHERE id=1 FOR UPDATE');
-    const currentRevision = Number(current.rows[0]?.revision || 0);
-    if (current.rowCount && baseRevision !== currentRevision) {
-      return { conflict: true, revision: currentRevision };
-    }
-
-    await replaceAccounts(client, accounts);
-    await replaceCategories(client, categories);
-    await replaceTransactions(client, transactions);
-    await replaceImports(client, imports);
-
-    const revision = currentRevision + 1;
-    const updatedAt = Date.now();
-    await client.query(`
-      INSERT INTO finance_state_meta(id,revision,updated_at) VALUES(1,$1,$2)
-      ON CONFLICT(id) DO UPDATE SET revision=excluded.revision,updated_at=excluded.updated_at
-    `, [revision, updatedAt]);
-
-    return { revision, updatedAt };
-  });
-
-  if (result.conflict) {
-    return res.status(409).json({ ok: false, error: 'finance-revision-conflict', revision: result.revision });
-  }
-  return res.json({
-    ok: true,
-    ...result,
-    counts: {
-      accounts: accounts.length,
-      categories: categories.length,
-      transactions: transactions.length,
-      imports: Object.keys(imports).length
-    }
-  });
-}));
- THEN (item->>'createdAt')::bigint ELSE 0 END,
-      CASE
-        WHEN COALESCE(item->>'updatedAt','') ~ '^[0-9]+
-  const metaOnly = req.query.meta === '1';
-  if (metaOnly) {
-    const meta = await pool.query('SELECT revision,updated_at FROM finance_state_meta WHERE id=1');
-    return res.json({
-      ok: true,
-      exists: Boolean(meta.rowCount),
-      revision: Number(meta.rows[0]?.revision || 0),
-      updatedAt: Number(meta.rows[0]?.updated_at || 0)
-    });
-  }
-  const state = await transaction(client => readFinanceState(client));
-  const exists = state.revision > 0 || state.accounts.length > 0 || state.categories.length > 0 || state.transactions.length > 0 || Object.keys(state.imports).length > 0;
-  return res.json({ ok: true, exists, ...state });
-}));
-
-financeRouter.put('/finance-state', requireTrustedOrigin, requireWritesEnabled, asyncRoute(async (req, res) => {
-  const accounts = cleanRows(req.body?.accounts, MAX_ACCOUNTS, 'finance accounts');
-  const categories = cleanRows(req.body?.categories, MAX_CATEGORIES, 'finance categories');
-  const transactions = cleanRows(req.body?.transactions, MAX_TRANSACTIONS, 'finance transactions');
-  const imports = cleanImports(req.body?.imports);
-  const baseRevision = Number(req.body?.baseRevision || 0);
-
-  const result = await transaction(async client => {
-    await client.query('SELECT pg_advisory_xact_lock($1)', [730024]);
-    const current = await client.query('SELECT revision FROM finance_state_meta WHERE id=1 FOR UPDATE');
-    const currentRevision = Number(current.rows[0]?.revision || 0);
-    if (current.rowCount && baseRevision !== currentRevision) {
-      return { conflict: true, revision: currentRevision };
-    }
-
-    await replaceAccounts(client, accounts);
-    await replaceCategories(client, categories);
-    await replaceTransactions(client, transactions);
-    await replaceImports(client, imports);
-
-    const revision = currentRevision + 1;
-    const updatedAt = Date.now();
-    await client.query(`
-      INSERT INTO finance_state_meta(id,revision,updated_at) VALUES(1,$1,$2)
-      ON CONFLICT(id) DO UPDATE SET revision=excluded.revision,updated_at=excluded.updated_at
-    `, [revision, updatedAt]);
-
-    return { revision, updatedAt };
-  });
-
-  if (result.conflict) {
-    return res.status(409).json({ ok: false, error: 'finance-revision-conflict', revision: result.revision });
-  }
-  return res.json({
-    ok: true,
-    ...result,
-    counts: {
-      accounts: accounts.length,
-      categories: categories.length,
-      transactions: transactions.length,
-      imports: Object.keys(imports).length
-    }
-  });
-}));
- THEN (item->>'updatedAt')::bigint
-        WHEN COALESCE(item->>'createdAt','') ~ '^[0-9]+
-  const metaOnly = req.query.meta === '1';
-  if (metaOnly) {
-    const meta = await pool.query('SELECT revision,updated_at FROM finance_state_meta WHERE id=1');
-    return res.json({
-      ok: true,
-      exists: Boolean(meta.rowCount),
-      revision: Number(meta.rows[0]?.revision || 0),
-      updatedAt: Number(meta.rows[0]?.updated_at || 0)
-    });
-  }
-  const state = await transaction(client => readFinanceState(client));
-  const exists = state.revision > 0 || state.accounts.length > 0 || state.categories.length > 0 || state.transactions.length > 0 || Object.keys(state.imports).length > 0;
-  return res.json({ ok: true, exists, ...state });
-}));
-
-financeRouter.put('/finance-state', requireTrustedOrigin, requireWritesEnabled, asyncRoute(async (req, res) => {
-  const accounts = cleanRows(req.body?.accounts, MAX_ACCOUNTS, 'finance accounts');
-  const categories = cleanRows(req.body?.categories, MAX_CATEGORIES, 'finance categories');
-  const transactions = cleanRows(req.body?.transactions, MAX_TRANSACTIONS, 'finance transactions');
-  const imports = cleanImports(req.body?.imports);
-  const baseRevision = Number(req.body?.baseRevision || 0);
-
-  const result = await transaction(async client => {
-    await client.query('SELECT pg_advisory_xact_lock($1)', [730024]);
-    const current = await client.query('SELECT revision FROM finance_state_meta WHERE id=1 FOR UPDATE');
-    const currentRevision = Number(current.rows[0]?.revision || 0);
-    if (current.rowCount && baseRevision !== currentRevision) {
-      return { conflict: true, revision: currentRevision };
-    }
-
-    await replaceAccounts(client, accounts);
-    await replaceCategories(client, categories);
-    await replaceTransactions(client, transactions);
-    await replaceImports(client, imports);
-
-    const revision = currentRevision + 1;
-    const updatedAt = Date.now();
-    await client.query(`
-      INSERT INTO finance_state_meta(id,revision,updated_at) VALUES(1,$1,$2)
-      ON CONFLICT(id) DO UPDATE SET revision=excluded.revision,updated_at=excluded.updated_at
-    `, [revision, updatedAt]);
-
-    return { revision, updatedAt };
-  });
-
-  if (result.conflict) {
-    return res.status(409).json({ ok: false, error: 'finance-revision-conflict', revision: result.revision });
-  }
-  return res.json({
-    ok: true,
-    ...result,
-    counts: {
-      accounts: accounts.length,
-      categories: categories.length,
-      transactions: transactions.length,
-      imports: Object.keys(imports).length
-    }
-  });
-}));
- THEN (item->>'createdAt')::bigint
-        ELSE $2
-      END,
-      COALESCE(item->>'statementFingerprint',''),
-      item
-    FROM incoming CROSS JOIN base
-    ON CONFLICT(id) DO UPDATE SET
-      type=excluded.type,account_id=excluded.account_id,to_account_id=excluded.to_account_id,
-      category_id=excluded.category_id,amount=excluded.amount,default_amount=excluded.default_amount,
-      currency=excluded.currency,transaction_date=excluded.transaction_date,created_at=excluded.created_at,
-      updated_at=excluded.updated_at,statement_fingerprint=excluded.statement_fingerprint,payload=excluded.payload
-  `, [JSON.stringify(rows), Date.now()]);
-}
-
-async function upsertImports(client, imports) {
-  const entries = Object.entries(imports);
-  if (!entries.length) return;
-  await client.query(`
-    INSERT INTO finance_imports(backup_hash,payload,imported_at)
-    SELECT
-      key,
-      value,
-      CASE
-        WHEN COALESCE(value->>'importedAt','') ~ '^[0-9]+
-  const metaOnly = req.query.meta === '1';
-  if (metaOnly) {
-    const meta = await pool.query('SELECT revision,updated_at FROM finance_state_meta WHERE id=1');
-    return res.json({
-      ok: true,
-      exists: Boolean(meta.rowCount),
-      revision: Number(meta.rows[0]?.revision || 0),
-      updatedAt: Number(meta.rows[0]?.updated_at || 0)
-    });
-  }
-  const state = await transaction(client => readFinanceState(client));
-  const exists = state.revision > 0 || state.accounts.length > 0 || state.categories.length > 0 || state.transactions.length > 0 || Object.keys(state.imports).length > 0;
-  return res.json({ ok: true, exists, ...state });
-}));
-
-financeRouter.put('/finance-state', requireTrustedOrigin, requireWritesEnabled, asyncRoute(async (req, res) => {
-  const accounts = cleanRows(req.body?.accounts, MAX_ACCOUNTS, 'finance accounts');
-  const categories = cleanRows(req.body?.categories, MAX_CATEGORIES, 'finance categories');
-  const transactions = cleanRows(req.body?.transactions, MAX_TRANSACTIONS, 'finance transactions');
-  const imports = cleanImports(req.body?.imports);
-  const baseRevision = Number(req.body?.baseRevision || 0);
-
-  const result = await transaction(async client => {
-    await client.query('SELECT pg_advisory_xact_lock($1)', [730024]);
-    const current = await client.query('SELECT revision FROM finance_state_meta WHERE id=1 FOR UPDATE');
-    const currentRevision = Number(current.rows[0]?.revision || 0);
-    if (current.rowCount && baseRevision !== currentRevision) {
-      return { conflict: true, revision: currentRevision };
-    }
-
-    await replaceAccounts(client, accounts);
-    await replaceCategories(client, categories);
-    await replaceTransactions(client, transactions);
-    await replaceImports(client, imports);
-
-    const revision = currentRevision + 1;
-    const updatedAt = Date.now();
-    await client.query(`
-      INSERT INTO finance_state_meta(id,revision,updated_at) VALUES(1,$1,$2)
-      ON CONFLICT(id) DO UPDATE SET revision=excluded.revision,updated_at=excluded.updated_at
-    `, [revision, updatedAt]);
-
-    return { revision, updatedAt };
-  });
-
-  if (result.conflict) {
-    return res.status(409).json({ ok: false, error: 'finance-revision-conflict', revision: result.revision });
-  }
-  return res.json({
-    ok: true,
-    ...result,
-    counts: {
-      accounts: accounts.length,
-      categories: categories.length,
-      transactions: transactions.length,
-      imports: Object.keys(imports).length
-    }
-  });
-}));
- THEN (value->>'importedAt')::bigint
-        ELSE $2
-      END
-    FROM jsonb_each($1::jsonb)
-    ON CONFLICT(backup_hash) DO UPDATE SET payload=excluded.payload,imported_at=excluded.imported_at
-  `, [JSON.stringify(imports), Date.now()]);
-}
-
-financeRouter.get('/finance-state', requireTrustedOrigin, asyncRoute(async (req, res) => {
-  const metaOnly = req.query.meta === '1';
-  if (metaOnly) {
-    const meta = await pool.query('SELECT revision,updated_at FROM finance_state_meta WHERE id=1');
-    return res.json({
-      ok: true,
-      exists: Boolean(meta.rowCount),
-      revision: Number(meta.rows[0]?.revision || 0),
-      updatedAt: Number(meta.rows[0]?.updated_at || 0)
-    });
-  }
-  const state = await transaction(client => readFinanceState(client));
-  const exists = state.revision > 0 || state.accounts.length > 0 || state.categories.length > 0 || state.transactions.length > 0 || Object.keys(state.imports).length > 0;
-  return res.json({ ok: true, exists, ...state });
 }));
 
 financeRouter.put('/finance-state', requireTrustedOrigin, requireWritesEnabled, asyncRoute(async (req, res) => {
