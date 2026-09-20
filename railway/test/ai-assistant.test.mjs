@@ -104,3 +104,21 @@ test('BCC Russian statement parser accepts Russian headings and blocked section'
   assert.equal(result.transactions[1].note,'Покупка');
   assert.equal(result.transactions[2].type,'income');
 });
+
+
+test('BCC parser repairs a wrapped account amount from the bank PDF table', () => {
+  const text = `
+Bank CenterCredit JSC
+BIC: KCJBKZKX
+Account statement KZ088562204150156670
+Account currency KZT
+Statement period 13.09.2026 - 20.09.2026
+2026-09-14 2026-09-14 Payment 153 000.00 -153 000.0 0.00 KZT 0.00KZT
+ KZT 0 KZT
+`;
+  const result = parseBccStatement(text,'source-hash-wrap','bcc-wrap.pdf');
+  assert.ok(result);
+  assert.equal(result.transactions.length,1);
+  assert.equal(result.transactions[0].amount,153000);
+  assert.equal(result.transactions[0].type,'expense');
+});
