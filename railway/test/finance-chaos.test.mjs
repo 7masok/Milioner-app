@@ -65,6 +65,7 @@ test('finance cache read failure is not treated as an authoritative empty databa
   assert.match(read,/return null/);
   assert.match(read,/financeCacheReadFailed=true/);
   assert.ok(html.includes("if(cached&&(localReady||financeSnapshotHasData(cached)))financeLocalBefore=cached"));
+  assert.ok(html.includes("if(!financeCacheReadFailed)applyFinanceSnapshot(financeLocalBefore)"));
   assert.ok(html.includes("if(financeCacheReadFailed){try{const data=await fetchFinanceCloud(false)"));
 });
 
@@ -231,4 +232,118 @@ test('10000 randomized local ledger mutations match an independent reference mod
   const result=run();
   assert.equal(result.balances.length,3);
   assert.ok(result.transactions>1000);
+});
+
+
+test('analytics handles income expense transit transfer refund and exclusions consistently',()=>{
+  const names=['financeTransactionType','financeTransactionAmount','financeTransactionDefaultAmount','financeCountsInIncomeExpense','financeAnalyticsEntry'];
+  const src=names.map(extractFunction).join('\n');
+  const run=new Function(src+`
+    return [
+      financeAnalyticsEntry({type:'expense',amount:100,defaultAmount:100,categoryId:'food'}),
+      financeAnalyticsEntry({type:'income',amount:250,defaultAmount:250}),
+      financeAnalyticsEntry({type:'transit_out',amount:40,defaultAmount:40,excludedFromAnalytics:true}),
+      financeAnalyticsEntry({type:'transfer',amount:50,defaultAmount:50,excludedFromAnalytics:true}),
+      financeAnalyticsEntry({type:'income',amount:30,defaultAmount:30,refundOfId:'e1',refundCategoryId:'food',refundCategory:'Еда'}),
+      financeAnalyticsEntry({type:'expense',amount:10,defaultAmount:10,excludedFromAnalytics:true})
+    ];
+  `);
+  assert.deepEqual(run(),[
+    {mode:'expense',amount:100,categoryId:'food',category:''},
+    {mode:'income',amount:250,categoryId:'',category:''},
+    null,
+    null,
+    {mode:'expense',amount:-30,categoryId:'food',category:'Еда'},
+    null
+  ]);
+});
+
+test('journal filters keep incoming transfers visible on the destination account',()=>{
+  const names=['financeTransactionType','financeTransactionTime','financeFilteredTransactions'];
+  const src=names.map(extractFunction).join('\n');
+  const run=new Function(src+`
+    const rows=[
+      {id:'e1',type:'expense',accountId:'a',categoryId:'food',amount:10,createdAt:100},
+      {id:'i1',type:'income',accountId:'b',amount:20,createdAt:200},
+      {id:'t1',type:'transfer',accountId:'a',toAccountId:'b',amount:30,createdAt:300},
+      {id:'x1',type:'expense',accountId:'b',amount:40,createdAt:400}
+    ];
+    let financeHistoryPeriodOverride={start:1,end:1000};
+    function financeTransactions(){return rows}
+    function financePeriodBounds(){return financeHistoryPeriodOverride}
+    const values={financePeriodFilter:'all',financeTypeFilter:'all',financeAccountFilter:'b',financeCategoryFilter:'all'};
+    const document={getElementById:id=>({value:values[id]||''})};
+    return financeFilteredTransactions().map(x=>x.id);
+  `);
+  assert.deepEqual(run(),['x1','t1','i1']);
+});
+
+test('10000 randomized KZT and USD ledger mutations preserve balance and default balance',()=>{
+  const names=[
+    'financeTransactionType','financeLocalTouchAccount','financeLocalApplyTransactionEffect',
+    'financeLocalApplyTransactionEffectSigned','financeLocalCreateTransaction',
+    'financeLocalUpdateTransaction','financeLocalDeleteTransaction'
+  ];
+  const src=names.map(extractFunction).join('\n');
+  const run=new Function(src+`
+    let accounts=[
+      {id:'k1',balance:100000,balanceDefault:100000,currency:'KZT'},
+      {id:'k2',balance:50000,balanceDefault:50000,currency:'KZT'},
+      {id:'u1',balance:1000,balanceDefault:450000,currency:'USD'},
+      {id:'u2',balance:500,balanceDefault:225000,currency:'USD'}
+    ],transactions=[];
+    function financeAccounts(){return accounts}
+    function financeTransactions(){return transactions}
+    const base={k1:{b:100000,d:100000},k2:{b:50000,d:50000},u1:{b:1000,d:450000},u2:{b:500,d:225000}};
+    function expected(){
+      const out=JSON.parse(JSON.stringify(base));
+      for(const tx of transactions){
+        if(tx.affectsBalance===false)continue;
+        const t=financeTransactionType(tx),a=Math.abs(Number(tx.amount)||0),da=Number.isFinite(Number(tx.defaultAmount))?Math.abs(Number(tx.defaultAmount)):null;
+        const add=(id,db,dd)=>{out[id].b+=db;if(dd!==null)out[id].d+=dd};
+        if(t==='income'||t==='transit_in')add(tx.accountId,a,da);
+        else if(t==='expense'||t==='transit_out')add(tx.accountId,-a,da===null?null:-da);
+        else if(t==='adjustment'){const signed=Number(tx.amount)||0;add(tx.accountId,signed,da===null?null:da*Math.sign(signed))}
+        else if(t==='transfer'){
+          const ta=Math.abs(Number(tx.toAmount))||a;
+          const td=Number.isFinite(Number(tx.toDefaultAmount))?Math.abs(Number(tx.toDefaultAmount)):(da!==null&&ta===a?da:null);
+          add(tx.accountId,-a,da===null?null:-da);add(tx.toAccountId,ta,td);
+        }
+      }
+      return out;
+    }
+    function verify(step){
+      const e=expected();
+      for(const a of accounts){
+        if(Math.abs(a.balance-e[a.id].b)>1e-8||Math.abs(a.balanceDefault-e[a.id].d)>1e-8)throw new Error('currency balance mismatch '+step+' '+a.id);
+      }
+    }
+    let seed=987654321,next=1;
+    function rnd(){seed=(seed*1103515245+12345)>>>0;return seed/4294967296}
+    const types=['income','expense','adjustment','transit_in','transit_out'];
+    for(let step=0;step<10000;step++){
+      const r=rnd();
+      if(r<.36||!transactions.length){
+        const curr=rnd()<.5?'KZT':'USD',ids=curr==='KZT'?['k1','k2']:['u1','u2'],from=ids[Math.floor(rnd()*2)],amount=Math.floor(rnd()*5000)+1,id='x'+next++;
+        if(rnd()<.25){
+          const to=ids[1-ids.indexOf(from)],def=curr==='KZT'?amount:amount*450;
+          financeLocalCreateTransaction({id,type:'transfer',accountId:from,toAccountId:to,amount,toAmount:amount,defaultAmount:def,toDefaultAmount:def,affectsBalance:true});
+        }else{
+          const type=types[Math.floor(rnd()*types.length)],signed=type==='adjustment'?(rnd()<.5?-amount:amount):amount,def=curr==='KZT'?Math.abs(signed):Math.abs(signed)*450;
+          financeLocalCreateTransaction({id,type,accountId:from,amount:signed,defaultAmount:def,affectsBalance:true});
+        }
+      }else if(r<.75){
+        const i=Math.floor(rnd()*transactions.length),old=transactions[i],curr=accounts.find(a=>a.id===old.accountId).currency,ids=curr==='KZT'?['k1','k2']:['u1','u2'],amount=Math.floor(rnd()*5000)+1,type=rnd()<.2?'transfer':types[Math.floor(rnd()*types.length)],accountId=ids[Math.floor(rnd()*2)],nextTx={...old,type,accountId,amount,defaultAmount:curr==='KZT'?amount:amount*450};
+        if(type==='adjustment')nextTx.amount=rnd()<.5?-amount:amount;
+        if(type==='transfer'){nextTx.toAccountId=ids[1-ids.indexOf(accountId)];nextTx.toAmount=amount;nextTx.toDefaultAmount=curr==='KZT'?amount:amount*450}
+        else{delete nextTx.toAccountId;delete nextTx.toAmount;delete nextTx.toDefaultAmount}
+        financeLocalUpdateTransaction(old.id,nextTx);
+      }else{
+        const i=Math.floor(rnd()*transactions.length);financeLocalDeleteTransaction(transactions[i].id);
+      }
+      verify(step);
+    }
+    return accounts.map(x=>({id:x.id,balance:x.balance,balanceDefault:x.balanceDefault}));
+  `);
+  assert.equal(run().length,4);
 });
