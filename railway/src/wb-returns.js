@@ -113,7 +113,13 @@ wbReturnsRouter.get('/wb-return-lookup',requireTrustedOrigin,asyncRoute(async(re
   if(unique.size>1)return res.status(409).json({ok:false,error:'По этому коду найдено несколько WB-заказов. Введите номер сборочного задания.'});
   const row=[...unique.values()][0];
   const externalKey=market+':'+String(row.orderId)+':'+String(row.entryId);
-  const sold=await pool.query("SELECT 1 FROM warehouse_state ws WHERE ws.id=1 AND ws.payload LIKE $1 LIMIT 1",['%'+externalKey.replace(/[%_]/g,'\\$&')+'%']);
+  const sold=await pool.query(`
+    SELECT 1
+    FROM warehouse_state ws
+    CROSS JOIN LATERAL jsonb_array_elements(COALESCE(ws.payload::jsonb->'sales','[]'::jsonb)) sale
+    WHERE ws.id=1 AND sale->>'externalKey'=$1
+    LIMIT 1
+  `,[externalKey]);
   return res.json({
     ok:true,
     order:{...row,qty:Math.max(1,Number(row.qty)||1),deducted:Boolean(sold.rowCount),externalKey},
