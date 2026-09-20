@@ -193,7 +193,7 @@ function bccMedian(values){
 }
 function parseBccBlockedRows(pending, accountCurrency='KZT'){
   const status='(?:ожидается|ожидает|в\\s+ожидании|күтілуде|pending|on\\s+hold)';
-  const blockRx=new RegExp('^\\s*(\\d{2}\\.\\d{2}\\.\\d{4})(?:\\s+(\\d{2}:\\d{2}:\\d{2}))?\\s+'+status+'([\\s\\S]*?)(?=^\\s*\\d{2}\\.\\d{2}\\.\\d{4}(?:\\s+\\d{2}:\\d{2}:\\d{2})?\\s+'+status+'|$)','gmi');
+  const blockRx=new RegExp('^\\s*(\\d{2}\\.\\d{2}\\.\\d{4})(?:\\s+(\\d{2}:\\d{2}:\\d{2}))?\\s+'+status+'([\\s\\S]*?)(?=^\\s*\\d{2}\\.\\d{2}\\.\\d{4}(?:\\s+\\d{2}:\\d{2}:\\d{2})?\\s+'+status+'|(?![\\s\\S]))','gmi');
   const rows=[];
   for(const m of String(pending||'').matchAll(blockRx)){
     const date=bccDateIso(m[1]),body=String(m[3]||'');
