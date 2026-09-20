@@ -45,3 +45,9 @@ test('merge effects combines repeated account deltas', () => {
 test('transfer rejects same source and destination', () => {
   assert.throws(() => financeTransactionEffects({type:'transfer',accountId:'a',toAccountId:'a',amount:1}), /different destination/);
 });
+
+test('negative adjustment also decreases default-currency balance', () => {
+  assert.deepEqual(financeTransactionEffects({type:'adjustment',accountId:'a',amount:-5,defaultAmount:2500}), [
+    {accountId:'a',delta:-5,defaultDelta:-2500}
+  ]);
+});
