@@ -98,6 +98,31 @@ app.get('/health', async (_req, res, next) => {
   } catch (error) { next(error); }
 });
 
+app.get('/api/system/storage-status', requireTrustedOrigin, async (_req, res, next) => {
+  try {
+    const capacityGb = Math.max(0.5, Number(process.env.POSTGRES_VOLUME_GB || 5) || 5);
+    const capacityBytes = Math.round(capacityGb * 1_000_000_000);
+    let databaseBytes = 0, tablespaceBytes = 0, walBytes = 0;
+    const db = await pool.query('SELECT pg_database_size(current_database())::bigint AS bytes');
+    databaseBytes = Number(db.rows[0]?.bytes || 0);
+    try {
+      const storage = await pool.query(`
+        SELECT
+          pg_tablespace_size('pg_default')::bigint AS tablespace_bytes,
+          COALESCE((SELECT SUM(size)::bigint FROM pg_ls_waldir()),0)::bigint AS wal_bytes
+      `);
+      tablespaceBytes = Number(storage.rows[0]?.tablespace_bytes || 0);
+      walBytes = Number(storage.rows[0]?.wal_bytes || 0);
+    } catch (error) {
+      console.warn('storage detail query unavailable:', String(error?.message || error));
+    }
+    const usedBytes = Math.max(databaseBytes, tablespaceBytes + walBytes);
+    const percent = capacityBytes > 0 ? Math.min(100, usedBytes / capacityBytes * 100) : 0;
+    const level = percent >= 85 ? 'critical' : percent >= 70 ? 'warning' : 'ok';
+    res.json({ ok:true, usedBytes, databaseBytes, tablespaceBytes, walBytes, capacityBytes, capacityGb, percent, level, checkedAt:Date.now() });
+  } catch (error) { next(error); }
+});
+
 app.get('/api/kaspi-sync-status', requireTrustedOrigin, async (_req, res, next) => {
   try {
     const latest = await pool.query("SELECT id,started_at,finished_at,ok,items,error FROM sync_runs WHERE market='Kaspi' ORDER BY id DESC LIMIT 1");
