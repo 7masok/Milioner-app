@@ -106,6 +106,26 @@ test('server reconciliation adds remote-only rows without deleting local-only ro
   assert.equal(merged.transactions.some(x=>x.id==='temp'),false);
 });
 
+test('server-confirmed reconcile repairs a newer wrong local balance and collapses local statement duplicates',()=>{
+  const names=['normalizeFinanceSnapshot','financeStatementIdentity','financeMergeServerArray','financeMergeServerSnapshot'];
+  const src=names.map(extractFunction).join('\n');
+  const run=new Function(src+`
+    const local={accounts:[{id:'a',name:'A',balance:700,updatedAt:999}],categories:[],transactions:[
+      {id:'dup1',type:'expense',accountId:'a',amount:100,source:'bank_statement',bankOperationKey:'op',bankStatus:'blocked',updatedAt:800},
+      {id:'dup2',type:'expense',accountId:'a',amount:120,source:'bank_statement',bankOperationKey:'op',bankStatus:'posted',updatedAt:700}
+    ],imports:{}};
+    const remote={accounts:[{id:'a',name:'A',balance:880,updatedAt:500}],categories:[],transactions:[
+      {id:'canon',type:'expense',accountId:'a',amount:120,source:'bank_statement',bankOperationKey:'op',bankStatus:'posted',updatedAt:500}
+    ],imports:{}};
+    return financeMergeServerSnapshot(local,remote,{preferRemote:true});
+  `);
+  const merged=run();
+  assert.equal(merged.accounts[0].balance,880);
+  assert.equal(merged.transactions.length,1);
+  assert.equal(merged.transactions[0].id,'canon');
+  assert.equal(merged.transactions[0].amount,120);
+});
+
 test('blocked BCC statement row promotes to posted and corrects balance locally',()=>{
   const names=[
     'financeTransactionType','financeLocalTouchAccount','financeLocalApplyTransactionEffect',
