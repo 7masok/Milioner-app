@@ -47,11 +47,23 @@ window.refreshAllMarketUnitProfit=async function(){
  if(allMarketUnitProfitLoading)return;
  allMarketUnitProfitLoading=true;
  try{
-  const days=30,[kaspiSnapshot,wb1,wb2]=await Promise.all([loadKaspiOrders(days),loadWbModel('WB',days),loadWbModel('WB2',days)]),totals=new Map((state.products||[]).map(p=>[String(p.id),{qty:0,profit:0}])),add=(pid,qty,profit)=>{pid=String(pid||'');qty=Math.max(0,Number(qty)||0);if(!pid)return;const row=totals.get(pid)||{qty:0,profit:0};row.qty+=qty;row.profit+=Number(profit)||0;totals.set(pid,row)},kaspi=buildModel(kaspiSnapshot,days);
+  const days=30,[kaspiSnapshot,wb1,wb2]=await Promise.all([loadKaspiOrders(days),loadWbModel('WB',days),loadWbModel('WB2',days)]),
+    totals=new Map((state.products||[]).map(p=>[String(p.id),{qty:0,profit:0,sources:{}}])),
+    add=(pid,qty,profit,source)=>{pid=String(pid||'');qty=Math.max(0,Number(qty)||0);if(!pid)return;const row=totals.get(pid)||{qty:0,profit:0,sources:{}};const profitValue=Number(profit)||0;row.qty+=qty;row.profit+=profitValue;if(source){const part=row.sources[source]||{qty:0,profit:0};part.qty+=qty;part.profit+=profitValue;row.sources[source]=part}totals.set(pid,row)},
+    kaspi=buildModel(kaspiSnapshot,days);
   const kaspiKnown=kaspi.rows.filter(x=>x.productId),kaspiRevenue=kaspiKnown.reduce((s,x)=>s+Math.max(0,Number(x.revenue)||0),0),kaspiLooseAds=kaspi.rows.filter(x=>!x.productId&&Number(x.revenue)===0).reduce((s,x)=>s+Math.max(0,Number(x.ads)||0),0);
-  for(const x of kaspiKnown)add(x.productId,x.qty,Number(x.profit)-(kaspiRevenue>0?kaspiLooseAds*Math.max(0,Number(x.revenue)||0)/kaspiRevenue:0));
-  for(const model of[wb1,wb2]){const linked=model.products.map(x=>({x,pid:wbLiveProductId(model.market,x)})).filter(v=>v.pid),revenue=linked.reduce((s,v)=>s+Math.max(0,Number(v.x.retailAmount)||0),0);for(const v of linked){const x=v.x,qty=Number(x.qty)||0,cost=wbRealizedFifoCost(v.pid,model.market,days,qty),share=revenue>0?Math.max(0,Number(x.retailAmount)||0)/revenue:0;add(v.pid,qty,Number(x.netBeforeCost||0)-cost-Math.max(0,Number(model.unmatchedAdvertising)||0)*share)}}
-  window.allMarketUnitProfit30=new Map([...totals].map(([pid,x])=>[pid,{qty:x.qty,profit:x.profit,unitProfit:x.qty?x.profit/x.qty:0}]));
+  for(const x of kaspiKnown)add(x.productId,x.qty,Number(x.profit)-(kaspiRevenue>0?kaspiLooseAds*Math.max(0,Number(x.revenue)||0)/kaspiRevenue:0),'Kaspi');
+  for(const model of[wb1,wb2]){
+    const linked=model.products.map(x=>({x,pid:wbLiveProductId(model.market,x)})).filter(v=>v.pid),
+      revenue=linked.reduce((s,v)=>s+Math.max(0,Number(v.x.retailAmount)||0),0);
+    for(const v of linked){
+      const x=v.x,netQty=Number(x.qty)||0,saleQty=Math.max(0,Number(x.saleQty??netQty)||0),
+        cost=wbRealizedFifoCost(v.pid,model.market,days,netQty),
+        share=revenue>0?Math.max(0,Number(x.retailAmount)||0)/revenue:0;
+      add(v.pid,saleQty,Number(x.netBeforeCost||0)-cost-Math.max(0,Number(model.unmatchedAdvertising)||0)*share,model.market);
+    }
+  }
+  window.allMarketUnitProfit30=new Map([...totals].map(([pid,x])=>[pid,{qty:x.qty,profit:x.profit,unitProfit:x.qty?x.profit/x.qty:0,sources:x.sources}]));
   if(typeof productRenderStatsCache!=='undefined')productRenderStatsCache=null;
   if(document.querySelector('#products.view.active')&&typeof renderProducts==='function')renderProducts(true);
  }catch(e){console.warn('All-market unit profit',e)}finally{allMarketUnitProfitLoading=false}
