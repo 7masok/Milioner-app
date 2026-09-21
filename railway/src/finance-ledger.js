@@ -613,7 +613,7 @@ financeLedgerRouter.post('/finance/accounts/:id/bind-statement', requireTrustedO
         if(accountNumber&&!String(before.accountNumber||'')){next.accountNumber=accountNumber;dirty=true}
         if(accountNumber&&!String(before.bankAccountNumber||'')){next.bankAccountNumber=accountNumber;dirty=true}
         if(cardNumber&&String(before.bankStatementCardNumber||'')!==cardNumber){next.bankStatementCardNumber=cardNumber;dirty=true}
-        if(cardNumber&&!String(before.cardNumber||'')){next.cardNumber=cardNumber;dirty=true}
+        if(cardNumber&&String(before.cardNumber||'')!==cardNumber){next.cardNumber=cardNumber;dirty=true}
       }else if(bind&&keys.some(key=>keysCurrent.includes(key))){next.bankStatementKeys=keysCurrent.filter(x=>!keys.includes(x));dirty=true}
       if(!dirty)continue;
       next.updatedAt=now;delete next._syncUpdatedAt;
