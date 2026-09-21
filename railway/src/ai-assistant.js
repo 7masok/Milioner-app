@@ -363,9 +363,23 @@ export function parseKaspiStatement(text, sourceHash, filename) {
   const clean=cleanPdfText(text);
   if(!/Kaspi\s+Gold/i.test(clean)||!/ВЫПИСКА/i.test(clean))return null;
   const period=clean.match(/за период с\s*(\d{2}\.\d{2}\.\d{2,4})\s*по\s*(\d{2}\.\d{2}\.\d{2,4})/i);
-  const account=clean.match(/Номер счета:\s*([A-Z0-9]+)/i);
-  const card=clean.match(/Номер карты:\s*([^\s]+)/i);
-  const raw={bank:'Kaspi Bank',accountName:card?'Kaspi Gold '+card[1]:'Kaspi Gold',currency:'KZT',periodStart:period?.[1]||'',periodEnd:period?.[2]||'',transactions:[]};
+  const account=clean.match(/(?:Номер\s+сч[её]та|IBAN)\s*[:№#-]?\s*(KZ[A-Z0-9]{14,32}|[A-Z0-9]{12,34})/i);
+  const cardRaw=clean.match(/Номер\s+карты\s*[:№#-]?\s*([0-9*Xx][0-9*Xx \-]{6,30}[0-9*Xx])/i);
+  const cardNumber=cardRaw?String(cardRaw[1]||'').replace(/[^0-9*Xx]/g,''):'';
+  const balanceMatch=clean.match(/(?:Доступно|Текущий\s+остаток|Итоговый\s+остаток|Конечный\s+остаток|Остаток(?:\s+на\s+конец)?|Баланс)\s*[:\-]?\s*([+-]?[\d\s]+(?:[\.,]\d{2})?)\s*₸?/i);
+  const accountNumber=String(account?.[1]||'').toUpperCase().replace(/[^A-Z0-9]/g,'');
+  const raw={
+    bank:'Kaspi Bank',
+    accountName:cardNumber?'Kaspi Gold '+cardNumber:'Kaspi Gold',
+    accountNumber,
+    iban:/^KZ/i.test(accountNumber)?accountNumber:'',
+    cardNumber,
+    currency:'KZT',
+    periodStart:period?.[1]||'',
+    periodEnd:period?.[2]||'',
+    currentBalance:balanceMatch?Number(String(balanceMatch[1]).replace(/\s+/g,'').replace(',','.')):null,
+    transactions:[]
+  };
   const occurrence=new Map();
   for(const row of kaspiOperationRows(clean)){
     const lower=row.rest.toLowerCase();
@@ -399,7 +413,6 @@ export function parseKaspiStatement(text, sourceHash, filename) {
     });
   }
   const normalized=normalizeStatementResult(raw,sourceHash,filename);
-  if(account?.[1])normalized.statement.accountNumber=account[1];
   return normalized.transactions.length?normalized:null;
 }
 
