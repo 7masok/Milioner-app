@@ -121,6 +121,9 @@ function normalizeStatementResult(raw, sourceHash, filename) {
       filename,
       bank: String(raw?.bank || '').trim().slice(0,120),
       accountName: String(raw?.accountName || '').trim().slice(0,160),
+      accountNumber: String(raw?.accountNumber || raw?.iban || '').trim().toUpperCase().replace(/[^A-Z0-9]/g,'').slice(0,64),
+      iban: String(raw?.iban || raw?.accountNumber || '').trim().toUpperCase().replace(/[^A-Z0-9]/g,'').slice(0,64),
+      cardNumber: String(raw?.cardNumber || '').trim().replace(/[^0-9*Xx]/g,'').slice(0,32),
       currency: String(raw?.currency || 'KZT').trim().toUpperCase().slice(0,8) || 'KZT',
       periodStart: normalizeStatementDate(raw?.periodStart),
       periodEnd: normalizeStatementDate(raw?.periodEnd),
@@ -269,11 +272,13 @@ export function parseBccStatement(text, sourceHash, filename) {
   if (!bankMatch || !statementMatch) return null;
 
   const period = clean.match(/(?:Кезеңі|Период(?:\s+выписки)?|Statement\s+period)\s*[:\-]?\s*(\d{2}\.\d{2}\.\d{4})\s*[-–—]\s*(\d{2}\.\d{2}\.\d{4})/i);
-  const account = clean.match(/(?:Шот бойынша үзінді|Выписка\s+по\s+сч[её]ту|Account\s+statement)\s*[:№#-]?\s*([A-Z]{2}\d{10,})/i);
-  const card = clean.match(/(?:Карта|Номер\s+(?:платежной\s+)?карты|Payment\s+card\s+number)\s*[:№#-]?\s*([0-9*]{8,})/i);
-  const currency = clean.match(/(?:Валюта(?:\s+сч[её]та)?|Шот\s+валютасы|Account\s+currency)\s*[:\-]?\s*([A-Z]{3})/i);
-  const accountType = clean.match(/(?:Тип\s+сч[её]та|Шот\s+түрі|Account\s+type)\s*[:\-]?\s*([^\n]+)/i);
-  const currentBalanceMatch = clean.match(/(?:Текущий\s+остаток|Ағымдағы\s+қалдық|Current\s+balance)\s*[:\-]?\s*([\d ]+\.\d{2})\s*([A-Z]{3})?/i);
+  const account = clean.match(/(?:Шот бойынша үзінді|Выписка\s+по\s+(?:банковскому\s+)?сч[её]ту|Account\s+statement|IBAN|Номер\s+(?:банковского\s+)?сч[её]та|Шот\s+н[өо]мірі)\s*[:№#-]?\s*(KZ[A-Z0-9]{14,32})/i)
+    || clean.match(/\b(KZ[A-Z0-9]{14,32})\b/i);
+  const cardRaw = clean.match(/(?:Карта|Номер\s+(?:платежной\s+)?карты|Payment\s+card\s+number)\s*[:№#-]?\s*([0-9*Xx][0-9*Xx \-]{6,30}[0-9*Xx])/i);
+  const cardNumber = cardRaw ? String(cardRaw[1]||'').replace(/[^0-9*Xx]/g,'') : '';
+  const currency = clean.match(/(?:Валюта(?:\s+(?:банковского\s+)?сч[её]та)?|Шот\s+валютасы|Account\s+currency)\s*[:\-]?\s*([A-Z]{3})/i);
+  const accountType = clean.match(/(?:Тип\s+(?:банковского\s+)?сч[её]та|Шот\s+түрі|Account\s+type)\s*[:\-]?\s*([^\n]+)/i);
+  const currentBalanceMatch = clean.match(/(?:Текущий\s+остаток|Итоговый\s+остаток|Конечный\s+остаток|Исходящий\s+остаток|Остаток\s+на\s+конец(?:\s+периода)?|Ағымдағы\s+қалдық|Current\s+balance|Closing\s+balance|Ending\s+balance)\s*[:\-]?\s*([+-]?[\d ]+[\.,]\d{2})\s*([A-Z]{3})?/i);
 
   const blockedRx = /(?:Блоктағы транзакциялар|Заблокированные\s+(?:операции|транзакции)|Транзакции\s+в\s+блоке|Операции\s+в\s+блоке|Transactions\s+on\s+hold)/i;
   const blockedMatch = blockedRx.exec(clean);
@@ -284,13 +289,16 @@ export function parseBccStatement(text, sourceHash, filename) {
 
   const raw = {
     bank:'Bank CenterCredit',
-    accountName:card ? 'BCC '+card[1] : (accountType?.[1]?.trim() || '#bccpay'),
+    accountName:cardNumber ? 'BCC '+cardNumber : (accountType?.[1]?.trim() || '#bccpay'),
+    accountNumber:account?.[1] || '',
+    iban:account?.[1] || '',
+    cardNumber,
     currency:currency?.[1] || 'KZT',
     periodStart:period?.[1] || '',
     periodEnd:period?.[2] || '',
     pendingCount,
     blockedImportedCount:0,
-    currentBalance: currentBalanceMatch ? Number(String(currentBalanceMatch[1]).replace(/\s+/g,'')) : null,
+    currentBalance: currentBalanceMatch ? Number(String(currentBalanceMatch[1]).replace(/\s+/g,'').replace(',','.')) : null,
     transactions:[]
   };
 
@@ -343,7 +351,6 @@ export function parseBccStatement(text, sourceHash, filename) {
   }
 
   const normalized = normalizeStatementResult(raw,sourceHash,filename);
-  if (account?.[1]) normalized.statement.accountNumber=account[1];
   normalized.statement.language =
     /Account\s+statement/i.test(clean) ? 'en' :
     /Выписка/i.test(clean) ? 'ru' :
