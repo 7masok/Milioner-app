@@ -19,9 +19,10 @@ test('finance journal empty state is controlled by renderer',()=>{
   assert.match(html,/По выбранным фильтрам операций нет/);
 });
 
-test('uncategorized income and expenses still count in analytics',()=>{
-  assert.match(html,/function financeCountsInIncomeExpense\(x\).*return true}/s);
+test('uncategorized rows remain filterable in history but stay out of analytics',()=>{
   assert.match(html,/value="__uncategorized__">Без категории/);
+  const fn=extractFunction('financeAnalyticsEntry');
+  assert.ok(fn.includes("if(!effective.categoryId&&!effective.category)return null"));
 });
 
 test('deleting a finance account with history preserves operations locally',()=>{
