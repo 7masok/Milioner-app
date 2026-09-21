@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { parseWarehousePayload, snapshotSummary, parseBccStatement } from '../src/ai-assistant.js';
+import { parseWarehousePayload, snapshotSummary, parseBccStatement, parseKaspiStatement } from '../src/ai-assistant.js';
 
 test('GPT context parses warehouse JSON stored as text', () => {
   const raw=JSON.stringify({products:[{id:'p1',name:'Рулетка',stock:7,min:3,kaspi:'123'}],sales:[{productId:'p1',qty:2,channel:'Kaspi',date:10}]});
@@ -275,4 +275,24 @@ test('BCC parser reads banking-account heading, spaced card and closing balance'
   assert.equal(result.statement.cardNumber,'489993******2297');
   assert.equal(result.statement.accountName,'BCC 489993******2297');
   assert.equal(result.statement.currentBalance,1234567.89);
+});
+
+
+test('Kaspi parser exposes account card and balance metadata', () => {
+  const text = `
+Kaspi Gold
+ВЫПИСКА
+за период с 20.09.2026 по 20.09.2026
+Номер счета: KZ1234567890123456
+Номер карты: 4400 12** **** 7788
+Доступно: 456 789,10 ₸
+Дата Сумма Операция Детали
+20.09.2026 12:30 - 1 000,00 ₸ Покупка MAGNUM
+`;
+  const result=parseKaspiStatement(text,'kaspi-meta','kaspi.pdf');
+  assert.ok(result);
+  assert.equal(result.statement.accountNumber,'KZ1234567890123456');
+  assert.equal(result.statement.iban,'KZ1234567890123456');
+  assert.equal(result.statement.cardNumber,'440012******7788');
+  assert.equal(result.statement.currentBalance,456789.10);
 });
