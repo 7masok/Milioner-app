@@ -56,3 +56,16 @@ test('same transaction id is a pure retry unless statement repair is required',(
   assert.match(fn,/idempotent:true/);
   assert.match(fn,/promote-statement/);
 });
+
+
+test('statement binding persists IBAN and card metadata',()=>{
+  const start=ledgerSource.indexOf("financeLedgerRouter.post('/finance/accounts/:id/bind-statement'");
+  assert.ok(start>=0);
+  const route=ledgerSource.slice(start,start+4200);
+  assert.match(route,/cardNumber/);
+  assert.match(route,/iban/);
+  assert.match(route,/next\.iban=iban/);
+  assert.match(route,/next\.cardNumber=cardNumber/);
+  assert.match(route,/bind&&key/);
+  assert.doesNotMatch(route,/if\(!key\) throw httpError\('Statement binding key is required'/);
+});
