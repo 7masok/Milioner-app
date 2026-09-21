@@ -11,3 +11,13 @@ test('product list shows unit cost and unit profit in the right column',()=>{
   assert.match(line,/Прибыль за 30 дней/);
   assert.match(line,/hasProfitData=Number\(profit\?\.qty\)>0/);
 });
+
+
+test('projected stock profit is transparent and product cost input is rounded',()=>{
+  assert.match(html,/Ожидаемая прибыль с остатка/);
+  assert.match(html,/onclick="openStockProfitBreakdown\(\)"/);
+  assert.match(html,/function warehouseProjectedProfitRows\(profitStats\)/);
+  assert.match(html,/свободный остаток × средняя чистая прибыль/);
+  assert.match(html,/последним 30 дням: Kaspi \+ WB1 \+ WB2/);
+  assert.match(html,/id="ecost"[^>]*step="0\.01"[^>]*Math\.round/);
+});
