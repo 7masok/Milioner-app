@@ -255,3 +255,24 @@ test('BCC blocked and later posted form of the same operation keep one stable ba
   assert.equal(blocked.transactions[0].bankOperationKey,posted.transactions[0].bankOperationKey);
   assert.notEqual(blocked.transactions[0].statementFingerprint,posted.transactions[0].statementFingerprint);
 });
+
+
+test('BCC parser reads banking-account heading, spaced card and closing balance', () => {
+  const text = `
+Банк ЦентрКредит
+БИК: KCJBKZKX
+Выписка по банковскому счету KZ088562204150156670
+Валюта банковского счета KZT
+Номер платежной карты 4899 93** **** 2297
+Период выписки 20.09.2026 - 20.09.2026
+Итоговый остаток: 1 234 567,89 KZT
+2026-09-20 2026-09-20 Платёж TEST 120.00 KZT -120.00 KZT 0.00 KZT 0.00KZT
+`;
+  const result=parseBccStatement(text,'source-hash-requisites','bcc-requisites.pdf');
+  assert.ok(result);
+  assert.equal(result.statement.accountNumber,'KZ088562204150156670');
+  assert.equal(result.statement.iban,'KZ088562204150156670');
+  assert.equal(result.statement.cardNumber,'489993******2297');
+  assert.equal(result.statement.accountName,'BCC 489993******2297');
+  assert.equal(result.statement.currentBalance,1234567.89);
+});
