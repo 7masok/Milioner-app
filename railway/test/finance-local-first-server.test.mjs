@@ -83,6 +83,6 @@ test('statement binding accepts multiple identity keys',()=>{
 test('statement metadata refreshes stale IBAN and card values',()=>{
   const start=ledgerSource.indexOf("financeLedgerRouter.post('/finance/accounts/:id/bind-statement'");
   const route=ledgerSource.slice(start,start+4600);
-  assert.match(route,/String\(before\.iban\|\|''\)!==iban/);
-  assert.match(route,/String\(before\.cardNumber\|\|''\)!==cardNumber/);
+  assert.ok(route.includes("String(before.iban||'')!==iban"));
+  assert.ok(route.includes("String(before.cardNumber||'')!==cardNumber"));
 });
