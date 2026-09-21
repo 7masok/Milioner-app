@@ -161,3 +161,34 @@ test('statement import reports exact local balance change',()=>{
   assert.ok(fn.includes('balanceAfterImport=Number(financeAccounts().find'));
   assert.ok(fn.includes("+' · баланс '+financeMoney(balanceBeforeImport"));
 });
+
+
+test('statement import stores bank requisites on selected account',()=>{
+  const accountNumber=extractFunction('financeStatementAccountNumber');
+  const cardNumber=extractFunction('financeStatementCardNumber');
+  const remember=extractFunction('financeStatementRememberAccount');
+  assert.ok(accountNumber.includes("statement?.accountNumber||statement?.iban"));
+  assert.ok(cardNumber.includes("statement?.cardNumber"));
+  assert.ok(remember.includes("a.iban=iban"));
+  assert.ok(remember.includes("a.cardNumber=card"));
+  assert.ok(remember.includes("bankStatementCardNumber"));
+  assert.ok(remember.includes("bind:Boolean(bind)"));
+});
+
+test('finance account cards expose imported IBAN and card details',()=>{
+  assert.ok(html.includes('function financeAccountRequisites(a)'));
+  assert.ok(html.includes("parts.push((/^KZ/i.test(number)?'IBAN ':'Счёт ')+number)"));
+  assert.ok(html.includes("parts.push('Карта '+card)"));
+  assert.ok(html.includes("financeAccountRequisites(x)"));
+});
+
+test('statement import verifies final account balance against statement closing balance',()=>{
+  const start=html.indexOf('async function financeImportStatementDraft(){');
+  const end=html.indexOf('\nasync function financeProcessStatementFile',start);
+  const fn=html.slice(start,end>start?end:start+40000);
+  assert.ok(fn.includes('statementBalance=Number(draft.statement?.currentBalance)'));
+  assert.ok(fn.includes('Math.abs(statementDiff)<=.01'));
+  assert.ok(fn.includes('Остаток совпадает с выпиской'));
+  assert.ok(fn.includes('Остаток НЕ совпадает с выпиской'));
+  assert.ok(fn.includes('Итоговый остаток в выписке не распознан'));
+});
