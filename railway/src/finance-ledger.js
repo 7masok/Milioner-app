@@ -609,9 +609,9 @@ financeLedgerRouter.post('/finance/accounts/:id/bind-statement', requireTrustedO
         if(bind&&keys.some(key=>!keysCurrent.includes(key))){next.bankStatementKeys=[...new Set([...keysCurrent,...keys])];dirty=true}
         if(accountNumber&&String(before.bankStatementAccountNumber||'')!==accountNumber){next.bankStatementAccountNumber=accountNumber;dirty=true}
         if(bank&&String(before.bankStatementBank||'')!==bank){next.bankStatementBank=bank;dirty=true}
-        if(iban&&!String(before.iban||'')){next.iban=iban;dirty=true}
-        if(accountNumber&&!String(before.accountNumber||'')){next.accountNumber=accountNumber;dirty=true}
-        if(accountNumber&&!String(before.bankAccountNumber||'')){next.bankAccountNumber=accountNumber;dirty=true}
+        if(iban&&String(before.iban||'')!==iban){next.iban=iban;dirty=true}
+        if(accountNumber&&String(before.accountNumber||'')!==accountNumber){next.accountNumber=accountNumber;dirty=true}
+        if(accountNumber&&String(before.bankAccountNumber||'')!==accountNumber){next.bankAccountNumber=accountNumber;dirty=true}
         if(cardNumber&&String(before.bankStatementCardNumber||'')!==cardNumber){next.bankStatementCardNumber=cardNumber;dirty=true}
         if(cardNumber&&String(before.cardNumber||'')!==cardNumber){next.cardNumber=cardNumber;dirty=true}
       }else if(bind&&keys.some(key=>keysCurrent.includes(key))){next.bankStatementKeys=keysCurrent.filter(x=>!keys.includes(x));dirty=true}
