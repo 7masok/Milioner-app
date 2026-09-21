@@ -69,3 +69,20 @@ test('statement binding persists IBAN and card metadata',()=>{
   assert.match(route,/bind&&key/);
   assert.doesNotMatch(route,/if\(!key\) throw httpError\('Statement binding key is required'/);
 });
+
+
+test('statement binding accepts multiple identity keys',()=>{
+  const start=ledgerSource.indexOf("financeLedgerRouter.post('/finance/accounts/:id/bind-statement'");
+  const route=ledgerSource.slice(start,start+4600);
+  assert.match(route,/Array\.isArray\(req\.body\?\.keys\)/);
+  assert.match(route,/keysCurrent/);
+  assert.match(route,/new Set\(\[\.\.\.keysCurrent,\.\.\.keys\]\)/);
+  assert.match(route,/keysCurrent\.filter\(x=>!keys\.includes\(x\)\)/);
+});
+
+test('statement metadata refreshes stale IBAN and card values',()=>{
+  const start=ledgerSource.indexOf("financeLedgerRouter.post('/finance/accounts/:id/bind-statement'");
+  const route=ledgerSource.slice(start,start+4600);
+  assert.match(route,/String\(before\.iban\|\|''\)!==iban/);
+  assert.match(route,/String\(before\.cardNumber\|\|''\)!==cardNumber/);
+});
