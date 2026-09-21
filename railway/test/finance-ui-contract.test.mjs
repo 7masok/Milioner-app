@@ -192,3 +192,26 @@ test('statement import verifies final account balance against statement closing 
   assert.ok(fn.includes('Остаток НЕ совпадает с выпиской'));
   assert.ok(fn.includes('Итоговый остаток в выписке не распознан'));
 });
+
+
+test('statement account binding keeps IBAN account and card keys',()=>{
+  const keysFn=extractFunction('financeStatementBindingKeys');
+  const boundFn=extractFunction('financeStatementBoundAccountId');
+  const remember=extractFunction('financeStatementRememberAccount');
+  assert.ok(keysFn.includes("statement?.iban"));
+  assert.ok(keysFn.includes("statement?.accountNumber"));
+  assert.ok(keysFn.includes("financeStatementCardNumber(statement)"));
+  assert.ok(boundFn.includes("wanted=new Set(keys)"));
+  assert.ok(remember.includes("bankStatementKeys=[...new Set([...keys,...bindingKeys])]"));
+  assert.ok(remember.includes("keys:bindingKeys"));
+});
+
+test('all finance accounts can store editable IBAN and card identifiers',()=>{
+  assert.ok(html.includes('id="financeAccountIban"'));
+  assert.ok(html.includes('id="financeAccountCard"'));
+  const save=extractFunction('saveFinanceAccount');
+  assert.ok(save.includes("account.iban=iban"));
+  assert.ok(save.includes("account.cardNumber=cardNumber"));
+  assert.ok(save.includes("bankStatementAccountNumber=iban"));
+  assert.ok(save.includes("bankStatementCardNumber=cardNumber"));
+});
