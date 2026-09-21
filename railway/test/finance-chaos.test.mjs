@@ -296,7 +296,7 @@ test('analytics handles income expense transit transfer refund and exclusions co
   `);
   assert.deepEqual(run(),[
     {mode:'expense',amount:100,categoryId:'food',category:'Еда'},
-    {mode:'income',amount:250,categoryId:'',category:''},
+    null,
     null,
     null,
     {mode:'expense',amount:-30,categoryId:'food',category:'Еда'},
@@ -465,4 +465,23 @@ test('10000 randomized KZT and USD ledger mutations preserve balance and default
     return accounts.map(x=>({id:x.id,balance:x.balance,balanceDefault:x.balanceDefault}));
   `);
   assert.equal(run().length,4);
+});
+
+
+test('uncategorized income and expense stay in history but out of analytics',()=>{
+  const names=['financeTransactionType','financeTransactionAmount','financeTransactionDefaultAmount','financeCountsInIncomeExpense','financeEffectiveCategory','financeAnalyticsEntry'];
+  const src=names.map(extractFunction).join('\n');
+  const run=new Function(src+`
+    function financeTransactions(){return []}
+    return [
+      financeAnalyticsEntry({id:'e',type:'expense',amount:6047472,defaultAmount:6047472,categoryId:'',category:''}),
+      financeAnalyticsEntry({id:'i',type:'income',amount:1000,defaultAmount:1000,categoryId:'',category:''}),
+      financeAnalyticsEntry({id:'c',type:'expense',amount:500,defaultAmount:500,categoryId:'cat',category:'Test'})
+    ];
+  `);
+  assert.deepEqual(run(),[
+    null,
+    null,
+    {mode:'expense',amount:500,categoryId:'cat',category:'Test'}
+  ]);
 });
