@@ -144,3 +144,20 @@ test('statement import reveals its own period and account in the journal',()=>{
 test('finance journal defaults to current month',()=>{
   assert.match(html,/id="financePeriodFilter"[^>]*><option value="day">Сегодня<\/option><option value="month" selected>Этот месяц<\/option>/);
 });
+
+
+test('server ACK canonicalizes skipped statement duplicates immediately',()=>{
+  const fn=extractFunction('financeApplyServerAck');
+  assert.ok(fn.includes('upsertTransactions(data.skippedTransactions)'));
+  assert.ok(fn.includes('financeStatementIdentity(list[i])===identity'));
+  assert.ok(fn.includes('list.splice(i,1)'));
+});
+
+test('statement import reports exact local balance change',()=>{
+  const start=html.indexOf('async function financeImportStatementDraft(){');
+  const end=html.indexOf('\nasync function financeProcessStatementFile',start);
+  const fn=html.slice(start,end>start?end:start+35000);
+  assert.ok(fn.includes('balanceBeforeImport=Number(account.balance)||0'));
+  assert.ok(fn.includes('balanceAfterImport=Number(financeAccounts().find'));
+  assert.ok(fn.includes("+' · баланс '+financeMoney(balanceBeforeImport"));
+});
