@@ -57,6 +57,17 @@ test('browser sync avoids five-second warehouse polling and duplicate order load
   assert.match(source, /sharedOrderCacheInFlight/);
 });
 
+test('WB stock-profit denominator uses gross sales while returns stay in profit', () => {
+  const source = readFileSync(new URL('../src/reports.js', import.meta.url), 'utf8');
+  assert.match(source, /AS "saleQty"/);
+  assert.match(source, /AS "returnQty"/);
+  assert.match(source, /ABS\(f\.qty\)/);
+  const ui = readFileSync(new URL('../../kaspi-report-v2.js', import.meta.url), 'utf8');
+  assert.match(ui, /saleQty=Math\.max\(0,Number\(x\.saleQty\?\?netQty\)/);
+  assert.match(ui, /add\(v\.pid,saleQty/);
+  assert.match(ui, /sources:x\.sources/);
+});
+
 test('WB product report keeps multi-product advertising unallocated', () => {
   const source = readFileSync(new URL('../src/reports.js', import.meta.url), 'utf8');
   assert.match(source, /ids\.length !== 1/);

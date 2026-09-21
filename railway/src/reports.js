@@ -230,6 +230,8 @@ reportsRouter.get('/wb-finance-products', asyncRoute(async (req, res) => {
   for (let time = since; time < until; time += 86_400_000) daysList.push(dateKey(time));
   const [result, adResult] = await Promise.all([pool.query(`SELECT f.vendor_code AS "vendorCode",f.nm_id AS "nmId",MAX(f.title) AS title,l.product_id AS "productId",
     SUM(CASE WHEN trim(f.doc_type)='Продажа' THEN f.qty WHEN trim(f.doc_type)='Возврат' THEN -f.qty ELSE 0 END) AS qty,
+    SUM(CASE WHEN trim(f.doc_type)='Продажа' THEN ABS(f.qty) ELSE 0 END) AS "saleQty",
+    SUM(CASE WHEN trim(f.doc_type)='Возврат' THEN ABS(f.qty) ELSE 0 END) AS "returnQty",
     SUM(f.retail_amount) AS "retailAmount",SUM(f.for_pay) AS "forPay",SUM(f.acquiring_fee) AS acquiring,
     SUM(f.delivery_service) AS delivery,SUM(f.paid_storage) AS storage,SUM(f.paid_acceptance) AS acceptance,
     SUM(CASE WHEN lower(COALESCE(NULLIF(f.raw_json::jsonb->>'bonusTypeName',''),NULLIF(f.raw_json::jsonb->>'bonus_type_name',''),'')) LIKE '%wb продвижение%' THEN 0 ELSE f.deduction END) AS deduction,
@@ -261,7 +263,7 @@ reportsRouter.get('/wb-finance-products', asyncRoute(async (req, res) => {
     if (rows.some(row => String(row.nmId || '') === nmId)) continue;
     const identity = await pool.query(`SELECT vendor_code AS "vendorCode" FROM wb_sales_live_rows
       WHERE market=$1 AND nm_id=$2 AND vendor_code<>'' LIMIT 1`, [selected, nmId]);
-    rows.push({ nmId, vendorCode: identity.rows[0]?.vendorCode || '', qty: 0,
+    rows.push({ nmId, vendorCode: identity.rows[0]?.vendorCode || '', qty: 0, saleQty: 0, returnQty: 0,
       retailAmount: 0, forPay: 0 });
   }
   const consumedAdvertising = new Set();
