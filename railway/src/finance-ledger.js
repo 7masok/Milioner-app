@@ -593,8 +593,8 @@ financeLedgerRouter.post('/finance/accounts/:id/adjust-balance', requireTrustedO
 }));
 
 financeLedgerRouter.post('/finance/accounts/:id/bind-statement', requireTrustedOrigin, requireWritesEnabled, asyncRoute(async (req,res)=>{
-  const accountId=String(req.params.id),key=cleanText(req.body?.key,500),bind=req.body?.bind!==false,accountNumber=cleanText(req.body?.accountNumber,180),iban=cleanText(req.body?.iban,180).toUpperCase().replace(/[^A-Z0-9]/g,''),cardNumber=cleanText(req.body?.cardNumber,80).replace(/[^0-9*Xx]/g,''),bank=cleanText(req.body?.bank,100);
-  if(!key&&!accountNumber&&!iban&&!cardNumber) throw httpError('Statement account details are required');
+  const accountId=String(req.params.id),legacyKey=cleanText(req.body?.key,500),bind=req.body?.bind!==false,accountNumber=cleanText(req.body?.accountNumber,180),iban=cleanText(req.body?.iban,180).toUpperCase().replace(/[^A-Z0-9]/g,''),cardNumber=cleanText(req.body?.cardNumber,80).replace(/[^0-9*Xx]/g,''),bank=cleanText(req.body?.bank,100),keys=[...new Set([...(Array.isArray(req.body?.keys)?req.body.keys:[]),legacyKey].map(x=>cleanText(x,500)).filter(Boolean))];
+  if(!keys.length&&!accountNumber&&!iban&&!cardNumber) throw httpError('Statement account details are required');
   const result=await transaction(async client=>{
     await lockFinance(client);
     const rows=await client.query(`
@@ -604,9 +604,9 @@ financeLedgerRouter.post('/finance/accounts/:id/bind-statement', requireTrustedO
     if(!rows.rows.some(row=>String(row.id)===accountId)) throw httpError('Finance account not found',404);
     const changed=[],now=Date.now();
     for(const row of rows.rows){
-      const before=accountPayload(row),keys=Array.isArray(before.bankStatementKeys)?before.bankStatementKeys.map(String):[],selected=String(row.id)===accountId,next={...before};let dirty=false;
+      const before=accountPayload(row),keysCurrent=Array.isArray(before.bankStatementKeys)?before.bankStatementKeys.map(String):[],selected=String(row.id)===accountId,next={...before};let dirty=false;
       if(selected){
-        if(bind&&key&&!keys.includes(key)){next.bankStatementKeys=[...keys,key];dirty=true}
+        if(bind&&keys.some(key=>!keysCurrent.includes(key))){next.bankStatementKeys=[...new Set([...keysCurrent,...keys])];dirty=true}
         if(accountNumber&&String(before.bankStatementAccountNumber||'')!==accountNumber){next.bankStatementAccountNumber=accountNumber;dirty=true}
         if(bank&&String(before.bankStatementBank||'')!==bank){next.bankStatementBank=bank;dirty=true}
         if(iban&&!String(before.iban||'')){next.iban=iban;dirty=true}
@@ -614,7 +614,7 @@ financeLedgerRouter.post('/finance/accounts/:id/bind-statement', requireTrustedO
         if(accountNumber&&!String(before.bankAccountNumber||'')){next.bankAccountNumber=accountNumber;dirty=true}
         if(cardNumber&&String(before.bankStatementCardNumber||'')!==cardNumber){next.bankStatementCardNumber=cardNumber;dirty=true}
         if(cardNumber&&!String(before.cardNumber||'')){next.cardNumber=cardNumber;dirty=true}
-      }else if(bind&&key&&keys.includes(key)){next.bankStatementKeys=keys.filter(x=>x!==key);dirty=true}
+      }else if(bind&&keys.some(key=>keysCurrent.includes(key))){next.bankStatementKeys=keysCurrent.filter(x=>!keys.includes(x));dirty=true}
       if(!dirty)continue;
       next.updatedAt=now;delete next._syncUpdatedAt;
       await client.query('UPDATE finance_accounts SET payload=$2::jsonb,updated_at=$3 WHERE id=$1',[row.id,JSON.stringify(next),now]);
