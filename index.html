@@ -909,39 +909,16 @@ function wbLiveRealizedCost(market,days,live){return wbLiveRealizedCostSummary(m
 function wbFinanceKztNet(finance,live){const rubGross=Number(finance?.retailAmount)||0,kztGross=Number(live?.buyoutSum)||0;if(!(rubGross>0&&kztGross>0))return null;return (Number(finance?.netBeforeCost)||0)*(kztGross/rubGross)}
 const wbLiveOverviewCache={};
 async function ensureWbLiveOverview(market,days){
-  const key=market+':'+days,old=wbLiveOverviewCache[key];let zeroCandidate=null;
+  const key=market+':'+days,old=wbLiveOverviewCache[key];
   if(old&&Date.now()-Number(old.at||0)<60000)return old.data;
-  if([-1,1,7,30].includes(Number(days))){
-    try{
-      const dashboard=await apiJson(MILLIONER_API+'/api/wb-dashboard-buyouts?market='+encodeURIComponent(market)+'&days='+encodeURIComponent(days));
-      if(dashboard?.ok&&dashboard?.available){
-        const data={...dashboard,analyticsOnly:true,priceComplete:false,source:'WB Analytics · дневной кэш Railway'},
-          hasBuyouts=Math.abs(Number(data.buyoutCount)||0)>0||Math.abs(Number(data.buyoutSum)||0)>0||(Array.isArray(data.products)&&data.products.some(x=>Math.abs(Number(x?.qty)||0)>0));
-        if(hasBuyouts){wbLiveOverviewCache[key]={at:Date.now(),data};return data}
-        zeroCandidate=data;
-      }
-    }catch(_){}
-  }
-  if(Number(days)===1){
-    try{
-      const tracked=await apiJson(MILLIONER_API+'/api/wb-realized-status?market='+encodeURIComponent(market)+'&days=1');
-      if(tracked?.ok&&tracked?.available){
-        const data={...tracked,analyticsOnly:true,source:'WB Marketplace sold transitions'},
-          hasBuyouts=Math.abs(Number(data.buyoutCount)||0)>0||Math.abs(Number(data.buyoutSum)||0)>0||(Array.isArray(data.products)&&data.products.some(x=>Math.abs(Number(x?.qty)||0)>0));
-        if(hasBuyouts){wbLiveOverviewCache[key]={at:Date.now(),data};return data}
-        if(!zeroCandidate)zeroCandidate=data;
-      }
-    }catch(_){}
-  }
   try{
     const data=await apiJson(MILLIONER_API+'/api/wb-sales-live?market='+encodeURIComponent(market)+'&days='+encodeURIComponent(days));
-    if(!data?.ok||data?.stale&&data?.lastError)throw new Error(data?.error||data?.lastError||'WB sales unavailable');
-    const hasBuyouts=Math.abs(Number(data.buyoutCount)||0)>0||Math.abs(Number(data.buyoutSum)||0)>0||(Array.isArray(data.products)&&data.products.some(x=>Math.abs(Number(x?.qty)||0)>0)),
-      resolved=hasBuyouts?data:(zeroCandidate||data);
-    wbLiveOverviewCache[key]={at:Date.now(),data:resolved};return resolved;
-  }catch(primary){
-    const fallback=zeroCandidate||old?.data||null;
-    wbLiveOverviewCache[key]={at:Date.now(),data:fallback,error:String(primary?.message||primary)};
+    if(!data?.ok||!data?.available)throw new Error(data?.error||data?.lastError||'WB sales unavailable');
+    wbLiveOverviewCache[key]={at:Date.now(),data,error:String(data?.lastError||'')};
+    return data;
+  }catch(error){
+    const fallback=old?.data||null;
+    wbLiveOverviewCache[key]={at:Date.now(),data:fallback,error:String(error?.message||error)};
     return fallback;
   }
 }
