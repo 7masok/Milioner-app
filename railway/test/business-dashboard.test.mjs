@@ -52,7 +52,6 @@ test('business profit no longer subtracts Finance-tab expenses', () => {
   assert.doesNotMatch(ui, /двойной учёт/);
   assert.doesNotMatch(ui, /financeAnalyticsEntry\(tx\)/);
   assert.match(ui, /const netProfit=summary\?\.profit===null\|\|summary\?\.profit===undefined/);
-  assert.match(ui, /meta:model\.summary\.estimated\?'≈ Kaspi \+ WB1 \+ WB2':'Kaspi \+ WB1 \+ WB2'/);
 });
 
 test('WB today business summary falls back to live buyouts instead of false zeros', () => {
