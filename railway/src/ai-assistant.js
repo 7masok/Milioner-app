@@ -303,8 +303,8 @@ export function parseBccStatement(text, sourceHash, filename) {
   };
 
   const tableText = posted.replace(
-    /(\d{4}-\d{2}-\d{2}\s+\d{4}-\d{2}-\d{2}\s+.+?\s+[\d ]+\.\d{2})\s+([+-]?[\d ]+\.\d)\s+(0\.00 KZT\s+0\.00KZT)\n\s*KZT\s+0 KZT/g,
-    (_all,prefix,accountAmount,tail)=>prefix+' KZT '+accountAmount+'0 KZT '+tail
+    /(\d{4}-\d{2}-\d{2}\s+\d{4}-\d{2}-\d{2}\s+.+?\s+[\d ]+\.\d{2})\s+([+-]?[\d ]+\.\d)\s+(0\.00\s*[A-Z]{3}\s+0\.00\s*[A-Z]{3})\n\s*([A-Z]{3})\s+0\s+([A-Z]{3})/g,
+    (_all,prefix,accountAmount,tail,originalCurrency,accountCurrency)=>prefix+' '+originalCurrency+' '+accountAmount+'0 '+accountCurrency+' '+tail
   );
   const money='(?:\\d{1,3}(?: \\d{3})*\\.\\d{2}|\\d+\\.\\d{2})';
   const rowRx = new RegExp('^\\s*(\\d{4}-\\d{2}(?:-\\d{2}|-)?)\\s+(\\d{4}-\\d{2}-\\d{2})\\s+(.+?)\\s+('+money+')\\s*([A-Z]{3})?\\s+([+-]?'+money+')(?:\\s*(?:[A-Z]{3}))?(?:\\s|$)','gmi');
