@@ -8,9 +8,11 @@ const html = readFileSync(new URL('../../index.html', import.meta.url), 'utf8');
 const server = readFileSync(new URL('../src/server.js', import.meta.url), 'utf8');
 
 test('business dashboard is day-only and keeps all agreed profit layers', () => {
-  for (const word of ['Сегодня','Заказы','Выкупы','Прибыль заказов','Прибыль выкупов','Чистая прибыль']) assert.match(ui, new RegExp(word));
+  for (const word of ['Сегодня','Заказы','Выкупы','Прибыль заказов','Прибыль выкупов']) assert.match(ui, new RegExp(word));
+  assert.doesNotMatch(ui, /Чистая прибыль/);
   for (const word of ['Неделя','Месяц','Год']) assert.equal(ui.includes(word),false);
   assert.match(ui, /BUSINESS_PERIODS=new Set\(\['day'\]\)/);
+  assert.match(ui, /BUSINESS_METRICS=new Set\(\['orders','buyouts','orderProfit','buyoutProfit'\]\)/);
   assert.match(ui, /BUSINESS_SUPPORTED_MARKETS=new Set\(\['Kaspi','WB','WB2'\]\)/);
   assert.match(ui, /allMarketUnitProfit30/);
   assert.match(ui, /loadBusinessMarketplaceSummary/);
@@ -75,7 +77,7 @@ test('money formatting removes negative zero and unknown WB fields render as das
 
 test('business dashboard assets are cache-busted and served', () => {
   assert.match(html, /kaspi-report-v2\.js\?v=20260922-business-wb-live2/);
-  assert.match(html, /business-dashboard-v1\.js\?v=20260922-business13/);
+  assert.match(html, /business-dashboard-v1\.js\?v=20260922-business14/);
   assert.match(server, /'business-dashboard-v1\.js'/);
 });
 
@@ -98,4 +100,11 @@ test('known marketplace values remain visible when another marketplace is unknow
   assert.match(report, /if\(knownCount\[keyName\]<sourceCount\)partial\[keyName\]=true/);
   assert.match(report, /estimated:total\.estimated\|\|partial\.cost\|\|partial\.fees\|\|partial\.profit/);
   assert.match(report, /qty===0&&revenue===0&&ads!==0\?-Math\.abs\(ads\):null/);
+});
+
+
+test('legacy net profit selection migrates to buyout profit and four buttons stay 2x2', () => {
+  assert.match(ui, /saved\.metric==='netProfit'\)businessMetric='buyoutProfit'/);
+  assert.doesNotMatch(ui, /\['netProfit','Чистая прибыль'\]/);
+  assert.doesNotMatch(ui, /business-metrics button:last-child/);
 });
