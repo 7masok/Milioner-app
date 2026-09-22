@@ -235,3 +235,11 @@ test('new visible finance categories stay on the main analytics list at zero',()
   assert.ok(fn.includes("filter(x=>x.amount>0||visibleIds.has(String(x.id)))"));
   assert.ok(fn.includes("r.amount>0?r.pct.toFixed"));
 });
+
+
+test('editing a finance category can change kind even when a legacy duplicate name exists',()=>{
+  const fn=extractFunction('saveFinanceCategory');
+  assert.ok(fn.includes("nameUnchanged=Boolean(current)"));
+  assert.ok(fn.includes("const duplicate=(!categoryId||!nameUnchanged)?categories.find"));
+  assert.ok(fn.includes("current.kind=kind"));
+});
