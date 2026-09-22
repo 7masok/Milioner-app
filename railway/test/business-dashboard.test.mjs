@@ -26,10 +26,25 @@ test('business day chart uses real overlapping bars and no separate yesterday ca
   assert.match(ui, /todayHeight=equal/);
   assert.match(ui, /сегодня .* вчера/);
 });
-test('business x-axis labels are 03 through 24 under every third bar', () => {
-  assert.match(ui, /\(i\+1\)%3===0/);
-  assert.match(ui, /String\(i\+1\)\.padStart\(2,'0'\)/);
-  assert.doesNotMatch(ui, /i%3===0/);
+test('business x-axis labels are 03 through 24 without 00', () => {
+  assert.match(ui, /\[3,6,9,12,15,18,21,24\]/);
+  assert.match(ui, /h===24\?100:\(\(h-\.5\)\/24\*100\)/);
+  assert.match(ui, /String\(h\)\.padStart\(2,'0'\)/);
+  assert.doesNotMatch(ui, /grid-column:\$\{i\+1\}/);
+});
+
+test('business card shows yesterday on the right and compares only through the same time of day', () => {
+  assert.match(ui, /business-value-grid/);
+  assert.match(ui, /businessYesterdayValue/);
+  assert.match(ui, /businessYesterdayMeta/);
+  assert.match(ui, /businessYesterdaySameTime/);
+  assert.match(ui, /businessElapsedTodayMs/);
+  assert.match(ui, /partialBounds=\{start:fullYesterday\.bounds\.start,end:cutoff/);
+  assert.match(ui, /businessOrderGroups\(partialBounds\)/);
+  assert.match(ui, /businessFinanceExpenses\(partialBounds,financeBuckets\)/);
+  assert.match(ui, /yesterdayCompare=businessYesterdaySameTime\(yesterday\)/);
+  assert.match(ui, /до '\+businessHourMinute/);
+  assert.match(ui, /разница/);
 });
 
 test('business net profit subtracts only included finance expenses', () => {
@@ -56,6 +71,6 @@ test('business marketplace summary reuses canonical Kaspi and WB finance models 
 });
 
 test('business dashboard asset is loaded and served', () => {
-  assert.match(html, /business-dashboard-v1\.js\?v=20260922-business7/);
+  assert.match(html, /business-dashboard-v1\.js\?v=20260922-business8/);
   assert.match(server, /'business-dashboard-v1\.js'/);
 });
