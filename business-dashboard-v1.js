@@ -100,7 +100,11 @@ function businessFinanceExpenses(bounds,buckets){
     const rawType=typeof financeTransactionType==='function'?financeTransactionType(tx):String(tx?.type||'');
     const counts=typeof financeCountsInIncomeExpense==='function'?financeCountsInIncomeExpense(tx):rawType==='expense';
     const effective=typeof financeEffectiveCategory==='function'?financeEffectiveCategory(tx):{categoryId:String(tx?.categoryId||''),category:String(tx?.category||'').trim()};
-    if(rawType==='expense'&&counts&&!effective.categoryId&&!effective.category)uncategorized+=typeof financeTransactionDefaultAmount==='function'?financeTransactionDefaultAmount(tx):Math.abs(Number(tx?.amount)||0);
+    if(rawType==='expense'&&counts&&!effective.categoryId&&!effective.category){
+      const amount=typeof financeTransactionDefaultAmount==='function'?financeTransactionDefaultAmount(tx):Math.abs(Number(tx?.amount)||0);
+      uncategorized+=amount;total+=amount;const bucket=businessBucketFor(buckets,ts);if(bucket)bucket.financeExpense+=amount;
+      const key='__uncategorized__';if(!groups.has(key))groups.set(key,{name:'Без категории',amount:0});groups.get(key).amount+=amount;
+    }
     continue
   }
   if(typeof financeAnalyticsEntryIncluded==='function'&&!financeAnalyticsEntryIncluded(entry)){excluded+=Number(entry.amount)||0;continue}
@@ -179,7 +183,7 @@ window.setBusinessDashboardMetric=function(metric){if(!BUSINESS_METRICS.has(metr
 function businessPaint(model){
  businessLastModel=model;businessPaintTabs();const info=businessMetricInfo(model),label=document.getElementById('businessValueLabel'),value=document.getElementById('businessValue'),meta=document.getElementById('businessValueMeta'),warning=document.getElementById('businessWarning');
  if(label)label.textContent=info.label+' · '+model.bounds.label;if(value)value.textContent=businessMoney(info.value);if(meta)meta.textContent=info.meta;businessPaintChart(model,info.field);
- const notes=[];if(model.orders.coverage<.999)notes.push('прогноз заказов покрывает '+Math.round(model.orders.coverage*100)+'% суммы');if(model.finance.uncategorized>0)notes.push('есть расходы без категории — они не вычтены');if(model.summary.estimated)notes.push('часть прибыли оценочная');notes.push('Ozon пока не входит в прибыль');
+ const notes=[];if(model.orders.coverage<.999)notes.push('прогноз заказов покрывает '+Math.round(model.orders.coverage*100)+'% суммы');if(model.finance.uncategorized>0)notes.push('расходы без категории включены: '+businessMoney(model.finance.uncategorized));if(model.summary.estimated)notes.push('часть прибыли оценочная');notes.push('Ozon пока не входит в прибыль');
  if(warning)warning.textContent=notes.join(' · ');
 }
 window.renderBusinessDashboard=async function(force=false){
@@ -198,9 +202,9 @@ window.openBusinessDashboardDetails=function(){
  <div class="item"><div class="row"><span class="grow">Заказы</span><b>${businessMoney(m.orders.amount)}</b></div><div class="muted">${m.orders.qty.toLocaleString('ru-RU')} шт. · ${m.orders.orderCount} заказов</div><div class="row" style="margin-top:8px"><span class="grow">Примерная прибыль с заказов</span><b>${businessMoney(m.orders.profit)}</b></div><div class="muted">Покрытие расчётом: ${coverage}%</div></div>
  <div class="item" style="margin-top:8px"><div class="row"><span class="grow">Выкупы</span><b>${businessMoney(m.summary.revenue)}</b></div><div class="row" style="margin-top:8px"><span class="grow"><b>Прибыль с выкупов</b></span><b>${businessMoney(m.summary.profit)}</b></div><div class="row" style="margin-top:5px"><span class="grow muted">Себестоимость</span><b>−${businessMoney(m.summary.cost).replace(/^-/,'')}</b></div><div class="row" style="margin-top:5px"><span class="grow muted">Комиссии, логистика и услуги</span><b>−${businessMoney(m.summary.fees).replace(/^-/,'')}</b></div><div class="row" style="margin-top:5px"><span class="grow muted">Реклама</span><b>−${businessMoney(m.summary.ads).replace(/^-/,'')}</b></div></div>
  <h3 style="margin-top:14px">По магазинам</h3>${sourceRows}
- <div class="item" style="margin-top:8px"><b>Расходы бизнеса из «Финансов»</b><div class="row" style="margin-top:7px"><span class="grow">Итого</span><b>${businessMoney(m.finance.total)}</b></div>${financeRows}${m.finance.uncategorized>0?`<div class="link-note" style="margin-top:8px">Есть расходы без категории на ${businessMoney(m.finance.uncategorized)}. Они не включены, пока им не присвоена категория.</div>`:''}</div>
+ <div class="item" style="margin-top:8px"><b>Расходы бизнеса из «Финансов»</b><div class="row" style="margin-top:7px"><span class="grow">Итого</span><b>${businessMoney(m.finance.total)}</b></div>${financeRows}${m.finance.uncategorized>0?`<div class="link-note" style="margin-top:8px">Есть расходы без категории на ${businessMoney(m.finance.uncategorized)}. Они включены в чистую прибыль, но лучше присвоить им категории.</div>`:''}</div>
  <div class="item" style="margin-top:8px"><div class="row"><span class="grow"><b>Чистая прибыль бизнеса</b></span><b>${businessMoney(m.netProfit)}</b></div></div>
- <div class="link-note"><b>Важно про двойной учёт.</b> Если комиссия, логистика или реклама маркетплейса уже учтена выше и одновременно занесена отдельным расходом в «Финансах», она будет вычтена второй раз. Такие категории в «Финансах» нужно выключить из «Итого». Ozon пока не входит в эту прибыль: его серверная финансовая история сейчас ограничена 30 днями.</div>`);
+ <div class="link-note"><b>Важно про двойной учёт.</b> Если закупка товара/себестоимость, комиссия, логистика или реклама маркетплейса уже учтена выше и одновременно занесена отдельным расходом в «Финансах», она будет вычтена второй раз. Такие категории в «Финансах» нужно выключить из «Итого». Ozon пока не входит в эту прибыль: его серверная финансовая история сейчас ограничена 30 днями.</div>`);
 };
 
 const baseRenderReports=window.renderReports;
