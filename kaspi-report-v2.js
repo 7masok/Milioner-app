@@ -44,7 +44,7 @@ function renderWbMain(model,market,days){const set=(id,value)=>{const e=document
 async function loadWbModel(market,days){const q=reportQuery(market,days),[summary,details]=await Promise.all([apiJson(MILLIONER_API+'/api/wb-finance-summary'+q),apiJson(MILLIONER_API+'/api/wb-finance-products'+q)]),products=Array.isArray(details.products)?details.products:[];return{market,...wbExpenseModel(summary,products,market,days),products,unmatchedAdvertising:Number(details.unmatchedAdvertising)||0}}
 const businessMarketplaceSummaryCache=new Map();
 window.loadBusinessMarketplaceSummary=async function(days=30,{force=false}={}){
- const n=Math.max(1,Math.min(3650,Math.round(Number(days)||30))),key=String(n),cached=businessMarketplaceSummaryCache.get(key);
+ const raw=Math.round(Number(days)||30),n=raw===-1?-1:Math.max(1,Math.min(3650,raw)),key=String(n),cached=businessMarketplaceSummaryCache.get(key);
  if(!force&&cached?.data&&Date.now()-Number(cached.at||0)<60000)return cached.data;
  if(!force&&cached?.promise)return cached.promise;
  const promise=(async()=>{
