@@ -42,19 +42,48 @@ function wbCostFromProducts(market,days,products){let cost=0,linked=0,total=0;fo
 function wbExpenseModel(summary,products,market,days){const financeAvailable=summary?.financeAvailable===true||Number(summary?.financeRowCount||0)>0,revenue=Number(summary.retailAmount)||0,forPay=Number(summary.forPay)||0,commission=Math.max(0,revenue-forPay),logistics=Number(summary.delivery)||0,storage=Number(summary.storage)||0,acceptance=Number(summary.acceptance)||0,deduction=Number(summary.deduction)||0,promotionDeduction=Number(summary.promotionDeduction)||0,penalty=Number(summary.penalty)||0,rebill=Number(summary.rebill)||0,acquiring=Number(summary.acquiring)||0,adjustment=Number(summary.additionalPayment)||0,ads=Number(summary.advertising)||0,costInfo=wbCostFromProducts(market,days,products),expenses=commission+logistics+storage+acceptance+deduction+penalty+rebill+acquiring,profit=financeAvailable?revenue+adjustment-expenses-ads-costInfo.cost:null;return{financeAvailable,revenue,forPay,commission,logistics,storage,acceptance,deduction,promotionDeduction,penalty,rebill,acquiring,adjustment,ads,expenses,profit,sync:summary.sync||null,lastSuccess:summary.lastSuccess||null,...costInfo}}
 function renderWbMain(model,market,days){const set=(id,value)=>{const e=document.getElementById(id);if(e)e.textContent=value};set('rRevenue',fmt(model.revenue));set('rCost',model.complete?fmt(model.cost):'≈ '+fmt(model.cost));set('rFees',fmt(model.expenses));set('rAds',fmt(model.ads));set('rProfit',(model.complete?'':'≈ ')+fmt(model.profit));const rows=[['Продажи',model.revenue],['Комиссия WB',model.commission],['Логистика',model.logistics],['Хранение',model.storage],['Корректировки',model.adjustment],['Штрафы',model.penalty],['Удержания (без рекламы)',model.deduction],['Операции при приёмке',model.acceptance],['Эквайринг',model.acquiring],['Перевыставленная логистика',model.rebill],['Реклама WB',model.ads]],box=document.getElementById('mpReport'),name=market==='WB'?'WB 1':'WB 2',syncError=model.sync&&Number(model.sync.financeOk)!==1?'<div class="link-note" style="border-color:#efb0b0;background:#fff4f4"><b>Финансовые данные WB не обновились.</b> '+esc(String(model.sync.error||'Проверьте, что API-ключ имеет доступ к категории «Финансы».'))+'</div>':'';if(box)box.innerHTML='<div class="item"><div class="row"><div class="grow"><b>Приход</b><div class="muted">Продажи и корректировки</div></div><b>'+fmt(model.revenue+model.adjustment)+'</b></div><div class="row" style="margin-top:10px"><div class="grow"><b>Расход</b><div class="muted">WB, реклама и себестоимость</div></div><b style="color:#b00000">−'+fmt(model.expenses+model.ads+model.cost)+'</b></div></div>'+syncError+'<button class="btn full" onclick="refreshWbFinance(\''+market+'\',this)">Обновить данные WB</button><div class="item" style="margin-top:8px"><b>Детализация</b>'+rows.map(x=>'<div class="row" style="margin-top:9px"><span class="grow muted">'+x[0]+'</span><b>'+fmt(x[1])+'</b></div>').join('')+'<div class="row" style="margin-top:11px;padding-top:10px;border-top:1px solid var(--line)"><span class="grow">Себестоимость FIFO</span><b>'+(model.complete?'':'≈ ')+fmt(model.cost)+'</b></div><div class="row" style="margin-top:9px"><span class="grow"><b>Чистая прибыль</b></span><b>'+(model.complete?'':'≈ ')+fmt(model.profit)+'</b></div></div><button class="btn dark full" onclick="openMarketplaceReport(\''+market+'\','+days+')">Товары и прибыль · '+name+'</button>'+(model.complete?'':'<div class="link-note">Часть товаров WB ещё не связана с товарами склада. Известная себестоимость учтена, итог помечен знаком ≈.</div>')}
 async function loadWbModel(market,days){const q=reportQuery(market,days),[summary,details]=await Promise.all([apiJson(MILLIONER_API+'/api/wb-finance-summary'+q),apiJson(MILLIONER_API+'/api/wb-finance-products'+q)]),products=Array.isArray(details.products)?details.products:[];return{market,...wbExpenseModel(summary,products,market,days),products,unmatchedAdvertising:Number(details.unmatchedAdvertising)||0}}
+function businessWbFinanceStats(model){
+ const products=Array.isArray(model?.products)?model.products:[],qty=products.reduce((sum,x)=>sum+Math.max(0,Number(x?.saleQty??x?.qty)||0),0),financeAvailable=Boolean(model?.financeAvailable),complete=financeAvailable&&Boolean(model?.complete);
+ return {qty,revenue:Number(model?.revenue)||0,cost:Number(model?.cost)||0,fees:Number(model?.expenses)||0,ads:Number(model?.ads)||0,profit:financeAvailable&&model?.profit!==null&&model?.profit!==undefined?Number(model.profit):null,complete,financeAvailable,estimated:!complete,live:false};
+}
+function businessWbLiveStats(model,live,market,days){
+ const rows=(live?.products||[]).filter(x=>Math.max(0,Number(x?.qty)||0)>0),rowQty=rows.reduce((sum,x)=>sum+Math.max(0,Number(x?.qty)||0),0),qty=Math.max(0,Number(live?.buyoutCount)||rowQty),
+   revenue=Math.max(0,Number(live?.buyoutSum)||rows.reduce((sum,x)=>sum+Math.max(0,Number(x?.buyoutSum??x?.retailAmount)||0),0)),
+   costInfo=typeof wbLiveRealizedCostSummary==='function'?wbLiveRealizedCostSummary(market,days,live):{cost:0,complete:false},
+   unitMap=window.allMarketUnitProfit30 instanceof Map?window.allMarketUnitProfit30:null;
+ let coveredQty=0,knownProfit=0;
+ for(const x of rows){
+  const q=Math.max(0,Number(x?.qty)||0),pid=typeof wbLiveProductId==='function'?wbLiveProductId(market,x):'',stats=pid&&unitMap?unitMap.get(String(pid)):null,source=stats?.sources?.[market];
+  if(q>0&&source&&Number(source.qty)>0){knownProfit+=q*(Number(source.profit)||0)/Number(source.qty);coveredQty+=q}
+ }
+ const profit=coveredQty>0?knownProfit*(qty>coveredQty?qty/coveredQty:1):null,cost=costInfo.complete?Number(costInfo.cost)||0:null,ads=Number(model?.ads)||0,
+   fees=cost!==null&&profit!==null?Math.max(0,revenue-cost-ads-profit):null;
+ return {qty,revenue,cost,fees,ads,profit,complete:false,financeAvailable:false,estimated:true,live:true,coverage:qty>0?Math.min(1,coveredQty/qty):0};
+}
 const businessMarketplaceSummaryCache=new Map();
 window.loadBusinessMarketplaceSummary=async function(days=30,{force=false}={}){
  const raw=Math.round(Number(days)||30),n=raw===-1?-1:Math.max(1,Math.min(3650,raw)),key=String(n),cached=businessMarketplaceSummaryCache.get(key);
  if(!force&&cached?.data&&Date.now()-Number(cached.at||0)<60000)return cached.data;
  if(!force&&cached?.promise)return cached.promise;
  const promise=(async()=>{
-  const [kaspiSnapshot,wb1,wb2]=await Promise.all([loadKaspiOrders(n,{force}),loadWbModel('WB',n),loadWbModel('WB2',n)]),
+  const useLive=[-1,1].includes(n)&&typeof ensureWbLiveOverview==='function',
+    [kaspiSnapshot,wb1,wb2,wb1Live,wb2Live]=await Promise.all([
+      loadKaspiOrders(n,{force}),loadWbModel('WB',n),loadWbModel('WB2',n),
+      useLive?ensureWbLiveOverview('WB',n):Promise.resolve(null),
+      useLive?ensureWbLiveOverview('WB2',n):Promise.resolve(null)
+    ]),
     kaspi=buildModel(kaspiSnapshot,n),kaspiView=reportProfitView(kaspi),
-    wbStats=model=>{const products=Array.isArray(model?.products)?model.products:[],qty=products.reduce((sum,x)=>sum+Math.max(0,Number(x?.saleQty??x?.qty)||0),0);return{qty,revenue:Number(model?.revenue)||0,cost:Number(model?.cost)||0,fees:Number(model?.expenses)||0,ads:Number(model?.ads)||0,profit:Number(model?.profit)||0,complete:Boolean(model?.financeAvailable)&&Boolean(model?.complete),financeAvailable:Boolean(model?.financeAvailable)}} ,
-    kaspiStats={qty:Math.max(0,Number(kaspi.qty)||0),revenue:Number(kaspi.revenue)||0,cost:Number(kaspi.cost)||0,fees:Number(kaspi.fees)||0,ads:Number(kaspi.ads)||0,profit:Number(kaspiView.value)||0,complete:!(Number(kaspi.unknownRevenue)>0),financeAvailable:true},
-    wb1Stats=wbStats(wb1),wb2Stats=wbStats(wb2),sources={Kaspi:kaspiStats,WB:wb1Stats,WB2:wb2Stats},
-    total=Object.values(sources).reduce((a,x)=>{for(const k of['qty','revenue','cost','fees','ads','profit'])a[k]+=Number(x[k])||0;a.complete=a.complete&&Boolean(x.complete);a.financeAvailable=a.financeAvailable&&Boolean(x.financeAvailable);return a},{qty:0,revenue:0,cost:0,fees:0,ads:0,profit:0,complete:true,financeAvailable:true});
-  const data={ok:true,days:n,...total,sources,estimated:!total.complete||!total.financeAvailable,generatedAt:Date.now()};
+    wbStats=(model,live,market)=>{const finance=businessWbFinanceStats(model),liveRevenue=Math.max(0,Number(live?.buyoutSum)||0),liveQty=Math.max(0,Number(live?.buyoutCount)||0);return live&&(liveRevenue>0||liveQty>0)&&(!(finance.revenue>0)||!finance.financeAvailable)?businessWbLiveStats(model,live,market,n):finance},
+    kaspiStats={qty:Math.max(0,Number(kaspi.qty)||0),revenue:Number(kaspi.revenue)||0,cost:Number(kaspi.cost)||0,fees:Number(kaspi.fees)||0,ads:Number(kaspi.ads)||0,profit:Number(kaspiView.value)||0,complete:!(Number(kaspi.unknownRevenue)>0),financeAvailable:true,estimated:Boolean(kaspiView.estimated),live:false},
+    wb1Stats=wbStats(wb1,wb1Live,'WB'),wb2Stats=wbStats(wb2,wb2Live,'WB2'),sources={Kaspi:kaspiStats,WB:wb1Stats,WB2:wb2Stats},
+    total={qty:0,revenue:0,cost:0,fees:0,ads:0,profit:0,complete:true,financeAvailable:true,estimated:false},known={cost:true,fees:true,profit:true};
+  for(const x of Object.values(sources)){
+    total.qty+=Number(x.qty)||0;total.revenue+=Number(x.revenue)||0;total.ads+=Number(x.ads)||0;
+    for(const keyName of ['cost','fees','profit']){if(x[keyName]===null||x[keyName]===undefined||!Number.isFinite(Number(x[keyName])))known[keyName]=false;else total[keyName]+=Number(x[keyName])||0}
+    total.complete=total.complete&&Boolean(x.complete);total.financeAvailable=total.financeAvailable&&Boolean(x.financeAvailable);total.estimated=total.estimated||Boolean(x.estimated);
+  }
+  if(!known.cost)total.cost=null;if(!known.fees)total.fees=null;if(!known.profit)total.profit=null;
+  const data={ok:true,days:n,...total,sources,estimated:total.estimated||!total.complete||!total.financeAvailable,generatedAt:Date.now()};
   businessMarketplaceSummaryCache.set(key,{at:Date.now(),data});return data;
  })().catch(error=>{businessMarketplaceSummaryCache.delete(key);throw error});
  businessMarketplaceSummaryCache.set(key,{at:Date.now(),promise});
