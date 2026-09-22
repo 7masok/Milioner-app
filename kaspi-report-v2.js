@@ -56,7 +56,12 @@ function businessWbLiveStats(model,live,market,days){
   const q=Math.max(0,Number(x?.qty)||0),pid=typeof wbLiveProductId==='function'?wbLiveProductId(market,x):'',stats=pid&&unitMap?unitMap.get(String(pid)):null,source=stats?.sources?.[market];
   if(q>0&&source&&Number(source.qty)>0){knownProfit+=q*(Number(source.profit)||0)/Number(source.qty);coveredQty+=q}
  }
- const profit=coveredQty>0?knownProfit*(qty>coveredQty?qty/coveredQty:1):null,cost=costInfo.complete?Number(costInfo.cost)||0:null,ads=Number(model?.ads)||0,
+ if(unitMap&&qty>coveredQty){
+  let historyQty=0,historyProfit=0;
+  for(const stats of unitMap.values()){const source=stats?.sources?.[market];if(source&&Number(source.qty)>0){historyQty+=Number(source.qty)||0;historyProfit+=Number(source.profit)||0}}
+  if(historyQty>0){const missing=qty-coveredQty;knownProfit+=missing*(historyProfit/historyQty);coveredQty+=missing}
+ }
+ const profit=coveredQty>0?knownProfit:null,cost=costInfo.complete?Number(costInfo.cost)||0:null,ads=Number(model?.ads)||0,
    fees=cost!==null&&profit!==null?Math.max(0,revenue-cost-ads-profit):null;
  return {qty,revenue,cost,fees,ads,profit,complete:false,financeAvailable:false,estimated:true,live:true,coverage:qty>0?Math.min(1,coveredQty/qty):0};
 }
