@@ -25,11 +25,15 @@ test('business day chart has 24 hourly buckets, axes, and yesterday markers', ()
   assert.match(ui, /i%3===0/);
   assert.match(ui, /businessChartScale/);
   assert.match(ui, /business-yesterday-bar/);
-  assert.match(ui, /business-yesterday-mark/);
+  assert.match(ui, /business-yesterday-cap/);
   assert.match(ui, /yBottom=Math\.min\(yPct,zeroPct\)/);
   assert.match(ui, /yHeight=Math\.abs\(yPct-zeroPct\)/);
+  assert.match(ui, /yesterdayShorter=sameSide&&Math\.abs\(yv\)<Math\.abs\(v\)/);
+  assert.match(ui, /todayZ=yesterdayShorter\?1:2,yesterdayZ=yesterdayShorter\?2:1/);
+  assert.match(ui, /z-index:\$\{yesterdayZ\}/);
+  assert.match(ui, /z-index:\$\{todayZ\}/);
   assert.match(ui, /сегодня .* вчера/);
-  assert.match(ui, /серый столбик — вчера · чёрный — сегодня/);
+  assert.match(ui, /короткий столбик перекрывает длинный · серый край — конец вчера/);
 });
 
 test('business net profit subtracts only included finance expenses', () => {
@@ -56,6 +60,6 @@ test('business marketplace summary reuses canonical Kaspi and WB finance models 
 });
 
 test('business dashboard asset is loaded and served', () => {
-  assert.match(html, /business-dashboard-v1\.js\?v=20260922-business4/);
+  assert.match(html, /business-dashboard-v1\.js\?v=20260922-business5/);
   assert.match(server, /'business-dashboard-v1\.js'/);
 });
