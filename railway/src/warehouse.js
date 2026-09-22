@@ -20,6 +20,57 @@ const MAX_WAREHOUSE_SNAPSHOT_BYTES = 6_000_000;
 // kept inside the warehouse document as that creates a growing duplicate cache.
 const DERIVED_CACHE_KEYS = ['kaspiOrderFeed', 'wbOrderFeed', 'ozonOrderFeed', 'kaspiOrders', 'marketOrderState', 'marketplaceLiveSince'];
 
+const PATCH_FIELDS = ['products', 'sales', 'purchases', 'reservations', 'kaspiAdExpenses'];
+
+export function warehouseEntityKey(field, row) {
+  if (!row || typeof row !== 'object') return '';
+  if (field === 'sales') return String(row.externalKey || row.id || '');
+  if (field === 'reservations') return String(`${row.source || ''}|${row.externalKey || row.id || ''}`);
+  if (field === 'kaspiAdExpenses') return String(row.id || row.importId || [row.date, row.day, row.productId, row.sku, row.amount].join('|'));
+  return String(row.id || '');
+}
+
+export function applyWarehousePatch(previous, patch) {
+  const base = previous && typeof previous === 'object' && !Array.isArray(previous) ? previous : {};
+  const incoming = patch && typeof patch === 'object' && !Array.isArray(patch) ? patch : {};
+  const next = { ...base };
+  const deleted = incoming.deleted && typeof incoming.deleted === 'object' ? incoming.deleted : {};
+  for (const field of PATCH_FIELDS) {
+    const hasRows = Object.prototype.hasOwnProperty.call(incoming, field);
+    const removed = Array.isArray(deleted[field]) ? deleted[field].map(String) : [];
+    if (!hasRows && !removed.length) continue;
+    const map = new Map();
+    for (const row of Array.isArray(base[field]) ? base[field] : []) {
+      const key = warehouseEntityKey(field, row);
+      if (key) map.set(key, row);
+    }
+    for (const key of removed) map.delete(key);
+    for (const row of Array.isArray(incoming[field]) ? incoming[field] : []) {
+      const key = warehouseEntityKey(field, row);
+      if (key) map.set(key, row);
+    }
+    next[field] = [...map.values()];
+  }
+  if (incoming.settings && typeof incoming.settings === 'object' && !Array.isArray(incoming.settings)) next.settings = incoming.settings;
+  if (Object.prototype.hasOwnProperty.call(incoming, 'kaspiBaselineAt')) next.kaspiBaselineAt = incoming.kaspiBaselineAt;
+  delete next.deleted;
+  delete next.movements;
+  return cleanState(next);
+}
+
+function patchMovements(existing, upserts, removedIds) {
+  const map = new Map();
+  for (const row of Array.isArray(existing) ? existing : []) {
+    const id = String(row?.id || '');
+    if (id) map.set(id, row);
+  }
+  for (const id of Array.isArray(removedIds) ? removedIds : []) map.delete(String(id));
+  for (const row of Array.isArray(upserts) ? upserts : []) {
+    const id = String(row?.id || '');
+    if (id) map.set(id, row);
+  }
+  return [...map.values()];
+}
 function cleanState(input) {
   const state = input && typeof input === 'object' && !Array.isArray(input) ? input : {};
   const result = { ...state };
@@ -132,12 +183,16 @@ warehouseRouter.post('/warehouse-backups', requireTrustedOrigin, requireWritesEn
 
 warehouseRouter.put('/warehouse-state', requireTrustedOrigin, requireWritesEnabled, asyncRoute(async (req, res) => {
   const baseRevision = Number(req.body?.baseRevision || 0);
+  const isPatch = req.body?.patch === true;
   const incomingState = req.body?.state;
-  const movementsProvided = Array.isArray(incomingState?.movements);
-  const state = cleanState(incomingState);
-  const snapshotState = stripMovementsFromState(state);
-  let raw = JSON.stringify(snapshotState);
-  if (Buffer.byteLength(raw, 'utf8') > MAX_WAREHOUSE_SNAPSHOT_BYTES) return res.status(413).json({ ok: false, error: 'Warehouse snapshot is too large' });
+  const movementsProvided = isPatch
+    ? Array.isArray(incomingState?.movements) || (Array.isArray(incomingState?.deleted?.movements) && incomingState.deleted.movements.length > 0)
+    : Array.isArray(incomingState?.movements);
+  let state = isPatch ? null : cleanState(incomingState);
+  if (!isPatch) {
+    const earlyRaw = JSON.stringify(stripMovementsFromState(state));
+    if (Buffer.byteLength(earlyRaw, 'utf8') > MAX_WAREHOUSE_SNAPSHOT_BYTES) return res.status(413).json({ ok: false, error: 'Warehouse snapshot is too large' });
+  }
 
   const putStartedAt = Date.now();
   const timing = {};
@@ -149,25 +204,33 @@ warehouseRouter.put('/warehouse-state', requireTrustedOrigin, requireWritesEnabl
     const current = await client.query('SELECT payload,revision FROM warehouse_state WHERE id=1 FOR UPDATE');
     timing.readMs = Date.now() - stepStartedAt;
     const currentRevision = Number(current.rows[0]?.revision || 0);
+    if (isPatch && !current.rowCount) return { conflict: true, revision: 0 };
     if (current.rowCount && baseRevision !== currentRevision) return { conflict: true, revision: currentRevision };
     let productsChanged = true;
     if (current.rowCount) {
       const previousStored = parseWarehousePayload(current.rows[0].payload);
-      productsChanged = JSON.stringify(previousStored.products || []) !== JSON.stringify(state.products || []);
+      if (isPatch) state = applyWarehousePatch(previousStored, incomingState);
       // Routine saves omit movements when the audit trail did not change.
       // In that case an empty movement delta is sufficient for the stock guard:
       // any stock change without a supplied movement is still rejected, while we
       // avoid reading and parsing the entire movement history on every save.
-      const previous = movementsProvided ? await hydrateWarehouseMovements(client, previousStored) : { ...previousStored, movements: [] };
+      const previous = movementsProvided ? await hydrateWarehouseMovements(client, { ...previousStored }) : { ...previousStored, movements: [] };
+      if (movementsProvided && isPatch) state.movements = patchMovements(previous.movements, incomingState?.movements, incomingState?.deleted?.movements);
       if (!movementsProvided) state.movements = [];
+      productsChanged = JSON.stringify(previousStored.products || []) !== JSON.stringify(state.products || []);
       const violation = stockLedgerViolation(previous, state) || staleWbLinkRestored(previous, state);
       if (violation) return { conflict: true, revision: currentRevision, stockGuard: violation };
       preserveWbValidation(previous, state);
     }
     const updatedAt = Date.now();
-    if (movementsProvided) { const t = Date.now(); await persistWarehouseMovements(client, state.movements, updatedAt); timing.movementsMs = Date.now() - t; }
+    const movementRows = isPatch ? incomingState?.movements : state.movements;
+    if (movementsProvided && Array.isArray(movementRows) && movementRows.length) {
+      const t = Date.now();
+      await persistWarehouseMovements(client, movementRows, updatedAt);
+      timing.movementsMs = Date.now() - t;
+    }
     const persistedSnapshot = stripMovementsFromState(state);
-    raw = JSON.stringify(persistedSnapshot);
+    const raw = JSON.stringify(persistedSnapshot);
     if (Buffer.byteLength(raw, 'utf8') > MAX_WAREHOUSE_SNAPSHOT_BYTES) return { tooLarge: true };
     const revision = currentRevision + 1;
     stepStartedAt = Date.now();
@@ -179,12 +242,12 @@ warehouseRouter.put('/warehouse-state', requireTrustedOrigin, requireWritesEnabl
     const sha = crypto.createHash('sha256').update(raw).digest('hex').toUpperCase();
     stepStartedAt = Date.now();
     await client.query('INSERT INTO warehouse_audit(revision,updated_at,payload_sha256,source) VALUES($1,$2,$3,$4)',
-      [revision, updatedAt, sha, 'api']);
+      [revision, updatedAt, sha, isPatch ? 'api-patch' : 'api']);
     timing.auditMs = Date.now() - stepStartedAt;
-    return { revision, updatedAt };
+    return { revision, updatedAt, patched: isPatch };
   });
   const totalMs = Date.now() - putStartedAt;
-  if (totalMs >= 1000) console.info('[warehouse-put-timing]', JSON.stringify({ totalMs, productsChanged: timing.mirrorMs != null, movementsProvided, ...timing }));
+  if (totalMs >= 1000) console.info('[warehouse-put-timing]', JSON.stringify({ totalMs, productsChanged: timing.mirrorMs != null, movementsProvided, patch: isPatch, ...timing }));
   if (result.tooLarge) return res.status(413).json({ ok: false, error: 'Warehouse snapshot is too large' });
   if (result.conflict) return res.status(409).json({ ok: false, error: result.stockGuard?'stock-ledger-conflict':'revision-conflict', revision: result.revision, stockGuard: result.stockGuard || undefined });
   res.setHeader('ETag', `"${result.revision}"`);

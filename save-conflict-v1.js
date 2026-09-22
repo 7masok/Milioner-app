@@ -3,6 +3,36 @@
 
 if(typeof normalizeWarehouseSnapshot!=='function'||typeof mergeWarehouseSnapshots!=='function')return;
 
+function warehouseChangedWire(sentSnap){
+  const base=normalizeWarehouseSnapshot(warehouseLastCloudSnapshot||{});
+  if(!warehouseLastCloudSnapshot)return {patch:false,state:sentSnap};
+  const fields=['products','movements','sales','purchases','reservations','kaspiAdExpenses'];
+  const patch={deleted:{}};
+  let changedRows=0;
+  for(const field of fields){
+    const oldMap=new Map((base[field]||[]).map(row=>[warehouseKey(field,row),row]).filter(entry=>entry[0]));
+    const nextMap=new Map((sentSnap[field]||[]).map(row=>[warehouseKey(field,row),row]).filter(entry=>entry[0]));
+    const upserts=[];
+    const removed=[];
+    for(const [key,row] of nextMap){
+      const old=oldMap.get(key);
+      if(!old||!jsonSame(stripSyncStamp(old),stripSyncStamp(row)))upserts.push(row);
+    }
+    for(const key of oldMap.keys())if(!nextMap.has(key))removed.push(key);
+    if(upserts.length)patch[field]=upserts;
+    if(removed.length)patch.deleted[field]=removed;
+    changedRows+=upserts.length+removed.length;
+  }
+  if(!jsonSame(base.settings||{},sentSnap.settings||{}))patch.settings=sentSnap.settings||{};
+  if((base.kaspiBaselineAt||null)!==(sentSnap.kaspiBaselineAt||null))patch.kaspiBaselineAt=sentSnap.kaspiBaselineAt||null;
+  if(!Object.keys(patch.deleted).length)delete patch.deleted;
+  const described=Object.keys(patch).length>0;
+  if(!described)return {patch:false,state:sentSnap};
+  const totalRows=fields.reduce((sum,field)=>sum+((sentSnap[field]||[]).length),0);
+  if(totalRows>0&&changedRows>Math.max(80,Math.floor(totalRows*0.6)))return {patch:false,state:sentSnap};
+  return {patch:true,state:patch};
+}
+
 pushWarehouseToServer=async function(){
   if(!warehouseRemoteReady||warehouseSaveInFlight||!warehouseLocalDirty)return false;
   warehouseSaveInFlight=true;
@@ -10,14 +40,11 @@ pushWarehouseToServer=async function(){
   try{
     const sentSnap=normalizeWarehouseSnapshot(warehouseSnapshot());
     const sentText=JSON.stringify(sentSnap);
-    const previousMovements=normalizeWarehouseSnapshot(warehouseLastCloudSnapshot||{}).movements;
-    const movementsChanged=JSON.stringify(sentSnap.movements)!==JSON.stringify(previousMovements);
-    const wireSnap=movementsChanged?sentSnap:{...sentSnap};
-    if(!movementsChanged)delete wireSnap.movements;
+    const wire=warehouseChangedWire(sentSnap);
     const response=await fetch(MILLIONER_API+'/api/warehouse-state',{
       method:'PUT',
       headers:{'Content-Type':'application/json',Accept:'application/json'},
-      body:JSON.stringify({baseRevision:warehouseRemoteRevision,state:wireSnap})
+      body:JSON.stringify({baseRevision:warehouseRemoteRevision,patch:wire.patch,state:wire.state})
     });
     let data={};
     try{data=await response.json()}catch{}
