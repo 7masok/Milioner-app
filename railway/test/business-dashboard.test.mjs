@@ -61,6 +61,9 @@ test('WB today business summary falls back to live buyouts instead of false zero
   assert.match(report, /allMarketUnitProfit30/);
   assert.match(report, /historyProfit\/historyQty/);
   assert.match(report, /estimated:true,live:true/);
+  assert.match(html, /let zeroCandidate=null/);
+  assert.match(html, /hasBuyouts=.*buyoutCount/);
+  assert.match(html, /zeroCandidate\|\|data/);
 });
 
 test('money formatting removes negative zero and unknown WB fields render as dash', () => {
@@ -71,18 +74,28 @@ test('money formatting removes negative zero and unknown WB fields render as das
 });
 
 test('business dashboard assets are cache-busted and served', () => {
-  assert.match(html, /kaspi-report-v2\.js\?v=20260922-business-wb-live1/);
-  assert.match(html, /business-dashboard-v1\.js\?v=20260922-business12/);
+  assert.match(html, /kaspi-report-v2\.js\?v=20260922-business-wb-live2/);
+  assert.match(html, /business-dashboard-v1\.js\?v=20260922-business13/);
   assert.match(server, /'business-dashboard-v1\.js'/);
 });
 
-test('business dashboard has no verbose explanatory novel below the chart', () => {
-  assert.doesNotMatch(ui, /businessWarning/);
-  assert.doesNotMatch(ui, /короткий столбик перекрывает длинный/);
-  assert.match(ui, /openBusinessDashboardDetails\(\).*Расшифровка/);
+test('business dashboard has no breakdown button or breakdown sheet', () => {
+  assert.doesNotMatch(ui, /Расшифровка/);
+  assert.doesNotMatch(ui, /openBusinessDashboardDetails/);
+  assert.doesNotMatch(ui, /business-foot/);
 });
 
 test('legacy store note cleanup remains active', () => {
   assert.match(ui, /function businessRemoveLegacyStoreNote\(\)/);
   assert.match(ui, /MutationObserver/);
+});
+
+
+test('known marketplace values remain visible when another marketplace is unknown', () => {
+  assert.match(report, /knownCount=\{cost:0,fees:0,profit:0\}/);
+  assert.match(report, /knownCount\[keyName\]\+\+/);
+  assert.match(report, /if\(knownCount\[keyName\]===0\)total\[keyName\]=null/);
+  assert.match(report, /if\(knownCount\[keyName\]<sourceCount\)partial\[keyName\]=true/);
+  assert.match(report, /estimated:total\.estimated\|\|partial\.cost\|\|partial\.fees\|\|partial\.profit/);
+  assert.match(report, /qty===0&&revenue===0&&ads!==0\?-Math\.abs\(ads\):null/);
 });
