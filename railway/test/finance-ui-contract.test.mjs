@@ -243,3 +243,16 @@ test('editing a finance category can change kind even when a legacy duplicate na
   assert.ok(fn.includes("const duplicate=(!categoryId||!nameUnchanged)?categories.find"));
   assert.ok(fn.includes("current.kind=kind"));
 });
+
+
+test('archived finance categories do not reappear in analytics from old transactions',()=>{
+  const fn=extractFunction('renderFinanceBreakdown');
+  assert.ok(fn.includes("archivedIds=new Set(categoryList.filter(c=>c.archived).map(c=>String(c.id)))"));
+  assert.ok(fn.includes("if(id&&archivedIds.has(id))continue"));
+});
+
+test('delete category confirmation explains that old operations remain but analytics category disappears',()=>{
+  const fn=extractFunction('financeDeleteCategory');
+  assert.ok(fn.includes("Она исчезнет из списка и аналитики категорий"));
+  assert.ok(fn.includes("старых операциях"));
+});
