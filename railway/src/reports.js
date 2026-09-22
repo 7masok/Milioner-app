@@ -1,6 +1,7 @@
 import express from 'express';
 import { pool } from './db.js';
 import { asyncRoute } from './http.js';
+import { syncWbLiveSales } from './wb-sync.js';
 
 export const reportsRouter = express.Router();
 const ALMATY_OFFSET = 5 * 60 * 60 * 1000;
@@ -279,36 +280,78 @@ reportsRouter.get('/wb-finance-products', asyncRoute(async (req, res) => {
   res.json({ ok: true, market: selected, days, range: { since, until, timezone: 'Asia/Almaty' }, products, advertising, unmatchedAdvertising });
 }));
 
+async function wbSalesLiveSnapshot(selected, days) {
+  const sync = await syncWbLiveSales(selected).catch(error => ({
+    liveSalesSkipped: false,
+    liveSalesItems: 0,
+    liveSalesError: String(error?.message || error),
+    liveSalesLastSuccessAt: null,
+    liveSalesNextAt: null
+  }));
+  const { since, until } = periodBounds(days);
+  const priceExpr = "CASE WHEN ABS(r.finished_price)>0.000001 THEN r.finished_price ELSE r.price_with_disc END";
+  const [result, hourlyResult, stateResult] = await Promise.all([
+    pool.query(`SELECT r.vendor_code AS "vendorCode",r.nm_id AS "nmId",l.product_id AS "productId",
+      SUM(CASE WHEN r.is_return=1 THEN -1 ELSE 1 END) AS qty,
+      SUM(CASE WHEN r.is_return=1 THEN -(${priceExpr}) ELSE (${priceExpr}) END) AS "buyoutSum",
+      SUM(CASE WHEN r.is_return=1 THEN -r.for_pay ELSE r.for_pay END) AS "forPay",
+      SUM(CASE WHEN ABS(${priceExpr})<=0.000001 THEN 1 ELSE 0 END)::int AS "missingPriceRows"
+      FROM wb_sales_live_rows r LEFT JOIN LATERAL (
+        SELECT pl.product_id FROM product_links pl
+        WHERE pl.market=r.market AND pl.sku IN (r.barcode,r.vendor_code,r.nm_id)
+        ORDER BY CASE WHEN pl.sku=r.barcode THEN 0 WHEN pl.sku=r.vendor_code THEN 1 ELSE 2 END LIMIT 1
+      ) l ON TRUE
+      WHERE r.market=$1 AND r.sale_date >= $2 AND r.sale_date < $3
+      GROUP BY r.vendor_code,r.nm_id,l.product_id`, [selected, since, until]),
+    pool.query(`SELECT EXTRACT(HOUR FROM (to_timestamp(r.sale_date/1000.0) AT TIME ZONE 'Asia/Almaty'))::int AS hour,
+      SUM(CASE WHEN r.is_return=1 THEN -1 ELSE 1 END) AS qty,
+      SUM(CASE WHEN r.is_return=1 THEN -(${priceExpr}) ELSE (${priceExpr}) END) AS "buyoutSum",
+      SUM(CASE WHEN r.is_return=1 THEN -r.for_pay ELSE r.for_pay END) AS "forPay"
+      FROM wb_sales_live_rows r
+      WHERE r.market=$1 AND r.sale_date >= $2 AND r.sale_date < $3
+      GROUP BY hour ORDER BY hour`, [selected, since, until]),
+    pool.query('SELECT last_attempt_at AS "lastAttemptAt",last_success_at AS "lastSuccessAt",last_change_date AS "lastChangeDate",last_error AS "lastError",next_allowed_at AS "nextAllowedAt" FROM wb_sales_live_state WHERE market=$1', [selected])
+  ]);
+  const products = result.rows.map(row => ({
+    ...row,
+    title: row.vendorCode || row.nmId,
+    priceLinked: Number(row.missingPriceRows || 0) === 0 && Number(row.buyoutSum || 0) !== 0
+  }));
+  const hourlyByHour = new Map(hourlyResult.rows.map(row => [Number(row.hour), row]));
+  const hourly = Array.from({ length: 24 }, (_, hour) => {
+    const row = hourlyByHour.get(hour) || {};
+    return { hour, qty: Number(row.qty || 0), buyoutSum: Number(row.buyoutSum || 0), forPay: Number(row.forPay || 0) };
+  });
+  const state = stateResult.rows[0] || {};
+  const lastSuccessAt = Number(state.lastSuccessAt || sync?.liveSalesLastSuccessAt || 0) || null;
+  const lastError = String(state.lastError || sync?.liveSalesError || '');
+  const stale = !lastSuccessAt || Date.now() - lastSuccessAt > 45 * 60 * 1000;
+  return {
+    ok: true, available: true, market: selected, days,
+    range: { since, until, timezone: 'Asia/Almaty' },
+    buyoutCount: products.reduce((sum, row) => sum + Number(row.qty || 0), 0),
+    buyoutSum: products.reduce((sum, row) => sum + Number(row.buyoutSum || 0), 0),
+    forPay: products.reduce((sum, row) => sum + Number(row.forPay || 0), 0),
+    products, hourly, currency: 'KZT',
+    priceComplete: products.every(row => Number(row.missingPriceRows || 0) === 0),
+    source: 'WB Statistics sales/returns',
+    lastSuccessAt, lastAttemptAt: Number(state.lastAttemptAt || 0) || null,
+    lastChangeDate: Number(state.lastChangeDate || 0) || null,
+    nextAllowedAt: Number(state.nextAllowedAt || sync?.liveSalesNextAt || 0) || null,
+    lastError, stale
+  };
+}
+
 reportsRouter.get('/wb-dashboard-buyouts', asyncRoute(async (req, res) => {
   const selected = market(req.query.market);
   const days = Number(req.query.days || 1);
-  const cached = await pool.query('SELECT payload,updated_at AS "updatedAt",last_error AS "lastError" FROM wb_buyout_cache WHERE market=$1 AND period_key=$2', [selected, String(days)]);
-  if (cached.rowCount && cached.rows[0].payload) {
-    try { return res.json({ ...JSON.parse(cached.rows[0].payload), ok: true, cached: true, updatedAt: cached.rows[0].updatedAt, lastError: cached.rows[0].lastError }); } catch {}
-  }
-  const { since, until } = periodBounds(days);
-  const result = await pool.query('SELECT COALESCE(SUM(buyout_count),0)::bigint AS "buyoutCount",COALESCE(SUM(buyout_sum),0) AS "buyoutSum" FROM wb_dashboard_daily WHERE market=$1 AND day >= $2 AND day <= $3', [selected, dateKey(since), dateKey(until - 1)]);
-  res.json({ ok: true, available: true, market: selected, days, ...result.rows[0], products: [], currency: 'KZT', source: 'PostgreSQL WB daily cache' });
+  res.json(await wbSalesLiveSnapshot(selected, days));
 }));
 
 reportsRouter.get('/wb-sales-live', asyncRoute(async (req, res) => {
   const selected = market(req.query.market);
   const days = Number(req.query.days || 1);
-  const { since, until } = periodBounds(days);
-  const result = await pool.query(`SELECT r.vendor_code AS "vendorCode",r.nm_id AS "nmId",l.product_id AS "productId",
-    SUM(CASE WHEN r.is_return=1 THEN -1 ELSE 1 END) AS qty,
-    SUM(CASE WHEN r.is_return=1 THEN -r.finished_price ELSE r.finished_price END) AS "buyoutSum",
-    SUM(CASE WHEN r.is_return=1 THEN -r.for_pay ELSE r.for_pay END) AS "forPay"
-    FROM wb_sales_live_rows r LEFT JOIN LATERAL (
-      SELECT pl.product_id FROM product_links pl
-      WHERE pl.market=r.market AND pl.sku IN (r.barcode,r.vendor_code,r.nm_id)
-      ORDER BY CASE WHEN pl.sku=r.barcode THEN 0 WHEN pl.sku=r.vendor_code THEN 1 ELSE 2 END LIMIT 1
-    ) l ON TRUE
-    WHERE r.market=$1 AND r.sale_date >= $2 AND r.sale_date < $3 GROUP BY r.vendor_code,r.nm_id,l.product_id`, [selected, since, until]);
-  const products = result.rows.map(row => ({ ...row, title: row.vendorCode || row.nmId, priceLinked: Number(row.buyoutSum || 0) !== 0 }));
-  res.json({ ok: true, available: true, market: selected, days, range: { since, until, timezone: 'Asia/Almaty' },
-    buyoutCount: products.reduce((sum, row) => sum + Number(row.qty || 0), 0), buyoutSum: products.reduce((sum, row) => sum + Number(row.buyoutSum || 0), 0),
-    forPay: products.reduce((sum, row) => sum + Number(row.forPay || 0), 0), products, currency: 'KZT', source: 'PostgreSQL WB sales cache' });
+  res.json(await wbSalesLiveSnapshot(selected, days));
 }));
 
 reportsRouter.get('/wb-realized-status', asyncRoute(async (req, res) => {
