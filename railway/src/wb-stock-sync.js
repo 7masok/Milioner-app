@@ -4,6 +4,8 @@ import { stripPurchasesFromState } from './warehouse-purchases.js';
 import { stripSalesFromState } from './warehouse-sales.js';
 import { hydrateWarehouseReservations, stripReservationsFromState } from './warehouse-reservations.js';
 import { stripKaspiAdExpensesFromState } from './warehouse-kaspi-ads.js';
+import { hydrateWarehouseProducts, persistWarehouseProducts, stripProductsFromState } from './warehouse-products.js';
+import { legacyCompatibleWarehousePayload } from './warehouse-movements.js';
 import { linkFingerprint, validateWbLink, applyLinkObservation } from './wb-link-validation.js';
 import { config } from './config.js';
 import { credentialFor } from './connections.js';
@@ -64,7 +66,8 @@ export async function validateWbStockLinks(market) {
   const token=await credentialFor(id,id==='WB2'?config.wbToken2:config.wbToken);
   if(!token)return;
   const initial=await pool.query('SELECT payload FROM warehouse_state WHERE id=1');
-  const products=parse(initial.rows[0]?.payload).products||[];
+  const initialState=await hydrateWarehouseProducts(pool, parse(initial.rows[0]?.payload));
+  const products=initialState.products||[];
   const cards=await catalog(token);
   // An empty successful response is not sufficient evidence to detach a shop.
   if(!cards.length)return;
@@ -76,12 +79,13 @@ export async function validateWbStockLinks(market) {
     const current=await client.query('SELECT payload,revision FROM warehouse_state WHERE id=1 FOR UPDATE');
     if(!current.rowCount)return;
     const state=parse(current.rows[0].payload),now=Date.now();let changed=false,detached=0;
+    await hydrateWarehouseProducts(client, state);
     for(const observation of observations){
       const product=(state.products||[]).find(p=>String(p.id)===observation.id);
       if(!product||linkFingerprint(product,field)!==observation.fingerprint)continue;
       if(!observation.result.valid){
         if(!detached){
-          await client.query('INSERT INTO warehouse_backups(label,payload,revision,created_at) VALUES($1,$2,$3,$4)',['Before WB article unlink '+id,current.rows[0].payload,current.rows[0].revision,now]);
+          await client.query('INSERT INTO warehouse_backups(label,payload,revision,created_at) VALUES($1,$2,$3,$4)',['Before WB article unlink '+id, await legacyCompatibleWarehousePayload(client, current.rows[0].payload), current.rows[0].revision, now]);
           await pruneWarehouseBackups(client);
         }
         await client.query('DELETE FROM product_links WHERE product_id=$1 AND market=$2',[observation.id,id]);
@@ -89,7 +93,10 @@ export async function validateWbStockLinks(market) {
       }
       changed=applyLinkObservation(product,field,observation.result,now)||changed;
     }
-    if(changed)await client.query('UPDATE warehouse_state SET payload=$1,revision=revision+1,updated_at=$2 WHERE id=1',[JSON.stringify(stripKaspiAdExpensesFromState(stripReservationsFromState(stripSalesFromState(stripPurchasesFromState(state))))),now]);
+    if(changed){
+      await persistWarehouseProducts(client, state.products, now);
+      await client.query('UPDATE warehouse_state SET payload=$1,revision=revision+1,updated_at=$2 WHERE id=1',[JSON.stringify(stripProductsFromState(stripKaspiAdExpensesFromState(stripReservationsFromState(stripSalesFromState(stripPurchasesFromState(state)))))),now]);
+    }
     return {market:id,detached};
   });
 }
@@ -120,7 +127,7 @@ export async function syncWbStockMarket(market,{write=true}={}){
   const token=await credentialFor(id,id==='WB2'?config.wbToken2:config.wbToken);
   if(!token)return {ok:false,market:id,skipped:true,reason:'token-not-configured'};
   const stateRow=await pool.query('SELECT payload FROM warehouse_state WHERE id=1');
-  const state=await hydrateWarehouseReservations(pool, parse(stateRow.rows[0]?.payload)),availability=sharedAvailable(state),field=id==='WB2'?'wb2':'wb';
+  const state=await hydrateWarehouseProducts(pool, await hydrateWarehouseReservations(pool, parse(stateRow.rows[0]?.payload))),availability=sharedAvailable(state),field=id==='WB2'?'wb2':'wb';
   // Variant-group rows are display-only parents. Their children carry the real
   // WB barcode and characteristic ID, so never send the parent as a stock item.
   const linked=[...availability.products.values()].filter(product=>String(product?.[field]||'').trim()&&String(product?.kind||'')!=='variant-group');

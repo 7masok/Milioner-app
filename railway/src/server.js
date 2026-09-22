@@ -13,6 +13,7 @@ import { financeLedgerRouter } from './finance-ledger.js';
 import { ordersRouter } from './orders.js';
 import { reportsRouter } from './reports.js';
 import { stockRouter, kaspiFeedHandler } from './stock.js';
+import { hydrateWarehouseProducts } from './warehouse-products.js';
 import { startKaspiSyncLoop, syncKaspiOrders } from './kaspi-sync.js';
 import { startWbSyncLoop, syncWbOrders } from './wb-sync.js';
 import { syncWbStockMarket, validateWbStockLinks } from './wb-stock-sync.js';
@@ -229,7 +230,8 @@ async function verifyBackupRestoreReadiness() {
     ]);
     if (!warehouse.rowCount) return console.warn('BACKUP_RESTORE_DRY_RUN', JSON.stringify({ ok:false, error:'warehouse_state_missing' }));
     const raw = warehouse.rows[0].payload;
-    const state = typeof raw === 'string' ? JSON.parse(raw) : raw;
+    const parsed = typeof raw === 'string' ? JSON.parse(raw) : raw;
+    const state = await hydrateWarehouseProducts(pool, parsed && typeof parsed === 'object' ? parsed : {});
     const backupState = JSON.parse(JSON.stringify(state || {}));
     backupState.settings ||= {};
     for (const key of ['personalFinanceAccounts','personalFinanceTransactions','personalFinanceCategories','personalFinanceLegacyImports']) delete backupState.settings[key];

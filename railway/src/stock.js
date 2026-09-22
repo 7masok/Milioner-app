@@ -3,6 +3,7 @@ import { pool } from './db.js';
 import { asyncRoute, requireTrustedOrigin } from './http.js';
 import { automaticOfferFromRow, linkedRecoveryStock, rewriteOfferPrice } from './kaspi-stock-feed.js';
 import { hydrateWarehouseReservations } from './warehouse-reservations.js';
+import { hydrateWarehouseProducts } from './warehouse-products.js';
 
 export const stockRouter = express.Router();
 
@@ -97,7 +98,7 @@ function templateInfo(rawXml){
 }
 async function warehouseKaspiRows(){
   const stateResult=await pool.query('SELECT payload FROM warehouse_state WHERE id=1');
-  const snapshot=await hydrateWarehouseReservations(pool, parsePayload(stateResult.rows[0]?.payload)),availability=warehouseAvailability(snapshot),combined=new Map();
+  const snapshot=await hydrateWarehouseProducts(pool, await hydrateWarehouseReservations(pool, parsePayload(stateResult.rows[0]?.payload))),availability=warehouseAvailability(snapshot),combined=new Map();
   for(const product of(Array.isArray(snapshot.products)?snapshot.products:[])){
     const productId=String(product?.id||''),aliases=Array.isArray(product?.kaspiAliases)?product.kaspiAliases:[];
     for(const rawSku of [product?.kaspi,...aliases]){const sku=String(rawSku||'').trim();if(!sku||combined.has(sku))continue;combined.set(sku,{sku,productId,name:String(product?.name||''),brand:String(product?.brand||'LuxAr'),price:Math.max(0,n(product?.kaspiPrice,0)),stock:availability.available(productId)})}

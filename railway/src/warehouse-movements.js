@@ -2,6 +2,7 @@ import { hydrateWarehousePurchases } from './warehouse-purchases.js';
 import { hydrateWarehouseSales } from './warehouse-sales.js';
 import { hydrateWarehouseReservations } from './warehouse-reservations.js';
 import { hydrateKaspiAdExpenses } from './warehouse-kaspi-ads.js';
+import { hydrateWarehouseProducts } from './warehouse-products.js';
 
 export function parseWarehousePayload(raw) {
   try { return JSON.parse(String(raw || '{}')); } catch { return {}; }
@@ -76,6 +77,7 @@ export async function legacyCompatibleWarehouseState(client, rawPayload) {
   await hydrateWarehouseSales(client, state);
   await hydrateWarehouseReservations(client, state);
   await hydrateKaspiAdExpenses(client, state);
+  await hydrateWarehouseProducts(client, state);
   return hydrateWarehouseMovements(client, state);
 }
 

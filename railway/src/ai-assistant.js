@@ -7,6 +7,7 @@ import { asyncRoute, requireTrustedOrigin } from './http.js';
 import { hydrateWarehousePurchases } from './warehouse-purchases.js';
 import { hydrateWarehouseSales } from './warehouse-sales.js';
 import { hydrateWarehouseReservations } from './warehouse-reservations.js';
+import { hydrateWarehouseProducts } from './warehouse-products.js';
 
 export const aiAssistantRouter = express.Router();
 const MODEL = String(process.env.OPENAI_MODEL || 'gpt-5-mini').trim();
@@ -465,7 +466,7 @@ aiAssistantRouter.post('/assistant/chat', requireTrustedOrigin, asyncRoute(async
     pool.query(`SELECT market,order_id,status,state,creation_date,sku,product_name,qty,unit_price,total_price
       FROM marketplace_order_lines ORDER BY creation_date DESC LIMIT 500`)
   ]);
-  const context=snapshotSummary(await hydrateWarehouseReservations(pool, await hydrateWarehouseSales(pool, await hydrateWarehousePurchases(pool, parseWarehousePayload(result.rows[0]?.payload)))),ordersResult.rows);
+  const context=snapshotSummary(await hydrateWarehouseProducts(pool, await hydrateWarehouseReservations(pool, await hydrateWarehouseSales(pool, await hydrateWarehousePurchases(pool, parseWarehousePayload(result.rows[0]?.payload))))),ordersResult.rows);
   const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),55_000);
   try{
     const response=await fetch('https://api.openai.com/v1/responses',{method:'POST',signal:controller.signal,headers:{Authorization:'Bearer '+key,'Content-Type':'application/json'},body:JSON.stringify({model:MODEL,store:false,max_output_tokens:4000,reasoning:{effort:'low'},text:{verbosity:'low'},instructions:'Ты встроенный помощник владельца этого склада и продавца на Kaspi и Wildberries. Перед каждым ответом тебе автоматически передаются актуальные данные приложения: товары, остатки, резервы, продажи, закупки и последние заказы. Если владелец говорит «смотри на сайте», «посмотри склад» или похожее — анализируй именно эти переданные данные, не проси CSV, Excel, JSON или скриншоты. Отвечай по-русски, коротко и конкретно. Не выдумывай числа. Если конкретного показателя действительно нет в переданных данных, назови ровно какой показатель отсутствует. Ты анализируешь и советуешь, но пока не изменяешь склад.',input:[{role:'developer',content:'Актуальные данные приложения (JSON): '+JSON.stringify(context)},...messages]})});

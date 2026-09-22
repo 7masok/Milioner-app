@@ -1,6 +1,7 @@
 import express from 'express';
 import { pool } from './db.js';
 import { asyncRoute } from './http.js';
+import { hydrateWarehouseProducts } from './warehouse-products.js';
 
 export const ordersRouter = express.Router();
 
@@ -95,7 +96,7 @@ ordersRouter.get('/orders', asyncRoute(async (req, res) => {
     pool.query('SELECT payload FROM warehouse_state WHERE id=1')
   ]);
   let stateProducts = [];
-  try { stateProducts = JSON.parse(String(warehouse.rows[0]?.payload || '{}')).products || []; } catch {}
+  try { stateProducts = (await hydrateWarehouseProducts(pool, JSON.parse(String(warehouse.rows[0]?.payload || '{}')))).products || []; } catch {}
   const visibleLinks = new Map();
   for (const product of stateProducts) {
     for (const [linkMarket, field] of [['Kaspi','kaspi'],['WB','wb'],['WB2','wb2'],['Ozon','ozon']]) {
