@@ -15,13 +15,14 @@ const SYNC_MS = 10 * 60 * 1000;
 const TIMEOUT_MS = 25_000;
 const LOOKBACK_DAYS = 14;
 const LIVE_SALES_LOOKBACK_DAYS = 45;
-const LIVE_SALES_SYNC_MS = 6 * 60 * 60 * 1000 + 35 * 60 * 1000;
+const LIVE_SALES_SYNC_MS = 31 * 60 * 1000;
 const LIVE_SALES_RETRY_MS = 65 * 60 * 1000;
 // Keep finance on the conservative cadence that was stable before the report work.
 // Orders may still refresh every ten minutes; finance must not.
 const FINANCE_SYNC_MS = 2 * 60 * 60 * 1000;
 const FINANCE_FAILURE_RETRY_MS = 65 * 60 * 1000;
 const inFlight = new Map();
+const liveSalesInFlight = new Map();
 
 const MOSCOW_OFFSET_MS = 3 * 60 * 60 * 1000;
 function isoDate(time) {
@@ -131,15 +132,24 @@ async function fetchOrders(market, token) {
 }
 
 
+function wbMoscowDateTime(time) {
+  const shifted = new Date(Math.max(0, Number(time) || 0) + MOSCOW_OFFSET_MS).toISOString();
+  return shifted.replace(/Z$/, '+03:00');
+}
+
 function liveSaleTimestamp(input) {
   const numeric = Number(input);
   if (Number.isFinite(numeric) && numeric > 0) return numeric < 1e12 ? numeric * 1000 : numeric;
-  const parsed = Date.parse(String(input || ''));
+  let raw = String(input || '').trim();
+  if (!raw) return 0;
+  if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) raw += 'T00:00:00';
+  const hasZone = /(?:Z|[+-]\d{2}:?\d{2})$/i.test(raw);
+  const parsed = Date.parse(hasZone ? raw : raw + '+03:00');
   return Number.isFinite(parsed) ? parsed : 0;
 }
 
 async function fetchLiveSalesRows(token, dateFromMs) {
-  const from = new Date(Math.max(0, Number(dateFromMs) || 0)).toISOString();
+  const from = wbMoscowDateTime(dateFromMs);
   const query = new URLSearchParams({ dateFrom: from, flag: '0' });
   const data = await requestJson(`${WB_STATISTICS_API}/api/v1/supplier/sales?${query}`, {
     headers: { Accept: 'application/json', Authorization: token }
@@ -207,15 +217,17 @@ async function upsertLiveSales(market, rows) {
   };
 }
 
-async function syncLiveSales(market, token) {
+async function syncLiveSales(market, token, { force = false } = {}) {
   const state = (await pool.query('SELECT * FROM wb_sales_live_state WHERE market=$1', [market])).rows[0] || {};
   const now = Date.now();
   const lastAttemptAt = Number(state.last_attempt_at || 0);
   const lastSuccessAt = Number(state.last_success_at || 0);
   const lastError = String(state.last_error || '');
-  const cooldown = lastError ? LIVE_SALES_RETRY_MS : LIVE_SALES_SYNC_MS;
   const persistedNextAllowedAt = Number(state.next_allowed_at || 0);
-  const nextAllowedAt = Math.max(persistedNextAllowedAt, lastAttemptAt ? lastAttemptAt + cooldown : 0);
+  const normalNextAt = lastAttemptAt ? lastAttemptAt + LIVE_SALES_SYNC_MS : 0;
+  const retryNextAt = lastError ? Math.max(persistedNextAllowedAt, lastAttemptAt ? lastAttemptAt + LIVE_SALES_RETRY_MS : 0) : 0;
+  const hardRateLimitAt = lastAttemptAt ? lastAttemptAt + 65_000 : 0;
+  const nextAllowedAt = lastError ? retryNextAt : (force ? hardRateLimitAt : normalNextAt);
   if (nextAllowedAt && now < nextAllowedAt) {
     return {
       liveSalesSkipped: true,
@@ -273,6 +285,24 @@ async function syncLiveSales(market, token) {
       liveSalesNextAt: retryAt
     };
   }
+}
+
+export async function syncWbLiveSales(market, { force = false } = {}) {
+  if (!/^WB(?:[2-9]\d*|1\d+)?$/.test(market)) throw new Error('Unsupported WB market');
+  if (liveSalesInFlight.has(market)) return liveSalesInFlight.get(market);
+  const task = (async () => {
+    const token = await tokenFor(market);
+    if (!token) return {
+      liveSalesSkipped: true,
+      liveSalesItems: 0,
+      liveSalesError: `${market === 'WB2' ? 'WB_TOKEN_2' : 'WB_TOKEN'} is not configured`,
+      liveSalesLastSuccessAt: null,
+      liveSalesNextAt: null
+    };
+    return syncLiveSales(market, token, { force });
+  })();
+  liveSalesInFlight.set(market, task);
+  try { return await task; } finally { liveSalesInFlight.delete(market); }
 }
 
 async function fetchFinanceRows(token) {
@@ -539,14 +569,10 @@ export async function syncWbOrders(market, { force = false } = {}) {
       catch (error) { console.warn(`WB sticker cache failed (${market})`, String(error?.message || error)); }
       await upsert(market, rows);
       const finance = await syncFinanceReport(market, token);
-      // Live sales was added only as a diagnostic cross-check. It is not used by
-      // the production report, so do not spend another WB API lane on every sync.
-      const liveSales = {
-        liveSalesSkipped: true,
-        liveSalesItems: 0,
-        liveSalesError: '',
-        liveSalesDisabled: true
-      };
+      // WB Statistics sales/returns is the operational source for actual buyouts.
+      // The endpoint itself updates about every 30 minutes, so the helper enforces
+      // a 31-minute cadence and a hard one-minute request floor.
+      const liveSales = await syncLiveSales(market, token, { force });
       let reservationReconcile = null;
       try {
         reservationReconcile = await reconcileWbReservations(market, now);
