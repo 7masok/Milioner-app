@@ -110,6 +110,39 @@ test('BCC Russian statement parser accepts Russian headings and blocked section'
 
 
 
+test('BCC parser imports the actual two-line 242000 layout from the 21-22 Sep statement', () => {
+  const text = `
+Банк ЦентрКредит
+БИК: KCJBKZKX
+Выписка по банковскому счету KZ088562204150156670
+Валюта банковского счета KZT
+Период выписки 21.09.2026 - 22.09.2026
+2026-09-21     2026-09-21        Платеж                 242 000.00   -242 000.0   0.00 KZT      0.00
+                                                        KZT          0 KZT                      KZT
+2026-09-21     2026-09-21        Перевод                83 208.70    -83 208.70   0.00 KZT      0.00
+                                                        KZT          KZT                        KZT
+2026-09-21     2026-09-21        Прочие                 254 000.00   254 000.00   0.00 KZT      0.00
+                                 безвозмездные          KZT          KZT                        KZT
+                                 переводы денег.
+                                 Плательщик: ИП
+                                 MASTERBOX
+2026-09-21     2026-09-22        Перевод                15 000.00    -15 000.00   0.00 KZT      0.00
+                                                        KZT          KZT                        KZT
+2026-09-21     2026-09-21        Платеж                 120.00 KZT   -120.00      0.00 KZT      0.00
+                                                                     KZT                        KZT
+`;
+  const result=parseBccStatement(text,'source-hash-real-layout','bcc-real-layout.pdf');
+  assert.ok(result);
+  const amounts=result.transactions.map(x=>x.type==='expense'?-x.amount:x.amount);
+  assert.ok(result.transactions.some(x=>x.type==='expense'&&x.amount===242000));
+  assert.ok(result.transactions.some(x=>x.type==='expense'&&x.amount===83208.70));
+  assert.ok(result.transactions.some(x=>x.type==='income'&&x.amount===254000));
+  assert.ok(result.transactions.some(x=>x.type==='expense'&&x.amount===15000));
+  assert.ok(result.transactions.some(x=>x.type==='expense'&&x.amount===120));
+  assert.equal(amounts.reduce((sum,x)=>sum+x,0),-86328.70);
+  assert.equal(result.transactions.filter(x=>x.type==='expense').reduce((sum,x)=>sum+x.amount,0),340328.70);
+});
+
 test('BCC parser imports a 242000 payment when the PDF splits currency cells across lines', () => {
   const text = `
 Банк ЦентрКредит
