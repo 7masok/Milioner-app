@@ -39,7 +39,7 @@ function businessDayBounds(offset=0){
 }
 function businessPeriodBounds(){return businessDayBounds(0)}
 function businessBuckets(_period,bounds){
- const rows=[],push=(start,end,label)=>rows.push({start,end,label,orders:0,orderQty:0,orderProfit:0,buyouts:0,buyoutQty:0,buyoutBaseProfit:0,buyoutProfit:0,financeExpense:0,netProfit:0});
+ const rows=[],push=(start,end,label)=>rows.push({start,end,label,orders:0,orderQty:0,orderProfit:0,buyouts:0,buyoutQty:0,buyoutBaseProfit:0,buyoutProfit:0,netProfit:0});
  for(let h=0;h<24;h++){const s=bounds.start+h*3600000;push(s,s+3600000,String(h).padStart(2,'0'))}
  return rows;
 }
@@ -90,46 +90,24 @@ function businessLocalBuyouts(bounds,buckets){
  }
  return {revenue,qty,baseProfit};
 }
-function businessFinanceExpenses(bounds,buckets){
- const categories=new Map((typeof financeCategories==='function'?financeCategories():[]).map(x=>[String(x?.id||''),x]));
- const groups=new Map();let total=0,uncategorized=0,excluded=0;
- for(const tx of (typeof financeTransactions==='function'?financeTransactions():[])){
-  const ts=typeof financeTransactionTime==='function'?financeTransactionTime(tx):Number(tx?.createdAt)||0;if(!(ts>=bounds.start&&ts<bounds.end))continue;
-  const entry=typeof financeAnalyticsEntry==='function'?financeAnalyticsEntry(tx):null;
-  if(!entry||entry.mode!=='expense'){
-    const rawType=typeof financeTransactionType==='function'?financeTransactionType(tx):String(tx?.type||'');
-    const counts=typeof financeCountsInIncomeExpense==='function'?financeCountsInIncomeExpense(tx):rawType==='expense';
-    const effective=typeof financeEffectiveCategory==='function'?financeEffectiveCategory(tx):{categoryId:String(tx?.categoryId||''),category:String(tx?.category||'').trim()};
-    if(rawType==='expense'&&counts&&!effective.categoryId&&!effective.category){
-      const amount=typeof financeTransactionDefaultAmount==='function'?financeTransactionDefaultAmount(tx):Math.abs(Number(tx?.amount)||0);
-      uncategorized+=amount;total+=amount;const bucket=businessBucketFor(buckets,ts);if(bucket)bucket.financeExpense+=amount;
-      const key='__uncategorized__';if(!groups.has(key))groups.set(key,{name:'Без категории',amount:0});groups.get(key).amount+=amount;
-    }
-    continue
-  }
-  if(typeof financeAnalyticsEntryIncluded==='function'&&!financeAnalyticsEntryIncluded(entry)){excluded+=Number(entry.amount)||0;continue}
-  const amount=Number(entry.amount)||0;total+=amount;const bucket=businessBucketFor(buckets,ts);if(bucket)bucket.financeExpense+=amount;
-  const id=String(entry.categoryId||''),name=id?(categories.get(id)?.name||entry.category||'Без категории'):(entry.category||'Без категории'),key=id||('name:'+name);
-  if(!groups.has(key))groups.set(key,{name,amount:0});groups.get(key).amount+=amount;
- }
- return {total,uncategorized,excluded,groups:[...groups.values()].filter(x=>Math.abs(x.amount)>0.001).sort((a,b)=>b.amount-a.amount)};
-}
 function businessNormalizeBuyoutBuckets(buckets,local,summary){
  const exactRevenue=Number(summary?.revenue)||0,exactProfit=Number(summary?.profit)||0,localRevenue=Number(local?.revenue)||0,baseProfit=Number(local?.baseProfit)||0;
  const revenueScale=localRevenue>0?exactRevenue/localRevenue:0,profitAdjustment=exactProfit-baseProfit;
  if(localRevenue>0){
   for(const b of buckets){const share=Math.max(0,Number(b.buyouts)||0)/localRevenue;b.buyouts*=revenueScale;b.buyoutProfit=b.buyoutBaseProfit+profitAdjustment*share}
  }else if(buckets.length){buckets[buckets.length-1].buyouts=exactRevenue;buckets[buckets.length-1].buyoutProfit=exactProfit}
- for(const b of buckets)b.netProfit=b.buyoutProfit-b.financeExpense;
+ for(const b of buckets)b.netProfit=b.buyoutProfit;
 }
-function businessMoney(value){return typeof fmt==='function'?fmt(Number(value)||0):new Intl.NumberFormat('ru-RU',{maximumFractionDigits:0}).format(Number(value)||0)+' ₸'}
+function businessMoney(value){const raw=Number(value),n=Number.isFinite(raw)&&Math.abs(raw)>=.005?raw:0;return typeof fmt==='function'?fmt(n):new Intl.NumberFormat('ru-RU',{maximumFractionDigits:0}).format(n)+' ₸'}
+function businessMaybeMoney(value,estimated=false){if(value===null||value===undefined||!Number.isFinite(Number(value)))return '—';return (estimated?'≈ ':'')+businessMoney(value)}
+function businessExpenseMoney(value,estimated=false){if(value===null||value===undefined||!Number.isFinite(Number(value)))return '—';const n=Math.abs(Number(value));return n<.005?businessMoney(0):(estimated?'≈ −':'−')+businessMoney(n)}
 function businessMetricInfo(model){
  const map={
   orders:{label:'Заказы',value:model.orders.amount,meta:model.orders.qty.toLocaleString('ru-RU')+' шт. · '+model.orders.orderCount.toLocaleString('ru-RU')+' заказов',field:'orders'},
   buyouts:{label:'Выкупы',value:model.summary.revenue,meta:model.summary.qty.toLocaleString('ru-RU')+' шт.',field:'buyouts'},
   orderProfit:{label:'Прибыль с заказов · прогноз',value:model.orders.profit,meta:'покрытие расчётом '+Math.round(model.orders.coverage*100)+'%',field:'orderProfit'},
-  buyoutProfit:{label:'Прибыль с выкупов',value:model.summary.profit,meta:model.summary.estimated?'≈ финансовый расчёт':'финансовый расчёт',field:'buyoutProfit'},
-  netProfit:{label:'Чистая прибыль бизнеса',value:model.netProfit,meta:'расходы бизнеса '+businessMoney(model.finance.total),field:'netProfit'}
+  buyoutProfit:{label:'Прибыль с выкупов',value:model.summary.profit,meta:model.summary.estimated?'≈ по данным маркетплейсов':'по данным маркетплейсов',field:'buyoutProfit'},
+  netProfit:{label:'Чистая прибыль бизнеса',value:model.netProfit,meta:model.summary.estimated?'≈ Kaspi + WB1 + WB2':'Kaspi + WB1 + WB2',field:'netProfit'}
  };
  return map[businessMetric]||map.orders;
 }
@@ -213,10 +191,10 @@ async function businessLoadSummary(days,force=false){
  businessSummaryCache.set(key,{at:Date.now(),promise});return promise;
 }
 async function businessBuildDaySnapshot(bounds,summaryDays,force=false){
- const buckets=businessBuckets('day',bounds),groups=businessOrderGroups(bounds),orders=businessEstimateOrders(groups,buckets,window.allMarketUnitProfit30),local=businessLocalBuyouts(bounds,buckets),finance=businessFinanceExpenses(bounds,buckets),summary=await businessLoadSummary(summaryDays,force);
+ const buckets=businessBuckets('day',bounds),groups=businessOrderGroups(bounds),orders=businessEstimateOrders(groups,buckets,window.allMarketUnitProfit30),local=businessLocalBuyouts(bounds,buckets),summary=await businessLoadSummary(summaryDays,force);
  businessNormalizeBuyoutBuckets(buckets,local,summary);
- const netProfit=(Number(summary?.profit)||0)-finance.total;
- return {period:'day',bounds,buckets,orders,local,finance,summary,netProfit};
+ const netProfit=Number(summary?.profit)||0;
+ return {period:'day',bounds,buckets,orders,local,summary,netProfit};
 }
 function businessElapsedTodayMs(){
  const start=businessDayStart().getTime();
@@ -232,9 +210,7 @@ function businessYesterdaySameTime(fullYesterday){
  const elapsed=businessElapsedTodayMs(),cutoff=Math.min(fullYesterday.bounds.end,fullYesterday.bounds.start+elapsed),
    partialBounds={start:fullYesterday.bounds.start,end:cutoff,days:-1,label:'Вчера'},
    orderBuckets=businessBuckets('day',fullYesterday.bounds),
-   orders=businessEstimateOrders(businessOrderGroups(partialBounds),orderBuckets,window.allMarketUnitProfit30),
-   financeBuckets=businessBuckets('day',fullYesterday.bounds),
-   finance=businessFinanceExpenses(partialBounds,financeBuckets);
+   orders=businessEstimateOrders(businessOrderGroups(partialBounds),orderBuckets,window.allMarketUnitProfit30);
  let revenue=0,qty=0,profit=0;
  for(const b of fullYesterday.buckets){
   const factor=cutoff<=b.start?0:cutoff>=b.end?1:(cutoff-b.start)/Math.max(1,b.end-b.start);
@@ -243,8 +219,8 @@ function businessYesterdaySameTime(fullYesterday){
   profit+=(Number(b.buyoutProfit)||0)*factor;
  }
  const summary={...fullYesterday.summary,revenue,qty:Math.round(qty),profit},
-   netProfit=profit-finance.total;
- return {...fullYesterday,bounds:partialBounds,orders,finance,summary,netProfit,comparisonCutoff:cutoff,comparisonElapsed:elapsed};
+   netProfit=profit;
+ return {...fullYesterday,bounds:partialBounds,orders,summary,netProfit,comparisonCutoff:cutoff,comparisonElapsed:elapsed};
 }
 async function businessBuildModel(force=false){
  if(typeof window.refreshAllMarketUnitProfit==='function'&&(!(window.allMarketUnitProfit30 instanceof Map)||force)){try{await window.refreshAllMarketUnitProfit()}catch(_){}}
@@ -276,16 +252,13 @@ window.renderBusinessDashboard=async function(force=false){
 };
 window.openBusinessDashboardDetails=function(){
  const m=businessLastModel;if(!m)return window.renderBusinessDashboard(false);
- const sourceRows=Object.entries(m.summary?.sources||{}).map(([name,x])=>`<div class="item" style="margin-top:8px"><div class="row"><div class="grow"><b>${name==='WB'?'WB1':esc(name)}</b><div class="muted">${Math.round(Number(x.qty)||0).toLocaleString('ru-RU')} шт. выкупов</div></div><b>${businessMoney(x.profit)}</b></div><div class="row" style="margin-top:6px"><span class="grow muted">Выручка</span><b>${businessMoney(x.revenue)}</b></div><div class="row" style="margin-top:4px"><span class="grow muted">Себестоимость</span><b>−${businessMoney(x.cost).replace(/^-/,'')}</b></div><div class="row" style="margin-top:4px"><span class="grow muted">Комиссии, логистика и услуги</span><b>−${businessMoney(x.fees).replace(/^-/,'')}</b></div><div class="row" style="margin-top:4px"><span class="grow muted">Реклама</span><b>−${businessMoney(x.ads).replace(/^-/,'')}</b></div></div>`).join('');
- const financeRows=m.finance.groups.length?m.finance.groups.map(x=>`<div class="row" style="margin-top:5px"><span class="grow muted">${esc(x.name)}</span><b>${businessMoney(x.amount)}</b></div>`).join(''):'<div class="muted" style="margin-top:6px">Расходов бизнеса за период нет.</div>';
+ const sourceRows=Object.entries(m.summary?.sources||{}).map(([name,x])=>`<div class="item" style="margin-top:8px"><div class="row"><div class="grow"><b>${name==='WB'?'WB1':esc(name)}</b><div class="muted">${Math.round(Number(x.qty)||0).toLocaleString('ru-RU')} шт. выкупов${x.live?' · оперативные данные':''}</div></div><b>${businessMaybeMoney(x.profit,Boolean(x.estimated))}</b></div><div class="row" style="margin-top:6px"><span class="grow muted">Выручка</span><b>${businessMaybeMoney(x.revenue)}</b></div><div class="row" style="margin-top:4px"><span class="grow muted">Себестоимость</span><b>${businessExpenseMoney(x.cost,Boolean(x.estimated&&x.cost!==null))}</b></div><div class="row" style="margin-top:4px"><span class="grow muted">Комиссии, логистика и услуги</span><b>${businessExpenseMoney(x.fees,Boolean(x.estimated&&x.fees!==null))}</b></div><div class="row" style="margin-top:4px"><span class="grow muted">Реклама</span><b>${businessExpenseMoney(x.ads)}</b></div></div>`).join('');
  const coverage=Math.round(m.orders.coverage*100);
- showSheet(`<h3>Бизнес · ${esc(m.bounds.label)}</h3><div class="link-note"><b>Что считается.</b> Заказы — новые неотменённые заказы. Прибыль заказов — прогноз по фактической чистой прибыли/шт. последних 30 дней. Прибыль выкупов — финансовые данные Kaspi + WB1 + WB2 после себестоимости, комиссий, логистики, рекламы и возвратов. Чистая прибыль бизнеса дополнительно вычитает расходы из вкладки «Финансы».</div>
+ showSheet(`<h3>Бизнес · ${esc(m.bounds.label)}</h3>
  <div class="item"><div class="row"><span class="grow">Заказы</span><b>${businessMoney(m.orders.amount)}</b></div><div class="muted">${m.orders.qty.toLocaleString('ru-RU')} шт. · ${m.orders.orderCount} заказов</div><div class="row" style="margin-top:8px"><span class="grow">Примерная прибыль с заказов</span><b>${businessMoney(m.orders.profit)}</b></div><div class="muted">Покрытие расчётом: ${coverage}%</div></div>
- <div class="item" style="margin-top:8px"><div class="row"><span class="grow">Выкупы</span><b>${businessMoney(m.summary.revenue)}</b></div><div class="row" style="margin-top:8px"><span class="grow"><b>Прибыль с выкупов</b></span><b>${businessMoney(m.summary.profit)}</b></div><div class="row" style="margin-top:5px"><span class="grow muted">Себестоимость</span><b>−${businessMoney(m.summary.cost).replace(/^-/,'')}</b></div><div class="row" style="margin-top:5px"><span class="grow muted">Комиссии, логистика и услуги</span><b>−${businessMoney(m.summary.fees).replace(/^-/,'')}</b></div><div class="row" style="margin-top:5px"><span class="grow muted">Реклама</span><b>−${businessMoney(m.summary.ads).replace(/^-/,'')}</b></div></div>
+ <div class="item" style="margin-top:8px"><div class="row"><span class="grow">Выкупы</span><b>${businessMoney(m.summary.revenue)}</b></div><div class="row" style="margin-top:8px"><span class="grow"><b>Прибыль с выкупов</b></span><b>${businessMaybeMoney(m.summary.profit,Boolean(m.summary.estimated))}</b></div><div class="row" style="margin-top:5px"><span class="grow muted">Себестоимость</span><b>${businessExpenseMoney(m.summary.cost,Boolean(m.summary.estimated&&m.summary.cost!==null))}</b></div><div class="row" style="margin-top:5px"><span class="grow muted">Комиссии, логистика и услуги</span><b>${businessExpenseMoney(m.summary.fees,Boolean(m.summary.estimated&&m.summary.fees!==null))}</b></div><div class="row" style="margin-top:5px"><span class="grow muted">Реклама</span><b>${businessExpenseMoney(m.summary.ads)}</b></div></div>
  <h3 style="margin-top:14px">По магазинам</h3>${sourceRows}
- <div class="item" style="margin-top:8px"><b>Расходы бизнеса из «Финансов»</b><div class="row" style="margin-top:7px"><span class="grow">Итого</span><b>${businessMoney(m.finance.total)}</b></div>${financeRows}${m.finance.uncategorized>0?`<div class="link-note" style="margin-top:8px">Есть расходы без категории на ${businessMoney(m.finance.uncategorized)}. Они включены в чистую прибыль, но лучше присвоить им категории.</div>`:''}</div>
- <div class="item" style="margin-top:8px"><div class="row"><span class="grow"><b>Чистая прибыль бизнеса</b></span><b>${businessMoney(m.netProfit)}</b></div></div>
- <div class="link-note"><b>Важно про двойной учёт.</b> Если закупка товара/себестоимость, комиссия, логистика или реклама маркетплейса уже учтена выше и одновременно занесена отдельным расходом в «Финансах», она будет вычтена второй раз. Такие категории в «Финансах» нужно выключить из «Итого». Ozon пока не входит в эту прибыль: его серверная финансовая история сейчас ограничена 30 днями.</div>`);
+ <div class="item" style="margin-top:8px"><div class="row"><span class="grow"><b>Чистая прибыль бизнеса</b></span><b>${businessMaybeMoney(m.netProfit,Boolean(m.summary.estimated))}</b></div></div>`);
 };
 
 const baseRenderReports=window.renderReports;
