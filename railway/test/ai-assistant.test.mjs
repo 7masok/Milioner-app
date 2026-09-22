@@ -109,6 +109,31 @@ test('BCC Russian statement parser accepts Russian headings and blocked section'
 });
 
 
+
+test('BCC parser imports a 242000 payment when the PDF splits currency cells across lines', () => {
+  const text = `
+Банк ЦентрКредит
+БИК: KCJBKZKX
+Выписка по счету KZ088562204150156670
+Валюта счета KZT
+Период выписки 21.09.2026 - 22.09.2026
+2026-09-21 2026-09-21 Платеж 242 000.00 -242 000.0 0.00 KZT 0.00 KZT
+ KZT 0 KZT
+2026-09-21 2026-09-21 Перевод 83 208.70 KZT -83 208.70 KZT 0.00 KZT 0.00 KZT
+2026-09-21 2026-09-21 Перевод 15 000.00 KZT -15 000.00 KZT 0.00 KZT 0.00 KZT
+2026-09-21 2026-09-21 Платеж 120.00 KZT -120.00 KZT 0.00 KZT 0.00 KZT
+`;
+  const result = parseBccStatement(text,'source-hash-242k','bcc-242k.pdf');
+  assert.ok(result);
+  assert.equal(result.transactions.length,4);
+  const payment=result.transactions.find(x=>x.amount===242000);
+  assert.ok(payment);
+  assert.equal(payment.type,'expense');
+  assert.equal(payment.note,'Платёж');
+  const total=result.transactions.reduce((sum,x)=>sum+x.amount,0);
+  assert.equal(total,340328.70);
+});
+
 test('BCC parser repairs a wrapped account amount from the bank PDF table', () => {
   const text = `
 Bank CenterCredit JSC
