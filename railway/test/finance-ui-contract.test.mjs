@@ -216,3 +216,22 @@ test('all finance accounts can store editable IBAN and card identifiers',()=>{
   assert.ok(save.includes("bankStatementAccountNumber=iban"));
   assert.ok(save.includes("bankStatementCardNumber=cardNumber"));
 });
+
+
+test('finance journal uses category or account as the primary label',()=>{
+  const fn=extractFunction('renderFinanceTransactions');
+  assert.ok(fn.includes("displayTitle=x?.refundOfId?(category||account||rawTitle||'Возврат')"));
+  assert.ok(fn.includes("type==='transfer'?(account+' → '+to)"));
+  assert.ok(fn.includes("type==='adjustment'?(account||rawTitle||'Корректировка')"));
+  assert.ok(fn.includes("category?(category):(account||rawTitle||'Операция')"));
+  assert.ok(fn.includes("rawTitle&&rawTitle!==displayTitle?rawTitle:''"));
+  assert.ok(fn.includes("esc(displayTitle)"));
+});
+
+test('new visible finance categories stay on the main analytics list at zero',()=>{
+  const fn=extractFunction('renderFinanceBreakdown');
+  assert.ok(fn.includes("visibleCategories=financeVisibleCategories().filter(c=>c.kind==='both'||c.kind===financeAnalyticsMode)"));
+  assert.ok(fn.includes("groups.set(id,{id,filterId:id,name,amount:0,includeInTotal:c.includeInTotal!==false})"));
+  assert.ok(fn.includes("filter(x=>x.amount>0||visibleIds.has(String(x.id)))"));
+  assert.ok(fn.includes("r.amount>0?r.pct.toFixed"));
+});
