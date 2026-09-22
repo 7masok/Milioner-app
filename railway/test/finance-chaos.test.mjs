@@ -280,7 +280,7 @@ test('10000 randomized local ledger mutations match an independent reference mod
 
 
 test('analytics handles income expense transit transfer refund and exclusions consistently',()=>{
-  const names=['financeTransactionType','financeTransactionAmount','financeTransactionDefaultAmount','financeCountsInIncomeExpense','financeEffectiveCategory','financeAnalyticsEntry'];
+  const names=['financeTransactionType','financeTransactionAmount','financeTransactionDefaultAmount','financeCountsInIncomeExpense','financeNormalizeCategoryName','financeResolveCategoryByName','financeResolveEffectiveCategory','financeEffectiveCategory','financeAnalyticsEntry'];
   const src=names.map(extractFunction).join('\n');
   const run=new Function(src+`
     const all=[{id:'e1',type:'expense',amount:100,defaultAmount:100,categoryId:'food',category:'Еда'}];
@@ -360,7 +360,7 @@ test('account and category creates rely on idempotent server ACKs, not swallowed
 });
 
 test('journal filters keep incoming transfers visible on the destination account',()=>{
-  const names=['financeTransactionType','financeTransactionTime','financeEffectiveCategory','financeFilteredTransactions'];
+  const names=['financeTransactionType','financeTransactionTime','financeNormalizeCategoryName','financeResolveCategoryByName','financeResolveEffectiveCategory','financeEffectiveCategory','financeFilteredTransactions'];
   const src=names.map(extractFunction).join('\n');
   const run=new Function(src+`
     const rows=[
@@ -380,7 +380,7 @@ test('journal filters keep incoming transfers visible on the destination account
 });
 
 test('expense/category journal filters include linked refunds',()=>{
-  const names=['financeTransactionType','financeTransactionTime','financeEffectiveCategory','financeFilteredTransactions'];
+  const names=['financeTransactionType','financeTransactionTime','financeNormalizeCategoryName','financeResolveCategoryByName','financeResolveEffectiveCategory','financeEffectiveCategory','financeFilteredTransactions'];
   const src=names.map(extractFunction).join('\n');
   const run=new Function(src+`
     const rows=[
@@ -469,7 +469,7 @@ test('10000 randomized KZT and USD ledger mutations preserve balance and default
 
 
 test('uncategorized income and expense stay in history but out of analytics',()=>{
-  const names=['financeTransactionType','financeTransactionAmount','financeTransactionDefaultAmount','financeCountsInIncomeExpense','financeEffectiveCategory','financeAnalyticsEntry'];
+  const names=['financeTransactionType','financeTransactionAmount','financeTransactionDefaultAmount','financeCountsInIncomeExpense','financeNormalizeCategoryName','financeResolveCategoryByName','financeResolveEffectiveCategory','financeEffectiveCategory','financeAnalyticsEntry'];
   const src=names.map(extractFunction).join('\n');
   const run=new Function(src+`
     function financeTransactions(){return []}
