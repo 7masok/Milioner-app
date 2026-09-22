@@ -125,6 +125,8 @@ wbReturnsRouter.get('/wb-return-lookup',requireTrustedOrigin,asyncRoute(async(re
   const market=String(row.market);
   const externalKey=market+':'+String(row.orderId)+':'+String(row.entryId);
   const sold=await pool.query(`
+    SELECT 1 FROM warehouse_sales WHERE external_key=$1
+    UNION ALL
     SELECT 1
     FROM warehouse_state ws
     CROSS JOIN LATERAL jsonb_array_elements(COALESCE(ws.payload::jsonb->'sales','[]'::jsonb)) sale

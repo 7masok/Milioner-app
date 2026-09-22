@@ -19,6 +19,13 @@ import {
   replaceWarehousePurchases,
   stripPurchasesFromState
 } from './warehouse-purchases.js';
+import {
+  deleteWarehouseSales,
+  hydrateWarehouseSales,
+  persistWarehouseSales,
+  replaceWarehouseSales,
+  stripSalesFromState
+} from './warehouse-sales.js';
 
 export const warehouseRouter = express.Router();
 const MAX_WAREHOUSE_SNAPSHOT_BYTES = 6_000_000;
@@ -149,7 +156,7 @@ warehouseRouter.get('/warehouse-state', requireTrustedOrigin, asyncRoute(async (
     const stored = await client.query(`SELECT ${fields} FROM warehouse_state WHERE id=1`);
     if (!stored.rowCount) return null;
     const row = stored.rows[0];
-    const state = metaOnly ? undefined : await hydrateWarehousePurchases(client, await hydrateWarehouseMovements(client, parseWarehousePayload(row.payload)));
+    const state = metaOnly ? undefined : await hydrateWarehouseSales(client, await hydrateWarehousePurchases(client, await hydrateWarehouseMovements(client, parseWarehousePayload(row.payload))));
     return { row, state };
   });
   if (!result) return res.json({ ok: true, exists: false, revision: 0, updatedAt: null, state: metaOnly ? undefined : null });
@@ -197,7 +204,7 @@ warehouseRouter.put('/warehouse-state', requireTrustedOrigin, requireWritesEnabl
     : Array.isArray(incomingState?.movements);
   let state = isPatch ? null : cleanState(incomingState);
   if (!isPatch) {
-    const earlyRaw = JSON.stringify(stripPurchasesFromState(stripMovementsFromState(state)));
+    const earlyRaw = JSON.stringify(stripSalesFromState(stripPurchasesFromState(stripMovementsFromState(state))));
     if (Buffer.byteLength(earlyRaw, 'utf8') > MAX_WAREHOUSE_SNAPSHOT_BYTES) return res.status(413).json({ ok: false, error: 'Warehouse snapshot is too large' });
   }
 
@@ -217,6 +224,7 @@ warehouseRouter.put('/warehouse-state', requireTrustedOrigin, requireWritesEnabl
     if (current.rowCount) {
       const previousStored = parseWarehousePayload(current.rows[0].payload);
       await hydrateWarehousePurchases(client, previousStored);
+      await hydrateWarehouseSales(client, previousStored);
       if (isPatch) state = applyWarehousePatch(previousStored, incomingState);
       // Routine saves omit movements when the audit trail did not change.
       // In that case an empty movement delta is sufficient for the stock guard:
@@ -245,7 +253,15 @@ warehouseRouter.put('/warehouse-state', requireTrustedOrigin, requireWritesEnabl
     } else if (purchasesTouched || (!existingPurchases.rowCount && Array.isArray(state?.purchases) && state.purchases.length)) {
       await replaceWarehousePurchases(client, state.purchases, updatedAt);
     }
-    const persistedSnapshot = stripPurchasesFromState(stripMovementsFromState(state));
+    const salesTouched = !isPatch || Array.isArray(incomingState?.sales) || (Array.isArray(incomingState?.deleted?.sales) && incomingState.deleted.sales.length > 0);
+    const existingSales = await client.query('SELECT 1 FROM warehouse_sales LIMIT 1');
+    if (salesTouched && isPatch && existingSales.rowCount) {
+      await persistWarehouseSales(client, incomingState?.sales || [], updatedAt);
+      await deleteWarehouseSales(client, incomingState?.deleted?.sales || []);
+    } else if (salesTouched || (!existingSales.rowCount && Array.isArray(state?.sales) && state.sales.length)) {
+      await replaceWarehouseSales(client, state.sales, updatedAt);
+    }
+    const persistedSnapshot = stripSalesFromState(stripPurchasesFromState(stripMovementsFromState(state)));
     const raw = JSON.stringify(persistedSnapshot);
     if (Buffer.byteLength(raw, 'utf8') > MAX_WAREHOUSE_SNAPSHOT_BYTES) return { tooLarge: true };
     const revision = currentRevision + 1;
