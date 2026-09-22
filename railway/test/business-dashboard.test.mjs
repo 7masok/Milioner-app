@@ -54,17 +54,17 @@ test('business profit no longer subtracts Finance-tab expenses', () => {
   assert.match(ui, /const netProfit=summary\?\.profit===null\|\|summary\?\.profit===undefined/);
 });
 
-test('WB today business summary falls back to live buyouts instead of false zeros', () => {
+test('WB today business summary uses the authoritative live sales source', () => {
   assert.match(report, /ensureWbLiveOverview\('WB',n\)/);
   assert.match(report, /ensureWbLiveOverview\('WB2',n\)/);
   assert.match(report, /businessWbLiveStats/);
-  assert.match(report, /liveRevenue>0\|\|liveQty>0/);
+  assert.match(report, /live&&live\.available\?businessWbLiveStats/);
   assert.match(report, /allMarketUnitProfit30/);
   assert.match(report, /historyProfit\/historyQty/);
   assert.match(report, /estimated:true,live:true/);
-  assert.match(html, /let zeroCandidate=null/);
-  assert.match(html, /hasBuyouts=.*buyoutCount/);
-  assert.match(html, /zeroCandidate\|\|data/);
+  assert.match(html, /\/api\/wb-sales-live\?market=/);
+  assert.doesNotMatch(html, /\/api\/wb-dashboard-buyouts\?market=/);
+  assert.doesNotMatch(html, /\/api\/wb-realized-status\?market=/);
 });
 
 test('money formatting removes negative zero and unknown WB fields render as dash', () => {
@@ -75,8 +75,8 @@ test('money formatting removes negative zero and unknown WB fields render as das
 });
 
 test('business dashboard assets are cache-busted and served', () => {
-  assert.match(html, /kaspi-report-v2\.js\?v=20260922-report-market-local1/);
-  assert.match(html, /business-dashboard-v1\.js\?v=20260922-business14/);
+  assert.match(html, /kaspi-report-v2\.js\?v=20260922-wb-buyouts-audit1/);
+  assert.match(html, /business-dashboard-v1\.js\?v=20260922-business15/);
   assert.match(server, /'business-dashboard-v1\.js'/);
 });
 
@@ -117,5 +117,14 @@ test('report market selection is local UI state and does not restore stale WB2 f
   assert.match(report, /localStorage\.setItem\(REPORT_MARKET_UI_KEY,market\)/);
   assert.doesNotMatch(report, /reportMarket=\['all','Kaspi','WB','WB2'\]\.includes\(state\.settings\.reportMarket\)/);
   assert.doesNotMatch(report, /state\.settings\.reportMarket=market;try\{save\(\)\}/);
-  assert.match(html, /kaspi-report-v2\.js\?v=20260922-report-market-local1/);
+  assert.match(html, /kaspi-report-v2\.js\?v=20260922-wb-buyouts-audit1/);
+});
+
+
+test('real hourly buyout data drives the business chart instead of fabricating a last-hour bar', () => {
+  assert.match(report, /hourly:Array\.from\(\{length:24\}/);
+  assert.match(report, /for\(const h of \(x\.hourly\|\|\[\]\)\)/);
+  assert.match(ui, /Array\.isArray\(summary\?\.hourly\)/);
+  assert.match(ui, /bucket\.buyouts=\(Number\(source\.revenue\)\|\|0\)\*revenueScale/);
+  assert.doesNotMatch(ui, /buckets\[buckets\.length-1\]\.buyouts=exactRevenue/);
 });
