@@ -680,6 +680,50 @@ financeLedgerRouter.post('/finance/accounts/:id/move-operations', requireTrusted
   res.json({ok:true,...result});
 }));
 
+financeLedgerRouter.post('/finance/categories/:id/move-operations', requireTrustedOrigin, requireWritesEnabled, asyncRoute(async (req,res)=>{
+  const sourceId=String(req.params.id),targetId=cleanText(req.body?.targetId,220),deleteSource=req.body?.deleteSource!==false;
+  if(!targetId||targetId===sourceId) throw httpError('Choose another destination category');
+  const result=await transaction(async client=>{
+    await lockFinance(client);
+    const ids=[sourceId,targetId].sort();
+    const locked=await client.query(`
+      SELECT id,name,kind,archived,payload,created_at,updated_at
+      FROM finance_categories WHERE id=ANY($1::text[]) ORDER BY id FOR UPDATE
+    `,[ids]);
+    const map=new Map(locked.rows.map(row=>[String(row.id),row])),source=map.get(sourceId),target=map.get(targetId);
+    if(!source||!target) throw httpError('Finance category not found',404);
+    if(target.archived) throw httpError('Destination category is archived',409);
+    const sameName=await client.query(
+      "SELECT COUNT(*)::bigint AS n FROM finance_categories WHERE id<>$1 AND archived=false AND lower(trim(name))=lower(trim($2))",
+      [sourceId,String(source.name||'')]
+    );
+    const canClaimLegacy=Number(sameName.rows[0]?.n||0)===0;
+    const rows=await client.query(`
+      SELECT id,sort_order,type,account_id,to_account_id,category_id,amount,default_amount,currency,
+        transaction_date,created_at,updated_at,statement_fingerprint,payload
+      FROM finance_transactions
+      WHERE category_id=$1
+        OR ($3::boolean AND COALESCE(category_id,'')='' AND lower(trim(COALESCE(payload->>'category','')))=lower(trim($2)))
+      ORDER BY sort_order,id
+      FOR UPDATE
+    `,[sourceId,String(source.name||''),canClaimLegacy]);
+    let moved=0,movedLegacy=0;const now=Date.now();
+    for(const row of rows.rows){
+      const before=transactionPayload(row),legacy=String(before.categoryId||'')!==sourceId,next={...before,categoryId:targetId,category:String(target.name||''),updatedAt:now};
+      await storeTransaction(client,next,row);
+      await addAudit(client,'transaction',row.id,'move-category',before,next,now);
+      moved++;if(legacy)movedLegacy++;
+    }
+    if(deleteSource){
+      await client.query('DELETE FROM finance_categories WHERE id=$1',[sourceId]);
+      await addAudit(client,'category',sourceId,'delete-after-move',categoryPayload(source),null,now);
+    }
+    const meta=await bumpRevision(client);
+    return {...meta,moved,movedLegacy,deletedSource:deleteSource,target:categoryPayload(target)};
+  });
+  res.json({ok:true,...result});
+}));
+
 financeLedgerRouter.post('/finance/categories', requireTrustedOrigin, requireWritesEnabled, asyncRoute(async (req,res)=>{
   const raw=req.body?.category||req.body;
   const result=await transaction(async client=>{
@@ -715,7 +759,9 @@ financeLedgerRouter.delete('/finance/categories/:id', requireTrustedOrigin, requ
     const row=await getCategoryRow(client,req.params.id,true);
     if(!row) throw httpError('Finance category not found',404);
     const before=categoryPayload(row),now=Date.now();
-    const used=await client.query("SELECT COUNT(*)::bigint AS n FROM finance_transactions WHERE category_id=$1 OR lower(COALESCE(payload->>'category',''))=lower($2)",[req.params.id,String(row.name||'')]);
+    const sameName=await client.query("SELECT COUNT(*)::bigint AS n FROM finance_categories WHERE id<>$1 AND archived=false AND lower(trim(name))=lower(trim($2))",[req.params.id,String(row.name||'')]);
+    const canClaimLegacy=Number(sameName.rows[0]?.n||0)===0;
+    const used=await client.query("SELECT COUNT(*)::bigint AS n FROM finance_transactions WHERE category_id=$1 OR ($3::boolean AND COALESCE(category_id,'')='' AND lower(trim(COALESCE(payload->>'category','')))=lower(trim($2)))",[req.params.id,String(row.name||''),canClaimLegacy]);
     if(Number(used.rows[0]?.n||0)>0){
       const category=await updateCategoryLocked(client,req.params.id,{...before,archived:true});
       const meta=await bumpRevision(client);

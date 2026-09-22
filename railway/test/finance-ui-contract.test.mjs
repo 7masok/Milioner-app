@@ -243,3 +243,26 @@ test('editing a finance category can change kind even when a legacy duplicate na
   assert.ok(fn.includes("const duplicate=(!categoryId||!nameUnchanged)?categories.find"));
   assert.ok(fn.includes("current.kind=kind"));
 });
+
+
+test('legacy category text resolves into the single active category with the same name',()=>{
+  const resolve=extractFunction('financeResolveEffectiveCategory');
+  const byName=extractFunction('financeResolveCategoryByName');
+  assert.ok(byName.includes("matches.length===1?matches[0]:null"));
+  assert.ok(resolve.includes("financeResolveCategoryByName(name)"));
+  assert.ok(resolve.includes("categoryId:String(match.id)"));
+});
+
+test('finance categories can be merged by moving operations and deleting the source',()=>{
+  const open=extractFunction('financeMoveCategoryOperations');
+  const run=extractFunction('financeExecuteMoveCategoryOperations');
+  const del=extractFunction('financeDeleteCategory');
+  assert.ok(open.includes('Объединить категории'));
+  assert.ok(run.includes("categoryId:String(target.id)"));
+  assert.ok(run.includes("category:String(target.name)"));
+  assert.ok(run.includes("financeCategories().splice(index,1)"));
+  assert.ok(run.includes("'/move-operations'"));
+  assert.ok(run.includes("deleteSource:true"));
+  assert.ok(del.includes("if(used){financeMoveCategoryOperations(categoryId);return}"));
+  assert.ok(html.includes('Объединить / перенести операции'));
+});
