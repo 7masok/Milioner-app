@@ -17,6 +17,21 @@ try{
 function businessSaveUi(){
  try{localStorage.setItem(BUSINESS_UI_KEY,JSON.stringify({period:'day',metric:businessMetric}))}catch(_){}
 }
+function businessRemoveLegacyStoreNote(){
+ const root=document.getElementById('reports');if(!root)return;
+ for(const el of root.querySelectorAll('.muted,.link-note,p')){
+  const text=String(el.textContent||'').replace(/\s+/g,' ').trim().toLowerCase();
+  if(text.includes('часть себестоимости не определена')||text.includes('налоги, аренда, зарплаты'))el.remove();
+ }
+}
+let businessLegacyNoteObserver=null;
+function businessInstallLegacyNoteCleanup(){
+ const root=document.getElementById('reports');if(!root)return;
+ businessRemoveLegacyStoreNote();
+ if(businessLegacyNoteObserver)return;
+ businessLegacyNoteObserver=new MutationObserver(()=>businessRemoveLegacyStoreNote());
+ businessLegacyNoteObserver.observe(root,{childList:true,subtree:true});
+}
 function businessDayStart(date=new Date()){const d=new Date(date);d.setHours(0,0,0,0);return d}
 function businessDayBounds(offset=0){
  const start=businessDayStart();start.setDate(start.getDate()+Number(offset||0));const end=new Date(start);end.setDate(end.getDate()+1);
@@ -276,8 +291,9 @@ window.openBusinessDashboardDetails=function(){
 const baseRenderReports=window.renderReports;
 window.renderReports=function(){
  const result=typeof baseRenderReports==='function'?baseRenderReports.apply(this,arguments):undefined;
- setTimeout(()=>window.renderBusinessDashboard(false),0);return result;
+ businessRemoveLegacyStoreNote();
+ setTimeout(()=>{businessRemoveLegacyStoreNote();window.renderBusinessDashboard(false)},0);return result;
 };
-const init=()=>{businessEnsureUi();businessPaintTabs();if(document.getElementById('reports')?.classList.contains('active'))window.renderBusinessDashboard(false)};
+const init=()=>{businessEnsureUi();businessInstallLegacyNoteCleanup();businessPaintTabs();if(document.getElementById('reports')?.classList.contains('active'))window.renderBusinessDashboard(false)};
 if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',init,{once:true});else init();
 })();
