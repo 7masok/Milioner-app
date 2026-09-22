@@ -18,6 +18,8 @@ test('business net profit subtracts only included finance expenses', () => {
   assert.match(ui, /financeAnalyticsEntry\(tx\)/);
   assert.match(ui, /financeAnalyticsEntryIncluded/);
   assert.match(ui, /financeCountsInIncomeExpense/);
+  assert.match(ui, /groups\.set\(key,\{name:'Без категории',amount:0\}\)/);
+  assert.match(ui, /uncategorized\+=amount;total\+=amount/);
   assert.match(ui, /netProfit=\(Number\(summary\?\.profit\)\|\|0\)-finance\.total/);
   assert.match(ui, /двойной учёт/);
   assert.match(ui, /Ozon пока не входит/);
