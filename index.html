@@ -909,14 +909,16 @@ function wbLiveRealizedCost(market,days,live){return wbLiveRealizedCostSummary(m
 function wbFinanceKztNet(finance,live){const rubGross=Number(finance?.retailAmount)||0,kztGross=Number(live?.buyoutSum)||0;if(!(rubGross>0&&kztGross>0))return null;return (Number(finance?.netBeforeCost)||0)*(kztGross/rubGross)}
 const wbLiveOverviewCache={};
 async function ensureWbLiveOverview(market,days){
-  const key=market+':'+days,old=wbLiveOverviewCache[key];
+  const key=market+':'+days,old=wbLiveOverviewCache[key];let zeroCandidate=null;
   if(old&&Date.now()-Number(old.at||0)<60000)return old.data;
   if([-1,1,7,30].includes(Number(days))){
     try{
       const dashboard=await apiJson(MILLIONER_API+'/api/wb-dashboard-buyouts?market='+encodeURIComponent(market)+'&days='+encodeURIComponent(days));
       if(dashboard?.ok&&dashboard?.available){
-        const data={...dashboard,analyticsOnly:true,priceComplete:false,source:'WB Analytics · дневной кэш Railway'};
-        wbLiveOverviewCache[key]={at:Date.now(),data};return data;
+        const data={...dashboard,analyticsOnly:true,priceComplete:false,source:'WB Analytics · дневной кэш Railway'},
+          hasBuyouts=Math.abs(Number(data.buyoutCount)||0)>0||Math.abs(Number(data.buyoutSum)||0)>0||(Array.isArray(data.products)&&data.products.some(x=>Math.abs(Number(x?.qty)||0)>0));
+        if(hasBuyouts){wbLiveOverviewCache[key]={at:Date.now(),data};return data}
+        zeroCandidate=data;
       }
     }catch(_){}
   }
@@ -924,18 +926,23 @@ async function ensureWbLiveOverview(market,days){
     try{
       const tracked=await apiJson(MILLIONER_API+'/api/wb-realized-status?market='+encodeURIComponent(market)+'&days=1');
       if(tracked?.ok&&tracked?.available){
-        const data={...tracked,analyticsOnly:true,source:'WB Marketplace sold transitions'};
-        wbLiveOverviewCache[key]={at:Date.now(),data};return data;
+        const data={...tracked,analyticsOnly:true,source:'WB Marketplace sold transitions'},
+          hasBuyouts=Math.abs(Number(data.buyoutCount)||0)>0||Math.abs(Number(data.buyoutSum)||0)>0||(Array.isArray(data.products)&&data.products.some(x=>Math.abs(Number(x?.qty)||0)>0));
+        if(hasBuyouts){wbLiveOverviewCache[key]={at:Date.now(),data};return data}
+        if(!zeroCandidate)zeroCandidate=data;
       }
     }catch(_){}
   }
   try{
     const data=await apiJson(MILLIONER_API+'/api/wb-sales-live?market='+encodeURIComponent(market)+'&days='+encodeURIComponent(days));
     if(!data?.ok||data?.stale&&data?.lastError)throw new Error(data?.error||data?.lastError||'WB sales unavailable');
-    wbLiveOverviewCache[key]={at:Date.now(),data};return data;
+    const hasBuyouts=Math.abs(Number(data.buyoutCount)||0)>0||Math.abs(Number(data.buyoutSum)||0)>0||(Array.isArray(data.products)&&data.products.some(x=>Math.abs(Number(x?.qty)||0)>0)),
+      resolved=hasBuyouts?data:(zeroCandidate||data);
+    wbLiveOverviewCache[key]={at:Date.now(),data:resolved};return resolved;
   }catch(primary){
-    wbLiveOverviewCache[key]={at:Date.now(),data:old?.data||null,error:String(primary?.message||primary)};
-    return old?.data||null;
+    const fallback=zeroCandidate||old?.data||null;
+    wbLiveOverviewCache[key]={at:Date.now(),data:fallback,error:String(primary?.message||primary)};
+    return fallback;
   }
 }
 function renderReports(){renderReportCustomRange();document.querySelectorAll('[data-report-period]').forEach(b=>b.classList.toggle('active',Number(b.dataset.reportPeriod)===reportPeriodPreset));for(const id of ['rRevenue','rCost','rFees','rAds','rProfit']){const e=document.getElementById(id);if(e)e.textContent='…'}const box=document.getElementById('mpReport');if(box)box.innerHTML='<div class="empty">Загружаю Kaspi…</div>'}
@@ -1348,14 +1355,14 @@ function enhanceArrivalProductSearch(){}
 <script src="./warehouse-insights.js?v=20260906"></script>
 <script src="./cloud-sync-v3.js?v=20260820-report-period-v3"></script>
 <script src="./wb-variants-v1.js?v=20260914-group-delist"></script>
-<script src="./kaspi-report-v2.js?v=20260922-business-wb-live1"></script>
+<script src="./kaspi-report-v2.js?v=20260922-business-wb-live2"></script>
 <script src="./kaspi-ads-v2.js?v=20260911-utf8-fix"></script>
 <script src="./ai-assistant-v1.js?v=20260904-assistant1"></script>\n<script src="./purchase-arrival-sort-v1.js?v=20260904-arrival1"></script>
 <!-- cross-device-sync-v3 -->
 <!-- runtime-hotfix-268d -->
 <!-- cloud-authoritative-sync-with-safe-startup-edits -->
 <script src="./ozon-fbo-v1.js?v=20260915-fbo1"></script>
-<script src="./business-dashboard-v1.js?v=20260922-business12"></script>
+<script src="./business-dashboard-v1.js?v=20260922-business13"></script>
 </body>
 </html>
 
