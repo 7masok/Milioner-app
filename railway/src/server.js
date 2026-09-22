@@ -32,6 +32,7 @@ const frontendFiles = Object.freeze([
   'sw.js',
   'app-icon.svg',
   'ozon-fbo-v1.js',
+  'business-dashboard-v1.js',
   'ozon-supplies-v1.js',
   'warehouse-insights.js',
   'cloud-sync-v3.js',
