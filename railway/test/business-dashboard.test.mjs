@@ -16,26 +16,16 @@ test('business dashboard is day-only and keeps all agreed profit layers', () => 
   assert.match(ui, /loadBusinessMarketplaceSummary/);
 });
 
-test('business day chart has 24 hourly buckets, axes, and yesterday markers', () => {
-  assert.match(ui, /for\(let h=0;h<24;h\+\+\)/);
-  assert.match(ui, /grid-template-columns:repeat\(24,minmax\(0,1fr\)\)/);
-  assert.match(ui, /business-x-axis/);
-  assert.match(ui, /business-y-axis/);
-  assert.match(ui, /business-grid-line/);
-  assert.match(ui, /i%3===0/);
-  assert.match(ui, /businessChartScale/);
+test('business day chart uses real overlapping bars and no separate yesterday cap', () => {
   assert.match(ui, /business-yesterday-bar/);
-  assert.match(ui, /business-yesterday-cap/);
-  assert.match(ui, /yBottom=Math\.min\(yPct,zeroPct\)/);
-  assert.match(ui, /yHeight=Math\.abs\(yPct-zeroPct\)/);
-  assert.match(ui, /yesterdayShorter=sameSide&&Math\.abs\(yv\)<Math\.abs\(v\)/);
-  assert.match(ui, /todayZ=yesterdayShorter\?1:2,yesterdayZ=yesterdayShorter\?2:1/);
-  assert.match(ui, /z-index:\$\{yesterdayZ\}/);
-  assert.match(ui, /z-index:\$\{todayZ\}/);
+  assert.doesNotMatch(ui, /business-yesterday-cap/);
+  assert.match(ui, /border-top:3px solid #9d9da3/);
+  assert.match(ui, /yesterdayShorter=sameSide&&!equal&&Math\.abs\(yv\)<Math\.abs\(v\)/);
+  assert.match(ui, /todayShorter=sameSide&&!equal&&Math\.abs\(v\)<Math\.abs\(yv\)/);
+  assert.match(ui, /todayZ=todayShorter\|\|equal\?3:2,yesterdayZ=yesterdayShorter\?3:1/);
+  assert.match(ui, /todayHeight=equal/);
   assert.match(ui, /сегодня .* вчера/);
-  assert.match(ui, /короткий столбик перекрывает длинный · серый край — конец вчера/);
 });
-
 test('business net profit subtracts only included finance expenses', () => {
   assert.match(ui, /financeAnalyticsEntry\(tx\)/);
   assert.match(ui, /financeAnalyticsEntryIncluded/);
@@ -60,6 +50,6 @@ test('business marketplace summary reuses canonical Kaspi and WB finance models 
 });
 
 test('business dashboard asset is loaded and served', () => {
-  assert.match(html, /business-dashboard-v1\.js\?v=20260922-business5/);
+  assert.match(html, /business-dashboard-v1\.js\?v=20260922-business6/);
   assert.match(server, /'business-dashboard-v1\.js'/);
 });
