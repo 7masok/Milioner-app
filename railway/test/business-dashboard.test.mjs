@@ -26,6 +26,12 @@ test('business day chart uses real overlapping bars and no separate yesterday ca
   assert.match(ui, /todayHeight=equal/);
   assert.match(ui, /сегодня .* вчера/);
 });
+test('business x-axis labels are 03 through 24 under every third bar', () => {
+  assert.match(ui, /\(i\+1\)%3===0/);
+  assert.match(ui, /String\(i\+1\)\.padStart\(2,'0'\)/);
+  assert.doesNotMatch(ui, /i%3===0/);
+});
+
 test('business net profit subtracts only included finance expenses', () => {
   assert.match(ui, /financeAnalyticsEntry\(tx\)/);
   assert.match(ui, /financeAnalyticsEntryIncluded/);
@@ -50,6 +56,6 @@ test('business marketplace summary reuses canonical Kaspi and WB finance models 
 });
 
 test('business dashboard asset is loaded and served', () => {
-  assert.match(html, /business-dashboard-v1\.js\?v=20260922-business6/);
+  assert.match(html, /business-dashboard-v1\.js\?v=20260922-business7/);
   assert.match(server, /'business-dashboard-v1\.js'/);
 });

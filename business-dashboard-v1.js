@@ -187,7 +187,7 @@ function businessPaintChart(model,field){
     todayHeight=equal?`calc(${Math.max(0,height)}% - 3px)`:`${Math.max(v===0?0:1.2,height)}%`;
   return `<div class="business-hour" title="${b.label}:00 · сегодня ${businessMoney(v)} · вчера ${businessMoney(yv)}"><div class="business-yesterday-bar ${yv<0?'negative':''}" style="bottom:${yBottom}%;height:${Math.max(yv===0?0:1.2,yHeight)}%;z-index:${yesterdayZ}"></div><div class="business-bar ${v<0?'negative':''}" style="bottom:${todayBottom};height:${todayHeight};z-index:${todayZ}"></div></div>`;
  }).join('');
- const labels=model.buckets.map((b,i)=>i%3===0?`<div class="business-x-label" style="grid-column:${i+1}">${b.label}</div>`:'').join('');
+ const labels=model.buckets.map((b,i)=>(i+1)%3===0?`<div class="business-x-label" style="grid-column:${i+1}">${String(i+1).padStart(2,'0')}</div>`:'').join('');
  box.innerHTML=`<div class="business-chart-legend"><span class="business-legend-today">сегодня</span><span class="business-legend-yesterday">вчера</span></div><div class="business-chart-frame"><div class="business-plot">${lines}<div class="business-bars">${bars}</div></div><div class="business-y-axis">${ticks}</div><div class="business-x-axis">${labels}</div><div class="business-axis-caption">₸</div></div>`;
 }
 
