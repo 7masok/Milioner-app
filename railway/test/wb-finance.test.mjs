@@ -65,7 +65,10 @@ test('WB stock-profit denominator uses gross sales while returns stay in profit'
   const ui = readFileSync(new URL('../../kaspi-report-v2.js', import.meta.url), 'utf8');
   assert.match(ui, /saleQty=Math\.max\(0,Number\(x\.saleQty\?\?netQty\)/);
   assert.match(ui, /add\(v\.pid,saleQty/);
+  assert.match(ui, /productAds=Math\.max\(0,Number\(x\.advertising\)/);
+  assert.match(ui, /ads:x\.ads/);
   assert.match(ui, /sources:x\.sources/);
+  assert.match(ui, /allMarketUnitProfitPromise/);
 });
 
 test('WB product report keeps multi-product advertising unallocated', () => {
