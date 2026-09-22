@@ -11,6 +11,7 @@ export const config = Object.freeze({
   writesEnabled: bool('WAREHOUSE_WRITES_ENABLED', false),
   marketSyncEnabled: bool('MARKET_SYNC_ENABLED', false),
   adminToken: String(process.env.APP_ADMIN_TOKEN || ''),
+  webauthnRpID: String(process.env.WEBAUTHN_RP_ID || '').trim(),
   kaspiToken: String(process.env.KASPI_TOKEN || ''),
   wbToken: String(process.env.WB_TOKEN || ''),
   wbToken2: String(process.env.WB2_TOKEN || process.env.WB_TOKEN_2 || ''),
@@ -22,4 +23,3 @@ export function assertRuntimeConfig() {
   if (!config.databaseUrl) throw new Error('DATABASE_URL is required');
   if (!/^https:\/\//i.test(config.corsOrigin)) throw new Error('CORS_ORIGIN must be an HTTPS origin');
 }
-

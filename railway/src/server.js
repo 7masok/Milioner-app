@@ -16,7 +16,7 @@ import { stockRouter, kaspiFeedHandler } from './stock.js';
 import { startKaspiSyncLoop, syncKaspiOrders } from './kaspi-sync.js';
 import { startWbSyncLoop, syncWbOrders } from './wb-sync.js';
 import { syncWbStockMarket, validateWbStockLinks } from './wb-stock-sync.js';
-import { authConfig, login, requireAppSession } from './auth.js';
+import { authConfig, login, requireAppSession, webauthnLoginOptions, webauthnLoginVerify, webauthnRegisterOptions, webauthnRegisterVerify, listWebauthnCredentials, deleteWebauthnCredential } from './auth.js';
 import { configuredWbConnectionIds, connectionsRouter } from './connections.js';
 import { wbVariantsRouter } from './wb-variants.js';
 import { wbReturnsRouter } from './wb-returns.js';
@@ -93,7 +93,13 @@ for (const file of frontendFiles) {
 app.get('/api/auth/config', requireTrustedOrigin, authConfig);
 app.post('/api/auth/login', requireTrustedOrigin, login);
 app.get('/api/auth/session', requireTrustedOrigin, requireAppSession, (_req,res) => res.json({ ok:true }));
+app.post('/api/auth/webauthn/register-options', requireTrustedOrigin, webauthnRegisterOptions);
+app.post('/api/auth/webauthn/register-verify', requireTrustedOrigin, webauthnRegisterVerify);
+app.post('/api/auth/webauthn/login-options', requireTrustedOrigin, webauthnLoginOptions);
+app.post('/api/auth/webauthn/login-verify', requireTrustedOrigin, webauthnLoginVerify);
 app.use('/api', requireAppSession);
+app.get('/api/auth/webauthn/credentials', requireTrustedOrigin, listWebauthnCredentials);
+app.delete('/api/auth/webauthn/credentials/:id', requireTrustedOrigin, deleteWebauthnCredential);
 
 app.get('/health', async (_req, res, next) => {
   try {
