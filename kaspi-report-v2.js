@@ -51,24 +51,32 @@ function businessWbFinanceStats(model){
  return {qty,revenue,cost,fees,ads,profit,complete,financeAvailable,estimated:!complete,live:false};
 }
 function businessWbLiveStats(model,live,market,days){
- const rows=(live?.products||[]).filter(x=>Math.max(0,Number(x?.qty)||0)>0),rowQty=rows.reduce((sum,x)=>sum+Math.max(0,Number(x?.qty)||0),0),qty=Math.max(0,Number(live?.buyoutCount)||rowQty),
-   revenue=Math.max(0,Number(live?.buyoutSum)||rows.reduce((sum,x)=>sum+Math.max(0,Number(x?.buyoutSum??x?.retailAmount)||0),0)),
+ const rows=(live?.products||[]).filter(x=>Number(x?.qty||0)!==0||Number(x?.buyoutSum??x?.retailAmount||0)!==0),
+   rowQty=rows.reduce((sum,x)=>sum+(Number(x?.qty)||0),0),
+   qty=Number.isFinite(Number(live?.buyoutCount))?Number(live.buyoutCount):rowQty,
+   revenue=Number.isFinite(Number(live?.buyoutSum))?Number(live.buyoutSum):rows.reduce((sum,x)=>sum+(Number(x?.buyoutSum??x?.retailAmount)||0),0),
    costInfo=typeof wbLiveRealizedCostSummary==='function'?wbLiveRealizedCostSummary(market,days,live):{cost:0,complete:false},
    unitMap=window.allMarketUnitProfit30 instanceof Map?window.allMarketUnitProfit30:null;
- let coveredQty=0,knownProfit=0;
+ let coveredAbsQty=0,coveredSignedQty=0,knownProfit=0,totalAbsQty=rows.reduce((sum,x)=>sum+Math.abs(Number(x?.qty)||0),0);
  for(const x of rows){
-  const q=Math.max(0,Number(x?.qty)||0),pid=typeof wbLiveProductId==='function'?wbLiveProductId(market,x):'',stats=pid&&unitMap?unitMap.get(String(pid)):null,source=stats?.sources?.[market];
-  if(q>0&&source&&Number(source.qty)>0){knownProfit+=q*(Number(source.profit)||0)/Number(source.qty);coveredQty+=q}
+  const q=Number(x?.qty)||0,pid=typeof wbLiveProductId==='function'?wbLiveProductId(market,x):'',stats=pid&&unitMap?unitMap.get(String(pid)):null,source=stats?.sources?.[market];
+  if(q!==0&&source&&Number(source.qty)>0){knownProfit+=q*(Number(source.profit)||0)/Number(source.qty);coveredAbsQty+=Math.abs(q);coveredSignedQty+=q}
  }
- if(unitMap&&qty>coveredQty){
+ if(unitMap&&totalAbsQty>coveredAbsQty){
   let historyQty=0,historyProfit=0;
   for(const stats of unitMap.values()){const source=stats?.sources?.[market];if(source&&Number(source.qty)>0){historyQty+=Number(source.qty)||0;historyProfit+=Number(source.profit)||0}}
-  if(historyQty>0){const missing=qty-coveredQty;knownProfit+=missing*(historyProfit/historyQty);coveredQty+=missing}
+  if(historyQty>0){knownProfit+=(qty-coveredSignedQty)*(historyProfit/historyQty);coveredAbsQty=totalAbsQty;coveredSignedQty=qty}
  }
- const profit=coveredQty>0?knownProfit:null,cost=costInfo.complete?Number(costInfo.cost)||0:null,ads=Number(model?.ads)||0,
-   fees=cost!==null&&profit!==null?Math.max(0,revenue-cost-ads-profit):null;
- return {qty,revenue,cost,fees,ads,profit,complete:false,financeAvailable:false,estimated:true,live:true,coverage:qty>0?Math.min(1,coveredQty/qty):0};
+ const cost=costInfo.complete?Number(costInfo.cost)||0:null,ads=Number(model?.ads)||0,
+   profit=coveredAbsQty>0?knownProfit:(qty===0&&revenue===0&&ads!==0?-Math.abs(ads):qty===0&&revenue===0?0:null),
+   fees=cost!==null&&profit!==null?Math.max(0,revenue-cost-ads-profit):null,
+   rawHourly=Array.isArray(live?.hourly)?live.hourly:[],hourlyRevenue=rawHourly.reduce((sum,x)=>sum+Number(x?.buyoutSum||0),0),
+   hourlyAbsQty=rawHourly.reduce((sum,x)=>sum+Math.abs(Number(x?.qty)||0),0),
+   hourly=rawHourly.map(x=>{const hourRevenue=Number(x?.buyoutSum)||0,hourQty=Number(x?.qty)||0,share=hourlyRevenue!==0?hourRevenue/hourlyRevenue:(hourlyAbsQty>0?Math.abs(hourQty)/hourlyAbsQty:0);return {hour:Number(x?.hour)||0,revenue:hourRevenue,qty:hourQty,profit:profit===null?null:profit*share}});
+ return {qty,revenue,cost,fees,ads,profit,complete:false,financeAvailable:false,estimated:true,live:true,
+   coverage:totalAbsQty>0?Math.min(1,coveredAbsQty/totalAbsQty):(profit===null?0:1),hourly,lastSuccessAt:Number(live?.lastSuccessAt)||null,stale:Boolean(live?.stale)};
 }
+
 const businessMarketplaceSummaryCache=new Map();
 window.loadBusinessMarketplaceSummary=async function(days=30,{force=false}={}){
  const raw=Math.round(Number(days)||30),n=raw===-1?-1:Math.max(1,Math.min(3650,raw)),key=String(n),cached=businessMarketplaceSummaryCache.get(key);
@@ -82,10 +90,18 @@ window.loadBusinessMarketplaceSummary=async function(days=30,{force=false}={}){
       useLive?ensureWbLiveOverview('WB2',n):Promise.resolve(null)
     ]),
     kaspi=buildModel(kaspiSnapshot,n),kaspiView=reportProfitView(kaspi),
-    wbStats=(model,live,market)=>{const finance=businessWbFinanceStats(model),liveRevenue=Math.max(0,Number(live?.buyoutSum)||0),liveQty=Math.max(0,Number(live?.buyoutCount)||0);return live&&(liveRevenue>0||liveQty>0)&&(!(finance.revenue>0)||!finance.financeAvailable)?businessWbLiveStats(model,live,market,n):finance},
-    kaspiStats={qty:Math.max(0,Number(kaspi.qty)||0),revenue:Number(kaspi.revenue)||0,cost:Number(kaspi.cost)||0,fees:Number(kaspi.fees)||0,ads:Number(kaspi.ads)||0,profit:Number(kaspiView.value)||0,complete:!(Number(kaspi.unknownRevenue)>0),financeAvailable:true,estimated:Boolean(kaspiView.estimated),live:false},
+    wbStats=(model,live,market)=>live&&live.available?businessWbLiveStats(model,live,market,n):businessWbFinanceStats(model),
+    kaspiHourly=Array.from({length:24},(_,hour)=>({hour,revenue:0,qty:0,profit:0}));
+  for(const order of (kaspiSnapshot?.orders||[])){
+    const ts=Number(order?.completionDate||order?.creationDate)||0;if(!ts)continue;
+    const hour=new Date(ts).getHours(),revenue=Math.max(0,Number(order?.totalPrice)||0);
+    kaspiHourly[hour].revenue+=revenue;
+  }
+  const kaspiHourlyRevenue=kaspiHourly.reduce((sum,x)=>sum+x.revenue,0),kaspiProfitValue=Number(kaspiView.value)||0;
+  for(const h of kaspiHourly)h.profit=kaspiHourlyRevenue>0?kaspiProfitValue*(h.revenue/kaspiHourlyRevenue):0;
+  const kaspiStats={qty:Math.max(0,Number(kaspi.qty)||0),revenue:Number(kaspi.revenue)||0,cost:Number(kaspi.cost)||0,fees:Number(kaspi.fees)||0,ads:Number(kaspi.ads)||0,profit:kaspiProfitValue,complete:!(Number(kaspi.unknownRevenue)>0),financeAvailable:true,estimated:Boolean(kaspiView.estimated),live:false,hourly:kaspiHourly},
     wb1Stats=wbStats(wb1,wb1Live,'WB'),wb2Stats=wbStats(wb2,wb2Live,'WB2'),sources={Kaspi:kaspiStats,WB:wb1Stats,WB2:wb2Stats},
-    total={qty:0,revenue:0,cost:0,fees:0,ads:0,profit:0,complete:true,financeAvailable:true,estimated:false},
+    total={qty:0,revenue:0,cost:0,fees:0,ads:0,profit:0,complete:true,financeAvailable:true,estimated:false,hourly:Array.from({length:24},(_,hour)=>({hour,revenue:0,qty:0,profit:0}))},
     knownCount={cost:0,fees:0,profit:0},sourceCount=Object.keys(sources).length,partial={cost:false,fees:false,profit:false};
   for(const x of Object.values(sources)){
     total.qty+=Number(x.qty)||0;total.revenue+=Number(x.revenue)||0;total.ads+=Number(x.ads)||0;
@@ -93,6 +109,7 @@ window.loadBusinessMarketplaceSummary=async function(days=30,{force=false}={}){
       if(x[keyName]===null||x[keyName]===undefined||!Number.isFinite(Number(x[keyName])))partial[keyName]=true;
       else{total[keyName]+=Number(x[keyName])||0;knownCount[keyName]++}
     }
+    for(const h of (x.hourly||[])){const hour=Math.max(0,Math.min(23,Number(h?.hour)||0)),target=total.hourly[hour];target.revenue+=Number(h?.revenue)||0;target.qty+=Number(h?.qty)||0;if(h?.profit!==null&&h?.profit!==undefined&&Number.isFinite(Number(h.profit)))target.profit+=Number(h.profit)||0}
     total.complete=total.complete&&Boolean(x.complete);total.financeAvailable=total.financeAvailable&&Boolean(x.financeAvailable);total.estimated=total.estimated||Boolean(x.estimated);
   }
   for(const keyName of ['cost','fees','profit']){
