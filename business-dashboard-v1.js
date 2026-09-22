@@ -91,7 +91,7 @@ function businessLocalBuyouts(bounds,buckets){
  return {revenue,qty,baseProfit};
 }
 function businessNormalizeBuyoutBuckets(buckets,local,summary){
- const exactRevenue=Number(summary?.revenue)||0,exactProfit=Number(summary?.profit)||0,localRevenue=Number(local?.revenue)||0,baseProfit=Number(local?.baseProfit)||0;
+ const exactRevenue=Number(summary?.revenue)||0,localRevenue=Number(local?.revenue)||0,baseProfit=Number(local?.baseProfit)||0,profitKnown=summary?.profit!==null&&summary?.profit!==undefined&&Number.isFinite(Number(summary.profit)),exactProfit=profitKnown?Number(summary.profit):baseProfit;
  const revenueScale=localRevenue>0?exactRevenue/localRevenue:0,profitAdjustment=exactProfit-baseProfit;
  if(localRevenue>0){
   for(const b of buckets){const share=Math.max(0,Number(b.buyouts)||0)/localRevenue;b.buyouts*=revenueScale;b.buyoutProfit=b.buyoutBaseProfit+profitAdjustment*share}
@@ -106,8 +106,8 @@ function businessMetricInfo(model){
   orders:{label:'Заказы',value:model.orders.amount,meta:model.orders.qty.toLocaleString('ru-RU')+' шт. · '+model.orders.orderCount.toLocaleString('ru-RU')+' заказов',field:'orders'},
   buyouts:{label:'Выкупы',value:model.summary.revenue,meta:model.summary.qty.toLocaleString('ru-RU')+' шт.',field:'buyouts'},
   orderProfit:{label:'Прибыль с заказов · прогноз',value:model.orders.profit,meta:'покрытие расчётом '+Math.round(model.orders.coverage*100)+'%',field:'orderProfit'},
-  buyoutProfit:{label:'Прибыль с выкупов',value:model.summary.profit,meta:model.summary.estimated?'≈ по данным маркетплейсов':'по данным маркетплейсов',field:'buyoutProfit'},
-  netProfit:{label:'Чистая прибыль бизнеса',value:model.netProfit,meta:model.summary.estimated?'≈ Kaspi + WB1 + WB2':'Kaspi + WB1 + WB2',field:'netProfit'}
+  buyoutProfit:{label:'Прибыль с выкупов',value:model.summary.profit,estimated:Boolean(model.summary.estimated),meta:model.summary.estimated?'≈ по данным маркетплейсов':'по данным маркетплейсов',field:'buyoutProfit'},
+  netProfit:{label:'Чистая прибыль бизнеса',value:model.netProfit,estimated:Boolean(model.summary.estimated),meta:model.summary.estimated?'≈ Kaspi + WB1 + WB2':'Kaspi + WB1 + WB2',field:'netProfit'}
  };
  return map[businessMetric]||map.orders;
 }
@@ -193,7 +193,7 @@ async function businessLoadSummary(days,force=false){
 async function businessBuildDaySnapshot(bounds,summaryDays,force=false){
  const buckets=businessBuckets('day',bounds),groups=businessOrderGroups(bounds),orders=businessEstimateOrders(groups,buckets,window.allMarketUnitProfit30),local=businessLocalBuyouts(bounds,buckets),summary=await businessLoadSummary(summaryDays,force);
  businessNormalizeBuyoutBuckets(buckets,local,summary);
- const netProfit=Number(summary?.profit)||0;
+ const netProfit=summary?.profit===null||summary?.profit===undefined||!Number.isFinite(Number(summary.profit))?null:Number(summary.profit);
  return {period:'day',bounds,buckets,orders,local,summary,netProfit};
 }
 function businessElapsedTodayMs(){
@@ -230,7 +230,8 @@ async function businessBuildModel(force=false){
 
 window.setBusinessDashboardMetric=function(metric){if(!BUSINESS_METRICS.has(metric))return;businessMetric=metric;businessSaveUi();if(businessLastModel)businessPaint(businessLastModel);else window.renderBusinessDashboard(false)};
 function businessComparison(current,previous){
- const now=Number(current)||0,prev=Number(previous)||0,delta=now-prev,cls=Math.abs(delta)<.005?'flat':delta>0?'up':'down',sign=delta>0?'+':'',pct=prev!==0?delta/Math.abs(prev)*100:null,pctText=pct===null?'':(' · '+(pct>0?'+':'')+Math.round(pct)+'%');
+ if(current===null||current===undefined||previous===null||previous===undefined||!Number.isFinite(Number(current))||!Number.isFinite(Number(previous)))return {html:''};
+ const now=Number(current),prev=Number(previous),delta=now-prev,cls=Math.abs(delta)<.005?'flat':delta>0?'up':'down',sign=delta>0?'+':'',pct=prev!==0?delta/Math.abs(prev)*100:null,pctText=pct===null?'':(' · '+(pct>0?'+':'')+Math.round(pct)+'%');
  return {html:'<span class="business-compare-label">разница</span><span class="business-compare-delta '+cls+'">'+sign+businessMoney(delta)+pctText+'</span>'};
 }
 function businessPaint(model){
@@ -238,9 +239,9 @@ function businessPaint(model){
  metric=document.getElementById('businessValueMetric'),label=document.getElementById('businessValueLabel'),value=document.getElementById('businessValue'),meta=document.getElementById('businessValueMeta'),
  yLabel=document.getElementById('businessYesterdayLabel'),yValue=document.getElementById('businessYesterdayValue'),yMeta=document.getElementById('businessYesterdayMeta'),
  compare=document.getElementById('businessYesterdayCompare');
- if(metric)metric.textContent=info.label;if(label)label.textContent=businessShortDate(model.bounds.start)+' · сегодня';if(value)value.textContent=businessMoney(info.value);if(meta)meta.textContent=info.meta;
+ if(metric)metric.textContent=info.label;if(label)label.textContent=businessShortDate(model.bounds.start)+' · сегодня';if(value)value.textContent=businessMaybeMoney(info.value,Boolean(info.estimated));if(meta)meta.textContent=info.meta;
  if(yLabel)yLabel.textContent=yModel?businessShortDate(yModel.bounds.start)+' · до '+businessHourMinute(yModel.comparisonCutoff||yModel.bounds.end):'Вчера';
- if(yValue)yValue.textContent=yesterdayInfo?businessMoney(yesterdayInfo.value):'—';if(yMeta)yMeta.textContent=yesterdayInfo?yesterdayInfo.meta:'';
+ if(yValue)yValue.textContent=yesterdayInfo?businessMaybeMoney(yesterdayInfo.value,Boolean(yesterdayInfo.estimated)):'—';if(yMeta)yMeta.textContent=yesterdayInfo?yesterdayInfo.meta:'';
  if(compare)compare.innerHTML=yesterdayInfo?businessComparison(info.value,yesterdayInfo.value).html:'';businessPaintChart(model,info.field);
 }
 window.renderBusinessDashboard=async function(force=false){
