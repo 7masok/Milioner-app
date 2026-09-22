@@ -3,44 +3,28 @@
 if(typeof window==='undefined')return;
 
 const BUSINESS_SUPPORTED_MARKETS=new Set(['Kaspi','WB','WB2']);
-const BUSINESS_PERIODS=new Set(['day','week','month','year']);
+const BUSINESS_PERIODS=new Set(['day']);
 const BUSINESS_METRICS=new Set(['orders','buyouts','orderProfit','buyoutProfit','netProfit']);
 const BUSINESS_UI_KEY='milioner_business_dashboard_v1';
 let businessRenderSeq=0,businessSummaryCache=new Map(),businessLastModel=null;
 let businessPeriod='day',businessMetric='orders';
 try{
  const saved=JSON.parse(localStorage.getItem(BUSINESS_UI_KEY)||'{}');
- if(BUSINESS_PERIODS.has(saved.period))businessPeriod=saved.period;
+ businessPeriod='day';
  if(BUSINESS_METRICS.has(saved.metric))businessMetric=saved.metric;
 }catch(_){}
 
 function businessSaveUi(){
- try{localStorage.setItem(BUSINESS_UI_KEY,JSON.stringify({period:businessPeriod,metric:businessMetric}))}catch(_){}
+ try{localStorage.setItem(BUSINESS_UI_KEY,JSON.stringify({period:'day',metric:businessMetric}))}catch(_){}
 }
 function businessDayStart(date=new Date()){const d=new Date(date);d.setHours(0,0,0,0);return d}
-function businessPeriodBounds(period=businessPeriod){
- const today=businessDayStart(),end=new Date(today);end.setDate(end.getDate()+1);let start=new Date(today);
- if(period==='week'){const monday=(today.getDay()+6)%7;start.setDate(start.getDate()-monday)}
- else if(period==='month')start=new Date(today.getFullYear(),today.getMonth(),1);
- else if(period==='year')start=new Date(today.getFullYear(),0,1);
- return {start:start.getTime(),end:end.getTime(),days:Math.max(1,Math.round((end-start)/86400000)),label:period==='day'?'Сегодня':period==='week'?'Эта неделя':period==='month'?'Этот месяц':'Этот год'};
+function businessPeriodBounds(){
+ const start=businessDayStart(),end=new Date(start);end.setDate(end.getDate()+1);
+ return {start:start.getTime(),end:end.getTime(),days:1,label:'Сегодня'};
 }
-function businessBuckets(period,bounds){
+function businessBuckets(_period,bounds){
  const rows=[],push=(start,end,label)=>rows.push({start,end,label,orders:0,orderQty:0,orderProfit:0,buyouts:0,buyoutQty:0,buyoutBaseProfit:0,buyoutProfit:0,financeExpense:0,netProfit:0});
- if(period==='day'){
-  for(let h=0;h<24;h++){const s=bounds.start+h*3600000;push(s,s+3600000,String(h).padStart(2,'0'))}
- }else if(period==='year'){
-  const first=new Date(bounds.start),last=new Date(bounds.end-1);
-  for(let m=first.getMonth();m<=last.getMonth();m++){
-   const s=new Date(first.getFullYear(),m,1).getTime(),e=Math.min(bounds.end,new Date(first.getFullYear(),m+1,1).getTime());
-   push(s,e,new Date(s).toLocaleDateString('ru-RU',{month:'short'}).replace('.',''));
-  }
- }else{
-  for(let s=bounds.start;s<bounds.end;s+=86400000){
-   const e=Math.min(bounds.end,s+86400000),d=new Date(s);
-   push(s,e,period==='week'?d.toLocaleDateString('ru-RU',{weekday:'short'}).replace('.',''):String(d.getDate()));
-  }
- }
+ for(let h=0;h<24;h++){const s=bounds.start+h*3600000;push(s,s+3600000,String(h).padStart(2,'0'))}
  return rows;
 }
 function businessBucketFor(rows,ts){return rows.find(x=>ts>=x.start&&ts<x.end)||null}
@@ -136,33 +120,65 @@ function businessMetricInfo(model){
 function businessEnsureStyle(){
  if(document.getElementById('businessDashboardStyle'))return;
  const style=document.createElement('style');style.id='businessDashboardStyle';style.textContent=`
- .business-dashboard{border:1px solid var(--line);border-radius:24px;padding:16px;margin:0 0 18px;background:var(--card)}
+ .business-dashboard{border:1px solid var(--line);border-radius:24px;padding:15px;margin:0 0 18px;background:var(--card);overflow:hidden}
  .business-top{display:flex;align-items:center;justify-content:space-between;gap:10px}.business-top h3{margin:0}.business-sub{font-size:12px;color:var(--muted);margin-top:3px}
- .business-periods,.business-metrics{display:flex;gap:6px;overflow-x:auto;scrollbar-width:none}.business-periods{margin-top:14px}.business-metrics{margin-top:10px}.business-periods::-webkit-scrollbar,.business-metrics::-webkit-scrollbar{display:none}
- .business-periods button,.business-metrics button{white-space:nowrap;border:1px solid var(--line);background:var(--bg);border-radius:999px;padding:8px 12px;font:inherit}.business-periods button.active,.business-metrics button.active{background:#111;color:#fff;border-color:#111}
- .business-value-card{margin-top:14px;padding:14px;border-radius:18px;background:var(--bg)}.business-value-label{font-size:13px;color:var(--muted)}.business-value{font-size:30px;font-weight:800;margin-top:3px}.business-value-meta{font-size:13px;color:var(--muted);margin-top:4px}
- .business-chart{display:flex;align-items:flex-end;gap:5px;height:165px;margin-top:14px;padding:12px 4px 0;overflow-x:auto;border-top:1px dashed var(--line)}.business-bar-col{min-width:28px;flex:1;display:flex;flex-direction:column;justify-content:flex-end;align-items:center;height:100%}.business-bar-track{width:100%;height:120px;display:flex;align-items:flex-end;justify-content:center}.business-bar{width:min(22px,80%);min-height:2px;border-radius:7px 7px 2px 2px;background:#111}.business-bar.negative{background:#9b1c1c}.business-bar-label{font-size:10px;color:var(--muted);margin-top:6px;white-space:nowrap}
- .business-foot{display:flex;justify-content:space-between;align-items:center;gap:10px;margin-top:12px}.business-warning{font-size:12px;color:var(--muted);line-height:1.35}.business-detail-btn{border:1px solid var(--line);background:var(--bg);border-radius:12px;padding:8px 10px;font:inherit;white-space:nowrap}
- @media(max-width:560px){.business-dashboard{padding:13px;border-radius:20px}.business-value{font-size:27px}.business-chart{height:150px}.business-bar-track{height:106px}}
+ .business-metrics{display:grid;grid-template-columns:1fr 1fr;gap:7px;margin-top:13px}.business-metrics button{min-width:0;border:1px solid var(--line);background:var(--bg);border-radius:14px;padding:9px 7px;font:inherit;font-size:13px;line-height:1.15}.business-metrics button.active{background:#111;color:#fff;border-color:#111}.business-metrics button:last-child{grid-column:1/-1}
+ .business-value-card{margin-top:12px;padding:13px 14px;border-radius:18px;background:var(--bg)}.business-value-label{font-size:13px;color:var(--muted)}.business-value{font-size:28px;font-weight:800;margin-top:3px}.business-value-meta{font-size:12px;color:var(--muted);margin-top:4px}
+ .business-chart{margin-top:13px}.business-chart-frame{display:grid;grid-template-columns:minmax(0,1fr) 48px;grid-template-rows:172px 25px;column-gap:4px;width:100%}
+ .business-plot{position:relative;grid-column:1;grid-row:1;min-width:0;border-bottom:1px solid var(--line)}
+ .business-grid-line{position:absolute;left:0;right:0;border-top:1px dashed var(--line);pointer-events:none}
+ .business-bars{position:absolute;inset:0;display:grid;grid-template-columns:repeat(24,minmax(0,1fr));align-items:stretch}
+ .business-hour{position:relative;min-width:0}.business-bar{position:absolute;left:24%;width:52%;min-height:1px;border-radius:5px 5px 1px 1px;background:#111}.business-bar.negative{border-radius:1px 1px 5px 5px;background:#8d2222}
+ .business-y-axis{grid-column:2;grid-row:1;position:relative;font-size:10px;color:var(--muted)}.business-y-tick{position:absolute;right:0;transform:translateY(50%);white-space:nowrap}
+ .business-x-axis{grid-column:1;grid-row:2;display:grid;grid-template-columns:repeat(24,minmax(0,1fr));align-items:start;padding-top:6px;font-size:9px;color:var(--muted)}.business-x-label{text-align:center;white-space:nowrap;transform:translateX(-1px)}
+ .business-axis-caption{grid-column:2;grid-row:2;font-size:9px;color:var(--muted);padding-top:6px;text-align:right}
+ .business-foot{display:flex;justify-content:space-between;align-items:flex-start;gap:10px;margin-top:9px}.business-warning{font-size:11px;color:var(--muted);line-height:1.35}.business-detail-btn{border:1px solid var(--line);background:var(--bg);border-radius:12px;padding:8px 10px;font:inherit;white-space:nowrap}
+ @media(max-width:560px){.business-dashboard{padding:12px;border-radius:20px}.business-value{font-size:25px}.business-chart-frame{grid-template-columns:minmax(0,1fr) 42px;grid-template-rows:158px 24px}.business-metrics button{font-size:12px;padding:8px 5px}.business-bar{left:20%;width:60%}}
  `;document.head.appendChild(style);
 }
 function businessEnsureUi(){
  const reports=document.getElementById('reports');if(!reports)return null;let root=document.getElementById('businessDashboard');
  if(root)return root;businessEnsureStyle();root=document.createElement('div');root.id='businessDashboard';root.className='business-dashboard';
- root.innerHTML=`<div class="business-top"><div><h3>Бизнес</h3><div class="business-sub">Kaspi + WB1 + WB2 · прибыль после расходов</div></div><button class="business-detail-btn" type="button" onclick="renderBusinessDashboard(true)">↻</button></div>
- <div class="business-periods">${[['day','День'],['week','Неделя'],['month','Месяц'],['year','Год']].map(([k,v])=>`<button type="button" data-business-period="${k}" onclick="setBusinessDashboardPeriod('${k}')">${v}</button>`).join('')}</div>
+ root.innerHTML=`<div class="business-top"><div><h3>Сегодня</h3><div class="business-sub">Kaspi + WB1 + WB2 · по часам</div></div><button class="business-detail-btn" type="button" onclick="renderBusinessDashboard(true)">↻</button></div>
  <div class="business-metrics">${[['orders','Заказы'],['buyouts','Выкупы'],['orderProfit','Прибыль заказов'],['buyoutProfit','Прибыль выкупов'],['netProfit','Чистая прибыль']].map(([k,v])=>`<button type="button" data-business-metric="${k}" onclick="setBusinessDashboardMetric('${k}')">${v}</button>`).join('')}</div>
- <div class="business-value-card"><div id="businessValueLabel" class="business_value-label">Загрузка…</div><div id="businessValue" class="business_value">—</div><div id="businessValueMeta" class="business_value-meta"></div></div>
- <div id="businessChart" class="business_chart"></div><div class="business-foot"><div id="businessWarning" class="business-warning">Считаю данные…</div><button class="business-detail-btn" type="button" onclick="openBusinessDashboardDetails()">Расшифровка</button></div>`;
+ <div class="business-value-card"><div id="businessValueLabel" class="business-value-label">Загрузка…</div><div id="businessValue" class="business-value">—</div><div id="businessValueMeta" class="business-value-meta"></div></div>
+ <div id="businessChart" class="business-chart"></div><div class="business-foot"><div id="businessWarning" class="business-warning">Считаю данные…</div><button class="business-detail-btn" type="button" onclick="openBusinessDashboardDetails()">Расшифровка</button></div>`;
  const title=reports.querySelector('h2');if(title)title.insertAdjacentElement('afterend',root);else reports.prepend(root);return root;
 }
 function businessPaintTabs(){
- document.querySelectorAll('[data-business-period]').forEach(x=>x.classList.toggle('active',x.dataset.businessPeriod===businessPeriod));
  document.querySelectorAll('[data-business-metric]').forEach(x=>x.classList.toggle('active',x.dataset.businessMetric===businessMetric));
 }
+function businessNiceStep(raw){
+ const n=Math.max(1e-9,Math.abs(Number(raw)||0)),pow=Math.pow(10,Math.floor(Math.log10(n))),f=n/pow;
+ return (f<=1?1:f<=2?2:f<=5?5:10)*pow;
+}
+function businessChartScale(values){
+ const min=Math.min(0,...values),max=Math.max(0,...values);
+ if(min<0){
+  const extent=Math.max(Math.abs(min),Math.abs(max),1),step=businessNiceStep(extent/2),limit=Math.max(step,Math.ceil(extent/step)*step);
+  return {min:-limit,max:limit,ticks:[-limit,-limit/2,0,limit/2,limit]};
+ }
+ const step=businessNiceStep(Math.max(max,1)/3),top=Math.max(step,Math.ceil(Math.max(max,1)/step)*step),ticks=[];
+ for(let v=0;v<=top+step*.001;v+=step)ticks.push(v);
+ return {min:0,max:top,ticks:ticks.length>5?[0,top/3,top*2/3,top]:ticks};
+}
+function businessAxisNumber(value){
+ const n=Number(value)||0,a=Math.abs(n);
+ if(a>=1000000)return (n/1000000).toLocaleString('ru-RU',{maximumFractionDigits:1})+'м';
+ if(a>=1000)return Math.round(n/1000).toLocaleString('ru-RU')+'к';
+ return Math.round(n).toLocaleString('ru-RU');
+}
 function businessPaintChart(model,field){
- const box=document.getElementById('businessChart');if(!box)return;const values=model.buckets.map(x=>Number(x[field])||0),max=Math.max(1,...values.map(x=>Math.abs(x)));
- box.innerHTML=model.buckets.map((b,i)=>{const v=values[i],h=Math.max(v===0?2:5,Math.round(Math.abs(v)/max*112));return `<div class="business-bar-col" title="${b.label}: ${businessMoney(v)}"><div class="business-bar-track"><div class="business-bar ${v<0?'negative':''}" style="height:${h}px"></div></div><div class="business-bar-label">${b.label}</div></div>`}).join('');
+ const box=document.getElementById('businessChart');if(!box)return;
+ const values=model.buckets.map(x=>Number(x[field])||0),scale=businessChartScale(values),range=Math.max(1e-9,scale.max-scale.min),toPct=v=>(v-scale.min)/range*100,zeroPct=toPct(0);
+ const lines=scale.ticks.map(v=>`<div class="business-grid-line" style="bottom:${toPct(v)}%"></div>`).join('');
+ const ticks=scale.ticks.map(v=>`<div class="business-y-tick" style="bottom:${toPct(v)}%">${businessAxisNumber(v)}</div>`).join('');
+ const bars=model.buckets.map((b,i)=>{
+  const v=values[i],vPct=toPct(v),bottom=Math.min(vPct,zeroPct),height=Math.abs(vPct-zeroPct);
+  return `<div class="business-hour" title="${b.label}:00 · ${businessMoney(v)}"><div class="business-bar ${v<0?'negative':''}" style="bottom:${bottom}%;height:${Math.max(v===0?0:1.2,height)}%"></div></div>`;
+ }).join('');
+ const labels=model.buckets.map((b,i)=>i%3===0?`<div class="business-x-label" style="grid-column:${i+1}">${b.label}</div>`:'').join('');
+ box.innerHTML=`<div class="business-chart-frame"><div class="business-plot">${lines}<div class="business-bars">${bars}</div></div><div class="business-y-axis">${ticks}</div><div class="business-x-axis">${labels}</div><div class="business-axis-caption">₸</div></div>`;
 }
 async function businessLoadSummary(days,force=false){
  const key=String(days),old=businessSummaryCache.get(key);if(!force&&old?.data&&Date.now()-Number(old.at||0)<60000)return old.data;if(!force&&old?.promise)return old.promise;
@@ -171,14 +187,13 @@ async function businessLoadSummary(days,force=false){
  businessSummaryCache.set(key,{at:Date.now(),promise});return promise;
 }
 async function businessBuildModel(force=false){
- const bounds=businessPeriodBounds(),buckets=businessBuckets(businessPeriod,bounds);
+ const bounds=businessPeriodBounds(),buckets=businessBuckets('day',bounds);
  if(typeof window.refreshAllMarketUnitProfit==='function'&&(!(window.allMarketUnitProfit30 instanceof Map)||force)){try{await window.refreshAllMarketUnitProfit()}catch(_){}}
  const groups=businessOrderGroups(bounds),orders=businessEstimateOrders(groups,buckets,window.allMarketUnitProfit30),local=businessLocalBuyouts(bounds,buckets),finance=businessFinanceExpenses(bounds,buckets),summary=await businessLoadSummary(bounds.days,force);
  businessNormalizeBuyoutBuckets(buckets,local,summary);
  const netProfit=(Number(summary?.profit)||0)-finance.total;
- return {period:businessPeriod,bounds,buckets,orders,local,finance,summary,netProfit};
+ return {period:'day',bounds,buckets,orders,local,finance,summary,netProfit};
 }
-window.setBusinessDashboardPeriod=function(period){if(!BUSINESS_PERIODS.has(period))return;businessPeriod=period;businessSaveUi();window.renderBusinessDashboard(false)};
 window.setBusinessDashboardMetric=function(metric){if(!BUSINESS_METRICS.has(metric))return;businessMetric=metric;businessSaveUi();if(businessLastModel)businessPaint(businessLastModel);else window.renderBusinessDashboard(false)};
 function businessPaint(model){
  businessLastModel=model;businessPaintTabs();const info=businessMetricInfo(model),label=document.getElementById('businessValueLabel'),value=document.getElementById('businessValue'),meta=document.getElementById('businessValueMeta'),warning=document.getElementById('businessWarning');
