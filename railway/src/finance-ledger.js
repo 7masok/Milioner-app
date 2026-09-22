@@ -687,7 +687,7 @@ financeLedgerRouter.post('/finance/categories/:id/move-operations', requireTrust
     await lockFinance(client);
     const ids=[sourceId,targetId].sort();
     const locked=await client.query(`
-      SELECT id,name,kind,archived,payload,created_at,updated_at
+      SELECT id,name,kind,archived,payload,updated_at
       FROM finance_categories WHERE id=ANY($1::text[]) ORDER BY id FOR UPDATE
     `,[ids]);
     const map=new Map(locked.rows.map(row=>[String(row.id),row])),source=map.get(sourceId),target=map.get(targetId);

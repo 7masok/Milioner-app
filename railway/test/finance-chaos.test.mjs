@@ -494,4 +494,6 @@ test('category merge endpoint rewrites transactions before deleting the source c
   assert.match(ledger,/addAudit\(client,'transaction',row\.id,'move-category'/);
   assert.match(ledger,/DELETE FROM finance_categories WHERE id=\$1/);
   assert.match(ledger,/canClaimLegacy/);
+  assert.match(ledger,/SELECT id,name,kind,archived,payload,updated_at\s+FROM finance_categories WHERE id=ANY/);
+  assert.doesNotMatch(ledger,/SELECT id,name,kind,archived,payload,created_at,updated_at\s+FROM finance_categories WHERE id=ANY/);
 });
