@@ -10,6 +10,7 @@ import {
   persistWarehouseMovements,
   stripMovementsFromState
 } from './warehouse-movements.js';
+import { stripPurchasesFromState } from './warehouse-purchases.js';
 
 // The server became authoritative for marketplace orders on 24 August 2026.
 // Never backfill older rows: some of them were already written by the former
@@ -169,7 +170,7 @@ export async function reconcileMarketplaceSales(market) {
       VALUES($1,$2,$3,$4) RETURNING id`, [`before-${market.toLowerCase()}-sale-reconcile`, backupPayload, stored.rows[0].revision, now]);
     await pruneWarehouseBackups(client);
     await persistWarehouseMovements(client, state.movements, now);
-    const raw = JSON.stringify(stripMovementsFromState(state)), revision = Number(stored.rows[0].revision || 0) + 1;
+    const raw = JSON.stringify(stripPurchasesFromState(stripMovementsFromState(state))), revision = Number(stored.rows[0].revision || 0) + 1;
     await client.query('UPDATE warehouse_state SET payload=$1,revision=$2,updated_at=$3 WHERE id=1', [raw, revision, now]);
     const sha = crypto.createHash('sha256').update(raw).digest('hex').toUpperCase();
     await client.query('INSERT INTO warehouse_audit(revision,updated_at,payload_sha256,source) VALUES($1,$2,$3,$4)',

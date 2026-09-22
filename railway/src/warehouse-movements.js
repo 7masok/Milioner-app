@@ -1,3 +1,5 @@
+import { hydrateWarehousePurchases } from './warehouse-purchases.js';
+
 export function parseWarehousePayload(raw) {
   try { return JSON.parse(String(raw || '{}')); } catch { return {}; }
 }
@@ -67,6 +69,7 @@ export async function persistWarehouseMovements(client, movements, now = Date.no
 
 export async function legacyCompatibleWarehouseState(client, rawPayload) {
   const state = parseWarehousePayload(rawPayload);
+  await hydrateWarehousePurchases(client, state);
   return hydrateWarehouseMovements(client, state);
 }
 

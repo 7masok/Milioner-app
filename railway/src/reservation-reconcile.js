@@ -1,6 +1,7 @@
 import crypto from 'node:crypto';
 import { transaction } from './db.js';
 import { pruneWarehouseBackups } from './warehouse-backups.js';
+import { stripPurchasesFromState } from './warehouse-purchases.js';
 import { wbOrderIsActive } from './wb-status.js';
 
 function parsePayload(raw) {
@@ -127,7 +128,7 @@ export async function reconcileWbReservations(market, _syncedSince) {
       state.settings.wbReservationCompleteRestoreV1 = { at: now, market, backupId: String(backup.rows[0].id), revision: Number(stored.rows[0].revision || 0) };
     }
     state.reservations = next;
-    const raw = JSON.stringify(state);
+    const raw = JSON.stringify(stripPurchasesFromState(state));
     const revision = Number(stored.rows[0].revision || 0) + 1;
     await client.query('UPDATE warehouse_state SET payload=$1,revision=$2,updated_at=$3 WHERE id=1', [raw, revision, now]);
     const sha = crypto.createHash('sha256').update(raw).digest('hex').toUpperCase();
@@ -231,7 +232,7 @@ export async function reconcileKaspiReservations(activeEntries) {
       state.settings.kaspiReservationAuthoritativeV1 = { at: now, backupId: String(backup.rows[0].id), revision: Number(stored.rows[0].revision || 0) };
     }
     state.reservations = next;
-    const raw = JSON.stringify(state);
+    const raw = JSON.stringify(stripPurchasesFromState(state));
     const revision = Number(stored.rows[0].revision || 0) + 1;
     await client.query('UPDATE warehouse_state SET payload=$1,revision=$2,updated_at=$3 WHERE id=1', [raw, revision, now]);
     const sha = crypto.createHash('sha256').update(raw).digest('hex').toUpperCase();

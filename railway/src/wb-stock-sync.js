@@ -1,5 +1,6 @@
 import { pool, transaction } from './db.js';
 import { pruneWarehouseBackups } from './warehouse-backups.js';
+import { stripPurchasesFromState } from './warehouse-purchases.js';
 import { linkFingerprint, validateWbLink, applyLinkObservation } from './wb-link-validation.js';
 import { config } from './config.js';
 import { credentialFor } from './connections.js';
@@ -85,7 +86,7 @@ export async function validateWbStockLinks(market) {
       }
       changed=applyLinkObservation(product,field,observation.result,now)||changed;
     }
-    if(changed)await client.query('UPDATE warehouse_state SET payload=$1,revision=revision+1,updated_at=$2 WHERE id=1',[JSON.stringify(state),now]);
+    if(changed)await client.query('UPDATE warehouse_state SET payload=$1,revision=revision+1,updated_at=$2 WHERE id=1',[JSON.stringify(stripPurchasesFromState(state)),now]);
     return {market:id,detached};
   });
 }
