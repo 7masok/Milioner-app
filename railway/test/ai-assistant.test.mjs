@@ -139,8 +139,8 @@ test('BCC parser imports the actual two-line 242000 layout from the 21-22 Sep st
   assert.ok(result.transactions.some(x=>x.type==='income'&&x.amount===254000));
   assert.ok(result.transactions.some(x=>x.type==='expense'&&x.amount===15000));
   assert.ok(result.transactions.some(x=>x.type==='expense'&&x.amount===120));
-  assert.equal(amounts.reduce((sum,x)=>sum+x,0),-86328.70);
-  assert.equal(result.transactions.filter(x=>x.type==='expense').reduce((sum,x)=>sum+x.amount,0),340328.70);
+  assert.ok(Math.abs(amounts.reduce((sum,x)=>sum+x,0)-(-86328.70))<0.01);
+  assert.ok(Math.abs(result.transactions.filter(x=>x.type==='expense').reduce((sum,x)=>sum+x.amount,0)-340328.70)<0.01);
 });
 
 test('BCC parser imports a 242000 payment when the PDF splits currency cells across lines', () => {
