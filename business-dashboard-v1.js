@@ -126,7 +126,7 @@ function businessEnsureStyle(){
  .business-y-axis{grid-column:2;grid-row:1;position:relative;font-size:10px;color:var(--muted)}.business-y-tick{position:absolute;right:0;transform:translateY(50%);white-space:nowrap}
  .business-x-axis{grid-column:1;grid-row:2;position:relative;height:24px;padding-top:6px;font-size:9px;color:var(--muted)}.business-x-label{position:absolute;top:6px;white-space:nowrap;transform:translateX(-50%);text-align:center}
  .business-axis-caption{grid-column:2;grid-row:2;font-size:9px;color:var(--muted);padding-top:6px;text-align:right}
- .business-foot{display:flex;justify-content:flex-end;align-items:flex-start;gap:10px;margin-top:9px}.business-detail-btn{border:1px solid var(--line);background:var(--bg);border-radius:12px;padding:8px 10px;font:inherit;white-space:nowrap}
+ .business-detail-btn{border:1px solid var(--line);background:var(--bg);border-radius:12px;padding:8px 10px;font:inherit;white-space:nowrap}
  @media(max-width:560px){.business-dashboard{padding:12px;border-radius:20px}.business-value{font-size:25px}.business-chart-frame{grid-template-columns:minmax(0,1fr) 42px;grid-template-rows:158px 24px}.business-metrics button{font-size:12px;padding:8px 5px}.business-bar,.business-yesterday-bar{left:20%;width:60%}}
  `;document.head.appendChild(style);
 }
@@ -136,7 +136,7 @@ function businessEnsureUi(){
  root.innerHTML=`<div class="business-top"><div><h3>Сегодня</h3><div class="business-sub">Kaspi + WB1 + WB2 · по часам</div></div><button class="business-detail-btn" type="button" onclick="renderBusinessDashboard(true)">↻</button></div>
  <div class="business-metrics">${[['orders','Заказы'],['buyouts','Выкупы'],['orderProfit','Прибыль заказов'],['buyoutProfit','Прибыль выкупов'],['netProfit','Чистая прибыль']].map(([k,v])=>`<button type="button" data-business-metric="${k}" onclick="setBusinessDashboardMetric('${k}')">${v}</button>`).join('')}</div>
  <div class="business-value-card"><div id="businessValueMetric" class="business-value-title">Загрузка…</div><div class="business-value-grid"><div class="business-value-side"><div id="businessValueLabel" class="business-value-label">Сегодня</div><div id="businessValue" class="business-value">—</div><div id="businessValueMeta" class="business-value-meta"></div></div><div class="business-value-side business-yesterday-side"><div id="businessYesterdayLabel" class="business-value-label">Вчера</div><div id="businessYesterdayValue" class="business-value">—</div><div id="businessYesterdayMeta" class="business-value-meta"></div></div></div><div id="businessYesterdayCompare" class="business-compare"></div></div>
- <div id="businessChart" class="business-chart"></div><div class="business-foot"><button class="business-detail-btn" type="button" onclick="openBusinessDashboardDetails()">Расшифровка</button></div>`;
+ <div id="businessChart" class="business-chart"></div>`;
  const title=reports.querySelector('h2');if(title)title.insertAdjacentElement('afterend',root);else reports.prepend(root);return root;
 }
 function businessPaintTabs(){
@@ -251,16 +251,7 @@ window.renderBusinessDashboard=async function(force=false){
  try{const model=await businessBuildModel(force);if(seq!==businessRenderSeq)return;businessPaint(model)}
  catch(error){if(seq!==businessRenderSeq)return;if(label)label.textContent='Не удалось посчитать';if(value)value.textContent='—'}
 };
-window.openBusinessDashboardDetails=function(){
- const m=businessLastModel;if(!m)return window.renderBusinessDashboard(false);
- const sourceRows=Object.entries(m.summary?.sources||{}).map(([name,x])=>`<div class="item" style="margin-top:8px"><div class="row"><div class="grow"><b>${name==='WB'?'WB1':esc(name)}</b><div class="muted">${Math.round(Number(x.qty)||0).toLocaleString('ru-RU')} шт. выкупов${x.live?' · оперативные данные':''}</div></div><b>${businessMaybeMoney(x.profit,Boolean(x.estimated))}</b></div><div class="row" style="margin-top:6px"><span class="grow muted">Выручка</span><b>${businessMaybeMoney(x.revenue)}</b></div><div class="row" style="margin-top:4px"><span class="grow muted">Себестоимость</span><b>${businessExpenseMoney(x.cost,Boolean(x.estimated&&x.cost!==null))}</b></div><div class="row" style="margin-top:4px"><span class="grow muted">Комиссии, логистика и услуги</span><b>${businessExpenseMoney(x.fees,Boolean(x.estimated&&x.fees!==null))}</b></div><div class="row" style="margin-top:4px"><span class="grow muted">Реклама</span><b>${businessExpenseMoney(x.ads)}</b></div></div>`).join('');
- const coverage=Math.round(m.orders.coverage*100);
- showSheet(`<h3>Бизнес · ${esc(m.bounds.label)}</h3>
- <div class="item"><div class="row"><span class="grow">Заказы</span><b>${businessMoney(m.orders.amount)}</b></div><div class="muted">${m.orders.qty.toLocaleString('ru-RU')} шт. · ${m.orders.orderCount} заказов</div><div class="row" style="margin-top:8px"><span class="grow">Примерная прибыль с заказов</span><b>${businessMoney(m.orders.profit)}</b></div><div class="muted">Покрытие расчётом: ${coverage}%</div></div>
- <div class="item" style="margin-top:8px"><div class="row"><span class="grow">Выкупы</span><b>${businessMoney(m.summary.revenue)}</b></div><div class="row" style="margin-top:8px"><span class="grow"><b>Прибыль с выкупов</b></span><b>${businessMaybeMoney(m.summary.profit,Boolean(m.summary.estimated))}</b></div><div class="row" style="margin-top:5px"><span class="grow muted">Себестоимость</span><b>${businessExpenseMoney(m.summary.cost,Boolean(m.summary.estimated&&m.summary.cost!==null))}</b></div><div class="row" style="margin-top:5px"><span class="grow muted">Комиссии, логистика и услуги</span><b>${businessExpenseMoney(m.summary.fees,Boolean(m.summary.estimated&&m.summary.fees!==null))}</b></div><div class="row" style="margin-top:5px"><span class="grow muted">Реклама</span><b>${businessExpenseMoney(m.summary.ads)}</b></div></div>
- <h3 style="margin-top:14px">По магазинам</h3>${sourceRows}
- <div class="item" style="margin-top:8px"><div class="row"><span class="grow"><b>Чистая прибыль бизнеса</b></span><b>${businessMaybeMoney(m.netProfit,Boolean(m.summary.estimated))}</b></div></div>`);
-};
+
 
 const baseRenderReports=window.renderReports;
 window.renderReports=function(){
