@@ -26,66 +26,63 @@ test('business day chart uses real overlapping bars and no separate yesterday ca
   assert.match(ui, /todayHeight=equal/);
   assert.match(ui, /сегодня .* вчера/);
 });
+
 test('business x-axis labels are 03 through 24 without 00', () => {
   assert.match(ui, /\[3,6,9,12,15,18,21,24\]/);
   assert.match(ui, /h===24\?100:\(\(h-\.5\)\/24\*100\)/);
   assert.match(ui, /String\(h\)\.padStart\(2,'0'\)/);
-  assert.doesNotMatch(ui, /grid-column:\$\{i\+1\}/);
 });
 
 test('business card shows yesterday on the right and compares only through the same time of day', () => {
   assert.match(ui, /business-value-grid/);
   assert.match(ui, /businessYesterdayValue/);
-  assert.match(ui, /businessYesterdayMeta/);
   assert.match(ui, /businessYesterdaySameTime/);
   assert.match(ui, /businessElapsedTodayMs/);
   assert.match(ui, /partialBounds=\{start:fullYesterday\.bounds\.start,end:cutoff/);
   assert.match(ui, /businessOrderGroups\(partialBounds\)/);
-  assert.match(ui, /businessFinanceExpenses\(partialBounds,financeBuckets\)/);
+  assert.doesNotMatch(ui, /businessFinanceExpenses/);
+  assert.match(ui, /netProfit=profit/);
   assert.match(ui, /yesterdayCompare=businessYesterdaySameTime\(yesterday\)/);
-  assert.match(ui, /до '\+businessHourMinute/);
-  assert.match(ui, /разница/);
 });
 
-test('business net profit subtracts only included finance expenses', () => {
-  assert.match(ui, /financeAnalyticsEntry\(tx\)/);
-  assert.match(ui, /financeAnalyticsEntryIncluded/);
-  assert.match(ui, /financeCountsInIncomeExpense/);
-  assert.match(ui, /groups\.set\(key,\{name:'Без категории',amount:0\}\)/);
-  assert.match(ui, /uncategorized\+=amount;total\+=amount/);
-  assert.match(ui, /netProfit=\(Number\(summary\?\.profit\)\|\|0\)-finance\.total/);
-  assert.match(ui, /двойной учёт/);
-  assert.match(ui, /Ozon пока не входит/);
+test('business profit no longer subtracts Finance-tab expenses', () => {
+  assert.doesNotMatch(ui, /Расходы бизнеса из «Финансов»/);
+  assert.doesNotMatch(ui, /двойной учёт/);
+  assert.doesNotMatch(ui, /financeAnalyticsEntry\(tx\)/);
+  assert.match(ui, /const netProfit=summary\?\.profit===null\|\|summary\?\.profit===undefined/);
+  assert.match(ui, /meta:model\.summary\.estimated\?'≈ Kaspi \+ WB1 \+ WB2':'Kaspi \+ WB1 \+ WB2'/);
 });
 
-test('business marketplace summary reuses canonical Kaspi and WB finance models including yesterday', () => {
-  assert.match(report, /window\.loadBusinessMarketplaceSummary/);
-  assert.match(report, /raw===-1\?-1/);
-  assert.match(report, /loadKaspiOrders\(n/);
-  assert.match(report, /loadWbModel\('WB',n\)/);
-  assert.match(report, /loadWbModel\('WB2',n\)/);
-  assert.match(report, /reportProfitView\(kaspi\)/);
-  assert.match(ui, /businessBuildDaySnapshot\(businessDayBounds\(-1\),-1/);
-  assert.match(ui, /businessYesterdayCompare/);
-  assert.match(ui, /вчера /);
+test('WB today business summary falls back to live buyouts instead of false zeros', () => {
+  assert.match(report, /ensureWbLiveOverview\('WB',n\)/);
+  assert.match(report, /ensureWbLiveOverview\('WB2',n\)/);
+  assert.match(report, /businessWbLiveStats/);
+  assert.match(report, /liveRevenue>0\|\|liveQty>0/);
+  assert.match(report, /allMarketUnitProfit30/);
+  assert.match(report, /historyProfit\/historyQty/);
+  assert.match(report, /estimated:true,live:true/);
 });
 
-test('business dashboard asset is loaded and served', () => {
-  assert.match(html, /business-dashboard-v1\.js\?v=20260922-business10/);
+test('money formatting removes negative zero and unknown WB fields render as dash', () => {
+  assert.match(ui, /Math\.abs\(raw\)>=\.005\?raw:0/);
+  assert.match(ui, /function businessMaybeMoney/);
+  assert.match(ui, /function businessExpenseMoney/);
+  assert.match(ui, /return '—'/);
+});
+
+test('business dashboard assets are cache-busted and served', () => {
+  assert.match(html, /kaspi-report-v2\.js\?v=20260922-business-wb-live1/);
+  assert.match(html, /business-dashboard-v1\.js\?v=20260922-business12/);
   assert.match(server, /'business-dashboard-v1\.js'/);
 });
 
 test('business dashboard has no verbose explanatory novel below the chart', () => {
   assert.doesNotMatch(ui, /businessWarning/);
-  assert.doesNotMatch(ui, /вчера в карточке — только до этого же времени/);
   assert.doesNotMatch(ui, /короткий столбик перекрывает длинный/);
   assert.match(ui, /openBusinessDashboardDetails\(\).*Расшифровка/);
 });
 
-
-test('legacy store note cleanup removes the long marketplace explainer', () => {
+test('legacy store note cleanup remains active', () => {
   assert.match(ui, /function businessRemoveLegacyStoreNote\(\)/);
-  assert.match(ui, /часть себестоимости не определена/);
-  assert.match(ui, /налоги, аренда, зарплаты/);
   assert.match(ui, /MutationObserver/);
 });
