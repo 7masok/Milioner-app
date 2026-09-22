@@ -1,5 +1,6 @@
 import { hydrateWarehousePurchases } from './warehouse-purchases.js';
 import { hydrateWarehouseSales } from './warehouse-sales.js';
+import { hydrateWarehouseReservations } from './warehouse-reservations.js';
 
 export function parseWarehousePayload(raw) {
   try { return JSON.parse(String(raw || '{}')); } catch { return {}; }
@@ -72,6 +73,7 @@ export async function legacyCompatibleWarehouseState(client, rawPayload) {
   const state = parseWarehousePayload(rawPayload);
   await hydrateWarehousePurchases(client, state);
   await hydrateWarehouseSales(client, state);
+  await hydrateWarehouseReservations(client, state);
   return hydrateWarehouseMovements(client, state);
 }
 

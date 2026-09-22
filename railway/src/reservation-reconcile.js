@@ -3,6 +3,7 @@ import { transaction } from './db.js';
 import { pruneWarehouseBackups } from './warehouse-backups.js';
 import { stripPurchasesFromState } from './warehouse-purchases.js';
 import { stripSalesFromState } from './warehouse-sales.js';
+import { hydrateWarehouseReservations, replaceWarehouseReservations, stripReservationsFromState } from './warehouse-reservations.js';
 import { wbOrderIsActive } from './wb-status.js';
 
 function parsePayload(raw) {
@@ -52,6 +53,7 @@ export async function reconcileWbReservations(market, _syncedSince) {
       ORDER BY o.creation_date,o.order_id,o.entry_id`, [market]);
 
     const state = parsePayload(stored.rows[0].payload);
+    await hydrateWarehouseReservations(client, state);
     const current = Array.isArray(state.reservations) ? state.reservations : [];
     const expected = new Map();
     let unlinked = 0;
@@ -129,7 +131,8 @@ export async function reconcileWbReservations(market, _syncedSince) {
       state.settings.wbReservationCompleteRestoreV1 = { at: now, market, backupId: String(backup.rows[0].id), revision: Number(stored.rows[0].revision || 0) };
     }
     state.reservations = next;
-    const raw = JSON.stringify(stripSalesFromState(stripPurchasesFromState(state)));
+    await replaceWarehouseReservations(client, next, now);
+    const raw = JSON.stringify(stripReservationsFromState(stripSalesFromState(stripPurchasesFromState(state))));
     const revision = Number(stored.rows[0].revision || 0) + 1;
     await client.query('UPDATE warehouse_state SET payload=$1,revision=$2,updated_at=$3 WHERE id=1', [raw, revision, now]);
     const sha = crypto.createHash('sha256').update(raw).digest('hex').toUpperCase();
@@ -158,6 +161,7 @@ export async function reconcileKaspiReservations(activeEntries) {
       ORDER BY o.creation_date,o.order_id,o.entry_id`);
 
     const state = parsePayload(stored.rows[0].payload);
+    await hydrateWarehouseReservations(client, state);
     const current = Array.isArray(state.reservations) ? state.reservations : [];
     const expected = new Map();
     let unlinked = 0;
@@ -233,7 +237,8 @@ export async function reconcileKaspiReservations(activeEntries) {
       state.settings.kaspiReservationAuthoritativeV1 = { at: now, backupId: String(backup.rows[0].id), revision: Number(stored.rows[0].revision || 0) };
     }
     state.reservations = next;
-    const raw = JSON.stringify(stripSalesFromState(stripPurchasesFromState(state)));
+    await replaceWarehouseReservations(client, next, now);
+    const raw = JSON.stringify(stripReservationsFromState(stripSalesFromState(stripPurchasesFromState(state))));
     const revision = Number(stored.rows[0].revision || 0) + 1;
     await client.query('UPDATE warehouse_state SET payload=$1,revision=$2,updated_at=$3 WHERE id=1', [raw, revision, now]);
     const sha = crypto.createHash('sha256').update(raw).digest('hex').toUpperCase();

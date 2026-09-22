@@ -12,6 +12,7 @@ import {
 } from './warehouse-movements.js';
 import { stripPurchasesFromState } from './warehouse-purchases.js';
 import { hydrateWarehouseSales, replaceWarehouseSales, stripSalesFromState } from './warehouse-sales.js';
+import { hydrateWarehouseReservations, replaceWarehouseReservations, stripReservationsFromState } from './warehouse-reservations.js';
 
 // The server became authoritative for marketplace orders on 24 August 2026.
 // Never backfill older rows: some of them were already written by the former
@@ -126,7 +127,7 @@ export async function reconcileMarketplaceSales(market) {
       LEFT JOIN product_links l ON l.market=o.market AND l.sku=o.sku
       WHERE o.market=$1 AND o.creation_date >= $2
       ORDER BY o.creation_date,o.order_id,o.entry_id`, [market, SERVER_SALE_CUTOVER]);
-    const state = await hydrateWarehouseSales(client, await hydrateWarehouseMovements(client, parseWarehousePayload(stored.rows[0].payload)));
+    const state = await hydrateWarehouseReservations(client, await hydrateWarehouseSales(client, await hydrateWarehouseMovements(client, parseWarehousePayload(stored.rows[0].payload))));
     state.products = Array.isArray(state.products) ? state.products : [];
     state.sales = Array.isArray(state.sales) ? state.sales : [];
     state.reservations = Array.isArray(state.reservations) ? state.reservations : [];
@@ -172,7 +173,8 @@ export async function reconcileMarketplaceSales(market) {
     await pruneWarehouseBackups(client);
     await persistWarehouseMovements(client, state.movements, now);
     await replaceWarehouseSales(client, state.sales, now);
-    const raw = JSON.stringify(stripSalesFromState(stripPurchasesFromState(stripMovementsFromState(state)))), revision = Number(stored.rows[0].revision || 0) + 1;
+    await replaceWarehouseReservations(client, state.reservations, now);
+    const raw = JSON.stringify(stripReservationsFromState(stripSalesFromState(stripPurchasesFromState(stripMovementsFromState(state))))), revision = Number(stored.rows[0].revision || 0) + 1;
     await client.query('UPDATE warehouse_state SET payload=$1,revision=$2,updated_at=$3 WHERE id=1', [raw, revision, now]);
     const sha = crypto.createHash('sha256').update(raw).digest('hex').toUpperCase();
     await client.query('INSERT INTO warehouse_audit(revision,updated_at,payload_sha256,source) VALUES($1,$2,$3,$4)',

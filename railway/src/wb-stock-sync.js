@@ -2,6 +2,7 @@ import { pool, transaction } from './db.js';
 import { pruneWarehouseBackups } from './warehouse-backups.js';
 import { stripPurchasesFromState } from './warehouse-purchases.js';
 import { stripSalesFromState } from './warehouse-sales.js';
+import { hydrateWarehouseReservations, stripReservationsFromState } from './warehouse-reservations.js';
 import { linkFingerprint, validateWbLink, applyLinkObservation } from './wb-link-validation.js';
 import { config } from './config.js';
 import { credentialFor } from './connections.js';
@@ -87,7 +88,7 @@ export async function validateWbStockLinks(market) {
       }
       changed=applyLinkObservation(product,field,observation.result,now)||changed;
     }
-    if(changed)await client.query('UPDATE warehouse_state SET payload=$1,revision=revision+1,updated_at=$2 WHERE id=1',[JSON.stringify(stripSalesFromState(stripPurchasesFromState(state))),now]);
+    if(changed)await client.query('UPDATE warehouse_state SET payload=$1,revision=revision+1,updated_at=$2 WHERE id=1',[JSON.stringify(stripReservationsFromState(stripSalesFromState(stripPurchasesFromState(state)))),now]);
     return {market:id,detached};
   });
 }
@@ -118,7 +119,7 @@ export async function syncWbStockMarket(market,{write=true}={}){
   const token=await credentialFor(id,id==='WB2'?config.wbToken2:config.wbToken);
   if(!token)return {ok:false,market:id,skipped:true,reason:'token-not-configured'};
   const stateRow=await pool.query('SELECT payload FROM warehouse_state WHERE id=1');
-  const state=parse(stateRow.rows[0]?.payload),availability=sharedAvailable(state),field=id==='WB2'?'wb2':'wb';
+  const state=await hydrateWarehouseReservations(pool, parse(stateRow.rows[0]?.payload)),availability=sharedAvailable(state),field=id==='WB2'?'wb2':'wb';
   // Variant-group rows are display-only parents. Their children carry the real
   // WB barcode and characteristic ID, so never send the parent as a stock item.
   const linked=[...availability.products.values()].filter(product=>String(product?.[field]||'').trim()&&String(product?.kind||'')!=='variant-group');

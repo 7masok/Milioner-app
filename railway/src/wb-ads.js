@@ -5,6 +5,7 @@ import { credentialFor } from './connections.js';
 import { asyncRoute } from './http.js';
 import { campaignInventory, parseAdWarehouse, stockBlock } from './wb-ad-inventory.js';
 import { hydrateWarehousePurchases } from './warehouse-purchases.js';
+import { hydrateWarehouseReservations } from './warehouse-reservations.js';
 
 const ADVERT_API = 'https://advert-api.wildberries.ru';
 const CONTENT_API = 'https://content-api.wildberries.ru';
@@ -409,7 +410,7 @@ async function inventoryFor(marketName, campaigns) {
       WHERE creation_date >= $1 AND creation_date <= $2 GROUP BY market,sku,status,state`,
       [Date.now()-25*86400000, Date.now()]),
   ]);
-  const state = await hydrateWarehousePurchases(pool, parseAdWarehouse(warehouse.rows[0]?.payload));
+  const state = await hydrateWarehouseReservations(pool, await hydrateWarehousePurchases(pool, parseAdWarehouse(warehouse.rows[0]?.payload)));
   return campaignInventory(state, orders.rows, marketName, campaigns);
 }
 

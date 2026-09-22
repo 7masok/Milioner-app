@@ -26,6 +26,13 @@ import {
   replaceWarehouseSales,
   stripSalesFromState
 } from './warehouse-sales.js';
+import {
+  deleteWarehouseReservations,
+  hydrateWarehouseReservations,
+  persistWarehouseReservations,
+  replaceWarehouseReservations,
+  stripReservationsFromState
+} from './warehouse-reservations.js';
 
 export const warehouseRouter = express.Router();
 const MAX_WAREHOUSE_SNAPSHOT_BYTES = 6_000_000;
@@ -156,7 +163,7 @@ warehouseRouter.get('/warehouse-state', requireTrustedOrigin, asyncRoute(async (
     const stored = await client.query(`SELECT ${fields} FROM warehouse_state WHERE id=1`);
     if (!stored.rowCount) return null;
     const row = stored.rows[0];
-    const state = metaOnly ? undefined : await hydrateWarehouseSales(client, await hydrateWarehousePurchases(client, await hydrateWarehouseMovements(client, parseWarehousePayload(row.payload))));
+    const state = metaOnly ? undefined : await hydrateWarehouseReservations(client, await hydrateWarehouseSales(client, await hydrateWarehousePurchases(client, await hydrateWarehouseMovements(client, parseWarehousePayload(row.payload)))));
     return { row, state };
   });
   if (!result) return res.json({ ok: true, exists: false, revision: 0, updatedAt: null, state: metaOnly ? undefined : null });
@@ -204,7 +211,7 @@ warehouseRouter.put('/warehouse-state', requireTrustedOrigin, requireWritesEnabl
     : Array.isArray(incomingState?.movements);
   let state = isPatch ? null : cleanState(incomingState);
   if (!isPatch) {
-    const earlyRaw = JSON.stringify(stripSalesFromState(stripPurchasesFromState(stripMovementsFromState(state))));
+    const earlyRaw = JSON.stringify(stripReservationsFromState(stripSalesFromState(stripPurchasesFromState(stripMovementsFromState(state)))));
     if (Buffer.byteLength(earlyRaw, 'utf8') > MAX_WAREHOUSE_SNAPSHOT_BYTES) return res.status(413).json({ ok: false, error: 'Warehouse snapshot is too large' });
   }
 
@@ -225,6 +232,7 @@ warehouseRouter.put('/warehouse-state', requireTrustedOrigin, requireWritesEnabl
       const previousStored = parseWarehousePayload(current.rows[0].payload);
       await hydrateWarehousePurchases(client, previousStored);
       await hydrateWarehouseSales(client, previousStored);
+      await hydrateWarehouseReservations(client, previousStored);
       if (isPatch) state = applyWarehousePatch(previousStored, incomingState);
       // Routine saves omit movements when the audit trail did not change.
       // In that case an empty movement delta is sufficient for the stock guard:
@@ -261,7 +269,15 @@ warehouseRouter.put('/warehouse-state', requireTrustedOrigin, requireWritesEnabl
     } else if (salesTouched || (!existingSales.rowCount && Array.isArray(state?.sales) && state.sales.length)) {
       await replaceWarehouseSales(client, state.sales, updatedAt);
     }
-    const persistedSnapshot = stripSalesFromState(stripPurchasesFromState(stripMovementsFromState(state)));
+    const reservationsTouched = !isPatch || Array.isArray(incomingState?.reservations) || (Array.isArray(incomingState?.deleted?.reservations) && incomingState.deleted.reservations.length > 0);
+    const existingReservations = await client.query('SELECT 1 FROM warehouse_reservations LIMIT 1');
+    if (reservationsTouched && isPatch && existingReservations.rowCount) {
+      await persistWarehouseReservations(client, incomingState?.reservations || [], updatedAt);
+      await deleteWarehouseReservations(client, incomingState?.deleted?.reservations || []);
+    } else if (reservationsTouched || (!existingReservations.rowCount && Array.isArray(state?.reservations) && state.reservations.length)) {
+      await replaceWarehouseReservations(client, state.reservations, updatedAt);
+    }
+    const persistedSnapshot = stripReservationsFromState(stripSalesFromState(stripPurchasesFromState(stripMovementsFromState(state))));
     const raw = JSON.stringify(persistedSnapshot);
     if (Buffer.byteLength(raw, 'utf8') > MAX_WAREHOUSE_SNAPSHOT_BYTES) return { tooLarge: true };
     const revision = currentRevision + 1;
