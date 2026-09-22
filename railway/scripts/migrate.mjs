@@ -13,6 +13,7 @@ const client = await pool.connect();
 
 try {
   await client.query('SELECT pg_advisory_lock($1)', [730019]);
+  client.on('notice', (notice) => console.log(notice.message));
   await client.query(`CREATE TABLE IF NOT EXISTS schema_migrations (
     version TEXT PRIMARY KEY,
     applied_at BIGINT NOT NULL

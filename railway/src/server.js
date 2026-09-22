@@ -257,30 +257,18 @@ async function verifyBackupRestoreReadiness() {
     ]);
     if (!warehouse.rowCount) return console.warn('BACKUP_RESTORE_DRY_RUN', JSON.stringify({ ok:false, error:'warehouse_state_missing' }));
     const raw = warehouse.rows[0].payload;
-    const parsed = typeof raw === 'string' ? JSON.parse(raw) : raw;
-    const state = await hydrateWarehouseProducts(pool, parsed && typeof parsed === 'object' ? parsed : {});
-    const parts = await pool.query(`
-      SELECT 'products' AS name, count(*)::int AS rows, coalesce(sum(pg_column_size(payload)),0)::bigint AS bytes FROM warehouse_products
-      UNION ALL SELECT 'purchases', count(*)::int, coalesce(sum(pg_column_size(payload)),0)::bigint FROM warehouse_purchases
-      UNION ALL SELECT 'sales', count(*)::int, coalesce(sum(pg_column_size(payload)),0)::bigint FROM warehouse_sales
-      UNION ALL SELECT 'reservations', count(*)::int, coalesce(sum(pg_column_size(payload)),0)::bigint FROM warehouse_reservations
-      UNION ALL SELECT 'kaspiAds', count(*)::int, coalesce(sum(pg_column_size(payload)),0)::bigint FROM warehouse_kaspi_ad_expenses
-      UNION ALL SELECT 'movements', count(*)::int, coalesce(sum(pg_column_size(payload)),0)::bigint FROM warehouse_movements
-    `);
-    const count = (value) => Array.isArray(value) ? value.length : 0;
+    const rawText = typeof raw === 'string' ? raw : JSON.stringify(raw || {});
+    const parsed = JSON.parse(rawText);
+    const keySizes = {};
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+      for (const [key, value] of Object.entries(parsed)) keySizes[key] = Buffer.byteLength(JSON.stringify(value), 'utf8');
+    }
     console.info('WAREHOUSE_FILE', JSON.stringify({
-      bytes: Buffer.byteLength(typeof raw === 'string' ? raw : JSON.stringify(raw || {}), 'utf8'),
+      bytes: Buffer.byteLength(rawText, 'utf8'),
       revision: Number(warehouse.rows[0].revision || 0),
-      stillInside: {
-        products: count(parsed?.products),
-        sales: count(parsed?.sales),
-        purchases: count(parsed?.purchases),
-        reservations: count(parsed?.reservations),
-        ads: count(parsed?.kaspiAdExpenses),
-        movements: count(parsed?.movements)
-      },
-      parts: parts.rows
+      keySizes
     }));
+    const state = await hydrateWarehouseProducts(pool, JSON.parse(rawText));
     const backupState = JSON.parse(JSON.stringify(state || {}));
     backupState.settings ||= {};
     for (const key of ['personalFinanceAccounts','personalFinanceTransactions','personalFinanceCategories','personalFinanceLegacyImports']) delete backupState.settings[key];
