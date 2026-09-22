@@ -81,3 +81,11 @@ test('business dashboard has no verbose explanatory novel below the chart', () =
   assert.doesNotMatch(ui, /короткий столбик перекрывает длинный/);
   assert.match(ui, /openBusinessDashboardDetails\(\).*Расшифровка/);
 });
+
+
+test('legacy store note cleanup removes the long marketplace explainer', () => {
+  assert.match(ui, /function businessRemoveLegacyStoreNote\(\)/);
+  assert.match(ui, /часть себестоимости не определена/);
+  assert.match(ui, /налоги, аренда, зарплаты/);
+  assert.match(ui, /MutationObserver/);
+});
