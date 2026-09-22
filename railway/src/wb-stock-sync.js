@@ -1,11 +1,9 @@
 import { pool, transaction } from './db.js';
 import { pruneWarehouseBackups } from './warehouse-backups.js';
-import { stripPurchasesFromState } from './warehouse-purchases.js';
-import { stripSalesFromState } from './warehouse-sales.js';
-import { hydrateWarehouseReservations, stripReservationsFromState } from './warehouse-reservations.js';
-import { stripKaspiAdExpensesFromState } from './warehouse-kaspi-ads.js';
-import { hydrateWarehouseProducts, persistWarehouseProducts, stripProductsFromState } from './warehouse-products.js';
+import { hydrateWarehouseProducts, persistWarehouseProducts } from './warehouse-products.js';
+import { hydrateWarehouseReservations } from './warehouse-reservations.js';
 import { legacyCompatibleWarehousePayload } from './warehouse-movements.js';
+import { warehousePayloadForStorage } from './warehouse-document.js';
 import { linkFingerprint, validateWbLink, applyLinkObservation } from './wb-link-validation.js';
 import { config } from './config.js';
 import { credentialFor } from './connections.js';
@@ -95,7 +93,7 @@ export async function validateWbStockLinks(market) {
     }
     if(changed){
       await persistWarehouseProducts(client, state.products, now);
-      await client.query('UPDATE warehouse_state SET payload=$1,revision=revision+1,updated_at=$2 WHERE id=1',[JSON.stringify(stripProductsFromState(stripKaspiAdExpensesFromState(stripReservationsFromState(stripSalesFromState(stripPurchasesFromState(state)))))),now]);
+      await client.query('UPDATE warehouse_state SET payload=$1,revision=revision+1,updated_at=$2 WHERE id=1',[JSON.stringify(warehousePayloadForStorage(state)),now]);
     }
     return {market:id,detached};
   });

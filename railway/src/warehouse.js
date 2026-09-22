@@ -9,44 +9,39 @@ import {
   hydrateWarehouseMovements,
   legacyCompatibleWarehouseState,
   parseWarehousePayload,
-  persistWarehouseMovements,
-  stripMovementsFromState
+  persistWarehouseMovements
 } from './warehouse-movements.js';
 import {
   deleteWarehousePurchases,
   hydrateWarehousePurchases,
   persistWarehousePurchases,
-  replaceWarehousePurchases,
-  stripPurchasesFromState
+  replaceWarehousePurchases
 } from './warehouse-purchases.js';
 import {
   deleteWarehouseSales,
   hydrateWarehouseSales,
   persistWarehouseSales,
-  replaceWarehouseSales,
-  stripSalesFromState
+  replaceWarehouseSales
 } from './warehouse-sales.js';
 import {
   deleteWarehouseReservations,
   hydrateWarehouseReservations,
   persistWarehouseReservations,
-  replaceWarehouseReservations,
-  stripReservationsFromState
+  replaceWarehouseReservations
 } from './warehouse-reservations.js';
 import {
   deleteKaspiAdExpenses,
   hydrateKaspiAdExpenses,
   persistKaspiAdExpenses,
-  replaceKaspiAdExpenses,
-  stripKaspiAdExpensesFromState
+  replaceKaspiAdExpenses
 } from './warehouse-kaspi-ads.js';
 import {
   deleteWarehouseProducts,
   hydrateWarehouseProducts,
   persistWarehouseProducts,
-  replaceWarehouseProducts,
-  stripProductsFromState
+  replaceWarehouseProducts
 } from './warehouse-products.js';
+import { warehousePayloadForStorage } from './warehouse-document.js';
 
 export const warehouseRouter = express.Router();
 const MAX_WAREHOUSE_SNAPSHOT_BYTES = 6_000_000;
@@ -226,7 +221,7 @@ warehouseRouter.put('/warehouse-state', requireTrustedOrigin, requireWritesEnabl
     : Array.isArray(incomingState?.movements);
   let state = isPatch ? null : cleanState(incomingState);
   if (!isPatch) {
-    const earlyRaw = JSON.stringify(stripProductsFromState(stripKaspiAdExpensesFromState(stripReservationsFromState(stripSalesFromState(stripPurchasesFromState(stripMovementsFromState(state)))))));
+    const earlyRaw = JSON.stringify(warehousePayloadForStorage(state));
     if (Buffer.byteLength(earlyRaw, 'utf8') > MAX_WAREHOUSE_SNAPSHOT_BYTES) return res.status(413).json({ ok: false, error: 'Warehouse snapshot is too large' });
   }
 
@@ -310,7 +305,7 @@ warehouseRouter.put('/warehouse-state', requireTrustedOrigin, requireWritesEnabl
     } else if (productsTouched || (!existingProducts.rowCount && Array.isArray(state?.products) && state.products.length)) {
       await replaceWarehouseProducts(client, state.products, updatedAt);
     }
-    const persistedSnapshot = stripProductsFromState(stripKaspiAdExpensesFromState(stripReservationsFromState(stripSalesFromState(stripPurchasesFromState(stripMovementsFromState(state))))));
+    const persistedSnapshot = warehousePayloadForStorage(state);
     const raw = JSON.stringify(persistedSnapshot);
     if (Buffer.byteLength(raw, 'utf8') > MAX_WAREHOUSE_SNAPSHOT_BYTES) return { tooLarge: true };
     const revision = currentRevision + 1;

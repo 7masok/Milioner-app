@@ -1,11 +1,8 @@
 import crypto from 'node:crypto';
 import { transaction } from './db.js';
 import { pruneWarehouseBackups } from './warehouse-backups.js';
-import { stripPurchasesFromState } from './warehouse-purchases.js';
-import { stripSalesFromState } from './warehouse-sales.js';
-import { hydrateWarehouseReservations, replaceWarehouseReservations, stripReservationsFromState } from './warehouse-reservations.js';
-import { stripKaspiAdExpensesFromState } from './warehouse-kaspi-ads.js';
-import { stripProductsFromState } from './warehouse-products.js';
+import { hydrateWarehouseReservations, replaceWarehouseReservations } from './warehouse-reservations.js';
+import { warehousePayloadForStorage } from './warehouse-document.js';
 import { wbOrderIsActive } from './wb-status.js';
 
 function parsePayload(raw) {
@@ -134,7 +131,7 @@ export async function reconcileWbReservations(market, _syncedSince) {
     }
     state.reservations = next;
     await replaceWarehouseReservations(client, next, now);
-    const raw = JSON.stringify(stripProductsFromState(stripKaspiAdExpensesFromState(stripReservationsFromState(stripSalesFromState(stripPurchasesFromState(state))))));
+    const raw = JSON.stringify(warehousePayloadForStorage(state));
     const revision = Number(stored.rows[0].revision || 0) + 1;
     await client.query('UPDATE warehouse_state SET payload=$1,revision=$2,updated_at=$3 WHERE id=1', [raw, revision, now]);
     const sha = crypto.createHash('sha256').update(raw).digest('hex').toUpperCase();
@@ -240,7 +237,7 @@ export async function reconcileKaspiReservations(activeEntries) {
     }
     state.reservations = next;
     await replaceWarehouseReservations(client, next, now);
-    const raw = JSON.stringify(stripProductsFromState(stripKaspiAdExpensesFromState(stripReservationsFromState(stripSalesFromState(stripPurchasesFromState(state))))));
+    const raw = JSON.stringify(warehousePayloadForStorage(state));
     const revision = Number(stored.rows[0].revision || 0) + 1;
     await client.query('UPDATE warehouse_state SET payload=$1,revision=$2,updated_at=$3 WHERE id=1', [raw, revision, now]);
     const sha = crypto.createHash('sha256').update(raw).digest('hex').toUpperCase();

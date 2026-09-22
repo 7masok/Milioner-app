@@ -106,8 +106,10 @@ app.get('/health', async (_req, res, next) => {
   try {
     const db = await pool.query('SELECT 1 AS ok');
     const migrations = await pool.query("SELECT to_regclass('public.schema_migrations') AS name");
+    const file = await pool.query('SELECT octet_length(payload)::bigint AS bytes FROM warehouse_state WHERE id=1');
     res.json({ ok: db.rows[0]?.ok === 1, service: 'millioner-railway-api', postgres: true,
-      writesEnabled: config.writesEnabled, marketSyncEnabled: true, migrationsReady: Boolean(migrations.rows[0]?.name) });
+      writesEnabled: config.writesEnabled, marketSyncEnabled: true, migrationsReady: Boolean(migrations.rows[0]?.name),
+      warehouseFileBytes: Number(file.rows[0]?.bytes || 0) });
   } catch (error) { next(error); }
 });
 

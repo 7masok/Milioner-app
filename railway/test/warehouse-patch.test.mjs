@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { applyWarehousePatch } from '../src/warehouse.js';
+import { warehousePayloadForStorage } from '../src/warehouse-document.js';
 
 test('a patch updates one product and leaves the rest of the warehouse in place', () => {
   const previous = {
@@ -20,3 +21,25 @@ test('a patch updates one product and leaves the rest of the warehouse in place'
   assert.equal(next.sales[0].externalKey, 'kaspi-1');
   assert.equal(next.settings.shop, 'new');
 });
+
+test('the stored warehouse file drops lists and the old finance copy', () => {
+  const stored = warehousePayloadForStorage({
+    products: [{ id: 'a', name: 'Товар', stock: 1 }],
+    sales: [{ id: 's1' }],
+    purchases: [{ id: 'p1' }],
+    reservations: [{ id: 'r1' }],
+    movements: [{ id: 'm1' }],
+    kaspiAdExpenses: [{ id: 'ad1' }],
+    kaspiOrderFeed: [{ id: 'order' }],
+    settings: {
+      shop: 'main',
+      personalFinanceTransactions: [{ id: 'tx', amount: 10 }],
+      personalFinanceAccounts: [{ id: 'acc' }]
+    },
+    kaspiBaselineAt: 5
+  });
+  assert.deepEqual(Object.keys(stored).sort(), ['kaspiBaselineAt', 'settings']);
+  assert.deepEqual(stored.settings, { shop: 'main' });
+  assert.equal(stored.kaspiBaselineAt, 5);
+});
+
