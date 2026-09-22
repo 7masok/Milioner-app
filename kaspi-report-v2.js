@@ -43,8 +43,10 @@ function wbExpenseModel(summary,products,market,days){const financeAvailable=sum
 function renderWbMain(model,market,days){const set=(id,value)=>{const e=document.getElementById(id);if(e)e.textContent=value};set('rRevenue',fmt(model.revenue));set('rCost',model.complete?fmt(model.cost):'≈ '+fmt(model.cost));set('rFees',fmt(model.expenses));set('rAds',fmt(model.ads));set('rProfit',(model.complete?'':'≈ ')+fmt(model.profit));const rows=[['Продажи',model.revenue],['Комиссия WB',model.commission],['Логистика',model.logistics],['Хранение',model.storage],['Корректировки',model.adjustment],['Штрафы',model.penalty],['Удержания (без рекламы)',model.deduction],['Операции при приёмке',model.acceptance],['Эквайринг',model.acquiring],['Перевыставленная логистика',model.rebill],['Реклама WB',model.ads]],box=document.getElementById('mpReport'),name=market==='WB'?'WB 1':'WB 2',syncError=model.sync&&Number(model.sync.financeOk)!==1?'<div class="link-note" style="border-color:#efb0b0;background:#fff4f4"><b>Финансовые данные WB не обновились.</b> '+esc(String(model.sync.error||'Проверьте, что API-ключ имеет доступ к категории «Финансы».'))+'</div>':'';if(box)box.innerHTML='<div class="item"><div class="row"><div class="grow"><b>Приход</b><div class="muted">Продажи и корректировки</div></div><b>'+fmt(model.revenue+model.adjustment)+'</b></div><div class="row" style="margin-top:10px"><div class="grow"><b>Расход</b><div class="muted">WB, реклама и себестоимость</div></div><b style="color:#b00000">−'+fmt(model.expenses+model.ads+model.cost)+'</b></div></div>'+syncError+'<button class="btn full" onclick="refreshWbFinance(\''+market+'\',this)">Обновить данные WB</button><div class="item" style="margin-top:8px"><b>Детализация</b>'+rows.map(x=>'<div class="row" style="margin-top:9px"><span class="grow muted">'+x[0]+'</span><b>'+fmt(x[1])+'</b></div>').join('')+'<div class="row" style="margin-top:11px;padding-top:10px;border-top:1px solid var(--line)"><span class="grow">Себестоимость FIFO</span><b>'+(model.complete?'':'≈ ')+fmt(model.cost)+'</b></div><div class="row" style="margin-top:9px"><span class="grow"><b>Чистая прибыль</b></span><b>'+(model.complete?'':'≈ ')+fmt(model.profit)+'</b></div></div><button class="btn dark full" onclick="openMarketplaceReport(\''+market+'\','+days+')">Товары и прибыль · '+name+'</button>'+(model.complete?'':'<div class="link-note">Часть товаров WB ещё не связана с товарами склада. Известная себестоимость учтена, итог помечен знаком ≈.</div>')}
 async function loadWbModel(market,days){const q=reportQuery(market,days),[summary,details]=await Promise.all([apiJson(MILLIONER_API+'/api/wb-finance-summary'+q),apiJson(MILLIONER_API+'/api/wb-finance-products'+q)]),products=Array.isArray(details.products)?details.products:[];return{market,...wbExpenseModel(summary,products,market,days),products,unmatchedAdvertising:Number(details.unmatchedAdvertising)||0}}
 function businessWbFinanceStats(model){
- const products=Array.isArray(model?.products)?model.products:[],qty=products.reduce((sum,x)=>sum+Math.max(0,Number(x?.saleQty??x?.qty)||0),0),financeAvailable=Boolean(model?.financeAvailable),complete=financeAvailable&&Boolean(model?.complete);
- return {qty,revenue:Number(model?.revenue)||0,cost:Number(model?.cost)||0,fees:Number(model?.expenses)||0,ads:Number(model?.ads)||0,profit:financeAvailable&&model?.profit!==null&&model?.profit!==undefined?Number(model.profit):null,complete,financeAvailable,estimated:!complete,live:false};
+ const products=Array.isArray(model?.products)?model.products:[],qty=products.reduce((sum,x)=>sum+Math.max(0,Number(x?.saleQty??x?.qty)||0),0),financeAvailable=Boolean(model?.financeAvailable),complete=financeAvailable&&Boolean(model?.complete),
+   revenue=Number(model?.revenue)||0,cost=Number(model?.cost)||0,fees=Number(model?.expenses)||0,ads=Number(model?.ads)||0,
+   profit=financeAvailable&&model?.profit!==null&&model?.profit!==undefined?Number(model.profit):(qty===0&&revenue===0&&ads!==0?-Math.abs(ads):null);
+ return {qty,revenue,cost,fees,ads,profit,complete,financeAvailable,estimated:!complete,live:false};
 }
 function businessWbLiveStats(model,live,market,days){
  const rows=(live?.products||[]).filter(x=>Math.max(0,Number(x?.qty)||0)>0),rowQty=rows.reduce((sum,x)=>sum+Math.max(0,Number(x?.qty)||0),0),qty=Math.max(0,Number(live?.buyoutCount)||rowQty),
@@ -81,14 +83,21 @@ window.loadBusinessMarketplaceSummary=async function(days=30,{force=false}={}){
     wbStats=(model,live,market)=>{const finance=businessWbFinanceStats(model),liveRevenue=Math.max(0,Number(live?.buyoutSum)||0),liveQty=Math.max(0,Number(live?.buyoutCount)||0);return live&&(liveRevenue>0||liveQty>0)&&(!(finance.revenue>0)||!finance.financeAvailable)?businessWbLiveStats(model,live,market,n):finance},
     kaspiStats={qty:Math.max(0,Number(kaspi.qty)||0),revenue:Number(kaspi.revenue)||0,cost:Number(kaspi.cost)||0,fees:Number(kaspi.fees)||0,ads:Number(kaspi.ads)||0,profit:Number(kaspiView.value)||0,complete:!(Number(kaspi.unknownRevenue)>0),financeAvailable:true,estimated:Boolean(kaspiView.estimated),live:false},
     wb1Stats=wbStats(wb1,wb1Live,'WB'),wb2Stats=wbStats(wb2,wb2Live,'WB2'),sources={Kaspi:kaspiStats,WB:wb1Stats,WB2:wb2Stats},
-    total={qty:0,revenue:0,cost:0,fees:0,ads:0,profit:0,complete:true,financeAvailable:true,estimated:false},known={cost:true,fees:true,profit:true};
+    total={qty:0,revenue:0,cost:0,fees:0,ads:0,profit:0,complete:true,financeAvailable:true,estimated:false},
+    knownCount={cost:0,fees:0,profit:0},sourceCount=Object.keys(sources).length,partial={cost:false,fees:false,profit:false};
   for(const x of Object.values(sources)){
     total.qty+=Number(x.qty)||0;total.revenue+=Number(x.revenue)||0;total.ads+=Number(x.ads)||0;
-    for(const keyName of ['cost','fees','profit']){if(x[keyName]===null||x[keyName]===undefined||!Number.isFinite(Number(x[keyName])))known[keyName]=false;else total[keyName]+=Number(x[keyName])||0}
+    for(const keyName of ['cost','fees','profit']){
+      if(x[keyName]===null||x[keyName]===undefined||!Number.isFinite(Number(x[keyName])))partial[keyName]=true;
+      else{total[keyName]+=Number(x[keyName])||0;knownCount[keyName]++}
+    }
     total.complete=total.complete&&Boolean(x.complete);total.financeAvailable=total.financeAvailable&&Boolean(x.financeAvailable);total.estimated=total.estimated||Boolean(x.estimated);
   }
-  if(!known.cost)total.cost=null;if(!known.fees)total.fees=null;if(!known.profit)total.profit=null;
-  const data={ok:true,days:n,...total,sources,estimated:total.estimated||!total.complete||!total.financeAvailable,generatedAt:Date.now()};
+  for(const keyName of ['cost','fees','profit']){
+    if(knownCount[keyName]===0)total[keyName]=null;
+    if(knownCount[keyName]<sourceCount)partial[keyName]=true;
+  }
+  const data={ok:true,days:n,...total,sources,partial,estimated:total.estimated||partial.cost||partial.fees||partial.profit||!total.complete||!total.financeAvailable,generatedAt:Date.now()};
   businessMarketplaceSummaryCache.set(key,{at:Date.now(),data});return data;
  })().catch(error=>{businessMarketplaceSummaryCache.delete(key);throw error});
  businessMarketplaceSummaryCache.set(key,{at:Date.now(),promise});
