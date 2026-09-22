@@ -205,15 +205,17 @@ export async function webauthnRegisterOptions(req, res, next) {
       userID: new Uint8Array(Buffer.from('sklad-owner-v1')),
       attestationType: 'none',
       timeout: 60_000,
+      supportedAlgorithmIDs: [-7, -257],
       excludeCredentials: existing.map(credentialDescriptor),
       authenticatorSelection: {
         authenticatorAttachment: 'platform',
-        residentKey: 'required',
-        requireResidentKey: true,
+        residentKey: 'discouraged',
+        requireResidentKey: false,
         userVerification: 'required'
-      },
-      preferredAuthenticatorType: 'local'
+      }
     });
+    delete options.hints;
+    delete options.extensions;
     saveChallenge(options.challenge, 'register');
     res.json({ ok:true, options });
   } catch (error) {
@@ -273,6 +275,8 @@ export async function webauthnLoginOptions(req, res, next) {
       userVerification: 'required',
       allowCredentials: existing.map(credentialDescriptor)
     });
+    delete options.hints;
+    delete options.extensions;
     saveChallenge(options.challenge, 'login');
     res.json({ ok:true, options });
   } catch (error) {

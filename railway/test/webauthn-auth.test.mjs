@@ -29,7 +29,8 @@ test('server exposes WebAuthn routes before the session lock', () => {
 test('password login is disabled after a passkey exists', () => {
   assert.match(auth, /use-webauthn/);
   assert.match(auth, /authenticatorAttachment: 'platform'/);
-  assert.match(auth, /userVerification: 'required'/);
+  assert.match(auth, /residentKey: 'discouraged'/);
+  assert.match(auth, /supportedAlgorithmIDs: \[-7, -257\]/);
 });
 
 test('relying party follows the request origin', () => {
