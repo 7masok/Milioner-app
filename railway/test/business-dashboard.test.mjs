@@ -76,7 +76,7 @@ test('money formatting removes negative zero and unknown WB fields render as das
 });
 
 test('business dashboard assets are cache-busted and served', () => {
-  assert.match(html, /kaspi-report-v2\.js\?v=20260922-business-wb-live2/);
+  assert.match(html, /kaspi-report-v2\.js\?v=20260922-report-market-local1/);
   assert.match(html, /business-dashboard-v1\.js\?v=20260922-business14/);
   assert.match(server, /'business-dashboard-v1\.js'/);
 });
@@ -107,4 +107,16 @@ test('legacy net profit selection migrates to buyout profit and four buttons sta
   assert.match(ui, /saved\.metric==='netProfit'\)businessMetric='buyoutProfit'/);
   assert.doesNotMatch(ui, /\['netProfit','Чистая прибыль'\]/);
   assert.doesNotMatch(ui, /business-metrics button:last-child/);
+});
+
+
+test('report market selection is local UI state and does not restore stale WB2 from cloud', () => {
+  assert.match(report, /REPORT_MARKET_UI_KEY='milioner_report_market_v1'/);
+  assert.match(report, /localStorage\.getItem\(REPORT_MARKET_UI_KEY\)/);
+  assert.match(report, /return REPORT_MARKETS\.includes\(saved\)\?saved:'all'/);
+  assert.match(report, /state\.settings\.reportMarket=reportMarket/);
+  assert.match(report, /localStorage\.setItem\(REPORT_MARKET_UI_KEY,market\)/);
+  assert.doesNotMatch(report, /reportMarket=\['all','Kaspi','WB','WB2'\]\.includes\(state\.settings\.reportMarket\)/);
+  assert.doesNotMatch(report, /state\.settings\.reportMarket=market;try\{save\(\)\}/);
+  assert.match(html, /kaspi-report-v2\.js\?v=20260922-report-market-local1/);
 });
