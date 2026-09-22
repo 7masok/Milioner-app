@@ -113,6 +113,7 @@ function cleanState(input) {
     result[key] = Array.isArray(state[key]) ? state[key] : [];
   }
   result.settings = state.settings && typeof state.settings === 'object' && !Array.isArray(state.settings) ? state.settings : {};
+  for (const key of ['personalFinanceAccounts', 'personalFinanceTransactions', 'personalFinanceCategories', 'personalFinanceLegacyImports']) delete result.settings[key];
   for (const key of DERIVED_CACHE_KEYS) delete result[key];
   return result;
 }
