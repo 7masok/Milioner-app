@@ -132,7 +132,34 @@ app.get('/api/system/storage-status', requireTrustedOrigin, async (_req, res, ne
     const usedBytes = Math.max(databaseBytes, tablespaceBytes + walBytes);
     const percent = capacityBytes > 0 ? Math.min(100, usedBytes / capacityBytes * 100) : 0;
     const level = percent >= 85 ? 'critical' : percent >= 70 ? 'warning' : 'ok';
-    res.json({ ok:true, usedBytes, databaseBytes, tablespaceBytes, walBytes, capacityBytes, capacityGb, percent, level, checkedAt:Date.now() });
+    const file = await pool.query(`SELECT octet_length(payload::text)::bigint AS bytes,
+      (payload::jsonb ? 'products') AS products,
+      (payload::jsonb ? 'sales') AS sales,
+      (payload::jsonb ? 'purchases') AS purchases,
+      (payload::jsonb ? 'reservations') AS reservations,
+      (payload::jsonb ? 'kaspiAdExpenses') AS ads,
+      (payload::jsonb ? 'movements') AS movements
+      FROM warehouse_state WHERE id=1`);
+    const parts = await pool.query(`
+      SELECT 'products' AS name, count(*)::int AS rows, coalesce(sum(pg_column_size(payload)),0)::bigint AS bytes FROM warehouse_products
+      UNION ALL SELECT 'purchases', count(*)::int, coalesce(sum(pg_column_size(payload)),0)::bigint FROM warehouse_purchases
+      UNION ALL SELECT 'sales', count(*)::int, coalesce(sum(pg_column_size(payload)),0)::bigint FROM warehouse_sales
+      UNION ALL SELECT 'reservations', count(*)::int, coalesce(sum(pg_column_size(payload)),0)::bigint FROM warehouse_reservations
+      UNION ALL SELECT 'kaspiAds', count(*)::int, coalesce(sum(pg_column_size(payload)),0)::bigint FROM warehouse_kaspi_ad_expenses
+      UNION ALL SELECT 'movements', count(*)::int, coalesce(sum(pg_column_size(payload)),0)::bigint FROM warehouse_movements
+    `);
+    res.json({ ok:true, usedBytes, databaseBytes, tablespaceBytes, walBytes, capacityBytes, capacityGb, percent, level, checkedAt:Date.now(),
+      warehouseFileBytes: Number(file.rows[0]?.bytes || 0),
+      warehouseFileStillHas: {
+        products: file.rows[0]?.products === true,
+        sales: file.rows[0]?.sales === true,
+        purchases: file.rows[0]?.purchases === true,
+        reservations: file.rows[0]?.reservations === true,
+        ads: file.rows[0]?.ads === true,
+        movements: file.rows[0]?.movements === true
+      },
+      warehouseParts: parts.rows.map(row => ({ name: row.name, rows: Number(row.rows), bytes: Number(row.bytes) }))
+    });
   } catch (error) { next(error); }
 });
 
