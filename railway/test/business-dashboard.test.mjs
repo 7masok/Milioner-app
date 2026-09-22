@@ -71,6 +71,13 @@ test('business marketplace summary reuses canonical Kaspi and WB finance models 
 });
 
 test('business dashboard asset is loaded and served', () => {
-  assert.match(html, /business-dashboard-v1\.js\?v=20260922-business8/);
+  assert.match(html, /business-dashboard-v1\.js\?v=20260922-business9/);
   assert.match(server, /'business-dashboard-v1\.js'/);
+});
+
+test('business dashboard has no verbose explanatory novel below the chart', () => {
+  assert.doesNotMatch(ui, /businessWarning/);
+  assert.doesNotMatch(ui, /вчера в карточке — только до этого же времени/);
+  assert.doesNotMatch(ui, /короткий столбик перекрывает длинный/);
+  assert.match(ui, /openBusinessDashboardDetails\(\).*Расшифровка/);
 });
