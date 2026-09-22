@@ -16,7 +16,7 @@ test('business dashboard is day-only and keeps all agreed profit layers', () => 
   assert.match(ui, /loadBusinessMarketplaceSummary/);
 });
 
-test('business day chart has 24 hourly buckets with horizontal time axis and vertical money scale', () => {
+test('business day chart has 24 hourly buckets, axes, and yesterday markers', () => {
   assert.match(ui, /for\(let h=0;h<24;h\+\+\)/);
   assert.match(ui, /grid-template-columns:repeat\(24,minmax\(0,1fr\)\)/);
   assert.match(ui, /business-x-axis/);
@@ -24,6 +24,9 @@ test('business day chart has 24 hourly buckets with horizontal time axis and ver
   assert.match(ui, /business-grid-line/);
   assert.match(ui, /i%3===0/);
   assert.match(ui, /businessChartScale/);
+  assert.match(ui, /business-yesterday-mark/);
+  assert.match(ui, /сегодня .* вчера/);
+  assert.match(ui, /серая риска — этот же час вчера/);
 });
 
 test('business net profit subtracts only included finance expenses', () => {
@@ -37,15 +40,19 @@ test('business net profit subtracts only included finance expenses', () => {
   assert.match(ui, /Ozon пока не входит/);
 });
 
-test('business marketplace summary reuses canonical Kaspi and WB finance models', () => {
+test('business marketplace summary reuses canonical Kaspi and WB finance models including yesterday', () => {
   assert.match(report, /window\.loadBusinessMarketplaceSummary/);
+  assert.match(report, /raw===-1\?-1/);
   assert.match(report, /loadKaspiOrders\(n/);
   assert.match(report, /loadWbModel\('WB',n\)/);
   assert.match(report, /loadWbModel\('WB2',n\)/);
   assert.match(report, /reportProfitView\(kaspi\)/);
+  assert.match(ui, /businessBuildDaySnapshot\(businessDayBounds\(-1\),-1/);
+  assert.match(ui, /businessYesterdayCompare/);
+  assert.match(ui, /вчера /);
 });
 
 test('business dashboard asset is loaded and served', () => {
-  assert.match(html, /business-dashboard-v1\.js\?v=20260922-business2/);
+  assert.match(html, /business-dashboard-v1\.js\?v=20260922-business3/);
   assert.match(server, /'business-dashboard-v1\.js'/);
 });
