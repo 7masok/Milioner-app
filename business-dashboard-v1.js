@@ -18,10 +18,11 @@ function businessSaveUi(){
  try{localStorage.setItem(BUSINESS_UI_KEY,JSON.stringify({period:'day',metric:businessMetric}))}catch(_){}
 }
 function businessDayStart(date=new Date()){const d=new Date(date);d.setHours(0,0,0,0);return d}
-function businessPeriodBounds(){
- const start=businessDayStart(),end=new Date(start);end.setDate(end.getDate()+1);
- return {start:start.getTime(),end:end.getTime(),days:1,label:'Сегодня'};
+function businessDayBounds(offset=0){
+ const start=businessDayStart();start.setDate(start.getDate()+Number(offset||0));const end=new Date(start);end.setDate(end.getDate()+1);
+ return {start:start.getTime(),end:end.getTime(),days:offset===-1?-1:1,label:offset===-1?'Вчера':'Сегодня'};
 }
+function businessPeriodBounds(){return businessDayBounds(0)}
 function businessBuckets(_period,bounds){
  const rows=[],push=(start,end,label)=>rows.push({start,end,label,orders:0,orderQty:0,orderProfit:0,buyouts:0,buyoutQty:0,buyoutBaseProfit:0,buyoutProfit:0,financeExpense:0,netProfit:0});
  for(let h=0;h<24;h++){const s=bounds.start+h*3600000;push(s,s+3600000,String(h).padStart(2,'0'))}
@@ -123,12 +124,12 @@ function businessEnsureStyle(){
  .business-dashboard{border:1px solid var(--line);border-radius:24px;padding:15px;margin:0 0 18px;background:var(--card);overflow:hidden}
  .business-top{display:flex;align-items:center;justify-content:space-between;gap:10px}.business-top h3{margin:0}.business-sub{font-size:12px;color:var(--muted);margin-top:3px}
  .business-metrics{display:grid;grid-template-columns:1fr 1fr;gap:7px;margin-top:13px}.business-metrics button{min-width:0;border:1px solid var(--line);background:var(--bg);border-radius:14px;padding:9px 7px;font:inherit;font-size:13px;line-height:1.15}.business-metrics button.active{background:#111;color:#fff;border-color:#111}.business-metrics button:last-child{grid-column:1/-1}
- .business-value-card{margin-top:12px;padding:13px 14px;border-radius:18px;background:var(--bg)}.business-value-label{font-size:13px;color:var(--muted)}.business-value{font-size:28px;font-weight:800;margin-top:3px}.business-value-meta{font-size:12px;color:var(--muted);margin-top:4px}
- .business-chart{margin-top:13px}.business-chart-frame{display:grid;grid-template-columns:minmax(0,1fr) 48px;grid-template-rows:172px 25px;column-gap:4px;width:100%}
+ .business-value-card{margin-top:12px;padding:13px 14px;border-radius:18px;background:var(--bg)}.business-value-label{font-size:13px;color:var(--muted)}.business-value{font-size:28px;font-weight:800;margin-top:3px}.business-value-meta{font-size:12px;color:var(--muted);margin-top:4px}.business-compare{font-size:12px;margin-top:7px;display:flex;gap:6px;align-items:center;flex-wrap:wrap}.business-compare-label{color:var(--muted)}.business-compare-delta{font-weight:700}.business-compare-delta.up{color:#138a55}.business-compare-delta.down{color:#b42318}.business-compare-delta.flat{color:var(--muted)}
+ .business-chart{margin-top:13px}.business-chart-legend{display:flex;justify-content:flex-end;gap:12px;align-items:center;font-size:10px;color:var(--muted);margin:0 48px 5px 0}.business-legend-today,.business-legend-yesterday{display:inline-flex;align-items:center;gap:5px}.business-legend-today:before{content:'';width:8px;height:8px;border-radius:2px;background:#111;display:inline-block}.business-legend-yesterday:before{content:'';width:14px;height:2px;border-radius:2px;background:#a7a7ad;display:inline-block}.business-chart-frame{display:grid;grid-template-columns:minmax(0,1fr) 48px;grid-template-rows:172px 25px;column-gap:4px;width:100%}
  .business-plot{position:relative;grid-column:1;grid-row:1;min-width:0;border-bottom:1px solid var(--line)}
  .business-grid-line{position:absolute;left:0;right:0;border-top:1px dashed var(--line);pointer-events:none}
  .business-bars{position:absolute;inset:0;display:grid;grid-template-columns:repeat(24,minmax(0,1fr));align-items:stretch}
- .business-hour{position:relative;min-width:0}.business-bar{position:absolute;left:24%;width:52%;min-height:1px;border-radius:5px 5px 1px 1px;background:#111}.business-bar.negative{border-radius:1px 1px 5px 5px;background:#8d2222}
+ .business-hour{position:relative;min-width:0}.business-bar{position:absolute;left:24%;width:52%;min-height:1px;border-radius:5px 5px 1px 1px;background:#111;z-index:2}.business-bar.negative{border-radius:1px 1px 5px 5px;background:#8d2222}.business-yesterday-mark{position:absolute;left:10%;width:80%;height:2px;border-radius:2px;background:#a7a7ad;z-index:3;transform:translateY(1px);pointer-events:none}
  .business-y-axis{grid-column:2;grid-row:1;position:relative;font-size:10px;color:var(--muted)}.business-y-tick{position:absolute;right:0;transform:translateY(50%);white-space:nowrap}
  .business-x-axis{grid-column:1;grid-row:2;display:grid;grid-template-columns:repeat(24,minmax(0,1fr));align-items:start;padding-top:6px;font-size:9px;color:var(--muted)}.business-x-label{text-align:center;white-space:nowrap;transform:translateX(-1px)}
  .business-axis-caption{grid-column:2;grid-row:2;font-size:9px;color:var(--muted);padding-top:6px;text-align:right}
@@ -141,7 +142,7 @@ function businessEnsureUi(){
  if(root)return root;businessEnsureStyle();root=document.createElement('div');root.id='businessDashboard';root.className='business-dashboard';
  root.innerHTML=`<div class="business-top"><div><h3>Сегодня</h3><div class="business-sub">Kaspi + WB1 + WB2 · по часам</div></div><button class="business-detail-btn" type="button" onclick="renderBusinessDashboard(true)">↻</button></div>
  <div class="business-metrics">${[['orders','Заказы'],['buyouts','Выкупы'],['orderProfit','Прибыль заказов'],['buyoutProfit','Прибыль выкупов'],['netProfit','Чистая прибыль']].map(([k,v])=>`<button type="button" data-business-metric="${k}" onclick="setBusinessDashboardMetric('${k}')">${v}</button>`).join('')}</div>
- <div class="business-value-card"><div id="businessValueLabel" class="business-value-label">Загрузка…</div><div id="businessValue" class="business-value">—</div><div id="businessValueMeta" class="business-value-meta"></div></div>
+ <div class="business-value-card"><div id="businessValueLabel" class="business-value-label">Загрузка…</div><div id="businessValue" class="business-value">—</div><div id="businessValueMeta" class="business-value-meta"></div><div id="businessYesterdayCompare" class="business-compare"></div></div>
  <div id="businessChart" class="business-chart"></div><div class="business-foot"><div id="businessWarning" class="business-warning">Считаю данные…</div><button class="business-detail-btn" type="button" onclick="openBusinessDashboardDetails()">Расшифровка</button></div>`;
  const title=reports.querySelector('h2');if(title)title.insertAdjacentElement('afterend',root);else reports.prepend(root);return root;
 }
@@ -170,41 +171,50 @@ function businessAxisNumber(value){
 }
 function businessPaintChart(model,field){
  const box=document.getElementById('businessChart');if(!box)return;
- const values=model.buckets.map(x=>Number(x[field])||0),scale=businessChartScale(values),range=Math.max(1e-9,scale.max-scale.min),toPct=v=>(v-scale.min)/range*100,zeroPct=toPct(0);
+ const values=model.buckets.map(x=>Number(x[field])||0),yesterdayValues=(model.yesterday?.buckets||[]).map(x=>Number(x[field])||0),scale=businessChartScale([...values,...yesterdayValues]),range=Math.max(1e-9,scale.max-scale.min),toPct=v=>(v-scale.min)/range*100,zeroPct=toPct(0);
  const lines=scale.ticks.map(v=>`<div class="business-grid-line" style="bottom:${toPct(v)}%"></div>`).join('');
  const ticks=scale.ticks.map(v=>`<div class="business-y-tick" style="bottom:${toPct(v)}%">${businessAxisNumber(v)}</div>`).join('');
  const bars=model.buckets.map((b,i)=>{
-  const v=values[i],vPct=toPct(v),bottom=Math.min(vPct,zeroPct),height=Math.abs(vPct-zeroPct);
-  return `<div class="business-hour" title="${b.label}:00 · ${businessMoney(v)}"><div class="business-bar ${v<0?'negative':''}" style="bottom:${bottom}%;height:${Math.max(v===0?0:1.2,height)}%"></div></div>`;
+  const v=values[i],yv=Number(yesterdayValues[i])||0,vPct=toPct(v),bottom=Math.min(vPct,zeroPct),height=Math.abs(vPct-zeroPct),yPct=toPct(yv);
+  return `<div class="business-hour" title="${b.label}:00 · сегодня ${businessMoney(v)} · вчера ${businessMoney(yv)}"><div class="business-yesterday-mark" style="bottom:${yPct}%"></div><div class="business-bar ${v<0?'negative':''}" style="bottom:${bottom}%;height:${Math.max(v===0?0:1.2,height)}%"></div></div>`;
  }).join('');
  const labels=model.buckets.map((b,i)=>i%3===0?`<div class="business-x-label" style="grid-column:${i+1}">${b.label}</div>`:'').join('');
- box.innerHTML=`<div class="business-chart-frame"><div class="business-plot">${lines}<div class="business-bars">${bars}</div></div><div class="business-y-axis">${ticks}</div><div class="business-x-axis">${labels}</div><div class="business-axis-caption">₸</div></div>`;
+ box.innerHTML=`<div class="business-chart-legend"><span class="business-legend-today">сегодня</span><span class="business-legend-yesterday">вчера</span></div><div class="business-chart-frame"><div class="business-plot">${lines}<div class="business-bars">${bars}</div></div><div class="business-y-axis">${ticks}</div><div class="business-x-axis">${labels}</div><div class="business-axis-caption">₸</div></div>`;
 }
+
 async function businessLoadSummary(days,force=false){
  const key=String(days),old=businessSummaryCache.get(key);if(!force&&old?.data&&Date.now()-Number(old.at||0)<60000)return old.data;if(!force&&old?.promise)return old.promise;
  if(typeof window.loadBusinessMarketplaceSummary!=='function')throw new Error('Финансовый модуль ещё не загрузился');
  const promise=window.loadBusinessMarketplaceSummary(days,{force}).then(data=>{businessSummaryCache.set(key,{at:Date.now(),data});return data}).catch(e=>{businessSummaryCache.delete(key);throw e});
  businessSummaryCache.set(key,{at:Date.now(),promise});return promise;
 }
-async function businessBuildModel(force=false){
- const bounds=businessPeriodBounds(),buckets=businessBuckets('day',bounds);
- if(typeof window.refreshAllMarketUnitProfit==='function'&&(!(window.allMarketUnitProfit30 instanceof Map)||force)){try{await window.refreshAllMarketUnitProfit()}catch(_){}}
- const groups=businessOrderGroups(bounds),orders=businessEstimateOrders(groups,buckets,window.allMarketUnitProfit30),local=businessLocalBuyouts(bounds,buckets),finance=businessFinanceExpenses(bounds,buckets),summary=await businessLoadSummary(bounds.days,force);
+async function businessBuildDaySnapshot(bounds,summaryDays,force=false){
+ const buckets=businessBuckets('day',bounds),groups=businessOrderGroups(bounds),orders=businessEstimateOrders(groups,buckets,window.allMarketUnitProfit30),local=businessLocalBuyouts(bounds,buckets),finance=businessFinanceExpenses(bounds,buckets),summary=await businessLoadSummary(summaryDays,force);
  businessNormalizeBuyoutBuckets(buckets,local,summary);
  const netProfit=(Number(summary?.profit)||0)-finance.total;
  return {period:'day',bounds,buckets,orders,local,finance,summary,netProfit};
 }
+async function businessBuildModel(force=false){
+ if(typeof window.refreshAllMarketUnitProfit==='function'&&(!(window.allMarketUnitProfit30 instanceof Map)||force)){try{await window.refreshAllMarketUnitProfit()}catch(_){}}
+ const [today,yesterday]=await Promise.all([businessBuildDaySnapshot(businessDayBounds(0),1,force),businessBuildDaySnapshot(businessDayBounds(-1),-1,force)]);
+ return {...today,yesterday};
+}
+
 window.setBusinessDashboardMetric=function(metric){if(!BUSINESS_METRICS.has(metric))return;businessMetric=metric;businessSaveUi();if(businessLastModel)businessPaint(businessLastModel);else window.renderBusinessDashboard(false)};
+function businessComparison(current,previous){
+ const now=Number(current)||0,prev=Number(previous)||0,delta=now-prev,cls=Math.abs(delta)<.005?'flat':delta>0?'up':'down',sign=delta>0?'+':'',pct=prev!==0?delta/Math.abs(prev)*100:null,pctText=pct===null?'':(' · '+(pct>0?'+':'')+Math.round(pct)+'%');
+ return {html:'<span class="business-compare-label">вчера '+businessMoney(prev)+'</span><span class="business-compare-delta '+cls+'">'+sign+businessMoney(delta)+pctText+'</span>'};
+}
 function businessPaint(model){
- businessLastModel=model;businessPaintTabs();const info=businessMetricInfo(model),label=document.getElementById('businessValueLabel'),value=document.getElementById('businessValue'),meta=document.getElementById('businessValueMeta'),warning=document.getElementById('businessWarning');
- if(label)label.textContent=info.label+' · '+model.bounds.label;if(value)value.textContent=businessMoney(info.value);if(meta)meta.textContent=info.meta;businessPaintChart(model,info.field);
- const notes=[];if(model.orders.coverage<.999)notes.push('прогноз заказов покрывает '+Math.round(model.orders.coverage*100)+'% суммы');if(model.finance.uncategorized>0)notes.push('расходы без категории включены: '+businessMoney(model.finance.uncategorized));if(model.summary.estimated)notes.push('часть прибыли оценочная');notes.push('Ozon пока не входит в прибыль');
+ businessLastModel=model;businessPaintTabs();const info=businessMetricInfo(model),yesterdayInfo=model.yesterday?businessMetricInfo(model.yesterday):null,label=document.getElementById('businessValueLabel'),value=document.getElementById('businessValue'),meta=document.getElementById('businessValueMeta'),compare=document.getElementById('businessYesterdayCompare'),warning=document.getElementById('businessWarning');
+ if(label)label.textContent=info.label+' · '+model.bounds.label;if(value)value.textContent=businessMoney(info.value);if(meta)meta.textContent=info.meta;if(compare)compare.innerHTML=yesterdayInfo?businessComparison(info.value,yesterdayInfo.value).html:'';businessPaintChart(model,info.field);
+ const notes=[];if(model.orders.coverage<.999)notes.push('прогноз заказов покрывает '+Math.round(model.orders.coverage*100)+'% суммы');if(model.finance.uncategorized>0)notes.push('расходы без категории включены: '+businessMoney(model.finance.uncategorized));if(model.summary.estimated)notes.push('часть прибыли оценочная');notes.push('серая риска — этот же час вчера');notes.push('Ozon пока не входит в прибыль');
  if(warning)warning.textContent=notes.join(' · ');
 }
 window.renderBusinessDashboard=async function(force=false){
  const root=businessEnsureUi();if(!root)return;if(!document.getElementById('reports')?.classList.contains('active')){businessPaintTabs();return}
- const seq=++businessRenderSeq;businessPaintTabs();const label=document.getElementById('businessValueLabel'),value=document.getElementById('businessValue'),meta=document.getElementById('businessValueMeta'),chart=document.getElementById('businessChart'),warning=document.getElementById('businessWarning');
- if(label)label.textContent='Считаю бизнес-показатели…';if(value)value.textContent='…';if(meta)meta.textContent='';if(chart)chart.innerHTML='';if(warning)warning.textContent='Загрузка финансовых данных…';
+ const seq=++businessRenderSeq;businessPaintTabs();const label=document.getElementById('businessValueLabel'),value=document.getElementById('businessValue'),meta=document.getElementById('businessValueMeta'),compare=document.getElementById('businessYesterdayCompare'),chart=document.getElementById('businessChart'),warning=document.getElementById('businessWarning');
+ if(label)label.textContent='Считаю бизнес-показатели…';if(value)value.textContent='…';if(meta)meta.textContent='';if(compare)compare.innerHTML='';if(chart)chart.innerHTML='';if(warning)warning.textContent='Загрузка финансовых данных…';
  try{const model=await businessBuildModel(force);if(seq!==businessRenderSeq)return;businessPaint(model)}
  catch(error){if(seq!==businessRenderSeq)return;if(label)label.textContent='Не удалось посчитать';if(value)value.textContent='—';if(warning)warning.textContent=String(error?.message||error)}
 };
