@@ -7,11 +7,23 @@ const report = readFileSync(new URL('../../kaspi-report-v2.js', import.meta.url)
 const html = readFileSync(new URL('../../index.html', import.meta.url), 'utf8');
 const server = readFileSync(new URL('../src/server.js', import.meta.url), 'utf8');
 
-test('business dashboard exposes day week month year and profit layers', () => {
-  for (const word of ['День','Неделя','Месяц','Год','Заказы','Выкупы','Прибыль заказов','Прибыль выкупов','Чистая прибыль']) assert.match(ui, new RegExp(word));
+test('business dashboard is day-only and keeps all agreed profit layers', () => {
+  for (const word of ['Сегодня','Заказы','Выкупы','Прибыль заказов','Прибыль выкупов','Чистая прибыль']) assert.match(ui, new RegExp(word));
+  for (const word of ['Неделя','Месяц','Год']) assert.equal(ui.includes(word),false);
+  assert.match(ui, /BUSINESS_PERIODS=new Set\(\['day'\]\)/);
   assert.match(ui, /BUSINESS_SUPPORTED_MARKETS=new Set\(\['Kaspi','WB','WB2'\]\)/);
   assert.match(ui, /allMarketUnitProfit30/);
   assert.match(ui, /loadBusinessMarketplaceSummary/);
+});
+
+test('business day chart has 24 hourly buckets with horizontal time axis and vertical money scale', () => {
+  assert.match(ui, /for\(let h=0;h<24;h\+\+\)/);
+  assert.match(ui, /grid-template-columns:repeat\(24,minmax\(0,1fr\)\)/);
+  assert.match(ui, /business-x-axis/);
+  assert.match(ui, /business-y-axis/);
+  assert.match(ui, /business-grid-line/);
+  assert.match(ui, /i%3===0/);
+  assert.match(ui, /businessChartScale/);
 });
 
 test('business net profit subtracts only included finance expenses', () => {
@@ -34,6 +46,6 @@ test('business marketplace summary reuses canonical Kaspi and WB finance models'
 });
 
 test('business dashboard asset is loaded and served', () => {
-  assert.match(html, /business-dashboard-v1\.js\?v=20260922-business1/);
+  assert.match(html, /business-dashboard-v1\.js\?v=20260922-business2/);
   assert.match(server, /'business-dashboard-v1\.js'/);
 });
