@@ -16,7 +16,7 @@ test('business dashboard is day-only and keeps all agreed profit layers', () => 
   assert.match(ui, /loadBusinessMarketplaceSummary/);
 });
 
-test('business day chart has 24 hourly buckets, axes, and yesterday markers', () => {
+test('business day chart overlays the shorter real bar over the longer one', () => {
   assert.match(ui, /for\(let h=0;h<24;h\+\+\)/);
   assert.match(ui, /grid-template-columns:repeat\(24,minmax\(0,1fr\)\)/);
   assert.match(ui, /business-x-axis/);
@@ -25,13 +25,14 @@ test('business day chart has 24 hourly buckets, axes, and yesterday markers', ()
   assert.match(ui, /i%3===0/);
   assert.match(ui, /businessChartScale/);
   assert.match(ui, /business-yesterday-bar/);
-  assert.match(ui, /business-yesterday-mark/);
-  assert.match(ui, /yBottom=Math\.min\(yPct,zeroPct\)/);
-  assert.match(ui, /yHeight=Math\.abs\(yPct-zeroPct\)/);
-  assert.match(ui, /сегодня .* вчера/);
-  assert.match(ui, /серый столбик — вчера · чёрный — сегодня/);
+  assert.doesNotMatch(ui, /business-yesterday-mark/);
+  assert.match(ui, /yesterdayShorter=sameDirection&&!equal&&Math\.abs\(yv\)<Math\.abs\(v\)/);
+  assert.match(ui, /todayShorter=sameDirection&&!equal&&Math\.abs\(v\)<Math\.abs\(yv\)/);
+  assert.match(ui, /yZ=yesterdayShorter\?3:1,tZ=todayShorter\|\|equal\?3:2/);
+  assert.match(ui, /border-top:3px solid #9d9da3/);
+  assert.match(ui, /todayHeight=equal/);
+  assert.match(ui, /короткий столбик перекрывает длинный/);
 });
-
 test('business net profit subtracts only included finance expenses', () => {
   assert.match(ui, /financeAnalyticsEntry\(tx\)/);
   assert.match(ui, /financeAnalyticsEntryIncluded/);
@@ -56,6 +57,6 @@ test('business marketplace summary reuses canonical Kaspi and WB finance models 
 });
 
 test('business dashboard asset is loaded and served', () => {
-  assert.match(html, /business-dashboard-v1\.js\?v=20260922-business4/);
+  assert.match(html, /business-dashboard-v1\.js\?v=20260922-business5/);
   assert.match(server, /'business-dashboard-v1\.js'/);
 });
