@@ -92,11 +92,25 @@ function businessLocalBuyouts(bounds,buckets){
  return {revenue,qty,baseProfit};
 }
 function businessNormalizeBuyoutBuckets(buckets,local,summary){
- const exactRevenue=Number(summary?.revenue)||0,localRevenue=Number(local?.revenue)||0,baseProfit=Number(local?.baseProfit)||0,profitKnown=summary?.profit!==null&&summary?.profit!==undefined&&Number.isFinite(Number(summary.profit)),exactProfit=profitKnown?Number(summary.profit):baseProfit;
- const revenueScale=localRevenue>0?exactRevenue/localRevenue:0,profitAdjustment=exactProfit-baseProfit;
+ const exactRevenue=Number(summary?.revenue)||0,profitKnown=summary?.profit!==null&&summary?.profit!==undefined&&Number.isFinite(Number(summary.profit)),exactProfit=profitKnown?Number(summary.profit):Number(local?.baseProfit)||0,
+   hourly=Array.isArray(summary?.hourly)?summary.hourly:[],hourlyRevenue=hourly.reduce((sum,x)=>sum+(Number(x?.revenue)||0),0),hourlyQty=hourly.reduce((sum,x)=>sum+(Number(x?.qty)||0),0),
+   hourlyProfit=hourly.reduce((sum,x)=>sum+(Number(x?.profit)||0),0);
+ if(hourly.length&&Math.abs(hourlyRevenue)>0.005){
+  const revenueScale=exactRevenue/hourlyRevenue,qtyScale=Number(summary?.qty)!==0&&hourlyQty!==0?Number(summary.qty)/hourlyQty:1,
+    profitScale=profitKnown&&Math.abs(hourlyProfit)>0.005?exactProfit/hourlyProfit:1;
+  for(let hour=0;hour<buckets.length;hour++){
+   const source=hourly.find(x=>Number(x?.hour)===hour)||{},bucket=buckets[hour];
+   bucket.buyouts=(Number(source.revenue)||0)*revenueScale;
+   bucket.buyoutQty=(Number(source.qty)||0)*qtyScale;
+   bucket.buyoutProfit=profitKnown?(Number(source.profit)||0)*profitScale:(Number(source.profit)||0);
+   bucket.netProfit=bucket.buyoutProfit;
+  }
+  return;
+ }
+ const localRevenue=Number(local?.revenue)||0,baseProfit=Number(local?.baseProfit)||0,revenueScale=localRevenue>0?exactRevenue/localRevenue:0,profitAdjustment=exactProfit-baseProfit;
  if(localRevenue>0){
   for(const b of buckets){const share=Math.max(0,Number(b.buyouts)||0)/localRevenue;b.buyouts*=revenueScale;b.buyoutProfit=b.buyoutBaseProfit+profitAdjustment*share}
- }else if(buckets.length){buckets[buckets.length-1].buyouts=exactRevenue;buckets[buckets.length-1].buyoutProfit=exactProfit}
+ }
  for(const b of buckets)b.netProfit=b.buyoutProfit;
 }
 function businessMoney(value){const raw=Number(value),n=Number.isFinite(raw)&&Math.abs(raw)>=.005?raw:0;return typeof fmt==='function'?fmt(n):new Intl.NumberFormat('ru-RU',{maximumFractionDigits:0}).format(n)+' ₸'}
