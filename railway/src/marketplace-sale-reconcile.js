@@ -13,6 +13,7 @@ import {
 import { stripPurchasesFromState } from './warehouse-purchases.js';
 import { hydrateWarehouseSales, replaceWarehouseSales, stripSalesFromState } from './warehouse-sales.js';
 import { hydrateWarehouseReservations, replaceWarehouseReservations, stripReservationsFromState } from './warehouse-reservations.js';
+import { stripKaspiAdExpensesFromState } from './warehouse-kaspi-ads.js';
 
 // The server became authoritative for marketplace orders on 24 August 2026.
 // Never backfill older rows: some of them were already written by the former
@@ -174,7 +175,7 @@ export async function reconcileMarketplaceSales(market) {
     await persistWarehouseMovements(client, state.movements, now);
     await replaceWarehouseSales(client, state.sales, now);
     await replaceWarehouseReservations(client, state.reservations, now);
-    const raw = JSON.stringify(stripReservationsFromState(stripSalesFromState(stripPurchasesFromState(stripMovementsFromState(state))))), revision = Number(stored.rows[0].revision || 0) + 1;
+    const raw = JSON.stringify(stripKaspiAdExpensesFromState(stripReservationsFromState(stripSalesFromState(stripPurchasesFromState(stripMovementsFromState(state)))))), revision = Number(stored.rows[0].revision || 0) + 1;
     await client.query('UPDATE warehouse_state SET payload=$1,revision=$2,updated_at=$3 WHERE id=1', [raw, revision, now]);
     const sha = crypto.createHash('sha256').update(raw).digest('hex').toUpperCase();
     await client.query('INSERT INTO warehouse_audit(revision,updated_at,payload_sha256,source) VALUES($1,$2,$3,$4)',

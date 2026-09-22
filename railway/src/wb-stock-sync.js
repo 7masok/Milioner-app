@@ -3,6 +3,7 @@ import { pruneWarehouseBackups } from './warehouse-backups.js';
 import { stripPurchasesFromState } from './warehouse-purchases.js';
 import { stripSalesFromState } from './warehouse-sales.js';
 import { hydrateWarehouseReservations, stripReservationsFromState } from './warehouse-reservations.js';
+import { stripKaspiAdExpensesFromState } from './warehouse-kaspi-ads.js';
 import { linkFingerprint, validateWbLink, applyLinkObservation } from './wb-link-validation.js';
 import { config } from './config.js';
 import { credentialFor } from './connections.js';
@@ -88,7 +89,7 @@ export async function validateWbStockLinks(market) {
       }
       changed=applyLinkObservation(product,field,observation.result,now)||changed;
     }
-    if(changed)await client.query('UPDATE warehouse_state SET payload=$1,revision=revision+1,updated_at=$2 WHERE id=1',[JSON.stringify(stripReservationsFromState(stripSalesFromState(stripPurchasesFromState(state)))),now]);
+    if(changed)await client.query('UPDATE warehouse_state SET payload=$1,revision=revision+1,updated_at=$2 WHERE id=1',[JSON.stringify(stripKaspiAdExpensesFromState(stripReservationsFromState(stripSalesFromState(stripPurchasesFromState(state))))),now]);
     return {market:id,detached};
   });
 }

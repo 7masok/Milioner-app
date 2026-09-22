@@ -33,6 +33,13 @@ import {
   replaceWarehouseReservations,
   stripReservationsFromState
 } from './warehouse-reservations.js';
+import {
+  deleteKaspiAdExpenses,
+  hydrateKaspiAdExpenses,
+  persistKaspiAdExpenses,
+  replaceKaspiAdExpenses,
+  stripKaspiAdExpensesFromState
+} from './warehouse-kaspi-ads.js';
 
 export const warehouseRouter = express.Router();
 const MAX_WAREHOUSE_SNAPSHOT_BYTES = 6_000_000;
@@ -163,7 +170,7 @@ warehouseRouter.get('/warehouse-state', requireTrustedOrigin, asyncRoute(async (
     const stored = await client.query(`SELECT ${fields} FROM warehouse_state WHERE id=1`);
     if (!stored.rowCount) return null;
     const row = stored.rows[0];
-    const state = metaOnly ? undefined : await hydrateWarehouseReservations(client, await hydrateWarehouseSales(client, await hydrateWarehousePurchases(client, await hydrateWarehouseMovements(client, parseWarehousePayload(row.payload)))));
+    const state = metaOnly ? undefined : await hydrateKaspiAdExpenses(client, await hydrateWarehouseReservations(client, await hydrateWarehouseSales(client, await hydrateWarehousePurchases(client, await hydrateWarehouseMovements(client, parseWarehousePayload(row.payload))))));
     return { row, state };
   });
   if (!result) return res.json({ ok: true, exists: false, revision: 0, updatedAt: null, state: metaOnly ? undefined : null });
@@ -211,7 +218,7 @@ warehouseRouter.put('/warehouse-state', requireTrustedOrigin, requireWritesEnabl
     : Array.isArray(incomingState?.movements);
   let state = isPatch ? null : cleanState(incomingState);
   if (!isPatch) {
-    const earlyRaw = JSON.stringify(stripReservationsFromState(stripSalesFromState(stripPurchasesFromState(stripMovementsFromState(state)))));
+    const earlyRaw = JSON.stringify(stripKaspiAdExpensesFromState(stripReservationsFromState(stripSalesFromState(stripPurchasesFromState(stripMovementsFromState(state))))));
     if (Buffer.byteLength(earlyRaw, 'utf8') > MAX_WAREHOUSE_SNAPSHOT_BYTES) return res.status(413).json({ ok: false, error: 'Warehouse snapshot is too large' });
   }
 
@@ -233,6 +240,7 @@ warehouseRouter.put('/warehouse-state', requireTrustedOrigin, requireWritesEnabl
       await hydrateWarehousePurchases(client, previousStored);
       await hydrateWarehouseSales(client, previousStored);
       await hydrateWarehouseReservations(client, previousStored);
+      await hydrateKaspiAdExpenses(client, previousStored);
       if (isPatch) state = applyWarehousePatch(previousStored, incomingState);
       // Routine saves omit movements when the audit trail did not change.
       // In that case an empty movement delta is sufficient for the stock guard:
@@ -277,7 +285,15 @@ warehouseRouter.put('/warehouse-state', requireTrustedOrigin, requireWritesEnabl
     } else if (reservationsTouched || (!existingReservations.rowCount && Array.isArray(state?.reservations) && state.reservations.length)) {
       await replaceWarehouseReservations(client, state.reservations, updatedAt);
     }
-    const persistedSnapshot = stripReservationsFromState(stripSalesFromState(stripPurchasesFromState(stripMovementsFromState(state))));
+    const adsTouched = !isPatch || Array.isArray(incomingState?.kaspiAdExpenses) || (Array.isArray(incomingState?.deleted?.kaspiAdExpenses) && incomingState.deleted.kaspiAdExpenses.length > 0);
+    const existingAds = await client.query('SELECT 1 FROM warehouse_kaspi_ad_expenses LIMIT 1');
+    if (adsTouched && isPatch && existingAds.rowCount) {
+      await persistKaspiAdExpenses(client, incomingState?.kaspiAdExpenses || [], updatedAt);
+      await deleteKaspiAdExpenses(client, incomingState?.deleted?.kaspiAdExpenses || []);
+    } else if (adsTouched || (!existingAds.rowCount && Array.isArray(state?.kaspiAdExpenses) && state.kaspiAdExpenses.length)) {
+      await replaceKaspiAdExpenses(client, state.kaspiAdExpenses, updatedAt);
+    }
+    const persistedSnapshot = stripKaspiAdExpensesFromState(stripReservationsFromState(stripSalesFromState(stripPurchasesFromState(stripMovementsFromState(state)))));
     const raw = JSON.stringify(persistedSnapshot);
     if (Buffer.byteLength(raw, 'utf8') > MAX_WAREHOUSE_SNAPSHOT_BYTES) return { tooLarge: true };
     const revision = currentRevision + 1;
