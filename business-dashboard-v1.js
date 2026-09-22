@@ -133,7 +133,7 @@ function businessEnsureStyle(){
  .business-y-axis{grid-column:2;grid-row:1;position:relative;font-size:10px;color:var(--muted)}.business-y-tick{position:absolute;right:0;transform:translateY(50%);white-space:nowrap}
  .business-x-axis{grid-column:1;grid-row:2;position:relative;height:24px;padding-top:6px;font-size:9px;color:var(--muted)}.business-x-label{position:absolute;top:6px;white-space:nowrap;transform:translateX(-50%);text-align:center}
  .business-axis-caption{grid-column:2;grid-row:2;font-size:9px;color:var(--muted);padding-top:6px;text-align:right}
- .business-foot{display:flex;justify-content:space-between;align-items:flex-start;gap:10px;margin-top:9px}.business-warning{font-size:11px;color:var(--muted);line-height:1.35}.business-detail-btn{border:1px solid var(--line);background:var(--bg);border-radius:12px;padding:8px 10px;font:inherit;white-space:nowrap}
+ .business-foot{display:flex;justify-content:flex-end;align-items:flex-start;gap:10px;margin-top:9px}.business-detail-btn{border:1px solid var(--line);background:var(--bg);border-radius:12px;padding:8px 10px;font:inherit;white-space:nowrap}
  @media(max-width:560px){.business-dashboard{padding:12px;border-radius:20px}.business-value{font-size:25px}.business-chart-frame{grid-template-columns:minmax(0,1fr) 42px;grid-template-rows:158px 24px}.business-metrics button{font-size:12px;padding:8px 5px}.business-bar,.business-yesterday-bar{left:20%;width:60%}}
  `;document.head.appendChild(style);
 }
@@ -143,7 +143,7 @@ function businessEnsureUi(){
  root.innerHTML=`<div class="business-top"><div><h3>Сегодня</h3><div class="business-sub">Kaspi + WB1 + WB2 · по часам</div></div><button class="business-detail-btn" type="button" onclick="renderBusinessDashboard(true)">↻</button></div>
  <div class="business-metrics">${[['orders','Заказы'],['buyouts','Выкупы'],['orderProfit','Прибыль заказов'],['buyoutProfit','Прибыль выкупов'],['netProfit','Чистая прибыль']].map(([k,v])=>`<button type="button" data-business-metric="${k}" onclick="setBusinessDashboardMetric('${k}')">${v}</button>`).join('')}</div>
  <div class="business-value-card"><div id="businessValueMetric" class="business-value-title">Загрузка…</div><div class="business-value-grid"><div class="business-value-side"><div id="businessValueLabel" class="business-value-label">Сегодня</div><div id="businessValue" class="business-value">—</div><div id="businessValueMeta" class="business-value-meta"></div></div><div class="business-value-side business-yesterday-side"><div id="businessYesterdayLabel" class="business-value-label">Вчера</div><div id="businessYesterdayValue" class="business-value">—</div><div id="businessYesterdayMeta" class="business-value-meta"></div></div></div><div id="businessYesterdayCompare" class="business-compare"></div></div>
- <div id="businessChart" class="business-chart"></div><div class="business-foot"><div id="businessWarning" class="business-warning">Считаю данные…</div><button class="business-detail-btn" type="button" onclick="openBusinessDashboardDetails()">Расшифровка</button></div>`;
+ <div id="businessChart" class="business-chart"></div><div class="business-foot"><button class="business-detail-btn" type="button" onclick="openBusinessDashboardDetails()">Расшифровка</button></div>`;
  const title=reports.querySelector('h2');if(title)title.insertAdjacentElement('afterend',root);else reports.prepend(root);return root;
 }
 function businessPaintTabs(){
@@ -246,20 +246,18 @@ function businessPaint(model){
  businessLastModel=model;businessPaintTabs();const info=businessMetricInfo(model),yModel=model.yesterdayCompare||model.yesterday,yesterdayInfo=yModel?businessMetricInfo(yModel):null,
  metric=document.getElementById('businessValueMetric'),label=document.getElementById('businessValueLabel'),value=document.getElementById('businessValue'),meta=document.getElementById('businessValueMeta'),
  yLabel=document.getElementById('businessYesterdayLabel'),yValue=document.getElementById('businessYesterdayValue'),yMeta=document.getElementById('businessYesterdayMeta'),
- compare=document.getElementById('businessYesterdayCompare'),warning=document.getElementById('businessWarning');
+ compare=document.getElementById('businessYesterdayCompare');
  if(metric)metric.textContent=info.label;if(label)label.textContent=businessShortDate(model.bounds.start)+' · сегодня';if(value)value.textContent=businessMoney(info.value);if(meta)meta.textContent=info.meta;
  if(yLabel)yLabel.textContent=yModel?businessShortDate(yModel.bounds.start)+' · до '+businessHourMinute(yModel.comparisonCutoff||yModel.bounds.end):'Вчера';
  if(yValue)yValue.textContent=yesterdayInfo?businessMoney(yesterdayInfo.value):'—';if(yMeta)yMeta.textContent=yesterdayInfo?yesterdayInfo.meta:'';
  if(compare)compare.innerHTML=yesterdayInfo?businessComparison(info.value,yesterdayInfo.value).html:'';businessPaintChart(model,info.field);
- const notes=[];if(model.orders.coverage<.999)notes.push('прогноз заказов покрывает '+Math.round(model.orders.coverage*100)+'% суммы');if(model.finance.uncategorized>0)notes.push('расходы без категории включены: '+businessMoney(model.finance.uncategorized));if(model.summary.estimated)notes.push('часть прибыли оценочная');notes.push('вчера в карточке — только до этого же времени');notes.push('короткий столбик перекрывает длинный · серый край — конец вчера');notes.push('Ozon пока не входит в прибыль');
- if(warning)warning.textContent=notes.join(' · ');
 }
 window.renderBusinessDashboard=async function(force=false){
  const root=businessEnsureUi();if(!root)return;if(!document.getElementById('reports')?.classList.contains('active')){businessPaintTabs();return}
- const seq=++businessRenderSeq;businessPaintTabs();const metric=document.getElementById('businessValueMetric'),label=document.getElementById('businessValueLabel'),value=document.getElementById('businessValue'),meta=document.getElementById('businessValueMeta'),yLabel=document.getElementById('businessYesterdayLabel'),yValue=document.getElementById('businessYesterdayValue'),yMeta=document.getElementById('businessYesterdayMeta'),compare=document.getElementById('businessYesterdayCompare'),chart=document.getElementById('businessChart'),warning=document.getElementById('businessWarning');
- if(metric)metric.textContent='Считаю бизнес-показатели…';if(label)label.textContent='Сегодня';if(value)value.textContent='…';if(meta)meta.textContent='';if(yLabel)yLabel.textContent='Вчера';if(yValue)yValue.textContent='…';if(yMeta)yMeta.textContent='';if(compare)compare.innerHTML='';if(chart)chart.innerHTML='';if(warning)warning.textContent='Загрузка финансовых данных…';
+ const seq=++businessRenderSeq;businessPaintTabs();const metric=document.getElementById('businessValueMetric'),label=document.getElementById('businessValueLabel'),value=document.getElementById('businessValue'),meta=document.getElementById('businessValueMeta'),yLabel=document.getElementById('businessYesterdayLabel'),yValue=document.getElementById('businessYesterdayValue'),yMeta=document.getElementById('businessYesterdayMeta'),compare=document.getElementById('businessYesterdayCompare'),chart=document.getElementById('businessChart');
+ if(metric)metric.textContent='Считаю бизнес-показатели…';if(label)label.textContent='Сегодня';if(value)value.textContent='…';if(meta)meta.textContent='';if(yLabel)yLabel.textContent='Вчера';if(yValue)yValue.textContent='…';if(yMeta)yMeta.textContent='';if(compare)compare.innerHTML='';if(chart)chart.innerHTML='';
  try{const model=await businessBuildModel(force);if(seq!==businessRenderSeq)return;businessPaint(model)}
- catch(error){if(seq!==businessRenderSeq)return;if(label)label.textContent='Не удалось посчитать';if(value)value.textContent='—';if(warning)warning.textContent=String(error?.message||error)}
+ catch(error){if(seq!==businessRenderSeq)return;if(label)label.textContent='Не удалось посчитать';if(value)value.textContent='—'}
 };
 window.openBusinessDashboardDetails=function(){
  const m=businessLastModel;if(!m)return window.renderBusinessDashboard(false);
