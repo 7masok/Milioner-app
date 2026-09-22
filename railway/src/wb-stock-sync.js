@@ -66,11 +66,11 @@ export async function validateWbStockLinks(market) {
   const token=await credentialFor(id,id==='WB2'?config.wbToken2:config.wbToken);
   if(!token)return;
   const initial=await pool.query('SELECT payload FROM warehouse_state WHERE id=1');
-  const initialState=await hydrateWarehouseProducts(pool, parse(initial.rows[0]?.payload));
-  const products=initialState.products||[];
   const cards=await catalog(token);
   // An empty successful response is not sufficient evidence to detach a shop.
   if(!cards.length)return;
+  const initialState=await hydrateWarehouseProducts(pool, parse(initial.rows[0]?.payload));
+  const products=initialState.products||[];
   const observations=products.filter(p=>p[field]&&p.kind!=='variant-group').map(p=>({
     id:String(p.id), fingerprint:linkFingerprint(p,field), result:validateWbLink(p,field,cards)
   }));
