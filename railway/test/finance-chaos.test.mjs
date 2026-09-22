@@ -55,7 +55,7 @@ test('inline application scripts still parse after finance changes',()=>{
 test('all finance mutation entrypoints are local-first',()=>{
   const localFirst=[
     'saveFinanceAdjustment','saveFinanceAccount','financeDeleteAccount',
-    'financeSetAccountIncludedInTotal','financeExecuteMoveAccountOperations',
+    'financeSetAccountIncludedInTotal','financeExecuteMoveAccountOperations','financeExecuteMoveCategoryOperations',
     'saveFinanceCategory','financeDeleteCategory','financeSetCategoryIncludedInTotal',
     'saveFinanceTransaction','saveFinanceTransfer','saveFinanceAdjustmentTransaction',
     'financeDeleteTransaction','financeStatementRememberAccount',
@@ -484,4 +484,14 @@ test('uncategorized income and expense stay in history but out of analytics',()=
     null,
     {mode:'expense',amount:500,categoryId:'cat',category:'Test'}
   ]);
+});
+
+
+test('category merge endpoint rewrites transactions before deleting the source category',()=>{
+  assert.match(ledger,/finance\/categories\/:id\/move-operations/);
+  assert.match(ledger,/categoryId:targetId/);
+  assert.match(ledger,/category:String\(target\.name\|\|''\)/);
+  assert.match(ledger,/addAudit\(client,'transaction',row\.id,'move-category'/);
+  assert.match(ledger,/DELETE FROM finance_categories WHERE id=\$1/);
+  assert.match(ledger,/canClaimLegacy/);
 });
