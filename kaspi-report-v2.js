@@ -42,31 +42,41 @@ function wbCostFromProducts(market,days,products){let cost=0,linked=0,total=0;fo
 function wbExpenseModel(summary,products,market,days){const financeAvailable=summary?.financeAvailable===true||Number(summary?.financeRowCount||0)>0,revenue=Number(summary.retailAmount)||0,forPay=Number(summary.forPay)||0,commission=Math.max(0,revenue-forPay),logistics=Number(summary.delivery)||0,storage=Number(summary.storage)||0,acceptance=Number(summary.acceptance)||0,deduction=Number(summary.deduction)||0,promotionDeduction=Number(summary.promotionDeduction)||0,penalty=Number(summary.penalty)||0,rebill=Number(summary.rebill)||0,acquiring=Number(summary.acquiring)||0,adjustment=Number(summary.additionalPayment)||0,ads=Number(summary.advertising)||0,costInfo=wbCostFromProducts(market,days,products),expenses=commission+logistics+storage+acceptance+deduction+penalty+rebill+acquiring,profit=financeAvailable?revenue+adjustment-expenses-ads-costInfo.cost:null;return{financeAvailable,revenue,forPay,commission,logistics,storage,acceptance,deduction,promotionDeduction,penalty,rebill,acquiring,adjustment,ads,expenses,profit,sync:summary.sync||null,lastSuccess:summary.lastSuccess||null,...costInfo}}
 function renderWbMain(model,market,days){const set=(id,value)=>{const e=document.getElementById(id);if(e)e.textContent=value};set('rRevenue',fmt(model.revenue));set('rCost',model.complete?fmt(model.cost):'≈ '+fmt(model.cost));set('rFees',fmt(model.expenses));set('rAds',fmt(model.ads));set('rProfit',(model.complete?'':'≈ ')+fmt(model.profit));const rows=[['Продажи',model.revenue],['Комиссия WB',model.commission],['Логистика',model.logistics],['Хранение',model.storage],['Корректировки',model.adjustment],['Штрафы',model.penalty],['Удержания (без рекламы)',model.deduction],['Операции при приёмке',model.acceptance],['Эквайринг',model.acquiring],['Перевыставленная логистика',model.rebill],['Реклама WB',model.ads]],box=document.getElementById('mpReport'),name=market==='WB'?'WB 1':'WB 2',syncError=model.sync&&Number(model.sync.financeOk)!==1?'<div class="link-note" style="border-color:#efb0b0;background:#fff4f4"><b>Финансовые данные WB не обновились.</b> '+esc(String(model.sync.error||'Проверьте, что API-ключ имеет доступ к категории «Финансы».'))+'</div>':'';if(box)box.innerHTML='<div class="item"><div class="row"><div class="grow"><b>Приход</b><div class="muted">Продажи и корректировки</div></div><b>'+fmt(model.revenue+model.adjustment)+'</b></div><div class="row" style="margin-top:10px"><div class="grow"><b>Расход</b><div class="muted">WB, реклама и себестоимость</div></div><b style="color:#b00000">−'+fmt(model.expenses+model.ads+model.cost)+'</b></div></div>'+syncError+'<button class="btn full" onclick="refreshWbFinance(\''+market+'\',this)">Обновить данные WB</button><div class="item" style="margin-top:8px"><b>Детализация</b>'+rows.map(x=>'<div class="row" style="margin-top:9px"><span class="grow muted">'+x[0]+'</span><b>'+fmt(x[1])+'</b></div>').join('')+'<div class="row" style="margin-top:11px;padding-top:10px;border-top:1px solid var(--line)"><span class="grow">Себестоимость FIFO</span><b>'+(model.complete?'':'≈ ')+fmt(model.cost)+'</b></div><div class="row" style="margin-top:9px"><span class="grow"><b>Чистая прибыль</b></span><b>'+(model.complete?'':'≈ ')+fmt(model.profit)+'</b></div></div><button class="btn dark full" onclick="openMarketplaceReport(\''+market+'\','+days+')">Товары и прибыль · '+name+'</button>'+(model.complete?'':'<div class="link-note">Часть товаров WB ещё не связана с товарами склада. Известная себестоимость учтена, итог помечен знаком ≈.</div>')}
 async function loadWbModel(market,days){const q=reportQuery(market,days),[summary,details]=await Promise.all([apiJson(MILLIONER_API+'/api/wb-finance-summary'+q),apiJson(MILLIONER_API+'/api/wb-finance-products'+q)]),products=Array.isArray(details.products)?details.products:[];return{market,...wbExpenseModel(summary,products,market,days),products,unmatchedAdvertising:Number(details.unmatchedAdvertising)||0}}
-let allMarketUnitProfitLoading=false;
-window.refreshAllMarketUnitProfit=async function(){
- if(allMarketUnitProfitLoading)return;
+let allMarketUnitProfitLoading=false,allMarketUnitProfitPromise=null;
+window.refreshAllMarketUnitProfit=function(){
+ if(allMarketUnitProfitPromise)return allMarketUnitProfitPromise;
  allMarketUnitProfitLoading=true;
- try{
-  const days=30,[kaspiSnapshot,wb1,wb2]=await Promise.all([loadKaspiOrders(days),loadWbModel('WB',days),loadWbModel('WB2',days)]),
-    totals=new Map((state.products||[]).map(p=>[String(p.id),{qty:0,profit:0,sources:{}}])),
-    add=(pid,qty,profit,source)=>{pid=String(pid||'');qty=Math.max(0,Number(qty)||0);if(!pid)return;const row=totals.get(pid)||{qty:0,profit:0,sources:{}};const profitValue=Number(profit)||0;row.qty+=qty;row.profit+=profitValue;if(source){const part=row.sources[source]||{qty:0,profit:0};part.qty+=qty;part.profit+=profitValue;row.sources[source]=part}totals.set(pid,row)},
-    kaspi=buildModel(kaspiSnapshot,days);
-  const kaspiKnown=kaspi.rows.filter(x=>x.productId),kaspiRevenue=kaspiKnown.reduce((s,x)=>s+Math.max(0,Number(x.revenue)||0),0),kaspiLooseAds=kaspi.rows.filter(x=>!x.productId&&Number(x.revenue)===0).reduce((s,x)=>s+Math.max(0,Number(x.ads)||0),0);
-  for(const x of kaspiKnown)add(x.productId,x.qty,Number(x.profit)-(kaspiRevenue>0?kaspiLooseAds*Math.max(0,Number(x.revenue)||0)/kaspiRevenue:0),'Kaspi');
-  for(const model of[wb1,wb2]){
-    const linked=model.products.map(x=>({x,pid:wbLiveProductId(model.market,x)})).filter(v=>v.pid),
-      revenue=linked.reduce((s,v)=>s+Math.max(0,Number(v.x.retailAmount)||0),0);
-    for(const v of linked){
-      const x=v.x,netQty=Number(x.qty)||0,saleQty=Math.max(0,Number(x.saleQty??netQty)||0),
-        cost=wbRealizedFifoCost(v.pid,model.market,days,netQty),
-        share=revenue>0?Math.max(0,Number(x.retailAmount)||0)/revenue:0;
-      add(v.pid,saleQty,Number(x.netBeforeCost||0)-cost-Math.max(0,Number(model.unmatchedAdvertising)||0)*share,model.market);
-    }
-  }
-  window.allMarketUnitProfit30=new Map([...totals].map(([pid,x])=>[pid,{qty:x.qty,profit:x.profit,unitProfit:x.qty?x.profit/x.qty:0,sources:x.sources}]));
-  if(typeof productRenderStatsCache!=='undefined')productRenderStatsCache=null;
-  if(document.querySelector('#products.view.active')&&typeof renderProducts==='function')renderProducts(true);
- }catch(e){console.warn('All-market unit profit',e)}finally{allMarketUnitProfitLoading=false}
+ allMarketUnitProfitPromise=(async()=>{
+  try{
+   const days=30,[kaspiSnapshot,wb1,wb2]=await Promise.all([loadKaspiOrders(days),loadWbModel('WB',days),loadWbModel('WB2',days)]),
+     totals=new Map((state.products||[]).map(p=>[String(p.id),{qty:0,profit:0,ads:0,sources:{}}])),
+     add=(pid,qty,profit,source,ads=0)=>{pid=String(pid||'');qty=Math.max(0,Number(qty)||0);if(!pid)return;const row=totals.get(pid)||{qty:0,profit:0,ads:0,sources:{}};const profitValue=Number(profit)||0,adValue=Math.max(0,Number(ads)||0);row.qty+=qty;row.profit+=profitValue;row.ads+=adValue;if(source){const part=row.sources[source]||{qty:0,profit:0,ads:0};part.qty+=qty;part.profit+=profitValue;part.ads+=adValue;row.sources[source]=part}totals.set(pid,row)},
+     kaspi=buildModel(kaspiSnapshot,days);
+   const kaspiKnown=kaspi.rows.filter(x=>x.productId),kaspiRevenue=kaspiKnown.reduce((s,x)=>s+Math.max(0,Number(x.revenue)||0),0),kaspiLooseAds=kaspi.rows.filter(x=>!x.productId&&Number(x.revenue)===0).reduce((s,x)=>s+Math.max(0,Number(x.ads)||0),0);
+   for(const x of kaspiKnown){
+     const looseShare=kaspiRevenue>0?kaspiLooseAds*Math.max(0,Number(x.revenue)||0)/kaspiRevenue:0;
+     add(x.productId,x.qty,Number(x.profit)-looseShare,'Kaspi',Math.max(0,Number(x.ads)||0)+looseShare);
+   }
+   for(const model of[wb1,wb2]){
+     const linked=model.products.map(x=>({x,pid:wbLiveProductId(model.market,x)})).filter(v=>v.pid),
+       revenue=linked.reduce((s,v)=>s+Math.max(0,Number(v.x.retailAmount)||0),0);
+     for(const v of linked){
+       const x=v.x,netQty=Number(x.qty)||0,saleQty=Math.max(0,Number(x.saleQty??netQty)||0),
+         cost=wbRealizedFifoCost(v.pid,model.market,days,netQty),
+         share=revenue>0?Math.max(0,Number(x.retailAmount)||0)/revenue:0,
+         unmatchedAds=Math.max(0,Number(model.unmatchedAdvertising)||0)*share,
+         productAds=Math.max(0,Number(x.advertising)||0)+unmatchedAds;
+       add(v.pid,saleQty,Number(x.netBeforeCost||0)-cost-unmatchedAds,model.market,productAds);
+     }
+   }
+   window.allMarketUnitProfit30=new Map([...totals].map(([pid,x])=>[pid,{qty:x.qty,profit:x.profit,ads:x.ads,unitProfit:x.qty?x.profit/x.qty:0,sources:x.sources}]));
+   if(typeof productRenderStatsCache!=='undefined')productRenderStatsCache=null;
+   if(document.querySelector('#products.view.active')&&typeof renderProducts==='function')renderProducts(true);
+   return window.allMarketUnitProfit30;
+  }catch(e){console.warn('All-market unit profit',e);return null}
+  finally{allMarketUnitProfitLoading=false;allMarketUnitProfitPromise=null}
+ })();
+ return allMarketUnitProfitPromise;
 };
 function renderWbCompact(model,market,days){reportConfidenceNote(market,[model]);const set=(id,value)=>{const e=document.getElementById(id);if(e)e.textContent=value},name=market==='WB'?'WB 1':'WB 2',waiting=!model.financeAvailable;set('rRevenue',waiting?'—':fmt(model.revenue));set('rCost',waiting?'—':(model.complete?fmt(model.cost):'≈ '+fmt(model.cost)));set('rFees',waiting?'—':fmt(model.expenses));set('rAds',fmt(model.ads));set('rProfit',waiting?'—':(model.complete?'':'≈ ')+fmt(model.profit));const box=document.getElementById('mpReport');if(box)box.innerHTML='<div class="item row" role="button" tabindex="0" style="cursor:pointer" onclick="openWbExpenseDetails(\''+market+'\','+days+')"><div class="grow"><b>'+name+'</b><div class="muted">'+(waiting?'Финансовый отчёт WB ожидается · реклама '+fmt(model.ads):'Приход '+fmt(model.revenue+model.adjustment)+' · расход '+fmt(model.expenses+model.ads+model.cost))+' · нажмите для детализации</div></div><b>'+(waiting?'—':(model.complete?'':'≈ ')+fmt(model.profit))+'</b></div>'}
 window.openWbExpenseDetails=async function(market,days=reportPeriod){

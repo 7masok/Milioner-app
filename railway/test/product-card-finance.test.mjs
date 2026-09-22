@@ -25,3 +25,14 @@ test('projected stock profit is transparent and product cost input is rounded',(
   assert.match(html,/возвраты уменьшают саму прибыль/);
   assert.match(html,/id="ecost"[^>]*step="0\.01"[^>]*Math\.round/);
 });
+
+
+test('product details use combined 30-day net profit including Kaspi and WB advertising',()=>{
+  assert.match(html,/async function openProduct\(pid,market='',days=30\)/);
+  assert.match(html,/window\.refreshAllMarketUnitProfit/);
+  assert.match(html,/Реклама Kaspi \+ WB1 \+ WB2 за 30 дней/);
+  assert.match(html,/Чистая прибыль за 30 дней/);
+  assert.match(html,/после себестоимости, комиссий, логистики, рекламы и возвратов/);
+  assert.match(html,/combined30\?Math\.max\(0,Number\(combined30\.ads\)/);
+  assert.match(html,/По магазинам/);
+});
