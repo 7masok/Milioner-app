@@ -1,4 +1,5 @@
 import { ozonRouter, startOzonSyncLoop } from './ozon-fbo.js';
+import { ozonPerformanceRouter } from './ozon-performance.js';
 import express from 'express';
 import helmet from 'helmet';
 import path from 'node:path';
@@ -223,6 +224,7 @@ app.post('/api/stock-sync-now', requireTrustedOrigin, async (req, res, next) => 
 });
 
 app.use('/api', ozonRouter);
+app.use('/api', ozonPerformanceRouter);
 app.use('/api', connectionsRouter);
 app.use('/api', wbVariantsRouter);
 app.use('/api', wbReturnsRouter);

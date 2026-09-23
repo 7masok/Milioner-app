@@ -181,22 +181,64 @@ try{
     for(const pr of products.values()){
       pr.cogs=pr.qty*ozonUnitCost(pr.product);pr.fbo=pr.qty*ozonFboUnitCost(pr.product.id);
       const currency='KZT',g=groups.get(currency);if(g){g.cogs+=pr.cogs;g.fbo+=pr.fbo;}
-      pr.profit=pr.net-pr.cogs-pr.fbo;pr.margin=pr.sales?pr.profit/pr.sales*100:0;
+      pr.financeAds=pr.ads;pr.profit=pr.net-pr.cogs-pr.fbo;pr.margin=pr.sales?pr.profit/pr.sales*100:0;
     }
     for(const g of groups.values()){g.profit=g.net-g.cogs-g.fbo;g.margin=g.sales?g.profit/g.sales*100:0;}
     return{groups:[...groups.values()],products:[...products.values()].sort((a,b)=>b.sales-a.sales),unallocated,unallocatedAds};
   }
-  function ozonSummaryFrom(payload,days){
+  function applyPerformanceAds(model,maps,adRows){
+    const byId=new Map(),loose=new Map();
+    for(const row of adRows||[]){
+      const spent=Number(row?.spent)||0;if(!(spent>0))continue;
+      const sku=String(row?.sku||'').trim(),product=sku?maps.aliasToProduct.get(sku):null;
+      if(product){const id=String(product.id);byId.set(id,(byId.get(id)||0)+spent);continue;}
+      const key=sku||String(row?.title||'');
+      const prev=loose.get(key)||{name:String(row?.title||'')||('SKU '+sku),spent:0};
+      prev.spent+=spent;loose.set(key,prev);
+    }
+    const have=new Map(model.products.map(pr=>[String(pr.product.id),pr]));
+    for(const [id,spent] of byId){
+      let pr=have.get(id);
+      if(!pr){
+        const product=[...maps.aliasToProduct.values()].find(item=>String(item.id)===id);
+        if(!product){loose.set('id:'+id,{name:'SKU',spent});continue;}
+        pr={product,qty:0,sales:0,commission:0,delivery:0,ads:0,services:0,other:0,net:0,cogs:0,fbo:0,profit:0,margin:0,financeAds:0};
+        model.products.push(pr);have.set(id,pr);
+      }
+      const financeAds=Number(pr.financeAds)||0;
+      pr.ads=spent;pr.profit=(Number(pr.net)||0)-financeAds-(Number(pr.cogs)||0)-(Number(pr.fbo)||0)-spent;pr.margin=pr.sales?pr.profit/pr.sales*100:0;
+    }
+    model.products.sort((a,b)=>(b.sales-a.sales)||((Number(b.ads)||0)-(Number(a.ads)||0)));
+    return [...loose.values()];
+  }
+  function ozonDay(ts){const d=new Date(ts);return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');}
+  async function loadOzonSkuAds(days){
+    const bounds=ozonBounds(days),from=ozonDay(bounds.start),to=ozonDay(bounds.end-1);
+    return apiJson(MILLIONER_API+'/api/ozon-ads?from='+from+'&to='+to);
+  }
+  function ozonSummaryFrom(payload,days,adPayload){
     const model=ozonProfitModel(payload,days);
+    let adSource='';
+    if(adPayload?.configured&&Array.isArray(adPayload.rows)&&adPayload.rows.length){
+      const loose=applyPerformanceAds(model,buildOzonMaps(payload),adPayload.rows);
+      model.looseAds=loose;adSource='performance';
+    }
     window.__ozonProfitModel=model;
     const g=model.groups.find(x=>x.currency==='KZT')||model.groups[0]||null;
-    if(!g)return{sales:0,cost:0,fees:0,ads:0,profit:0,qty:0,empty:true,products:[]};
+    if(!g)return{sales:0,cost:0,fees:0,ads:0,profit:0,qty:0,empty:true,products:[],adSource};
     const ads=Math.abs(g.ads),deductions=g.sales-g.net,fees=Math.max(0,deductions-ads)+Math.max(0,g.fbo);
     const qty=model.products.reduce((n,row)=>n+Math.max(0,row.qty),0);
-    const products=model.products.map(row=>({name:row.product?.name||'Товар',qty:row.qty,sales:row.sales,cost:(row.cogs||0)+(row.fbo||0),fees:Math.max(0,(row.sales||0)-(row.net||0)-Math.abs(row.ads||0)),ads:Math.abs(row.ads||0),profit:row.profit}));
-    return{sales:g.sales,cost:g.cogs,fees,ads,profit:g.profit,qty,empty:false,products,unallocatedAds:Math.abs(model.unallocatedAds||0)};
+    const products=model.products.map(row=>{
+      const financeAds=Number(row.financeAds!=null?row.financeAds:row.ads)||0;
+      return {name:row.product?.name||'Товар',qty:row.qty,sales:row.sales,cost:(row.cogs||0)+(row.fbo||0),fees:Math.max(0,(row.sales||0)-(row.net||0)-Math.abs(financeAds)),ads:Math.abs(row.ads||0),profit:row.profit};
+    });
+    for(const row of model.looseAds||[])products.push({name:row.name||'Товар Ozon',qty:0,sales:0,cost:0,fees:0,ads:row.spent,profit:-row.spent});
+    return{sales:g.sales,cost:g.cogs,fees,ads,profit:g.profit,qty,empty:false,products,unallocatedAds:adSource==='performance'?0:Math.abs(model.unallocatedAds||0),adSource};
   }
-  window.summarizeOzonReport=async function(days){return ozonSummaryFrom(await loadOzonProfitData(),days)};
+  window.summarizeOzonReport=async function(days){
+    const [payload,ads]=await Promise.all([loadOzonProfitData(),loadOzonSkuAds(days).catch(error=>{console.warn('Ozon ads',error);return null;})]);
+    return ozonSummaryFrom(payload,days,ads);
+  };
   window.ozonStoreDetail=window.summarizeOzonReport;
   const sumText=(groups,key)=>groups.length?groups.map(g=>ozonMoney(g[key],g.currency)).join(' + '):'—';
   async function renderOzonProfitReport(){
