@@ -82,7 +82,7 @@ window.loadBusinessMarketplaceSummary=async function(days=30,{force=false}={}){
       useLive?ensureWbLiveOverview('WB2',n):Promise.resolve(null)
     ]),
     kaspi=buildModel(kaspiSnapshot,n),kaspiView=reportProfitView(kaspi),
-    wbStats=(model,live,market)=>{const finance=businessWbFinanceStats(model),liveRevenue=Math.max(0,Number(live?.buyoutSum)||0),liveQty=Math.max(0,Number(live?.buyoutCount)||0);return live&&(liveRevenue>0||liveQty>0)&&(!(finance.revenue>0)||!finance.financeAvailable)?businessWbLiveStats(model,live,market,n):finance},
+    wbStats=(model,live,market)=>{const finance=businessWbFinanceStats(model),liveRevenue=Math.max(0,Number(live?.buyoutSum)||0),liveQty=Math.max(0,Number(live?.buyoutCount)||0),liveReady=live&&(liveRevenue>0||liveQty>0);if(liveReady&&(!(Number(finance.revenue)>0)||!finance.financeAvailable||liveRevenue>Number(finance.revenue)+1))return businessWbLiveStats(model,live,market,n);return finance},
     kaspiStats={qty:Math.max(0,Number(kaspi.qty)||0),revenue:Number(kaspi.revenue)||0,cost:Number(kaspi.cost)||0,fees:Number(kaspi.fees)||0,ads:Number(kaspi.ads)||0,profit:Number(kaspiView.value)||0,complete:!(Number(kaspi.unknownRevenue)>0),financeAvailable:true,estimated:Boolean(kaspiView.estimated),live:false},
     wb1Stats=wbStats(wb1,wb1Live,'WB'),wb2Stats=wbStats(wb2,wb2Live,'WB2'),sources={Kaspi:kaspiStats,WB:wb1Stats,WB2:wb2Stats},
     total={qty:0,revenue:0,cost:0,fees:0,ads:0,profit:0,complete:true,financeAvailable:true,estimated:false},
