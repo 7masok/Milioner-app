@@ -3,6 +3,7 @@
 if(typeof window==='undefined')return;
 
 const BUSINESS_SUPPORTED_MARKETS=new Set(['Kaspi','WB','WB2']);
+const BUSINESS_ORDER_MARKETS=new Set(['Kaspi','WB','WB2','Ozon']);
 const BUSINESS_PERIODS=new Set(['day']);
 const BUSINESS_METRICS=new Set(['orders','buyouts','orderProfit','buyoutProfit']);
 const BUSINESS_UI_KEY='milioner_business_dashboard_v1';
@@ -52,10 +53,11 @@ function businessLineAmount(line,qty=Math.max(0,Number(line?.qty)||0)){
 function businessOrderGroups(bounds){
  const feed=[
   ...(state?.kaspiOrderFeed||[]).map(x=>({...x,market:String(x?.market||'Kaspi')})),
-  ...(state?.wbOrderFeed||[]).map(x=>({...x,market:String(x?.market||'WB')}))
+  ...(state?.wbOrderFeed||[]).map(x=>({...x,market:String(x?.market||'WB')})),
+  ...(state?.ozonOrderFeed||[]).map(x=>({...x,market:'Ozon'}))
  ];
  return groupMarketplaceOrders(feed).filter(g=>{
-  const market=String(g?.market||'');if(!BUSINESS_SUPPORTED_MARKETS.has(market))return false;
+  const market=String(g?.market||'');if(!BUSINESS_ORDER_MARKETS.has(market))return false;
   const ts=Number(g?.creationDate)||0;if(!(ts>=bounds.start&&ts<bounds.end))return false;
   return marketplaceLifecycleStage(market,g?.status,g?.state)!=='cancelled';
  });
@@ -133,7 +135,7 @@ function businessEnsureStyle(){
 function businessEnsureUi(){
  const reports=document.getElementById('reports');if(!reports)return null;let root=document.getElementById('businessDashboard');
  if(root)return root;businessEnsureStyle();root=document.createElement('div');root.id='businessDashboard';root.className='business-dashboard';
- root.innerHTML=`<div class="business-top"><div><h3>Сегодня</h3><div class="business-sub">Kaspi + WB1 + WB2 · по часам</div></div><button class="business-detail-btn" type="button" onclick="renderBusinessDashboard(true)">↻</button></div>
+ root.innerHTML=`<div class="business-top"><div><h3>Сегодня</h3><div class="business-sub">Kaspi + WB1 + WB2 + Ozon · по часам</div></div><button class="business-detail-btn" type="button" onclick="renderBusinessDashboard(true)">↻</button></div>
  <div class="business-metrics">${[['orders','Заказы'],['buyouts','Выкупы'],['orderProfit','Прибыль заказов'],['buyoutProfit','Прибыль выкупов']].map(([k,v])=>`<button type="button" data-business-metric="${k}" onclick="setBusinessDashboardMetric('${k}')">${v}</button>`).join('')}</div>
  <div class="business-value-card"><div id="businessValueMetric" class="business-value-title">Загрузка…</div><div class="business-value-grid"><div class="business-value-side"><div id="businessValueLabel" class="business-value-label">Сегодня</div><div id="businessValue" class="business-value">—</div><div id="businessValueMeta" class="business-value-meta"></div></div><div class="business-value-side business-yesterday-side"><div id="businessYesterdayLabel" class="business-value-label">Вчера</div><div id="businessYesterdayValue" class="business-value">—</div><div id="businessYesterdayMeta" class="business-value-meta"></div></div></div><div id="businessYesterdayCompare" class="business-compare"></div></div>
  <div id="businessChart" class="business-chart"></div>`;
@@ -223,6 +225,7 @@ function businessYesterdaySameTime(fullYesterday){
  return {...fullYesterday,bounds:partialBounds,orders,summary,netProfit,comparisonCutoff:cutoff,comparisonElapsed:elapsed};
 }
 async function businessBuildModel(force=false){
+ if(typeof window.ozonFboRefreshStatus==='function'){try{await window.ozonFboRefreshStatus()}catch(_){}}
  if(typeof window.refreshAllMarketUnitProfit==='function'&&(!(window.allMarketUnitProfit30 instanceof Map)||force)){try{await window.refreshAllMarketUnitProfit()}catch(_){}}
  const [today,yesterday]=await Promise.all([businessBuildDaySnapshot(businessDayBounds(0),1,force),businessBuildDaySnapshot(businessDayBounds(-1),-1,force)]),yesterdayCompare=businessYesterdaySameTime(yesterday);
  return {...today,yesterday,yesterdayCompare};

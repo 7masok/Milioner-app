@@ -14,6 +14,7 @@ test('business dashboard is day-only and keeps all agreed profit layers', () => 
   assert.match(ui, /BUSINESS_PERIODS=new Set\(\['day'\]\)/);
   assert.match(ui, /BUSINESS_METRICS=new Set\(\['orders','buyouts','orderProfit','buyoutProfit'\]\)/);
   assert.match(ui, /BUSINESS_SUPPORTED_MARKETS=new Set\(\['Kaspi','WB','WB2'\]\)/);
+  assert.match(ui, /BUSINESS_ORDER_MARKETS=new Set\(\['Kaspi','WB','WB2','Ozon'\]\)/);
   assert.match(ui, /allMarketUnitProfit30/);
   assert.match(ui, /loadBusinessMarketplaceSummary/);
 });
@@ -77,7 +78,7 @@ test('money formatting removes negative zero and unknown WB fields render as das
 
 test('business dashboard assets are cache-busted and served', () => {
   assert.match(html, /kaspi-report-v2\.js\?v=20260923-ozon-ads-async/);
-  assert.match(html, /business-dashboard-v1\.js\?v=20260922-business14/);
+  assert.match(html, /business-dashboard-v1\.js\?v=20260923-ozon-today/);
   assert.match(server, /'business-dashboard-v1\.js'/);
 });
 
