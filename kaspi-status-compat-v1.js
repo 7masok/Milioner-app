@@ -235,9 +235,28 @@ try{
     for(const row of model.looseAds||[])products.push({name:row.name||'Товар Ozon',qty:0,sales:0,cost:0,fees:0,ads:row.spent,profit:-row.spent});
     return{sales:g.sales,cost:g.cogs,fees,ads,profit:g.profit,qty,empty:false,products,unallocatedAds:adSource==='performance'?0:Math.abs(model.unallocatedAds||0),adSource};
   }
+  const ozonAdsJobs=new Map();
+  function watchOzonAds(days,payload){
+    const bounds=ozonBounds(days),from=ozonDay(bounds.start),to=ozonDay(bounds.end-1),key=from+'|'+to;
+    if(ozonAdsJobs.get(key))return;
+    ozonAdsJobs.set(key,1);
+    let n=0;
+    const tick=async()=>{
+      try{
+        const ads=await loadOzonSkuAds(days);
+        if(ads?.pending){if(++n<24){setTimeout(tick,4000);return;}ozonAdsJobs.delete(key);return;}
+        ozonAdsJobs.delete(key);
+        if(!ads?.configured||!Array.isArray(ads.rows)||!ads.rows.length)return;
+        const next=ozonSummaryFrom(payload,days,ads);
+        if(typeof window.onOzonSummary==='function')window.onOzonSummary(Number(days),next);
+      }catch(error){if(++n<8){setTimeout(tick,4000);return;}ozonAdsJobs.delete(key);console.warn('Ozon ads',error);}
+    };
+    tick();
+  }
   window.summarizeOzonReport=async function(days){
-    const [payload,ads]=await Promise.all([loadOzonProfitData(),loadOzonSkuAds(days).catch(error=>{console.warn('Ozon ads',error);return null;})]);
-    return ozonSummaryFrom(payload,days,ads);
+    const payload=await loadOzonProfitData();
+    watchOzonAds(days,payload);
+    return ozonSummaryFrom(payload,days,null);
   };
   window.ozonStoreDetail=window.summarizeOzonReport;
   const sumText=(groups,key)=>groups.length?groups.map(g=>ozonMoney(g[key],g.currency)).join(' + '):'—';

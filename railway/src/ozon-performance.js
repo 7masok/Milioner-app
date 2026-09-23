@@ -168,6 +168,11 @@ ozonPerformanceRouter.get('/ozon-ads', asyncRoute(async (req, res) => {
   const span = (Date.parse(to + 'T00:00:00Z') - Date.parse(from + 'T00:00:00Z')) / 86400000;
   if (span > 62) return res.status(400).json({ ok: false, error: 'Период рекламы не длиннее 62 дней' });
   if (!credentials()) return res.json({ ok: true, configured: false, from, to, rows: [] });
-  const data = await ozonSkuSpend(from, to);
-  res.json({ ok: true, configured: true, ...data });
+  const data = ozonSkuSpend(from, to);
+  const ready = await Promise.race([
+    data.then(value => ({ value })),
+    new Promise(resolve => setTimeout(() => resolve(null), 8000))
+  ]);
+  if (!ready) return res.json({ ok: true, configured: true, from, to, rows: [], pending: true });
+  res.json({ ok: true, configured: true, pending: false, ...ready.value });
 }));
