@@ -16,7 +16,7 @@
   document.head.appendChild(purchasePlanIgnore);
 
   const kaspiStatusCompat=document.createElement('script');
-  kaspiStatusCompat.src='./kaspi-status-compat-v1.js?v=20260923-ozon-ads';
+  kaspiStatusCompat.src='./kaspi-status-compat-v1.js?v=20260923-ozon-ads-exact';
   kaspiStatusCompat.async=false;
   document.head.appendChild(kaspiStatusCompat);
 

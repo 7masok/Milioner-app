@@ -161,7 +161,7 @@ try{
   }
   function ozonProfitModel(payload,days){
     const bounds=ozonBounds(days),maps=buildOzonMaps(payload),groups=new Map(),products=new Map();let unallocated=0,unallocatedAds=0;
-    const productRow=p=>{const id=String(p.id);if(!products.has(id))products.set(id,{product:p,qty:0,sales:0,commission:0,delivery:0,ads:0,services:0,other:0,net:0,cogs:0,fbo:0,adsEstimated:false});return products.get(id);};
+    const productRow=p=>{const id=String(p.id);if(!products.has(id))products.set(id,{product:p,qty:0,sales:0,commission:0,delivery:0,ads:0,services:0,other:0,net:0,cogs:0,fbo:0});return products.get(id);};
     for(const account of payload?.accounts||[])for(const raw of account?.finance?.rows||[]){
       const t=Date.parse(raw?.operation_date||'');if(!(t>=bounds.start&&t<bounds.end))continue;
       const row={...raw,_account:String(account?.account||''),_label:account?.label||account?.account||'Ozon'};
@@ -178,15 +178,13 @@ try{
         pr.qty+=q;
       }
     }
-    const list=[...products.values()],salesBase=list.reduce((n,row)=>n+Math.max(0,row.sales),0);
-    if(salesBase>0&&unallocatedAds){for(const pr of list){const share=Math.max(0,pr.sales)/salesBase;if(!(share>0))continue;const part=unallocatedAds*share;pr.ads+=part;pr.net+=part;pr.adsEstimated=true;}}
-    for(const pr of list){
+    for(const pr of products.values()){
       pr.cogs=pr.qty*ozonUnitCost(pr.product);pr.fbo=pr.qty*ozonFboUnitCost(pr.product.id);
       const currency='KZT',g=groups.get(currency);if(g){g.cogs+=pr.cogs;g.fbo+=pr.fbo;}
       pr.profit=pr.net-pr.cogs-pr.fbo;pr.margin=pr.sales?pr.profit/pr.sales*100:0;
     }
     for(const g of groups.values()){g.profit=g.net-g.cogs-g.fbo;g.margin=g.sales?g.profit/g.sales*100:0;}
-    return{groups:[...groups.values()],products:list.sort((a,b)=>b.sales-a.sales),unallocated,unallocatedAds,adsEstimated:salesBase>0&&!!unallocatedAds};
+    return{groups:[...groups.values()],products:[...products.values()].sort((a,b)=>b.sales-a.sales),unallocated,unallocatedAds};
   }
   function ozonSummaryFrom(payload,days){
     const model=ozonProfitModel(payload,days);
@@ -195,8 +193,8 @@ try{
     if(!g)return{sales:0,cost:0,fees:0,ads:0,profit:0,qty:0,empty:true,products:[]};
     const ads=Math.abs(g.ads),deductions=g.sales-g.net,fees=Math.max(0,deductions-ads)+Math.max(0,g.fbo);
     const qty=model.products.reduce((n,row)=>n+Math.max(0,row.qty),0);
-    const products=model.products.map(row=>({name:row.product?.name||'Товар',qty:row.qty,sales:row.sales,cost:(row.cogs||0)+(row.fbo||0),fees:Math.max(0,(row.sales||0)-(row.net||0)-Math.abs(row.ads||0)),ads:Math.abs(row.ads||0),adsEstimated:!!row.adsEstimated,profit:row.profit}));
-    return{sales:g.sales,cost:g.cogs,fees,ads,profit:g.profit,qty,empty:false,products,adsEstimated:!!model.adsEstimated,allocatedAds:model.adsEstimated?Math.abs(model.unallocatedAds||0):0};
+    const products=model.products.map(row=>({name:row.product?.name||'Товар',qty:row.qty,sales:row.sales,cost:(row.cogs||0)+(row.fbo||0),fees:Math.max(0,(row.sales||0)-(row.net||0)-Math.abs(row.ads||0)),ads:Math.abs(row.ads||0),profit:row.profit}));
+    return{sales:g.sales,cost:g.cogs,fees,ads,profit:g.profit,qty,empty:false,products,unallocatedAds:Math.abs(model.unallocatedAds||0)};
   }
   window.summarizeOzonReport=async function(days){return ozonSummaryFrom(await loadOzonProfitData(),days)};
   window.ozonStoreDetail=window.summarizeOzonReport;
@@ -234,7 +232,7 @@ try{
   }
   window.openOzonProductProfit=function(){
     const model=window.__ozonProfitModel;if(!model){if(typeof openStoreDetail==='function')return openStoreDetail('Ozon',typeof reportPeriod!=='undefined'?reportPeriod:30);return renderOzonProfitReport();}
-    const body=model.products.length?model.products.map(r=>'<div class="item" style="margin-top:8px"><div class="row"><div class="grow"><b>'+esc(r.product?.name||'Товар')+'</b><div class="muted">Продано: '+r.qty.toLocaleString('ru-RU')+' шт.</div></div><b>'+(r.adsEstimated?'≈ ':'')+ozonMoney(r.profit,'KZT')+'</b></div><div class="row" style="margin-top:6px"><span class="grow muted">Продажи</span><b>'+ozonMoney(r.sales,'KZT')+'</b></div><div class="row" style="margin-top:4px"><span class="grow muted">Расходы Ozon</span><b>'+ozonMoney(r.net-r.sales,'KZT')+'</b></div><div class="row" style="margin-top:4px"><span class="grow muted">Реклама</span><b>'+(r.adsEstimated?'≈ ':'')+ozonMoney(Math.abs(r.ads),'KZT')+'</b></div><div class="row" style="margin-top:4px"><span class="grow muted">Себестоимость</span><b>-'+ozonMoney(r.cogs,'KZT').replace(/^-/,'')+'</b></div><div class="row" style="margin-top:4px"><span class="grow muted">FBO / кросс-докинг</span><b>-'+ozonMoney(r.fbo,'KZT').replace(/^-/,'')+'</b></div><div class="row" style="margin-top:6px"><span class="grow muted">Маржа</span><b>'+(r.adsEstimated?'≈ ':'')+r.margin.toLocaleString('ru-RU',{maximumFractionDigits:1})+'%</b></div></div>').join(''):'<div class="empty">Нет привязанных продаж Ozon за выбранный период.</div>';
+    const body=model.products.length?model.products.map(r=>'<div class="item" style="margin-top:8px"><div class="row"><div class="grow"><b>'+esc(r.product?.name||'Товар')+'</b><div class="muted">Продано: '+r.qty.toLocaleString('ru-RU')+' шт.</div></div><b>'+ozonMoney(r.profit,'KZT')+'</b></div><div class="row" style="margin-top:6px"><span class="grow muted">Продажи</span><b>'+ozonMoney(r.sales,'KZT')+'</b></div><div class="row" style="margin-top:4px"><span class="grow muted">Расходы Ozon</span><b>'+ozonMoney(r.net-r.sales,'KZT')+'</b></div><div class="row" style="margin-top:4px"><span class="grow muted">Реклама</span><b>'+ozonMoney(Math.abs(r.ads),'KZT')+'</b></div><div class="row" style="margin-top:4px"><span class="grow muted">Себестоимость</span><b>-'+ozonMoney(r.cogs,'KZT').replace(/^-/,'')+'</b></div><div class="row" style="margin-top:4px"><span class="grow muted">FBO / кросс-докинг</span><b>-'+ozonMoney(r.fbo,'KZT').replace(/^-/,'')+'</b></div><div class="row" style="margin-top:6px"><span class="grow muted">Маржа</span><b>'+r.margin.toLocaleString('ru-RU',{maximumFractionDigits:1})+'%</b></div></div>').join(''):'<div class="empty">Нет привязанных продаж Ozon за выбранный период.</div>';
     showSheet('<h3>Ozon FBO · прибыль по товарам</h3>'+body);
   };
   window.openOzonFboCosts=function(){
