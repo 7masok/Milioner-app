@@ -11,7 +11,7 @@
   document.head.appendChild(purchaseDelete);
 
   const purchasePlanIgnore=document.createElement('script');
-  purchasePlanIgnore.src='./purchase-plan-ignore-v1.js?v=20260901-purchase-speed';
+  purchasePlanIgnore.src='./purchase-plan-ignore-v1.js?v=20260923-plan-compact';
   purchasePlanIgnore.async=false;
   document.head.appendChild(purchasePlanIgnore);
 

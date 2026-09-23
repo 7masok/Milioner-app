@@ -110,7 +110,7 @@ function decoratePurchasePlan(){
     manager.className='item';
     manager.dataset.purchasePlanHiddenManager='1';
     manager.style.marginTop='8px';
-    manager.innerHTML=`<div class="row"><div class="grow"><b>Скрытые из закупки</b><div class="muted">Не будут появляться в рекомендациях, пока вы их не вернёте.</div></div><button type="button" class="btn" onclick="openIgnoredPurchasePlanProducts()">Показать · ${hidden.length}</button></div>`;
+    manager.innerHTML=`<div class="row"><b>Скрытые</b><button type="button" class="btn" style="margin-left:auto" onclick="openIgnoredPurchasePlanProducts()">Показать · ${hidden.length}</button></div>`;
     root.appendChild(manager);
   }
 }
