@@ -235,14 +235,15 @@ function businessComparison(current,previous){
  return {html:'<span class="business-compare-label">разница</span><span class="business-compare-delta '+cls+'">'+sign+businessMoney(delta)+pctText+'</span>'};
 }
 function businessPaint(model){
- businessLastModel=model;businessPaintTabs();const info=businessMetricInfo(model),yModel=model.yesterdayCompare||model.yesterday,yesterdayInfo=yModel?businessMetricInfo(yModel):null,
+ businessLastModel=model;businessPaintTabs();const info=businessMetricInfo(model),full=model.yesterday,same=model.yesterdayCompare||full,fullInfo=full?businessMetricInfo(full):null,sameInfo=same?businessMetricInfo(same):null,
  metric=document.getElementById('businessValueMetric'),label=document.getElementById('businessValueLabel'),value=document.getElementById('businessValue'),meta=document.getElementById('businessValueMeta'),
  yLabel=document.getElementById('businessYesterdayLabel'),yValue=document.getElementById('businessYesterdayValue'),yMeta=document.getElementById('businessYesterdayMeta'),
  compare=document.getElementById('businessYesterdayCompare');
  if(metric)metric.textContent=info.label;if(label)label.textContent=businessShortDate(model.bounds.start)+' · сегодня';if(value)value.textContent=businessMaybeMoney(info.value,Boolean(info.estimated));if(meta)meta.textContent=info.meta;
- if(yLabel)yLabel.textContent=yModel?businessShortDate(yModel.bounds.start)+' · до '+businessHourMinute(yModel.comparisonCutoff||yModel.bounds.end):'Вчера';
- if(yValue)yValue.textContent=yesterdayInfo?businessMaybeMoney(yesterdayInfo.value,Boolean(yesterdayInfo.estimated)):'—';if(yMeta)yMeta.textContent=yesterdayInfo?yesterdayInfo.meta:'';
- if(compare)compare.innerHTML=yesterdayInfo?businessComparison(info.value,yesterdayInfo.value).html:'';businessPaintChart(model,info.field);
+ if(yLabel)yLabel.textContent=full?businessShortDate(full.bounds.start)+' · весь день':'Вчера';
+ if(yValue)yValue.textContent=fullInfo?businessMaybeMoney(fullInfo.value,Boolean(fullInfo.estimated)):'—';if(yMeta)yMeta.textContent=fullInfo?fullInfo.meta:'';
+ if(compare){const until=same?businessHourMinute(same.comparisonCutoff||same.bounds.end):'';compare.innerHTML=(sameInfo?businessComparison(info.value,sameInfo.value).html:'')+(until&&sameInfo?'<span class="business-compare-label">вчера до '+until+' · '+businessMaybeMoney(sameInfo.value,Boolean(sameInfo.estimated))+'</span>':'')}
+ businessPaintChart(model,info.field);
 }
 window.renderBusinessDashboard=async function(force=false){
  const root=businessEnsureUi();if(!root)return;if(!document.getElementById('reports')?.classList.contains('active')){businessPaintTabs();return}
