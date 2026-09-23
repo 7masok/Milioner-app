@@ -235,11 +235,11 @@ async function renderOzonReport(){
  box.innerHTML=cards+'<button class="btn dark full" onclick="openOzonFinanceDetails()">Все операции Ozon</button><div class="link-note"><b>Это не чистая прибыль.</b> Здесь показаны финансовые начисления Ozon. Себестоимость товара, налоги и прочие расходы бизнеса не вычитаются. Данные Ozon сейчас хранятся за последние 30 дней.</div>';
 }
 window.openOzonFinanceDetails=async()=>{await load();const model=financeModel(reportPeriod);const rows=model.rows.slice().sort((a,b)=>Date.parse(b.operation_date||'')-Date.parse(a.operation_date||''));const body=rows.length?rows.map(r=>'<div class="item" style="margin-top:8px"><div class="row"><div class="grow"><b>'+esc(r.operation_type_name||'Операция Ozon')+'</b><div class="muted">'+new Date(r.operation_date).toLocaleDateString('ru-RU')+(r.posting?.posting_number?' · заказ '+esc(r.posting.posting_number):'')+(r._account?' · '+esc(r._account):'')+'</div></div><b>'+money(r.amount,r.currency_code||r.currency)+'</b></div></div>').join(''):'<div class="empty">Операций нет</div>';showSheet('<h3>Ozon FBO · финансовые операции</h3>'+body+'<div class="link-note">Суммы показаны в валюте, которую вернул Ozon. Это не расчёт чистой прибыли.</div>');};
-window.setReportMarket=function(market){if(market==='Ozon'){ozonReportActive=true;state.settings.reportMarket='Ozon';try{save();}catch(_){}renderOzonReport();return;}ozonReportActive=false;return baseSetReportMarket?.(market);};
-window.renderReports=function(){if(ozonReportActive||String(state.settings?.reportMarket||'')==='Ozon'){ozonReportActive=true;renderReportCustomRange();document.querySelectorAll('[data-report-period]').forEach(b=>b.classList.toggle('active',Number(b.dataset.reportPeriod)===reportPeriodPreset));renderOzonReport();return;}return baseRenderReports?.();};
+window.setReportMarket=function(market){ozonReportActive=market==='Ozon';return baseSetReportMarket?.(market);};
+window.renderReports=function(){return baseRenderReports?.();};
 function ensureReportTab(){const tabs=document.getElementById('reportMarketTabs');if(tabs&&!tabs.querySelector('[data-report-market="Ozon"]'))tabs.insertAdjacentHTML('beforeend','<button class="market-tab" data-report-market="Ozon" onclick="setReportMarket(\'Ozon\')">Ozon</button>');}
 ensureReportTab();
 ensureOzonHeaderIndicator();
-load().then(()=>{updateFboMetric();updateOzonHeaderIndicator();if(document.getElementById('products')?.classList.contains('active'))baseRenderProducts(false);if(ozonReportActive&&document.getElementById('reports')?.classList.contains('active'))renderOzonReport();});
+load().then(()=>{updateFboMetric();updateOzonHeaderIndicator();if(document.getElementById('products')?.classList.contains('active'))baseRenderProducts(false);});
 setInterval(()=>{if(document.getElementById('home')?.classList.contains('active')&&selectedOrderMarket==='Ozon')load(true);},60000);
 })();

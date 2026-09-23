@@ -186,14 +186,18 @@ try{
     for(const g of groups.values()){g.profit=g.net-g.cogs-g.fbo;g.margin=g.sales?g.profit/g.sales*100:0;}
     return{groups:[...groups.values()],products:[...products.values()].sort((a,b)=>b.sales-a.sales),unallocated};
   }
-  window.summarizeOzonReport=async function(days){
-    const payload=await loadOzonProfitData(),model=ozonProfitModel(payload,days);
+  function ozonSummaryFrom(payload,days){
+    const model=ozonProfitModel(payload,days);
+    window.__ozonProfitModel=model;
     const g=model.groups.find(x=>x.currency==='KZT')||model.groups[0]||null;
-    if(!g)return{sales:0,cost:0,fees:0,ads:0,profit:0,qty:0,empty:true};
+    if(!g)return{sales:0,cost:0,fees:0,ads:0,profit:0,qty:0,empty:true,products:[]};
     const ads=Math.abs(g.ads),deductions=g.sales-g.net,fees=Math.max(0,deductions-ads)+Math.max(0,g.fbo);
     const qty=model.products.reduce((n,row)=>n+Math.max(0,row.qty),0);
-    return{sales:g.sales,cost:g.cogs,fees,ads,profit:g.profit,qty,empty:false};
-  };
+    const products=model.products.map(row=>({name:row.product?.name||'Товар',qty:row.qty,sales:row.sales,cost:(row.cogs||0)+(row.fbo||0),fees:Math.max(0,(row.sales||0)-(row.net||0)-Math.abs(row.ads||0)),ads:Math.abs(row.ads||0),profit:row.profit}));
+    return{sales:g.sales,cost:g.cogs,fees,ads,profit:g.profit,qty,empty:false,products};
+  }
+  window.summarizeOzonReport=async function(days){return ozonSummaryFrom(await loadOzonProfitData(),days)};
+  window.ozonStoreDetail=window.summarizeOzonReport;
   const sumText=(groups,key)=>groups.length?groups.map(g=>ozonMoney(g[key],g.currency)).join(' + '):'—';
   async function renderOzonProfitReport(){
     if(String(state?.settings?.reportMarket||'')!=='Ozon')return;
@@ -227,7 +231,7 @@ try{
     }catch(error){if(box)box.innerHTML='<div class="empty">Не удалось рассчитать прибыль Ozon: '+esc(String(error?.message||error))+'</div>';}
   }
   window.openOzonProductProfit=function(){
-    const model=window.__ozonProfitModel;if(!model)return renderOzonProfitReport();
+    const model=window.__ozonProfitModel;if(!model){if(typeof openStoreDetail==='function')return openStoreDetail('Ozon',typeof reportPeriod!=='undefined'?reportPeriod:30);return renderOzonProfitReport();}
     const body=model.products.length?model.products.map(r=>'<div class="item" style="margin-top:8px"><div class="row"><div class="grow"><b>'+esc(r.product?.name||'Товар')+'</b><div class="muted">Продано: '+r.qty.toLocaleString('ru-RU')+' шт.</div></div><b>'+ozonMoney(r.profit,'KZT')+'</b></div><div class="row" style="margin-top:6px"><span class="grow muted">Продажи</span><b>'+ozonMoney(r.sales,'KZT')+'</b></div><div class="row" style="margin-top:4px"><span class="grow muted">Расходы Ozon</span><b>'+ozonMoney(r.net-r.sales,'KZT')+'</b></div><div class="row" style="margin-top:4px"><span class="grow muted">Реклама</span><b>'+ozonMoney(r.ads,'KZT')+'</b></div><div class="row" style="margin-top:4px"><span class="grow muted">Себестоимость</span><b>-'+ozonMoney(r.cogs,'KZT').replace(/^-/,'')+'</b></div><div class="row" style="margin-top:4px"><span class="grow muted">FBO / кросс-докинг</span><b>-'+ozonMoney(r.fbo,'KZT').replace(/^-/,'')+'</b></div><div class="row" style="margin-top:6px"><span class="grow muted">Маржа</span><b>'+r.margin.toLocaleString('ru-RU',{maximumFractionDigits:1})+'%</b></div></div>').join(''):'<div class="empty">Нет привязанных продаж Ozon за выбранный период.</div>';
     showSheet('<h3>Ozon FBO · прибыль по товарам</h3>'+body);
   };
@@ -239,23 +243,15 @@ try{
   window.saveOzonFboCosts=function(){
     state.settings=state.settings||{};const next={...(state.settings.ozonFboUnitCosts||{})};
     document.querySelectorAll('[data-ozon-fbo-cost]').forEach(input=>{const key=String(input.dataset.ozonFboCost||'');if(key)next[key]=Math.max(0,ozonNum(input.value));});
-    state.settings.ozonFboUnitCosts=next;try{save();}catch(error){console.warn('Ozon FBO cost save failed',error);}renderOzonProfitReport();
+    state.settings.ozonFboUnitCosts=next;try{save();}catch(error){console.warn('Ozon FBO cost save failed',error);}if(typeof openStoreDetail==='function')return openStoreDetail('Ozon',typeof reportPeriod!=='undefined'?reportPeriod:30);renderReports?.();
   };
   window.setReportMarket=function(market){
-    if(market==='Ozon'){
-      state.settings=state.settings||{};state.settings.reportMarket='Ozon';try{save();}catch(_){}
-      return renderOzonProfitReport();
-    }
     return baseOzonSetReportMarket?.(market);
   };
   window.renderReports=function(){
-    if(String(state?.settings?.reportMarket||'')==='Ozon'){
-      try{renderReportCustomRange();document.querySelectorAll('[data-report-period]').forEach(b=>b.classList.toggle('active',Number(b.dataset.reportPeriod)===reportPeriodPreset));}catch(_){}
-      return renderOzonProfitReport();
-    }
     return baseOzonRenderReports?.();
   };
-  const initOzonProfit=()=>{if(String(state?.settings?.reportMarket||'')==='Ozon'&&document.getElementById('reports')?.classList.contains('active'))renderOzonProfitReport();};
+  const initOzonProfit=()=>{};
   if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',initOzonProfit,{once:true});else initOzonProfit();
 }catch(error){
   console.warn('Ozon profit compatibility hook failed',error);
