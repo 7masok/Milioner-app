@@ -7,7 +7,7 @@ const BUSINESS_ORDER_MARKETS=new Set(['Kaspi','WB','WB2','Ozon']);
 const BUSINESS_PERIODS=new Set(['day']);
 const BUSINESS_METRICS=new Set(['orders','buyouts','orderProfit','buyoutProfit']);
 const BUSINESS_UI_KEY='milioner_business_dashboard_v1';
-let businessRenderSeq=0,businessSummaryCache=new Map(),businessLastModel=null,businessOzonPayload=null;
+let businessRenderSeq=0,businessSummaryCache=new Map(),businessLastModel=null;
 let businessPeriod='day',businessMetric='orders';
 try{
  const saved=JSON.parse(localStorage.getItem(BUSINESS_UI_KEY)||'{}');
@@ -192,53 +192,11 @@ async function businessLoadSummary(days,force=false){
  const promise=window.loadBusinessMarketplaceSummary(days,{force}).then(data=>{businessSummaryCache.set(key,{at:Date.now(),data});return data}).catch(e=>{businessSummaryCache.delete(key);throw e});
  businessSummaryCache.set(key,{at:Date.now(),promise});return promise;
 }
-function businessAddOzonBuyouts(bounds,buckets,ozonProfit){
- const rows=[];
- for(const account of businessOzonPayload?.accounts||[]){
-  const qtyByPostingSku=new Map();
-  for(const posting of account.postings?.rows||[]){
-   const number=String(posting.posting_number||'');
-   for(const item of posting.products||[]){
-    const sku=String(item.sku||item.offer_id||'').trim(),q=Math.max(0,Number(item.quantity)||0);
-    if(number&&sku&&q)qtyByPostingSku.set(number+'|'+sku,q);
-   }
-  }
-  for(const raw of account.finance?.rows||[]){
-   const t=Date.parse(raw?.operation_date||'');
-   if(!(t>=bounds.start&&t<bounds.end))continue;
-   const named=String(raw?.operation_type_name||'').toLowerCase()==='продажа';
-   const sale=Number(raw?.accruals_for_sale)||0;
-   if(!(sale||named))continue;
-   const amount=sale||Number(raw?.amount)||0;
-   if(!amount)continue;
-   const sku=String(raw?.items?.[0]?.sku||'').trim(),posting=String(raw?.posting?.posting_number||'');
-   const pieces=qtyByPostingSku.get(posting+'|'+sku)||0;
-   rows.push({t,amount,qty:amount<0?-pieces:pieces});
-  }
- }
- let revenue=0,qty=0;
- for(const row of rows){
-  revenue+=row.amount;qty+=row.qty;
-  const bucket=businessBucketFor(buckets,row.t);
-  if(bucket){bucket.buyouts+=row.amount;bucket.buyoutQty+=row.qty}
- }
- const profit=Number(ozonProfit);
- if(Number.isFinite(profit)&&revenue){
-  for(const row of rows){
-   const bucket=businessBucketFor(buckets,row.t);
-   if(bucket)bucket.buyoutProfit+=profit*(row.amount/revenue);
-  }
- }
- return {revenue,qty,profit:Number.isFinite(profit)?profit:0};
-}
 async function businessBuildDaySnapshot(bounds,summaryDays,force=false){
  const buckets=businessBuckets('day',bounds),groups=businessOrderGroups(bounds),orders=businessEstimateOrders(groups,buckets,window.allMarketUnitProfit30),local=businessLocalBuyouts(bounds,buckets),summary=await businessLoadSummary(summaryDays,force);
  businessNormalizeBuyoutBuckets(buckets,local,summary);
- let ozonProfit=null;
- if(typeof window.summarizeOzonReport==='function'){try{const ozon=await window.summarizeOzonReport(summaryDays);ozonProfit=Number(ozon?.profit)}catch(_){}}
- const ozon=businessAddOzonBuyouts(bounds,buckets,ozonProfit),merged={...summary,revenue:(Number(summary?.revenue)||0)+ozon.revenue,qty:(Number(summary?.qty)||0)+ozon.qty,profit:summary?.profit===null||summary?.profit===undefined||!Number.isFinite(Number(summary?.profit))?ozon.profit:(Number(summary.profit)||0)+ozon.profit};
- const netProfit=merged.profit===null||merged.profit===undefined||!Number.isFinite(Number(merged.profit))?null:Number(merged.profit);
- return {period:'day',bounds,buckets,orders,local,summary:merged,netProfit};
+ const netProfit=summary?.profit===null||summary?.profit===undefined||!Number.isFinite(Number(summary.profit))?null:Number(summary.profit);
+ return {period:'day',bounds,buckets,orders,local,summary,netProfit};
 }
 function businessElapsedTodayMs(){
  const start=businessDayStart().getTime();
@@ -267,7 +225,7 @@ function businessYesterdaySameTime(fullYesterday){
  return {...fullYesterday,bounds:partialBounds,orders,summary,netProfit,comparisonCutoff:cutoff,comparisonElapsed:elapsed};
 }
 async function businessBuildModel(force=false){
- if(typeof window.ozonFboRefreshStatus==='function'){try{businessOzonPayload=await window.ozonFboRefreshStatus()}catch(_){}}
+ if(typeof window.ozonFboRefreshStatus==='function'){try{await window.ozonFboRefreshStatus()}catch(_){}}
  if(typeof window.refreshAllMarketUnitProfit==='function'&&(!(window.allMarketUnitProfit30 instanceof Map)||force)){try{await window.refreshAllMarketUnitProfit()}catch(_){}}
  const [today,yesterday]=await Promise.all([businessBuildDaySnapshot(businessDayBounds(0),1,force),businessBuildDaySnapshot(businessDayBounds(-1),-1,force)]),yesterdayCompare=businessYesterdaySameTime(yesterday);
  return {...today,yesterday,yesterdayCompare};

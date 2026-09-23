@@ -52,7 +52,7 @@ test('business profit no longer subtracts Finance-tab expenses', () => {
   assert.doesNotMatch(ui, /Расходы бизнеса из «Финансов»/);
   assert.doesNotMatch(ui, /двойной учёт/);
   assert.doesNotMatch(ui, /financeAnalyticsEntry\(tx\)/);
-  assert.match(ui, /const netProfit=merged\.profit===null\|\|merged\.profit===undefined/);
+  assert.match(ui, /const netProfit=summary\?\.profit===null\|\|summary\?\.profit===undefined/);
   assert.match(ui, /meta:model\.summary\.estimated\?'≈ по данным маркетплейсов':'по данным маркетплейсов'/);
 });
 
@@ -78,7 +78,7 @@ test('money formatting removes negative zero and unknown WB fields render as das
 
 test('business dashboard assets are cache-busted and served', () => {
   assert.match(html, /kaspi-report-v2\.js\?v=20260923-ozon-ads-async/);
-  assert.match(html, /business-dashboard-v1\.js\?v=20260923-ozon-buyouts/);
+  assert.match(html, /business-dashboard-v1\.js\?v=20260923-ozon-today/);
   assert.match(server, /'business-dashboard-v1\.js'/);
 });
 
