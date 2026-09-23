@@ -186,6 +186,14 @@ try{
     for(const g of groups.values()){g.profit=g.net-g.cogs-g.fbo;g.margin=g.sales?g.profit/g.sales*100:0;}
     return{groups:[...groups.values()],products:[...products.values()].sort((a,b)=>b.sales-a.sales),unallocated};
   }
+  window.summarizeOzonReport=async function(days){
+    const payload=await loadOzonProfitData(),model=ozonProfitModel(payload,days);
+    const g=model.groups.find(x=>x.currency==='KZT')||model.groups[0]||null;
+    if(!g)return{sales:0,cost:0,fees:0,ads:0,profit:0,qty:0,empty:true};
+    const ads=Math.abs(g.ads),deductions=g.sales-g.net,fees=Math.max(0,deductions-ads)+Math.max(0,g.fbo);
+    const qty=model.products.reduce((n,row)=>n+Math.max(0,row.qty),0);
+    return{sales:g.sales,cost:g.cogs,fees,ads,profit:g.profit,qty,empty:false};
+  };
   const sumText=(groups,key)=>groups.length?groups.map(g=>ozonMoney(g[key],g.currency)).join(' + '):'—';
   async function renderOzonProfitReport(){
     if(String(state?.settings?.reportMarket||'')!=='Ozon')return;
