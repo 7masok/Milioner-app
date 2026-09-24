@@ -34,9 +34,10 @@ MARKET_SYNC_ENABLED=true
 Do not commit `.env`, database URLs, API tokens, feed keys, or marketplace
 credentials.
 
-Login is WebAuthn (fingerprint / Face ID / Windows Hello) on the device.
-`APP_ADMIN_TOKEN` is only the recovery code used to bind a new device. After
-the first passkey is saved, the 4-digit PIN login is disabled.
+Login uses `APP_ADMIN_TOKEN` as the access code on every device.
+WebAuthn credentials may remain in the database for compatibility, but the
+normal sign-in flow does not require fingerprints, Windows Hello, USB keys, or
+device binding.
 
 ## Running
 
