@@ -163,9 +163,9 @@ export async function authConfig(_req, res, next) {
       ok: true,
       enabled: Boolean(config.adminToken),
       sessionHours: SESSION_TTL_MS / 3_600_000,
-      webauthn: true,
+      webauthn: false,
       credentialCount: count,
-      passwordLogin: count === 0
+      passwordLogin: true
     });
   } catch (error) {
     next(error);
@@ -175,9 +175,6 @@ export async function authConfig(_req, res, next) {
 export async function login(req, res, next) {
   try {
     if (!config.adminToken) return res.status(503).json({ ok:false, error:'owner-password-not-configured' });
-    if (await credentialCount() > 0) {
-      return res.status(403).json({ ok:false, error:'use-webauthn' });
-    }
     const gate = consumeLoginAttempt(req);
     if (!gate.ok) return res.status(gate.status).json({ ok:false, error:gate.error });
     if (!safeEqual(req.body?.password, config.adminToken)) {
