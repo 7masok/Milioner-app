@@ -12,7 +12,7 @@
 *{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font-family:system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
 button,input,select{font:inherit}button{cursor:pointer}.app{max-width:560px;margin:auto;min-height:100vh;padding-bottom:76px}
 header{position:sticky;top:0;z-index:5;background:#fff;border-bottom:1px solid var(--line);padding:15px 16px 12px}
-.headrow{display:flex;justify-content:space-between;align-items:center;gap:12px}.title{font-size:26px;font-weight:800}.head-actions{display:flex;align-items:center;gap:7px;flex:none}.ai-head-btn{border:0;background:#111;color:#fff;border-radius:12px;padding:9px 12px;font-weight:800;min-width:52px;height:44px}.stock-alert-button{position:relative;width:44px;min-width:44px;height:44px;padding:0;border:0;background:transparent;display:inline-flex;align-items:center;justify-content:center;color:#111;border-radius:11px}.stock-alert-button:hover{background:#f4f5f6}.stock-alert-button:active{transform:scale(.96)}.stock-alert-icon{display:block;width:27px;height:27px;fill:none;stroke:currentColor;stroke-width:2.15;stroke-linecap:round;stroke-linejoin:round}.stock-alert-count{position:absolute;right:-3px;top:-4px;min-width:20px;height:20px;padding:0 5px;border-radius:12px;background:#d52b2b;color:#fff;font:800 11px/18px system-ui;text-align:center;border:2px solid #fff}.sync-now-icon{display:inline-block}.sync-now-busy .sync-now-icon{animation:syncNowSpin .8s linear infinite}@keyframes syncNowSpin{to{transform:rotate(360deg)}}.sync{font-size:11px;color:var(--muted);margin-top:6px}.sync.sync-compact{margin-top:7px;display:flex;align-items:flex-start;justify-content:space-between;gap:12px;font-size:12px;color:var(--muted)}.compact-cloud{display:flex;align-items:center;gap:5px;white-space:nowrap;min-width:0;padding-top:1px}.compact-cloud-label{color:var(--muted)}#cloudStatus{font-weight:650;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:120px}.compact-market-stack{display:flex;flex-direction:column;align-items:flex-start;gap:2px;min-width:138px}.compact-market-row{appearance:none;border:0;background:transparent;padding:1px 0;color:var(--muted);display:grid;grid-template-columns:11px 38px auto;align-items:center;gap:3px;font-size:11px;line-height:1.35;text-align:left;white-space:nowrap}.compact-market-row b{color:var(--text);font-size:11px}.compact-market-time{font-variant-numeric:tabular-nums;color:var(--muted)}.compact-market-row .dot{margin:0;width:7px;height:7px}.compact-market-row:active{opacity:.65}.dot{display:inline-block;width:7px;height:7px;border-radius:50%;background:var(--ok);margin:0 4px}@media(max-width:380px){.sync.sync-compact{gap:7px}.compact-cloud{font-size:11px}#cloudStatus{max-width:92px}.compact-market-stack{min-width:124px}.compact-market-row{grid-template-columns:10px 34px auto;font-size:10px}.compact-market-row b{font-size:10px}}
+.headrow{display:flex;justify-content:space-between;align-items:center;gap:12px}.title{font-size:26px;font-weight:800}.head-actions{display:flex;align-items:center;gap:7px;flex:none}.ai-head-btn{border:0;background:#111;color:#fff;border-radius:12px;padding:9px 12px;font-weight:800;min-width:52px;height:44px}#stockAlertBell.stock-alert-button{position:relative;width:44px;min-width:44px;height:44px;flex:0 0 44px;padding:0;border:0;background:transparent;display:inline-flex;align-items:center;justify-content:center;color:#111;border-radius:11px}#stockAlertBell.stock-alert-button:hover{background:#f4f5f6}#stockAlertBell.stock-alert-button:active{transform:scale(.96)}.stock-alert-icon{display:block;width:27px;height:27px;fill:none;stroke:currentColor;stroke-width:2.15;stroke-linecap:round;stroke-linejoin:round}.stock-alert-count{position:absolute;right:-3px;top:-4px;min-width:20px;height:20px;padding:0 5px;border-radius:12px;background:#d52b2b;color:#fff;font:800 11px/18px system-ui;text-align:center;border:2px solid #fff}.sync-now-icon{display:inline-block}.sync-now-busy .sync-now-icon{animation:syncNowSpin .8s linear infinite}@keyframes syncNowSpin{to{transform:rotate(360deg)}}.sync{font-size:11px;color:var(--muted);margin-top:6px}.sync.sync-compact{margin-top:7px;display:flex;align-items:flex-start;justify-content:space-between;gap:12px;font-size:12px;color:var(--muted)}.compact-cloud{display:flex;align-items:center;justify-content:flex-end;gap:5px;white-space:nowrap;width:132px;min-width:132px;flex:0 0 132px;padding-top:1px}.compact-cloud-label{color:var(--muted);flex:0 0 auto}#cloudStatus{display:inline-block;width:76px;min-width:76px;font-weight:650;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;text-align:left}.compact-market-stack{display:flex;flex-direction:column;align-items:flex-start;gap:2px;min-width:138px}.compact-market-row{appearance:none;border:0;background:transparent;padding:1px 0;color:var(--muted);display:grid;grid-template-columns:11px 38px auto;align-items:center;gap:3px;font-size:11px;line-height:1.35;text-align:left;white-space:nowrap}.compact-market-row b{color:var(--text);font-size:11px}.compact-market-time{font-variant-numeric:tabular-nums;color:var(--muted)}.compact-market-row .dot{margin:0;width:7px;height:7px}.compact-market-row:active{opacity:.65}.dot{display:inline-block;width:7px;height:7px;border-radius:50%;background:var(--ok);margin:0 4px}@media(max-width:380px){.sync.sync-compact{gap:7px}.compact-cloud{font-size:11px;width:116px;min-width:116px;flex-basis:116px}#cloudStatus{width:64px;min-width:64px}.compact-market-stack{min-width:124px}.compact-market-row{grid-template-columns:10px 34px auto;font-size:10px}.compact-market-row b{font-size:10px}}
 main{padding:14px}.view{display:none}.view.active{display:block}
 .metrics{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px}.metrics .card{min-width:0;padding:12px}.metrics .num{font-size:18px}.home-order-metrics{grid-template-columns:repeat(2,minmax(0,1fr))}.product-stock-metrics{grid-template-columns:repeat(2,minmax(0,1fr));margin-bottom:12px}.card{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:13px}.label{font-size:11px;color:var(--muted)}.num{font-size:19px;font-weight:800;margin-top:7px}.small{font-size:11px;color:var(--muted);margin-top:3px}
 .period{display:flex;gap:7px;margin:12px 0;overflow:auto}.chip{border:1px solid var(--line);background:#fff;border-radius:20px;padding:7px 11px;font-size:12px;white-space:nowrap}.chip.active{background:#111;color:#fff;border-color:#111}
@@ -188,6 +188,8 @@ const APP_FRESH_LOGIN_KEY=KEY+'_fresh_login_ui_v1';
 const ORDER_SEARCH_SESSION_KEY=KEY+'_order_search_session_v1';
 const ORDER_UNMATCHED_SESSION_KEY=KEY+'_order_unmatched_session_v1';
 const HOME_CACHE_KEY=KEY+'_home_cache_v1';
+const HOME_CACHE_FRESH_MS=15000;
+let homeCacheVerifiedAt=0;
 const nativeFetch=window.fetch.bind(window);
 let ownerSessionToken=sessionStorage.getItem(APP_SESSION_KEY)||'';
 let ownerAuthEnabled=false;
@@ -1294,7 +1296,7 @@ function compactHomeFeed(){
 function writeHomeCache(){
   homeCacheWriteScheduled=false;
   try{
-    const rows=compactHomeFeed(),payload={v:1,cachedAt:Date.now(),rows,serverMarketStatus:state.settings?.serverMarketStatus||{},lastSync:Number(state.settings?.lastSync||0)};
+    const rows=compactHomeFeed(),payload={v:1,cachedAt:Date.now(),verifiedAt:Number(homeCacheVerifiedAt||0),rows,serverMarketStatus:state.settings?.serverMarketStatus||{},lastSync:Number(state.settings?.lastSync||0)};
     localStorage.setItem(HOME_CACHE_KEY,JSON.stringify(payload));
     return true;
   }catch(e){console.warn('home cache write failed',e);return false}
@@ -1305,12 +1307,12 @@ function scheduleHomeCacheWrite(){
   if(typeof requestIdleCallback==='function')requestIdleCallback(run,{timeout:1500});else setTimeout(run,180);
 }
 function hydrateHomeCache(){
-  const cached=readHomeCache();
-  if(!cached){
-    const hasLegacyFeed=(state.kaspiOrderFeed?.length||0)+(state.wbOrderFeed?.length||0)+(state.ozonOrderFeed?.length||0);
-    if(hasLegacyFeed){homeOrdersSettled=true;scheduleHomeCacheWrite();return true}
+  const cached=readHomeCache(),verifiedAt=Number(cached?.verifiedAt||0);
+  if(!cached||!verifiedAt||Date.now()-verifiedAt>HOME_CACHE_FRESH_MS){
+    homeOrdersSettled=false;
     return false;
   }
+  homeCacheVerifiedAt=verifiedAt;
   const rows=Array.isArray(cached.rows)?cached.rows:[];
   state.kaspiOrderFeed=rows.filter(row=>row.market==='Kaspi');
   state.wbOrderFeed=rows.filter(row=>row.market==='WB'||row.market==='WB2');
@@ -1342,6 +1344,7 @@ async function loadSharedOrderCache({silent=true,after=null}={}){
   try{
     const allOrdersResult=await Promise.allSettled([apiJson(MILLIONER_API+'/api/orders?limit=15000&after='+encodeURIComponent(afterTs))]);
     const allOrders=allOrdersResult[0];
+    if(allOrders.status==='fulfilled')homeCacheVerifiedAt=Date.now();
     const resultFor=market=>allOrders.status==='fulfilled'?{status:'fulfilled',value:{orders:(allOrders.value.orders||[]).filter(row=>String(row.market||'')===market)}}:{status:'rejected',reason:allOrders.reason};
     const kdResult=resultFor('Kaspi'),w1Result=resultFor('WB'),w2Result=resultFor('WB2');
     let k=[],w1=[],w2=[],warnings=[];
@@ -1364,7 +1367,7 @@ async function loadSharedOrderCache({silent=true,after=null}={}){
     }else warnings.push('WB 2: '+String(w2Result.reason?.message||w2Result.reason));
     // Feed cache is local-only. Save the warehouse only when a real warehouse
     // transition changed it, preventing a read-only refresh from overwriting data.
-    if(JSON.stringify(warehouseSnapshot())!==warehouseBefore)save();else saveLocalOnly();render();scheduleHomeCacheWrite();
+    if(JSON.stringify(warehouseSnapshot())!==warehouseBefore)save();else saveLocalOnly();render();writeHomeCache();
     if(warnings.length)console.warn('Shared cache partial update',warnings.join('; '));
     const allFailed=kdResult.status==='rejected'&&w1Result.status==='rejected'&&w2Result.status==='rejected';
     if(allFailed)throw kdResult.reason||w1Result.reason||w2Result.reason;
