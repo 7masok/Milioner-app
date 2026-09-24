@@ -78,8 +78,108 @@ ordersRouter.get('/orders', asyncRoute(async (req, res) => {
   const limit = Math.max(1, Math.min(15000, Number(req.query.limit || 1000) || 1000));
   const after = Math.max(0, Number(req.query.after || 0) || 0);
   const params = [], clauses = [];
-  if (selected) clauses.push(`o.market=${params.push(selected)}`);
-  if (after) clauses.push(`o.creation_date >= ${params.push(after)}`);
+  if (selected) clauses.push('o.market=
+  const where = clauses.length ? `WHERE ${clauses.join(' AND ')}` : '';
+  params.push(limit);
+  const [rows, products, warehouse] = await Promise.all([
+    pool.query(`SELECT o.market,o.order_id AS "orderId",o.code,o.entry_id AS "entryId",o.status,o.state,
+      o.creation_date AS "creationDate",o.sku,o.product_name AS "productName",o.qty,o.unit_price AS "unitPrice",
+      o.total_price AS "totalPrice",o.seller_delivery_cost AS "sellerDeliveryCost",o.marketplace_fee AS "marketplaceFee",
+      o.fee_source AS "feeSource",o.updated_at AS "updatedAt",resolved.product_id AS "productId",resolved.link_source AS "linkSource"
+      FROM marketplace_order_lines o
+      LEFT JOIN LATERAL (
+        SELECT pl.product_id,'sku-exact' AS link_source
+        FROM product_links pl
+        WHERE pl.market=o.market AND pl.sku=o.sku
+        LIMIT 1
+      ) resolved ON TRUE
+      ${where} ORDER BY o.creation_date DESC LIMIT $${params.length}`, params),
+    pool.query('SELECT id,name FROM products'),
+    pool.query('SELECT payload FROM warehouse_state WHERE id=1')
+  ]);
+  let stateProducts = [];
+  try { stateProducts = (await hydrateWarehouseProducts(pool, JSON.parse(String(warehouse.rows[0]?.payload || '{}')))).products || []; } catch {}
+  const visibleLinks = new Map();
+  for (const product of stateProducts) {
+    for (const [linkMarket, field] of [['Kaspi','kaspi'],['WB','wb'],['WB2','wb2'],['Ozon','ozon']]) {
+      const values = [product?.[field], ...(Array.isArray(product?.[`${field}Aliases`]) ? product[`${field}Aliases`] : [])];
+      for (const value of values) if (String(value || '').trim()) visibleLinks.set(`${linkMarket}\u0000${String(value).trim()}`, String(product.id));
+    }
+  }
+  const inferredLinks = new Map();
+  const out = rows.rows.map(row => {
+    if (row.productId && visibleLinks.get(`${row.market}\u0000${String(row.sku || '').trim()}`) === String(row.productId)) return row;
+    if (row.productId) row = { ...row, productId: null, linkSource: null };
+    const fallback = safeNameFallback(row, products.rows);
+    if (!fallback) return row;
+    if (['Kaspi','WB','WB2'].includes(row.market) && row.sku) inferredLinks.set(`${row.market}\u0000${String(row.sku)}`, String(fallback.product.id));
+    return { ...row, productId: fallback.product.id, productName: fallback.product.name, linkSource: 'name-safe-fallback' };
+  });
+
+  // Persist only unique, high-confidence Kaspi title matches so the next load is
+  // resolved by SKU and does not depend on title matching again.
+  const now = Date.now();
+  for (const [key, productId] of inferredLinks) {
+    const [linkMarket,sku]=key.split('\u0000');
+    await pool.query(`INSERT INTO product_links(product_id,market,sku,created_at,updated_at)
+      VALUES($1,$2,$3,$4,$4)
+      ON CONFLICT(market,sku) DO NOTHING`, [productId, linkMarket, sku, now]);
+  }
+
+  res.json({ ok: true, orders: out });
+}));
+ + params.push(selected));
+  if (after) clauses.push('o.creation_date >= 
+  const where = clauses.length ? `WHERE ${clauses.join(' AND ')}` : '';
+  params.push(limit);
+  const [rows, products, warehouse] = await Promise.all([
+    pool.query(`SELECT o.market,o.order_id AS "orderId",o.code,o.entry_id AS "entryId",o.status,o.state,
+      o.creation_date AS "creationDate",o.sku,o.product_name AS "productName",o.qty,o.unit_price AS "unitPrice",
+      o.total_price AS "totalPrice",o.seller_delivery_cost AS "sellerDeliveryCost",o.marketplace_fee AS "marketplaceFee",
+      o.fee_source AS "feeSource",o.updated_at AS "updatedAt",resolved.product_id AS "productId",resolved.link_source AS "linkSource"
+      FROM marketplace_order_lines o
+      LEFT JOIN LATERAL (
+        SELECT pl.product_id,'sku-exact' AS link_source
+        FROM product_links pl
+        WHERE pl.market=o.market AND pl.sku=o.sku
+        LIMIT 1
+      ) resolved ON TRUE
+      ${where} ORDER BY o.creation_date DESC LIMIT $${params.length}`, params),
+    pool.query('SELECT id,name FROM products'),
+    pool.query('SELECT payload FROM warehouse_state WHERE id=1')
+  ]);
+  let stateProducts = [];
+  try { stateProducts = (await hydrateWarehouseProducts(pool, JSON.parse(String(warehouse.rows[0]?.payload || '{}')))).products || []; } catch {}
+  const visibleLinks = new Map();
+  for (const product of stateProducts) {
+    for (const [linkMarket, field] of [['Kaspi','kaspi'],['WB','wb'],['WB2','wb2'],['Ozon','ozon']]) {
+      const values = [product?.[field], ...(Array.isArray(product?.[`${field}Aliases`]) ? product[`${field}Aliases`] : [])];
+      for (const value of values) if (String(value || '').trim()) visibleLinks.set(`${linkMarket}\u0000${String(value).trim()}`, String(product.id));
+    }
+  }
+  const inferredLinks = new Map();
+  const out = rows.rows.map(row => {
+    if (row.productId && visibleLinks.get(`${row.market}\u0000${String(row.sku || '').trim()}`) === String(row.productId)) return row;
+    if (row.productId) row = { ...row, productId: null, linkSource: null };
+    const fallback = safeNameFallback(row, products.rows);
+    if (!fallback) return row;
+    if (['Kaspi','WB','WB2'].includes(row.market) && row.sku) inferredLinks.set(`${row.market}\u0000${String(row.sku)}`, String(fallback.product.id));
+    return { ...row, productId: fallback.product.id, productName: fallback.product.name, linkSource: 'name-safe-fallback' };
+  });
+
+  // Persist only unique, high-confidence Kaspi title matches so the next load is
+  // resolved by SKU and does not depend on title matching again.
+  const now = Date.now();
+  for (const [key, productId] of inferredLinks) {
+    const [linkMarket,sku]=key.split('\u0000');
+    await pool.query(`INSERT INTO product_links(product_id,market,sku,created_at,updated_at)
+      VALUES($1,$2,$3,$4,$4)
+      ON CONFLICT(market,sku) DO NOTHING`, [productId, linkMarket, sku, now]);
+  }
+
+  res.json({ ok: true, orders: out });
+}));
+ + params.push(after));
   const where = clauses.length ? `WHERE ${clauses.join(' AND ')}` : '';
   params.push(limit);
   const [rows, products, warehouse] = await Promise.all([
