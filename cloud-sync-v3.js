@@ -274,7 +274,7 @@ if(typeof originalLoadSharedOrderCache==='function'){
   };
 }
 window.syncNow=async function(){
-  const btn=document.querySelector('header .btn'),old=btn?.textContent;if(btn){btn.disabled=true;btn.textContent='…'}
+  const btn=document.getElementById('syncNowButton'),old=btn?.textContent;if(btn){btn.disabled=true;btn.textContent='…'}
   try{
     cloudStatus('обновляю маркетплейсы…','warn');
     const syncRequest=async(path,body,label)=>{

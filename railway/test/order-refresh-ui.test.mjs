@@ -21,10 +21,18 @@ test('order UI filters stay local and do not mark warehouse dirty',()=>{
   }
 });
 
-test('empty unmatched filter resets itself and search badge reflects visible results',()=>{
+test('refresh rendering preserves unmatched filter and search badge reflects visible results',()=>{
   const src=fn('renderMarketplaceOrders');
-  assert.match(src,/if\(unmatchedOrderFilter&&unmatched===0\)/);
-  assert.match(src,/state\.settings\.unmatchedOrderFilter=false/);
+  assert.doesNotMatch(src,/unmatchedOrderFilter=false/);
+  assert.doesNotMatch(src,/state\.settings\.unmatchedOrderFilter=false/);
   assert.match(src,/const visibleCount=unmatchedOrderFilter\?unmatchedOrders\.length:orders\.length/);
-  assert.match(src,/По этому поиску непривязанных заказов нет/);
+  assert.match(src,/По этому поиску ничего не найдено/);
+  assert.match(src,/Непривязанных заказов нет/);
+});
+
+test('refresh button has a stable id so sync spinner cannot replace the bell',()=>{
+  assert.match(html,/id="syncNowButton"[^>]*onclick="syncNow\(\)"/);
+  const cloudSync=readFileSync(new URL('../../cloud-sync-v3.js',import.meta.url),'utf8');
+  assert.match(cloudSync,/getElementById\('syncNowButton'\)/);
+  assert.doesNotMatch(cloudSync,/querySelector\('header \.btn'\)/);
 });
