@@ -4,7 +4,9 @@ import fs from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 
 const indexPath=fileURLToPath(new URL('../../index.html',import.meta.url));
+const cloudSyncPath=fileURLToPath(new URL('../../cloud-sync-v3.js',import.meta.url));
 const html=await fs.readFile(indexPath,'utf8');
+const cloudSync=await fs.readFile(cloudSyncPath,'utf8');
 
 test('finance analytics UI state is initialized before rendering',()=>{
   assert.match(html,/let financeAnalyticsMode='expense',financeAnalyticsPeriod='year',financeAnalyticsAnchor=new Date\(\),financeHistoryPeriodOverride=null,financePeriodSwipePoint=null;/);
@@ -46,6 +48,29 @@ test('finance is local-first with a durable IndexedDB outbox',()=>{
   assert.ok(html.includes("const financePromise=Promise.resolve(bootstrapFinanceFromServer(financeLocalBefore))"));
 });
 
+
+test('app startup always opens Home and Today',()=>{
+  const start=html.indexOf('function startAppRuntime(){');
+  assert.ok(start>=0);
+  const fn=html.slice(start,start+5000);
+  assert.ok(fn.includes("const startupView='home'"));
+  assert.ok(fn.includes("orderPeriodMode='today'"));
+  assert.equal(fn.includes('localStorage.getItem(ACTIVE_VIEW_KEY)'),false);
+  assert.match(cloudSync,/orderPeriodMode='today';/);
+  assert.doesNotMatch(cloudSync,/orderPeriodMode=savedOrderPeriodUi\.mode/);
+});
+
+test('startup does not duplicate the initial orders request',()=>{
+  const bootStart=cloudSync.indexOf('bootstrapWarehouseFromServer=async function(){');
+  const bootEnd=cloudSync.indexOf('startWarehouseServerWatcher=function',bootStart);
+  const boot=cloudSync.slice(bootStart,bootEnd);
+  assert.equal(boot.includes('loadSharedOrderCache?.({silent:true})'),false);
+  const start=html.indexOf('function startAppRuntime(){');
+  const fn=html.slice(start,start+5000);
+  assert.equal((fn.match(/loadSharedOrderCache\(\{silent:true\}\)/g)||[]).length,1);
+  assert.ok(fn.indexOf('const ordersPromise=')<fn.indexOf('await ordersPromise'));
+  assert.ok(fn.indexOf('const financePromise=')<fn.indexOf('await ordersPromise'));
+});
 test('normal finance flow no longer uses snapshot PATCH',()=>{
   assert.equal(html.includes("/api/finance-state',{method:'PATCH'"),false);
   assert.ok(html.includes("financeRunLocalMutation(()=>old?financeLocalUpdateTransaction"));
