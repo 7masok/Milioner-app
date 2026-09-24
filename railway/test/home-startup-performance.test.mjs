@@ -28,12 +28,14 @@ test('Home paints cached orders and market status before network refresh',()=>{
   assert.match(html,/homeOrdersSettled=true;/);
   assert.match(html,/state\.kaspiOrderFeed=rows\.filter/);
   assert.match(html,/state\.wbOrderFeed=rows\.filter/);
+  assert.match(html,/homeCacheWriteScheduled/);
   const start=html.indexOf('function startAppRuntime(){');
   const end=html.indexOf('// Wait for the server-sync module',start);
   const runtime=html.slice(start,end);
   assert.ok(runtime.indexOf('hydrateHomeCache()')<runtime.indexOf('openView(startupView,false)'));
   assert.ok(runtime.indexOf('openView(startupView,false)')<runtime.indexOf('bootstrapWarehouseFromServer()'));
-  assert.match(html,/writeHomeCache\(\);render\(\)/);
+  assert.match(html,/render\(\);scheduleHomeCacheWrite\(\)/);
+  assert.match(html,/requestIdleCallback\(run,\{timeout:1500\}\)/);
 });
 
 test('Home startup does not run report, Ozon or compatibility fetches',()=>{
