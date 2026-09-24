@@ -43,9 +43,10 @@ test('finance is local-first with a durable IndexedDB outbox',()=>{
   assert.ok(html.includes('async function financeLocalPersist(commands=[]'));
   assert.ok(html.includes('async function financeSyncOutbox()'));
   assert.ok(html.includes("financeCommandSequence=0"));
-  assert.ok(html.includes("applyFinanceSnapshot(financeLocalBefore);try{await bootstrapWarehouseFromServer()"));
-  assert.ok(html.includes("const ordersPromise=Promise.resolve(loadSharedOrderCache({silent:true}))"));
-  assert.ok(html.includes("const financePromise=Promise.resolve(bootstrapFinanceFromServer(financeLocalBefore))"));
+  assert.ok(html.includes("const bootstrapFinance=async()=>"));
+  assert.ok(html.includes("await bootstrapFinanceFromServer(financeLocalBefore)"));
+  assert.ok(html.includes("setTimeout(()=>bootstrapFinance(),financePriority?0:1800)"));
+  assert.ok(html.includes("await bootstrapWarehouseFromServer();await Promise.resolve(loadSharedOrderCache({silent:true}))"));
 });
 
 
@@ -69,8 +70,9 @@ test('startup does not duplicate the initial orders request',()=>{
   const intervalAt=html.indexOf('setInterval(()=>loadSharedOrderCache({silent:true})',start);
   const immediate=html.slice(start,intervalAt>start?intervalAt:start+5000);
   assert.equal((immediate.match(/loadSharedOrderCache\(\{silent:true\}\)/g)||[]).length,1);
-  assert.ok(immediate.indexOf('const ordersPromise=')<immediate.indexOf('await ordersPromise'));
-  assert.ok(immediate.indexOf('const financePromise=')<immediate.indexOf('await ordersPromise'));
+  assert.ok(immediate.indexOf('await bootstrapWarehouseFromServer()')<immediate.indexOf('loadSharedOrderCache({silent:true})'));
+  assert.ok(immediate.includes("setTimeout(()=>bootstrapFinance(),financePriority?0:1800)"));
+  assert.ok(immediate.includes('hydrateHomeCache();openView(startupView,false)'));
 });
 test('normal finance flow no longer uses snapshot PATCH',()=>{
   assert.equal(html.includes("/api/finance-state',{method:'PATCH'"),false);

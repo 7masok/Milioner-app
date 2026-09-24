@@ -240,6 +240,5 @@ window.renderReports=function(){return baseRenderReports?.();};
 function ensureReportTab(){const tabs=document.getElementById('reportMarketTabs');if(tabs&&!tabs.querySelector('[data-report-market="Ozon"]'))tabs.insertAdjacentHTML('beforeend','<button class="market-tab" data-report-market="Ozon" onclick="setReportMarket(\'Ozon\')">Ozon</button>');}
 ensureReportTab();
 ensureOzonHeaderIndicator();
-load().then(()=>{updateFboMetric();updateOzonHeaderIndicator();if(document.getElementById('products')?.classList.contains('active'))baseRenderProducts(false);});
 setInterval(()=>{if(document.getElementById('home')?.classList.contains('active')&&selectedOrderMarket==='Ozon')load(true);},60000);
 })();

@@ -73,10 +73,10 @@ app.use(helmet({
   }
 }));
 app.use(exactCors);
-app.use(noStore);
 app.use(express.json({ limit: '7mb', strict: true }));
 
-app.get(['/', '/index.html'], (_req, res) => res.sendFile(path.join(repositoryRoot, 'index.html')));
+const frontendRevalidateHeaders = { 'Cache-Control': 'public, max-age=0, must-revalidate' };
+app.get(['/', '/index.html'], (_req, res) => res.sendFile(path.join(repositoryRoot, 'index.html'), { headers: frontendRevalidateHeaders }));
 app.get('/ozon-fbo-v1.js', async (_req,res,next)=>{
   try{
     const [rawBase,supplies]=await Promise.all([
@@ -85,13 +85,14 @@ app.get('/ozon-fbo-v1.js', async (_req,res,next)=>{
     ]);
     const syncTimeCode="const complete=(data.accounts||[]).map(a=>[a.postings?.updatedAt,a.stocks?.updatedAt,a.finance?.updatedAt,a.supplies?.updatedAt].map(Number)).filter(x=>x.every(Boolean)).map(x=>Math.min(...x));text=complete.length===(data.accounts||[]).length&&complete.length?new Date(Math.min(...complete)).toLocaleTimeString('ru-RU',{hour:'2-digit',minute:'2-digit'}):'—';";
     const base=rawBase.replace("text='работает';",syncTimeCode);
-    res.type('application/javascript').send(base+'\n'+supplies);
+    res.setHeader('Cache-Control', frontendRevalidateHeaders['Cache-Control']);res.type('application/javascript').send(base+'\n'+supplies);
   }catch(error){next(error);}
 });
 for (const file of frontendFiles) {
-  app.get(`/${file}`, (_req, res) => res.sendFile(path.join(repositoryRoot, file)));
+  app.get(`/${file}`, (_req, res) => res.sendFile(path.join(repositoryRoot, file), { headers: frontendRevalidateHeaders }));
 }
 
+app.use('/api', noStore);
 app.get('/api/auth/config', requireTrustedOrigin, authConfig);
 app.post('/api/auth/login', requireTrustedOrigin, login);
 app.get('/api/auth/session', requireTrustedOrigin, requireAppSession, (_req,res) => res.json({ ok:true }));
@@ -103,7 +104,7 @@ app.use('/api', requireAppSession);
 app.get('/api/auth/webauthn/credentials', requireTrustedOrigin, listWebauthnCredentials);
 app.delete('/api/auth/webauthn/credentials/:id', requireTrustedOrigin, deleteWebauthnCredential);
 
-app.get('/health', async (_req, res, next) => {
+app.get('/health', noStore, async (_req, res, next) => {
   try {
     const db = await pool.query('SELECT 1 AS ok');
     const migrations = await pool.query("SELECT to_regclass('public.schema_migrations') AS name");

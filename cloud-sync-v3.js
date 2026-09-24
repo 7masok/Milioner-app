@@ -19,6 +19,7 @@ function serverSnapshot(source){
   snapshot.settings=snapshot.settings&&typeof snapshot.settings==='object'?snapshot.settings:{};
   for(const key of WAREHOUSE_VOLATILE_SETTINGS||[])delete snapshot.settings[key];
   delete snapshot.settings.serverUpdatedAt;
+  delete snapshot.kaspiPayImports;
   for(const key of SERVER_MANAGED_CACHE_KEYS)delete snapshot[key];
   return snapshot;
 }
@@ -193,6 +194,9 @@ renderOrderPeriodControls?.();
 
 const ORDER_MARKET_UI_KEY='milioner_order_market_ui_v2';
 function readOrderMarketUi(){try{return JSON.parse(localStorage.getItem(ORDER_MARKET_UI_KEY)||'{}')||{}}catch{return {}}}
+const initialOrderMarketUi=readOrderMarketUi();
+if(['all','Kaspi','WB','Ozon'].includes(initialOrderMarketUi.market))selectedOrderMarket=initialOrderMarketUi.market;
+if(['all','WB','WB2'].includes(initialOrderMarketUi.wbAccount))selectedWbAccount=initialOrderMarketUi.wbAccount;
 function rememberOrderMarketUi(next={}){
   try{const current=readOrderMarketUi();localStorage.setItem(ORDER_MARKET_UI_KEY,JSON.stringify({market:next.market||current.market||'Kaspi',wbAccount:next.wbAccount||current.wbAccount||'all',updatedAt:Date.now()}))}catch{}
 }
@@ -304,6 +308,7 @@ setTimeout(showMarketSyncTimes,0);
 (function(){
 'use strict';
 function addCompactStyles(){
+  if(document.querySelector('.sync.sync-compact[data-compact-built="1"]'))return;
   if(document.getElementById('compactMarketStatusStyle'))return;
   const style=document.createElement('style');style.id='compactMarketStatusStyle';style.textContent=`
   .sync.sync-compact{margin-top:7px;display:flex;align-items:flex-start;justify-content:space-between;gap:12px;font-size:12px;color:var(--muted)}
@@ -345,7 +350,7 @@ function health(name){
 }
 function paint(name,dotId,timeId){const h=health(name),dot=document.getElementById(dotId),time=document.getElementById(timeId);if(dot){dot.className='dot'+(h.cls?' '+h.cls:'');dot.title=(name==='WB'?'WB1':name)+': '+h.label}if(time)time.textContent=fmt(h.last);return h}
 function compactCloudText(){const el=document.getElementById('cloudStatus');if(!el)return;const raw=String(el.textContent||'').trim().toLowerCase();let short='';if(/сохраня|отправля/.test(raw))short='сохранение…';else if(/сохранено|синхронизировано/.test(raw))short='сохранено ✓';else if(/подключ|обновлено|сервер подключён/.test(raw))short='онлайн';else if(/последние данные/.test(raw))short='кэш';else if(/только просмотр/.test(raw))short='только просмотр';else if(/загружа|проверя/.test(raw))short='…';else if(/ошиб|нет связи|недоступ/.test(raw))short='ошибка';if(short&&el.textContent!==short)el.textContent=short}
-function refresh(){if(!buildCompactStatus())return;paint('Kaspi','dotKaspi','lastSync');paint('WB','dotWB1','wb1Sync');paint('WB2','dotWB2','wb2Sync');compactCloudText()}
+function refresh(){if(!buildCompactStatus())return;paint('Kaspi','dotKaspi','lastSync');paint('WB','dotWB1','wb1Sync');paint('WB2','dotWB2','wb2Sync');paint('Ozon','dotOzonTop','ozonTopStatus');compactCloudText()}
 async function details(name){
   const label=name==='WB2'?'WB2':'WB1',h=health(name);let extra='';
   try{const r=await fetch(MILLIONER_API+'/api/wb-sync-status',{cache:'no-store',headers:{Accept:'application/json'}}),data=await r.json().catch(()=>({}));if(r.ok&&data?.ok){const latest=(data.latest||[]).find(x=>String(x.market)===name),newest=(data.newestOrders||[]).find(x=>String(x.market)===name);if(latest){extra+=`\nПоследняя попытка: ${Number(latest.ok)===1?'OK':'ОШИБКА'}`;if(latest.error)extra+=`\n${String(latest.error).slice(0,350)}`}if(newest?.newest_order_at)extra+=`\nПоследний заказ: ${fmt(newest.newest_order_at)}`}}catch{extra+='\nДиагностика недоступна'}
