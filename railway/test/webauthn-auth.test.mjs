@@ -7,14 +7,23 @@ const html = readFileSync(new URL('../../index.html', import.meta.url), 'utf8');
 const server = readFileSync(new URL('../src/server.js', import.meta.url), 'utf8');
 const auth = readFileSync(new URL('../src/auth.js', import.meta.url), 'utf8');
 
-test('login screen uses the access code directly', () => {
-  assert.match(html, /Введите код доступа/);
-  assert.match(html, /id="ownerPassword"/);
-  assert.match(html, /id="ownerLoginButton"/);
-  assert.match(html, />Войти<\/button>/);
-  assert.doesNotMatch(html, /id="ownerBiometricButton"/);
-  assert.doesNotMatch(html, /id="ownerBindButton"/);
-  assert.doesNotMatch(html, /Другое устройство \/ код восстановления/);
+test('login screen is minimal and uses the access code directly', () => {
+  const start = html.indexOf('<div id="loginGate"');
+  const end = html.indexOf('<div id="warehouseLoadingGate"', start);
+  const login = html.slice(start, end);
+  assert.ok(start >= 0 && end > start);
+  assert.match(login, /<h1>Вход в склад<\/h1>/);
+  assert.match(login, /id="ownerPassword"/);
+  assert.match(login, /placeholder="Код доступа"/);
+  assert.match(login, /id="ownerLoginButton"/);
+  assert.match(login, />Войти<\/button>/);
+  assert.doesNotMatch(login, /Введите код доступа/);
+  assert.doesNotMatch(login, /id="ownerLoginHint"/);
+  assert.doesNotMatch(login, /id="ownerLoginError"/);
+  assert.doesNotMatch(login, /class="login-mark"/);
+  assert.doesNotMatch(login, /id="ownerBiometricButton"/);
+  assert.doesNotMatch(login, /id="ownerBindButton"/);
+  assert.doesNotMatch(login, /Другое устройство \/ код восстановления/);
 });
 
 test('password login remains available even when passkeys exist', () => {
