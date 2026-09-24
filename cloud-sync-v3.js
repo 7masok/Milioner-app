@@ -194,6 +194,9 @@ renderOrderPeriodControls?.();
 
 const ORDER_MARKET_UI_KEY='milioner_order_market_ui_v2';
 function readOrderMarketUi(){try{return JSON.parse(localStorage.getItem(ORDER_MARKET_UI_KEY)||'{}')||{}}catch{return {}}}
+const initialOrderMarketUi=readOrderMarketUi();
+if(['all','Kaspi','WB','Ozon'].includes(initialOrderMarketUi.market))selectedOrderMarket=initialOrderMarketUi.market;
+if(['all','WB','WB2'].includes(initialOrderMarketUi.wbAccount))selectedWbAccount=initialOrderMarketUi.wbAccount;
 function rememberOrderMarketUi(next={}){
   try{const current=readOrderMarketUi();localStorage.setItem(ORDER_MARKET_UI_KEY,JSON.stringify({market:next.market||current.market||'Kaspi',wbAccount:next.wbAccount||current.wbAccount||'all',updatedAt:Date.now()}))}catch{}
 }
