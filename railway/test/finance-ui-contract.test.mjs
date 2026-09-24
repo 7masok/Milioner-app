@@ -50,13 +50,14 @@ test('finance is local-first with a durable IndexedDB outbox',()=>{
 });
 
 
-test('fresh login opens Home Today while browser reload preserves the current period',()=>{
+test('fresh login opens Home Today while browser reload preserves the current tab and period',()=>{
   const start=html.indexOf('function startAppRuntime(){');
   assert.ok(start>=0);
-  const fn=html.slice(start,start+7000);
-  assert.ok(fn.includes("const startupView='home',freshLogin=sessionStorage.getItem(APP_FRESH_LOGIN_KEY)==='1'"));
-  assert.ok(fn.includes("if(freshLogin){orderPeriodMode='today'"));
-  assert.equal(fn.includes('localStorage.getItem(ACTIVE_VIEW_KEY)'),false);
+  const fn=html.slice(start,start+8000);
+  assert.ok(fn.includes("freshLogin=sessionStorage.getItem(APP_FRESH_LOGIN_KEY)==='1'"));
+  assert.ok(fn.includes("savedView=localStorage.getItem(ACTIVE_VIEW_KEY)||''"));
+  assert.ok(fn.includes("startupView=!freshLogin&&['home','products','movement','purchases','reports','ads','settings','finance'].includes(savedView)?savedView:'home'"));
+  assert.ok(fn.includes("if(freshLogin){localStorage.setItem(ACTIVE_VIEW_KEY,'home');orderPeriodMode='today'"));
   assert.match(cloudSync,/orderPeriodMode=savedOrderPeriodUi\.mode/);
   assert.doesNotMatch(cloudSync,/Every fresh app start opens/);
 });
