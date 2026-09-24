@@ -1282,6 +1282,7 @@ function homeCacheRow(row){
   if(!row||typeof row!=='object')return null;
   return {market:String(row.market||''),orderId:String(row.orderId||''),code:String(row.code||''),entryId:String(row.entryId||''),status:String(row.status||''),state:String(row.state||''),creationDate:Number(row.creationDate||0),sku:String(row.sku||''),productName:String(row.productName||''),qty:Number(row.qty||0),unitPrice:Number(row.unitPrice||0),totalPrice:Number(row.totalPrice||0),sellerDeliveryCost:Number(row.sellerDeliveryCost||0),marketplaceFee:Number(row.marketplaceFee||0),feeSource:String(row.feeSource||''),updatedAt:Number(row.updatedAt||0),productId:row.productId==null?null:String(row.productId),linkSource:String(row.linkSource||'')};
 }
+let homeCacheWriteScheduled=false;
 function readHomeCache(){try{const value=JSON.parse(localStorage.getItem(HOME_CACHE_KEY)||'null');return value&&Number(value.v)===1?value:null}catch{return null}}
 function compactHomeFeed(){
   const cutoff=Date.now()-45*86400000,combined=[...(state.kaspiOrderFeed||[]),...(state.wbOrderFeed||[]),...(state.ozonOrderFeed||[])].map(homeCacheRow).filter(Boolean).filter(row=>!row.creationDate||row.creationDate>=cutoff);
@@ -1289,14 +1290,25 @@ function compactHomeFeed(){
   return combined.slice(0,5000);
 }
 function writeHomeCache(){
+  homeCacheWriteScheduled=false;
   try{
     const rows=compactHomeFeed(),payload={v:1,cachedAt:Date.now(),rows,serverMarketStatus:state.settings?.serverMarketStatus||{},lastSync:Number(state.settings?.lastSync||0)};
     localStorage.setItem(HOME_CACHE_KEY,JSON.stringify(payload));
     return true;
   }catch(e){console.warn('home cache write failed',e);return false}
 }
+function scheduleHomeCacheWrite(){
+  if(homeCacheWriteScheduled)return;homeCacheWriteScheduled=true;
+  const run=()=>writeHomeCache();
+  if(typeof requestIdleCallback==='function')requestIdleCallback(run,{timeout:1500});else setTimeout(run,180);
+}
 function hydrateHomeCache(){
-  const cached=readHomeCache();if(!cached)return false;
+  const cached=readHomeCache();
+  if(!cached){
+    const hasLegacyFeed=(state.kaspiOrderFeed?.length||0)+(state.wbOrderFeed?.length||0)+(state.ozonOrderFeed?.length||0);
+    if(hasLegacyFeed){homeOrdersSettled=true;scheduleHomeCacheWrite();return true}
+    return false;
+  }
   const rows=Array.isArray(cached.rows)?cached.rows:[];
   state.kaspiOrderFeed=rows.filter(row=>row.market==='Kaspi');
   state.wbOrderFeed=rows.filter(row=>row.market==='WB'||row.market==='WB2');
@@ -1323,7 +1335,6 @@ async function loadSharedOrderCache({silent=true}={}){
     saveLocalOnly();
     const lastSync=document.getElementById('lastSync');if(lastSync)lastSync.textContent=state.settings.lastSync?new Date(state.settings.lastSync).toLocaleTimeString('ru-RU',{hour:'2-digit',minute:'2-digit'}):'—';
     renderIntegrationStatus();
-    writeHomeCache();
     return status;
   }).catch(e=>{console.warn('Market status update failed',e);return {ok:false,markets:[],error:e}});
   try{
@@ -1351,7 +1362,7 @@ async function loadSharedOrderCache({silent=true}={}){
     }else warnings.push('WB 2: '+String(w2Result.reason?.message||w2Result.reason));
     // Feed cache is local-only. Save the warehouse only when a real warehouse
     // transition changed it, preventing a read-only refresh from overwriting data.
-    if(JSON.stringify(warehouseSnapshot())!==warehouseBefore)save();else saveLocalOnly();writeHomeCache();render();
+    if(JSON.stringify(warehouseSnapshot())!==warehouseBefore)save();else saveLocalOnly();render();scheduleHomeCacheWrite();
     if(warnings.length)console.warn('Shared cache partial update',warnings.join('; '));
     const allFailed=kdResult.status==='rejected'&&w1Result.status==='rejected'&&w2Result.status==='rejected';
     if(allFailed)throw kdResult.reason||w1Result.reason||w2Result.reason;
@@ -1409,6 +1420,7 @@ function startAppRuntime(){if(appRuntimeStarted)return;appRuntimeStarted=true;co
 // Wait for the server-sync module to load before starting the app.  Otherwise
 // a fast authenticated session can start the legacy loader first, briefly
 // showing an empty warehouse instead of the last server-confirmed snapshot.
+window.addEventListener('pagehide',()=>{if(homeOrdersSettled)writeHomeCache()});
 if('serviceWorker'in navigator)window.addEventListener('load',()=>navigator.serviceWorker.register('/sw.js',{scope:'/'}).catch(e=>console.warn('share target service worker failed',e)),{once:true});
 initOwnerAuth();
 
