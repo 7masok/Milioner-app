@@ -21,6 +21,9 @@ test('Home header has final geometry in static HTML',()=>{
   }
   assert.match(header,/class="sync sync-compact" data-compact-built="1"/);
   assert.match(header,/class="head-actions"/);
+  assert.match(html,/#stockAlertBell\.stock-alert-button\{[^}]*flex:0 0 44px/);
+  assert.match(html,/\.compact-cloud\{[^}]*width:132px;min-width:132px;flex:0 0 132px/);
+  assert.match(html,/#cloudStatus\{[^}]*width:76px;min-width:76px/);
 });
 
 test('Home paints cached orders and market status before network refresh',()=>{
@@ -29,12 +32,16 @@ test('Home paints cached orders and market status before network refresh',()=>{
   assert.match(html,/state\.kaspiOrderFeed=rows\.filter/);
   assert.match(html,/state\.wbOrderFeed=rows\.filter/);
   assert.match(html,/homeCacheWriteScheduled/);
+  assert.match(html,/HOME_CACHE_FRESH_MS=15000/);
+  assert.match(html,/verifiedAt:Number\(homeCacheVerifiedAt\|\|0\)/);
+  assert.match(html,/Date\.now\(\)-verifiedAt>HOME_CACHE_FRESH_MS/);
+  assert.match(html,/if\(allOrders\.status==='fulfilled'\)homeCacheVerifiedAt=Date\.now\(\)/);
+  assert.match(html,/render\(\);writeHomeCache\(\)/);
   const start=html.indexOf('function startAppRuntime(){');
   const end=html.indexOf('// Wait for the server-sync module',start);
   const runtime=html.slice(start,end);
   assert.ok(runtime.indexOf('hydrateHomeCache()')<runtime.indexOf('openView(startupView,false)'));
   assert.ok(runtime.indexOf('openView(startupView,false)')<runtime.indexOf('bootstrapWarehouseFromServer()'));
-  assert.match(html,/render\(\);scheduleHomeCacheWrite\(\)/);
   assert.match(html,/requestIdleCallback\(run,\{timeout:1500\}\)/);
 });
 
