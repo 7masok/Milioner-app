@@ -37,6 +37,11 @@ test('browser refresh has no startup modal cards and validates an existing sessi
   const init = html.slice(start, end);
   assert.ok(init.indexOf("if(ownerSessionToken){const check=await nativeFetch(MILLIONER_API+'/api/auth/session'") >= 0);
   assert.ok(init.indexOf("/api/auth/session") < init.indexOf("/api/auth/config"));
+  assert.ok(init.indexOf("startAppRuntime();setOwnerAuthMode('ready')") >= 0);
+  const rememberStart=html.indexOf('function rememberOwnerSession');
+  const rememberEnd=html.indexOf('async function ownerAuthSubmit',rememberStart);
+  const remember=html.slice(rememberStart,rememberEnd);
+  assert.ok(remember.indexOf("startAppRuntime();setOwnerAuthMode('ready')") >= 0);
 });
 
 test('real code login marks a fresh UI entry, browser reload does not', () => {
