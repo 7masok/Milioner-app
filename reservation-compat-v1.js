@@ -79,14 +79,7 @@ applyMarketplaceTransitions=function(market,feed){
   return result;
 };
 
-function refreshOnce(attempt=0){
-  let ready=false;
-  try{ready=typeof warehouseRemoteReady!=='undefined'&&warehouseRemoteReady===true}catch{}
-  if(ready&&typeof loadSharedOrderCache==='function'){
-    Promise.resolve(loadSharedOrderCache({silent:true})).catch(e=>console.warn('reservation reconcile refresh failed',e));
-    return;
-  }
-  if(attempt<12)setTimeout(()=>refreshOnce(attempt+1),1000);
-}
-setTimeout(()=>refreshOnce(0),1200);
+// Marketplace reservations and order refresh are server-authoritative. The runtime
+// owns the single initial /api/orders load; this compatibility layer must not
+// schedule a second startup refresh.
 })();
