@@ -76,3 +76,25 @@ test('bottom navigation allocates one column per actual tab',()=>{
   assert.match(html,/grid-template-columns:repeat\(8,minmax\(0,1fr\)\)/);
   assert.ok((html.match(/data-view="/g)||[]).length>=8);
 });
+
+test('marketplace SKUs cannot be silently assigned to two products',()=>{
+  assert.match(html,/function marketplaceSkuOwner\(field,value,excludeId=''/);
+  assert.match(html,/function validateProductMarketplaceSkus\(values,excludeId=''/);
+  assert.match(html,/validateProductMarketplaceSkus\(\{kaspi:kaspiSku,wb:wbSku,wb2:wb2Sku,ozon:ozonSku\},p\.id\)/);
+  assert.match(html,/validateProductMarketplaceSkus\(\{kaspi:kaspiSku,wb:wbSku,wb2:wb2Sku,ozon:ozonSku\}\)/);
+  const attach=html.slice(html.indexOf('function attachMarketplaceSku('),html.indexOf('\nfunction saveMarketplaceLink',html.indexOf('function attachMarketplaceSku(')));
+  assert.match(attach,/marketplaceSkuOwner\(field,next,p\.id\)/);
+  assert.match(attach,/return false/);
+});
+
+test('warehouse relocation is not counted as a new purchase',()=>{
+  assert.match(html,/function isRealPurchase\(x\)\{return !!x&&!x\.inventoryAdjustment&&!x\.opening&&!x\.relocation\}/);
+});
+
+test('opening a product gives immediate feedback while 30-day finance refreshes',()=>{
+  const start=html.indexOf('async function openProduct(');
+  const end=html.indexOf('\nfunction ',start+10);
+  const fn=html.slice(start,end>start?end:start+16000);
+  assert.match(fn,/Обновляю данные товара…/);
+  assert.ok(fn.indexOf('Обновляю данные товара…')<fn.indexOf('await window.refreshAllMarketUnitProfit()'));
+});
