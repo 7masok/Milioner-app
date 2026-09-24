@@ -23,12 +23,7 @@ import {
   persistWarehouseSales,
   replaceWarehouseSales
 } from './warehouse-sales.js';
-import {
-  deleteWarehouseReservations,
-  hydrateWarehouseReservations,
-  persistWarehouseReservations,
-  replaceWarehouseReservations
-} from './warehouse-reservations.js';
+import { hydrateWarehouseReservations } from './warehouse-reservations.js';
 import {
   deleteKaspiAdExpenses,
   hydrateKaspiAdExpenses,
@@ -50,7 +45,7 @@ const MAX_WAREHOUSE_SNAPSHOT_BYTES = 6_000_000;
 // kept inside the warehouse document as that creates a growing duplicate cache.
 const DERIVED_CACHE_KEYS = ['kaspiOrderFeed', 'wbOrderFeed', 'ozonOrderFeed', 'kaspiOrders', 'marketOrderState', 'marketplaceLiveSince'];
 
-const PATCH_FIELDS = ['products', 'sales', 'purchases', 'reservations', 'kaspiAdExpenses'];
+const PATCH_FIELDS = ['products', 'sales', 'purchases', 'kaspiAdExpenses'];
 
 export function warehouseEntityKey(field, row) {
   if (!row || typeof row !== 'object') return '';
@@ -238,6 +233,7 @@ warehouseRouter.put('/warehouse-state', requireTrustedOrigin, requireWritesEnabl
     if (isPatch && !current.rowCount) return { conflict: true, revision: 0 };
     if (current.rowCount && baseRevision !== currentRevision) return { conflict: true, revision: currentRevision };
     let productsChanged = true;
+    let serverReservations = [];
     if (current.rowCount) {
       const previousStored = parseWarehousePayload(current.rows[0].payload);
       await hydrateWarehousePurchases(client, previousStored);
@@ -245,7 +241,12 @@ warehouseRouter.put('/warehouse-state', requireTrustedOrigin, requireWritesEnabl
       await hydrateWarehouseReservations(client, previousStored);
       await hydrateKaspiAdExpenses(client, previousStored);
       await hydrateWarehouseProducts(client, previousStored);
+      serverReservations = Array.isArray(previousStored.reservations) ? previousStored.reservations : [];
       if (isPatch) state = applyWarehousePatch(previousStored, incomingState);
+      // Marketplace reservations are derived from authoritative marketplace
+      // orders. Browser saves may read them, but must never create, replace or
+      // delete them.
+      state.reservations = serverReservations;
       // Routine saves omit movements when the audit trail did not change.
       // In that case an empty movement delta is sufficient for the stock guard:
       // any stock change without a supplied movement is still rejected, while we
@@ -257,6 +258,8 @@ warehouseRouter.put('/warehouse-state', requireTrustedOrigin, requireWritesEnabl
       const violation = stockLedgerViolation(previous, state) || staleWbLinkRestored(previous, state);
       if (violation) return { conflict: true, revision: currentRevision, stockGuard: violation };
       preserveWbValidation(previous, state);
+    } else {
+      state.reservations = [];
     }
     const updatedAt = Date.now();
     const movementRows = isPatch ? incomingState?.movements : state.movements;
@@ -280,14 +283,6 @@ warehouseRouter.put('/warehouse-state', requireTrustedOrigin, requireWritesEnabl
       await deleteWarehouseSales(client, incomingState?.deleted?.sales || []);
     } else if (salesTouched || (!existingSales.rowCount && Array.isArray(state?.sales) && state.sales.length)) {
       await replaceWarehouseSales(client, state.sales, updatedAt);
-    }
-    const reservationsTouched = !isPatch || Array.isArray(incomingState?.reservations) || (Array.isArray(incomingState?.deleted?.reservations) && incomingState.deleted.reservations.length > 0);
-    const existingReservations = await client.query('SELECT 1 FROM warehouse_reservations LIMIT 1');
-    if (reservationsTouched && isPatch && existingReservations.rowCount) {
-      await persistWarehouseReservations(client, incomingState?.reservations || [], updatedAt);
-      await deleteWarehouseReservations(client, incomingState?.deleted?.reservations || []);
-    } else if (reservationsTouched || (!existingReservations.rowCount && Array.isArray(state?.reservations) && state.reservations.length)) {
-      await replaceWarehouseReservations(client, state.reservations, updatedAt);
     }
     const adsTouched = !isPatch || Array.isArray(incomingState?.kaspiAdExpenses) || (Array.isArray(incomingState?.deleted?.kaspiAdExpenses) && incomingState.deleted.kaspiAdExpenses.length > 0);
     const existingAds = await client.query('SELECT 1 FROM warehouse_kaspi_ad_expenses LIMIT 1');

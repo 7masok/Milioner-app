@@ -2,6 +2,7 @@ import crypto from 'node:crypto';
 import { transaction } from './db.js';
 import { pruneWarehouseBackups } from './warehouse-backups.js';
 import { hydrateWarehouseReservations, replaceWarehouseReservations } from './warehouse-reservations.js';
+import { hydrateWarehouseProducts } from './warehouse-products.js';
 import { warehousePayloadForStorage } from './warehouse-document.js';
 import { wbOrderIsActive } from './wb-status.js';
 
@@ -29,6 +30,47 @@ function stableReservation(market, row, productId) {
     date: Number(row.creation_date) || Date.now(),
     updatedAt: Number(row.updated_at) || Date.now()
   };
+}
+
+function marketplaceSkus(product, field) {
+  const primary = String(product?.[field] || '').trim();
+  const rawAliases = product?.[`${field}Aliases`];
+  const aliases = Array.isArray(rawAliases) ? rawAliases : String(rawAliases || '').split(/[;,\n]/);
+  return [...new Set([primary, ...aliases].map(value => String(value || '').trim()).filter(Boolean))];
+}
+
+export function exactMarketplaceSkuIndex(products, field) {
+  const owners = new Map();
+  const ambiguous = new Set();
+  for (const product of Array.isArray(products) ? products : []) {
+    const productId = String(product?.id || '').trim();
+    if (!productId) continue;
+    for (const sku of marketplaceSkus(product, field)) {
+      if (ambiguous.has(sku)) continue;
+      const previous = owners.get(sku);
+      if (previous && previous !== productId) {
+        owners.delete(sku);
+        ambiguous.add(sku);
+      } else if (!previous) {
+        owners.set(sku, productId);
+      }
+    }
+  }
+  return { owners, ambiguous };
+}
+
+async function persistResolvedLinks(client, market, links, now) {
+  if (!links.size) return 0;
+  const rows = [...links].map(([sku, productId]) => ({ sku, productId }));
+  await client.query(`
+    INSERT INTO product_links(product_id,market,sku,created_at,updated_at)
+    SELECT item->>'productId',$1,item->>'sku',$2,$2
+    FROM jsonb_array_elements($3::jsonb) AS item
+    ON CONFLICT(market,sku) DO UPDATE SET
+      product_id=excluded.product_id,
+      updated_at=excluded.updated_at
+  `, [market, now, JSON.stringify(rows)]);
+  return rows.length;
 }
 
 // A confirmed WB sync is authoritative for active WB reservations. The active
@@ -153,29 +195,39 @@ export async function reconcileKaspiReservations(activeEntries) {
     const stored = await client.query('SELECT payload,revision FROM warehouse_state WHERE id=1 FOR UPDATE');
     if (!stored.rowCount) return { changed: false, market: 'Kaspi', reason: 'warehouse-not-initialized' };
 
-    const orderRows = await client.query(`SELECT o.order_id,o.entry_id,o.status,o.state,o.creation_date,o.updated_at,o.qty,l.product_id
+    const orderRows = await client.query(`SELECT o.order_id,o.entry_id,o.status,o.state,o.creation_date,o.updated_at,o.qty,o.sku,l.product_id
       FROM marketplace_order_lines o
       LEFT JOIN product_links l ON l.market=o.market AND l.sku=o.sku
       WHERE o.market='Kaspi'
       ORDER BY o.creation_date,o.order_id,o.entry_id`);
 
     const state = parsePayload(stored.rows[0].payload);
+    await hydrateWarehouseProducts(client, state);
     await hydrateWarehouseReservations(client, state);
     const current = Array.isArray(state.reservations) ? state.reservations : [];
     const expected = new Map();
+    const exactKaspi = exactMarketplaceSkuIndex(state.products, 'kaspi');
+    const repairedLinks = new Map();
     let unlinked = 0;
+    let ambiguous = 0;
 
     for (const row of orderRows.rows) {
       const key = orderKey('Kaspi', row.order_id, row.entry_id);
       if (!activeKeys.has(key)) continue;
       const qty = Math.max(0, Number(row.qty) || 0);
-      if (!row.product_id || qty === 0) {
+      const sku = String(row.sku || '').trim();
+      const canonicalProductId = sku ? exactKaspi.owners.get(sku) : '';
+      if (sku && exactKaspi.ambiguous.has(sku)) ambiguous++;
+      const productId = canonicalProductId || '';
+      if (!productId || qty === 0) {
         unlinked++;
         continue;
       }
-      const reservation = stableReservation('Kaspi', row, row.product_id);
+      if (String(row.product_id || '') !== String(productId)) repairedLinks.set(sku, String(productId));
+      const reservation = stableReservation('Kaspi', row, productId);
       expected.set(key, reservation);
     }
+    const repaired = await persistResolvedLinks(client, 'Kaspi', repairedLinks, Date.now());
 
     const next = [];
     const seenCurrent = new Set();
@@ -227,7 +279,7 @@ export async function reconcileKaspiReservations(activeEntries) {
     state.settings = state.settings && typeof state.settings === 'object' ? state.settings : {};
     const needsSafetyBackup = !state.settings.kaspiReservationAuthoritativeV1;
     if (before === after && !needsSafetyBackup) {
-      return { changed: false, market: 'Kaspi', activeLines: expected.size, unlinked, created: 0, closed: 0, revision: Number(stored.rows[0].revision || 0) };
+      return { changed: false, market: 'Kaspi', activeLines: activeKeys.size, reservedLines: expected.size, unlinked, ambiguous, repairedLinks: repaired, created: 0, closed: 0, revision: Number(stored.rows[0].revision || 0) };
     }
 
     if (needsSafetyBackup) {
@@ -243,7 +295,7 @@ export async function reconcileKaspiReservations(activeEntries) {
     const sha = crypto.createHash('sha256').update(raw).digest('hex').toUpperCase();
     await client.query('INSERT INTO warehouse_audit(revision,updated_at,payload_sha256,source) VALUES($1,$2,$3,$4)',
       [revision, now, sha, 'kaspi-reservation-reconcile-full']);
-    return { changed: true, market: 'Kaspi', activeLines: expected.size, unlinked, created, closed, revision, safetyBackup: needsSafetyBackup };
+    return { changed: true, market: 'Kaspi', activeLines: activeKeys.size, reservedLines: expected.size, unlinked, ambiguous, repairedLinks: repaired, created, closed, revision, safetyBackup: needsSafetyBackup };
   });
 }
 

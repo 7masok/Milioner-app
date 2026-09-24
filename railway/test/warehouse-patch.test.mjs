@@ -43,3 +43,16 @@ test('the stored warehouse file drops lists and the old finance copy', () => {
   assert.equal(stored.kaspiBaselineAt, 5);
 });
 
+
+
+test('browser warehouse patches cannot replace server-owned marketplace reservations', () => {
+  const previous = {
+    products: [{ id: 'a', stock: 2 }],
+    reservations: [{ id: 'server-kaspi-1', source: 'Kaspi', externalKey: 'Kaspi:1:1', productId: 'a', qty: 1, active: true }]
+  };
+  const next = applyWarehousePatch(previous, {
+    reservations: [],
+    deleted: { reservations: ['Kaspi|Kaspi:1:1'] }
+  });
+  assert.deepEqual(next.reservations, previous.reservations);
+});
