@@ -188,7 +188,7 @@ const APP_FRESH_LOGIN_KEY=KEY+'_fresh_login_ui_v1';
 const ORDER_SEARCH_SESSION_KEY=KEY+'_order_search_session_v1';
 const ORDER_UNMATCHED_SESSION_KEY=KEY+'_order_unmatched_session_v1';
 const HOME_CACHE_KEY=KEY+'_home_cache_v1';
-const HOME_CACHE_FRESH_MS=15000;
+const HOME_CACHE_FRESH_MS=10*60*1000;
 let homeCacheVerifiedAt=0;
 const nativeFetch=window.fetch.bind(window);
 let ownerSessionToken=sessionStorage.getItem(APP_SESSION_KEY)||'';
@@ -213,8 +213,8 @@ function setOwnerLoginError(text){const box=document.getElementById('ownerLoginE
 function toggleOwnerRecovery(){document.getElementById('ownerRecoveryBox')?.classList.toggle('open');setTimeout(()=>document.getElementById('ownerPassword')?.focus(),50)}
 function renderOwnerLogin(info){ownerAuthInfo=info||ownerAuthInfo;const hint=document.getElementById('ownerLoginHint');if(hint)hint.textContent='Введите код доступа.'}
 function setOwnerAuthMode(mode,error=''){document.body.classList.remove('auth-pending','auth-locked','auth-ready');document.body.classList.add('auth-'+mode);setOwnerLoginError(error);const logout=document.getElementById('ownerLogoutBtn');if(logout)logout.style.display=ownerAuthEnabled?'block':'none';if(mode==='locked')setTimeout(()=>document.getElementById('ownerPassword')?.focus(),50)}
-async function initOwnerAuth(){try{if(ownerSessionToken){const check=await nativeFetch(MILLIONER_API+'/api/auth/session',{cache:'no-store',headers:{Authorization:'Bearer '+ownerSessionToken}});if(check.ok){ownerAuthEnabled=true;startAppRuntime();setOwnerAuthMode('ready');return}ownerSessionToken='';sessionStorage.removeItem(APP_SESSION_KEY)}const configResponse=await nativeFetch(MILLIONER_API+'/api/auth/config',{cache:'no-store'}),info=await configResponse.json();ownerAuthEnabled=Boolean(info?.enabled);ownerAuthInfo={credentialCount:Number(info?.credentialCount||0),passwordLogin:true};renderOwnerLogin(ownerAuthInfo);if(!ownerAuthEnabled){startAppRuntime();setOwnerAuthMode('ready');return}setOwnerAuthMode('locked')}catch(e){setOwnerAuthMode('locked','Сервер временно недоступен. Обновите страницу.')}}
-function rememberOwnerSession(data){ownerSessionToken=String(data?.token||'');sessionStorage.setItem(APP_SESSION_KEY,ownerSessionToken);sessionStorage.setItem(APP_FRESH_LOGIN_KEY,'1');startAppRuntime();setOwnerAuthMode('ready')}
+async function initOwnerAuth(){try{if(ownerSessionToken){const check=await nativeFetch(MILLIONER_API+'/api/auth/session',{cache:'no-store',headers:{Authorization:'Bearer '+ownerSessionToken}});if(check.ok){ownerAuthEnabled=true;cloudStatus('онлайн','ok');startAppRuntime();setOwnerAuthMode('ready');return}ownerSessionToken='';sessionStorage.removeItem(APP_SESSION_KEY)}const configResponse=await nativeFetch(MILLIONER_API+'/api/auth/config',{cache:'no-store'}),info=await configResponse.json();ownerAuthEnabled=Boolean(info?.enabled);ownerAuthInfo={credentialCount:Number(info?.credentialCount||0),passwordLogin:true};renderOwnerLogin(ownerAuthInfo);if(!ownerAuthEnabled){cloudStatus('онлайн','ok');startAppRuntime();setOwnerAuthMode('ready');return}setOwnerAuthMode('locked')}catch(e){setOwnerAuthMode('locked','Сервер временно недоступен. Обновите страницу.')}}
+function rememberOwnerSession(data){ownerSessionToken=String(data?.token||'');sessionStorage.setItem(APP_SESSION_KEY,ownerSessionToken);sessionStorage.setItem(APP_FRESH_LOGIN_KEY,'1');cloudStatus('онлайн','ok');startAppRuntime();setOwnerAuthMode('ready')}
 async function ownerAuthSubmit(event){event?.preventDefault();const password=String(document.getElementById('ownerPassword')?.value||'');if(!password){setOwnerLoginError('Введите код доступа');document.getElementById('ownerPassword')?.focus();return}const button=document.getElementById('ownerLoginButton');if(button){button.disabled=true;button.textContent='Вход…'}setOwnerLoginError('');try{const response=await nativeFetch(MILLIONER_API+'/api/auth/login',{method:'POST',cache:'no-store',headers:{'Content-Type':'application/json'},body:JSON.stringify({password})}),data=await response.json().catch(()=>({}));if(!response.ok)throw new Error(data?.error==='wrong-password'?'Неверный код доступа':data?.error||('HTTP '+response.status));const input=document.getElementById('ownerPassword');if(input)input.value='';rememberOwnerSession(data)}catch(e){setOwnerLoginError(String(e?.message||e))}finally{if(button){button.disabled=false;button.textContent='Войти'}}}
 async function ownerWebAuthnLogin(opts={}){if(!ownerAuthSupported()){if(!opts.silent)setOwnerLoginError('Этот браузер не поддерживает ключи доступа.');return}const button=document.getElementById('ownerBiometricButton');if(button){button.disabled=true;button.textContent='Сканер…'}setOwnerLoginError('');try{const optionsResponse=await nativeFetch(MILLIONER_API+'/api/auth/webauthn/login-options',{method:'POST',cache:'no-store',headers:{'Content-Type':'application/json'},body:'{}'}),optionsData=await optionsResponse.json().catch(()=>({}));if(!optionsResponse.ok)throw new Error(optionsData?.error==='no-webauthn-credentials'?'Сначала привяжите ключ доступа':optionsData?.error||('HTTP '+optionsResponse.status));const cred=await navigator.credentials.get({publicKey:publicKeyFromOptions(optionsData.options)});if(!cred)throw new Error('Ключ доступа не получен');const verify=await nativeFetch(MILLIONER_API+'/api/auth/webauthn/login-verify',{method:'POST',cache:'no-store',headers:{'Content-Type':'application/json'},body:JSON.stringify({credential:serializeAssertion(cred)})}),data=await verify.json().catch(()=>({}));if(!verify.ok)throw new Error(data?.error==='webauthn-login-failed'?'Ключ доступа не принят':data?.error||('HTTP '+verify.status));rememberOwnerSession(data)}catch(e){if(opts.silent&&/NotAllowedError|AbortError/i.test(String(e?.name||e)))return;setOwnerLoginError(humanWebauthnError(e))}finally{if(button){button.disabled=false;button.textContent='Войти по ключу доступа'}}}
 async function ownerBindPasskey(){if(!ownerAuthSupported()){setOwnerLoginError('Этот браузер не поддерживает ключи доступа. Откройте склад в актуальном Chrome, Edge или Safari.');return}const password=String(document.getElementById('ownerPassword')?.value||'');if(!password&&!ownerSessionToken){document.getElementById('ownerRecoveryBox')?.classList.add('open');setOwnerLoginError('Введите код восстановления, затем выберите способ привязки ключа доступа. На компьютере можно выбрать телефон / QR-код.');document.getElementById('ownerPassword')?.focus();return}const bind=document.getElementById('ownerBindButton');if(bind){bind.disabled=true;bind.textContent='Сканер…'}setOwnerLoginError('');try{await ownerRegisterPasskey({password});const input=document.getElementById('ownerPassword');if(input)input.value='';ownerAuthInfo.credentialCount=Math.max(1,Number(ownerAuthInfo.credentialCount||0)+1);renderOwnerLogin(ownerAuthInfo)}catch(e){setOwnerLoginError(humanWebauthnError(e))}finally{if(bind){bind.disabled=false;bind.textContent='Привязать ключ доступа'}}}
@@ -229,8 +229,16 @@ function ownerLogout(){ownerSessionToken='';sessionStorage.removeItem(APP_SESSIO
 // kept only as an emergency pre-migration backup and is never loaded as live data.
 let state={products:[],movements:[],sales:[],purchases:[],reservations:[],settings:{autoBackup:true,lastSync:null}};
 state.products ||= [];state.movements ||= [];state.sales ||= [];state.purchases ||= [];state.reservations ||= [];state.settings ||= {};state.movements=state.movements.filter(m=>!['резерв','отмена резерва'].includes(String(m?.type||'')));if(!state.settings.negativeStockRepairV1){for(const p of state.products){if(Number(p.stock)<0){state.movements.unshift({id:'repair-'+String(p.id),date:Date.now(),type:'инвентаризация',productId:p.id,qty:-Number(p.stock),extra:'Автокоррекция отрицательного остатка после старой WB-синхронизации'});p.stock=0}}state.settings.negativeStockRepairV1=true;}state.purchases.forEach(x=>{x.status=['to_forwarder','to_me','at_warehouse','received'].includes(String(x.status||''))?String(x.status):'received';if(x.status==='received'){x.receivedAt=Number(x.receivedAt||x.date)||Date.now();x.remainingQty=Number.isFinite(Number(x.remainingQty))?Math.max(0,Number(x.remainingQty)):Math.max(0,Number(x.qty)||0);x.landedUnitCost=Number(x.landedUnitCost)||((Number(x.unitCost)||0)+((Number(x.delivery)||0)/(Math.max(1,Number(x.qty)||1))))}else{x.receivedAt=Number(x.receivedAt)||0;x.remainingQty=0;x.landedUnitCost=Number(x.landedUnitCost)||0}});state.kaspiOrders ||= {};state.marketOrderState ||= {};state.marketplaceLiveSince ||= {};state.kaspiOrderFeed ||= [];state.wbOrderFeed ||= [];state.ozonOrderFeed ||= [];state.kaspiAdExpenses ||= [];state.kaspiBaselineAt ||= null;
-let selectedPeriodPreset=[0,1,7,30].includes(Number(state.settings.selectedPeriodPreset))?Number(state.settings.selectedPeriodPreset):1;let selectedPeriod=selectedPeriodPreset===0?Math.max(1,Number(state.settings.selectedPeriod)||14):selectedPeriodPreset;let reportPeriodUiPreference={};try{reportPeriodUiPreference=JSON.parse(localStorage.getItem(REPORT_PERIOD_UI_KEY)||'{}')||{}}catch{}let reportPeriodPreset=[-1,0,1,7,30].includes(Number(state.settings.reportPeriodPreset))?Number(state.settings.reportPeriodPreset):([-1,0,1,7,30].includes(Number(reportPeriodUiPreference.preset))?Number(reportPeriodUiPreference.preset):1);let reportPeriod=reportPeriodPreset===0?0:reportPeriodPreset;let reportCustomFrom=String(state.settings.reportCustomFrom||reportPeriodUiPreference.from||'');let reportCustomTo=String(state.settings.reportCustomTo||reportPeriodUiPreference.to||'');function rememberReportPeriodUiPreference(){try{localStorage.setItem(REPORT_PERIOD_UI_KEY,JSON.stringify({preset:reportPeriodPreset,from:reportCustomFrom,to:reportCustomTo,updatedAt:Number(state.settings?.reportPeriodUpdatedAt||0)}))}catch{}}let marketplaceReportContext=null;let selectedOrderMarket=['all','Kaspi','WB','Ozon'].includes(state.settings.selectedOrderMarket)?state.settings.selectedOrderMarket:'all';let selectedWbAccount=['all','WB','WB2'].includes(state.settings.selectedWbAccount)?state.settings.selectedWbAccount:'all';let unmatchedOrderFilter=sessionStorage.getItem(ORDER_UNMATCHED_SESSION_KEY)==='1';
-let orderPeriodMode=['today','yesterday','week','month','custom'].includes(String(state.settings.orderPeriodMode||''))?String(state.settings.orderPeriodMode):'today';let orderCustomFrom=String(state.settings.orderCustomFrom||'');let orderCustomTo=String(state.settings.orderCustomTo||'');
+let selectedPeriodPreset=[0,1,7,30].includes(Number(state.settings.selectedPeriodPreset))?Number(state.settings.selectedPeriodPreset):1;let selectedPeriod=selectedPeriodPreset===0?Math.max(1,Number(state.settings.selectedPeriod)||14):selectedPeriodPreset;let reportPeriodUiPreference={};try{reportPeriodUiPreference=JSON.parse(localStorage.getItem(REPORT_PERIOD_UI_KEY)||'{}')||{}}catch{}let reportPeriodPreset=[-1,0,1,7,30].includes(Number(state.settings.reportPeriodPreset))?Number(state.settings.reportPeriodPreset):([-1,0,1,7,30].includes(Number(reportPeriodUiPreference.preset))?Number(reportPeriodUiPreference.preset):1);let reportPeriod=reportPeriodPreset===0?0:reportPeriodPreset;let reportCustomFrom=String(state.settings.reportCustomFrom||reportPeriodUiPreference.from||'');let reportCustomTo=String(state.settings.reportCustomTo||reportPeriodUiPreference.to||'');function rememberReportPeriodUiPreference(){try{localStorage.setItem(REPORT_PERIOD_UI_KEY,JSON.stringify({preset:reportPeriodPreset,from:reportCustomFrom,to:reportCustomTo,updatedAt:Number(state.settings?.reportPeriodUpdatedAt||0)}))}catch{}}let marketplaceReportContext=null;
+let homeOrderPeriodUiPreference={},homeOrderMarketUiPreference={};
+try{homeOrderPeriodUiPreference=JSON.parse(localStorage.getItem('milioner_order_period_ui_v1')||'{}')||{}}catch{}
+try{homeOrderMarketUiPreference=JSON.parse(localStorage.getItem('milioner_order_market_ui_v2')||'{}')||{}}catch{}
+let selectedOrderMarket=['all','Kaspi','WB','Ozon'].includes(homeOrderMarketUiPreference.market)?homeOrderMarketUiPreference.market:(['all','Kaspi','WB','Ozon'].includes(state.settings.selectedOrderMarket)?state.settings.selectedOrderMarket:'all');
+let selectedWbAccount=['all','WB','WB2'].includes(homeOrderMarketUiPreference.wbAccount)?homeOrderMarketUiPreference.wbAccount:(['all','WB','WB2'].includes(state.settings.selectedWbAccount)?state.settings.selectedWbAccount:'all');
+let unmatchedOrderFilter=sessionStorage.getItem(ORDER_UNMATCHED_SESSION_KEY)==='1';
+let orderPeriodMode=['today','yesterday','week','month','custom'].includes(String(homeOrderPeriodUiPreference.mode||''))?String(homeOrderPeriodUiPreference.mode):(['today','yesterday','week','month','custom'].includes(String(state.settings.orderPeriodMode||''))?String(state.settings.orderPeriodMode):'today');
+let orderCustomFrom=String(homeOrderPeriodUiPreference.from||state.settings.orderCustomFrom||'');
+let orderCustomTo=String(homeOrderPeriodUiPreference.to||state.settings.orderCustomTo||'');
 let warehouseRemoteReady=false,warehouseRemoteRevision=0,warehouseRemoteUpdatedAt=0,warehouseSaveTimer=null,warehouseSaveInFlight=false,warehousePullInFlight=false,warehouseWatchStarted=false;
 const WAREHOUSE_DIRTY_KEY=KEY+'_cloud_dirty_v2',WAREHOUSE_SERVER_SYNC_KEY=KEY+'_cloud_sync_v2_migrated';
 const PURCHASE_DELETE_TOMBSTONES_KEY=KEY+'_purchase_delete_tombstones_v1';let warehouseDeletedPurchaseIds=new Set();try{warehouseDeletedPurchaseIds=new Set(JSON.parse(localStorage.getItem(PURCHASE_DELETE_TOMBSTONES_KEY)||'[]').map(String))}catch{}function rememberPurchaseDeletes(ids){for(const x of(ids||[]))if(x)warehouseDeletedPurchaseIds.add(String(x));try{localStorage.setItem(PURCHASE_DELETE_TOMBSTONES_KEY,JSON.stringify([...warehouseDeletedPurchaseIds]))}catch{}}function clearPurchaseDeleteTombstones(){warehouseDeletedPurchaseIds.clear();try{localStorage.removeItem(PURCHASE_DELETE_TOMBSTONES_KEY)}catch{}}
@@ -1306,17 +1314,8 @@ function scheduleHomeCacheWrite(){
   const run=()=>writeHomeCache();
   if(typeof requestIdleCallback==='function')requestIdleCallback(run,{timeout:1500});else setTimeout(run,180);
 }
-function hydrateHomeCache(){
-  const cached=readHomeCache(),verifiedAt=Number(cached?.verifiedAt||0);
-  if(!cached||!verifiedAt||Date.now()-verifiedAt>HOME_CACHE_FRESH_MS){
-    homeOrdersSettled=false;
-    return false;
-  }
-  homeCacheVerifiedAt=verifiedAt;
-  const rows=Array.isArray(cached.rows)?cached.rows:[];
-  state.kaspiOrderFeed=rows.filter(row=>row.market==='Kaspi');
-  state.wbOrderFeed=rows.filter(row=>row.market==='WB'||row.market==='WB2');
-  state.ozonOrderFeed=rows.filter(row=>row.market==='Ozon');
+function paintCachedHomeHeader(cached){
+  if(!cached)return false;
   state.settings ||= {};
   if(cached.serverMarketStatus&&typeof cached.serverMarketStatus==='object')state.settings.serverMarketStatus=cached.serverMarketStatus;
   if(Number(cached.lastSync)>0)state.settings.lastSync=Number(cached.lastSync);
@@ -1326,6 +1325,21 @@ function hydrateHomeCache(){
     if(time)time.textContent=clock(last);
     if(dot)dot.className='dot '+(failed?'bad':age<=10*60*1000?'':age<=30*60*1000?'warn':last?'bad':'off');
   }
+  return true;
+}
+function hydrateHomeCache(){
+  const cached=readHomeCache();
+  paintCachedHomeHeader(cached);
+  const verifiedAt=Number(cached?.verifiedAt||0);
+  if(!cached||!verifiedAt||Date.now()-verifiedAt>HOME_CACHE_FRESH_MS){
+    homeOrdersSettled=false;
+    return false;
+  }
+  homeCacheVerifiedAt=verifiedAt;
+  const rows=Array.isArray(cached.rows)?cached.rows:[];
+  state.kaspiOrderFeed=rows.filter(row=>row.market==='Kaspi');
+  state.wbOrderFeed=rows.filter(row=>row.market==='WB'||row.market==='WB2');
+  state.ozonOrderFeed=rows.filter(row=>row.market==='Ozon');
   homeOrdersSettled=true;
   return true;
 }
