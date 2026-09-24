@@ -30,10 +30,7 @@
   reservationCompat.async=false;
   document.head.appendChild(reservationCompat);
 
-  const extra=document.createElement('script');
-  extra.src='./stock-alerts-rescue-v1.js?v=20260901-warehouse-only';
-  extra.async=false;
-  document.head.appendChild(extra);})();
+})();
 
 // Compact advertising cards without changing the campaign controls themselves.
 (function compactAdvertisingView(){
