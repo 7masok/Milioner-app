@@ -146,26 +146,26 @@ pushWarehouseToServer=async function(){
 };
 pullWarehouseFromServer=async function({force=false}={}){
   if(warehousePullInFlight||warehouseSaveInFlight||warehouseLocalDirty)return false;
-  warehousePullInFlight=true;if(force)cloudStatus('проверяю сервер…','warn');
+  warehousePullInFlight=true;
   try{
     const meta=await fetchServer(true,2),revision=Number(meta.revision||0);
     if(!meta.exists){cloudStatus('серверная база недоступна · показаны последние данные','warn');return false}
     if(revision<=warehouseRemoteRevision&&warehouseRemoteReady){setReadOnlyCache(false);cloudStatus('сервер подключён','ok');return true}
     const remote=await fetchServer(false,3);warehouseRemoteRevision=Number(remote.revision||revision);warehouseRemoteUpdatedAt=Number(remote.updatedAt||0);
     warehouseRemoteReady=true;warehouseLastCloudSnapshot=serverSnapshot(remote.state);warehouseLastSyncedText=snapshotText(remote.state);
-    applyWarehouseSnapshot(remote.state);clearWarehouseDirty();setReadOnlyCache(false);writeFastCache(remote.state,warehouseRemoteRevision,warehouseRemoteUpdatedAt);render();cloudStatus('обновлено с сервера','ok');setTimeout(restoreOrderMarketUi,0);return true;
+    applyWarehouseSnapshot(remote.state);clearWarehouseDirty();setReadOnlyCache(false);writeFastCache(remote.state,warehouseRemoteRevision,warehouseRemoteUpdatedAt);render();cloudStatus('обновлено с сервера','ok');return true;
   }catch(error){console.warn('server warehouse pull failed',error);cloudStatus(fastCached?.state?'сервер недоступен · показаны последние данные':'сервер временно недоступен','warn');return false}
   finally{warehousePullInFlight=false}
 };
 bootstrapWarehouseFromServer=async function(){
-  warehouseRemoteReady=false;warehouseLocalDirty=false;cloudStatus(fastCached?.state?'последние данные · подключаюсь…':'загружаю серверную базу…','warn');
+  warehouseRemoteReady=false;warehouseLocalDirty=false;
   try{
     const remote=await fetchServer(false,4);if(!remote.exists)throw new Error('Серверная база склада пуста — запись заблокирована до завершения миграции');
     warehouseRemoteRevision=Number(remote.revision||0);warehouseRemoteUpdatedAt=Number(remote.updatedAt||0);
     warehouseLastCloudSnapshot=serverSnapshot(remote.state);warehouseLastSyncedText=snapshotText(remote.state);applyWarehouseSnapshot(remote.state);
     clearWarehouseDirty();warehouseRemoteReady=true;setReadOnlyCache(false);reportPeriodUiPendingServerSave=false;
     writeFastCache(remote.state,warehouseRemoteRevision,warehouseRemoteUpdatedAt);
-    render();setTimeout(restoreOrderMarketUi,0);cloudStatus('сервер подключён','ok');
+    render();cloudStatus('сервер подключён','ok');
     // The runtime owns the single initial marketplace load. Keeping it here as
     // well caused a duplicate /api/orders request on every sign-in.
     return {mode:'server-authoritative',revision:warehouseRemoteRevision};
@@ -216,7 +216,7 @@ function restoreOrderMarketUi(){
     if(wbBtn&&!wbBtn.classList.contains('active'))wbBtn.click();
   }
 }
-window.addEventListener('load',()=>{[0,250,800,1800,3500].forEach(ms=>setTimeout(restoreOrderMarketUi,ms))});
+
 
 function syncLabel(ts){
   const value=Number(ts)||0;if(!value)return '—';const d=new Date(value),now=new Date();const time=d.toLocaleTimeString('ru-RU',{hour:'2-digit',minute:'2-digit'});
@@ -273,7 +273,7 @@ if(typeof originalLoadSharedOrderCache==='function'){
     for(let waited=0;!warehouseRemoteReady&&waited<15000;waited+=50)await sleep(50);
     if(!warehouseRemoteReady)return {error:new Error('warehouse-not-ready')};
     if(sharedOrderCacheInFlight)return sharedOrderCacheInFlight;
-    sharedOrderCacheInFlight=(async()=>{const result=await originalLoadSharedOrderCache(options);showMarketSyncTimes();restoreOrderMarketUi();setTimeout(restoreOrderMarketUi,100);return result})();
+    sharedOrderCacheInFlight=(async()=>{const result=await originalLoadSharedOrderCache(options);showMarketSyncTimes();return result})();
     try{return await sharedOrderCacheInFlight}finally{sharedOrderCacheInFlight=null}
   };
 }
@@ -293,7 +293,7 @@ window.syncNow=async function(){
       syncRequest('/api/wb-sync-now',{days:2},'WB')
     ]);
     const stockResult=await syncRequest('/api/stock-sync-now',{markets:['WB','WB2']},'WB остатки').catch(error=>({ok:false,error:String(error?.message||error)}));
-    await window.loadSharedOrderCache?.({silent:false});showMarketSyncTimes();restoreOrderMarketUi();
+    await window.loadSharedOrderCache?.({silent:false});showMarketSyncTimes();
     const failed=results.filter(x=>x.status==='rejected');if(failed.length)console.warn('market sync partial failure',failed);
     if(stockResult?.ok===false)console.warn('WB stock sync skipped',stockResult);
     cloudStatus('сервер подключён','ok');
