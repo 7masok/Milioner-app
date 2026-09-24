@@ -21,7 +21,8 @@ test('custom old order periods request their own older history',()=>{
 
 test('orders API supports an indexed creation-date lower bound',()=>{
   assert.match(orders,/const after = Math\.max\(0, Number\(req\.query\.after \|\| 0\) \|\| 0\)/);
-  assert.match(orders,/o\.creation_date >= \$\$\{params\.push\(after\)\}/);
+  assert.ok(orders.includes("clauses.push('o.creation_date >= ' + '$' + params.push(after))"));
+  assert.ok(orders.includes("clauses.push('o.market=' + '$' + params.push(selected))"));
   assert.match(migration,/idx_order_lines_creation_date ON marketplace_order_lines\(creation_date DESC\)/);
 });
 
