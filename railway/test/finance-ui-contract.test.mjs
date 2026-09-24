@@ -42,6 +42,8 @@ test('finance is local-first with a durable IndexedDB outbox',()=>{
   assert.ok(html.includes('async function financeSyncOutbox()'));
   assert.ok(html.includes("financeCommandSequence=0"));
   assert.ok(html.includes("applyFinanceSnapshot(financeLocalBefore);try{await bootstrapWarehouseFromServer()"));
+  assert.ok(html.includes("const ordersPromise=Promise.resolve(loadSharedOrderCache({silent:true}))"));
+  assert.ok(html.includes("const financePromise=Promise.resolve(bootstrapFinanceFromServer(financeLocalBefore))"));
 });
 
 test('normal finance flow no longer uses snapshot PATCH',()=>{
