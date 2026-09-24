@@ -24,7 +24,7 @@ function rebuildFboMap(){
 }
 function productOzonKeys(p){return [...new Set([p?.ozon,...(Array.isArray(p?.ozonAliases)?p.ozonAliases:[])].map(x=>String(x||'').trim()).filter(Boolean))];};
 function ozonFboQtyForProduct(p){return productOzonKeys(p).reduce((n,key)=>n+(fboByKey.get(key)||0),0);}
-function updateFboMetric(){const el=document.getElementById('productFboQty');if(el)el.textContent=data?fboTotal.toLocaleString('ru-RU')+' шт.':'—';}
+function updateFboMetric(){const el=document.getElementById('productFboQty');if(el)el.textContent=fboTotal.toLocaleString('ru-RU')+' шт.';}
 function populateOzonOrderFeed(){
  if(!data?.accounts)return;
  const feed=Array.isArray(state.ozonOrderFeed)?state.ozonOrderFeed:(state.ozonOrderFeed=[]);
@@ -203,7 +203,7 @@ renderMarketplaceOrders=function(){
 applyMarketplaceTransitions=function(market,feed){if(String(market).startsWith('Ozon'))return {reservedCount:0,soldCount:0,cancelledCount:0};return baseTransition(market,feed);};
 productCard=function(p,profit,d,stock){
  let html=baseProductCard(p,profit,d,stock),keys=productOzonKeys(p);if(!keys.length)return html;
- const qty=data?ozonFboQtyForProduct(p):null,line='<div class="muted" style="color:#1c62bb;font-weight:700">FBO Ozon: '+(qty===null?'—':qty+' шт.')+'</div>';
+ const qty=ozonFboQtyForProduct(p),line='<div class="muted" style="color:#1c62bb;font-weight:700">FBO Ozon: '+qty+' шт.</div>';
  return html.replace('</div><div class="right" style="min-width:112px">',line+'</div><div class="right" style="min-width:112px">');
 };
 renderProducts=function(rebuildStats=false){
