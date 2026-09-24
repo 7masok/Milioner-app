@@ -29,6 +29,7 @@ test('writeoff can record reserved stock as a physical shortage', () => {
   };
 
   runFrontendFunction('createWriteoff', {
+    requireWarehouseEditReady: () => true,
     document: { getElementById: id => fields[id] || null },
     prod: id => id === product.id ? product : null,
     isBundleProduct: () => false,
@@ -59,6 +60,7 @@ test('writeoff never goes below the physical stock', () => {
   };
 
   runFrontendFunction('createWriteoff', {
+    requireWarehouseEditReady: () => true,
     document: { getElementById: id => fields[id] || null },
     prod: id => id === product.id ? product : null,
     isBundleProduct: () => false,
@@ -89,6 +91,7 @@ test('inventory accepts a physical count below active reservations', () => {
   };
 
   runFrontendFunction('doInventory', {
+    requireWarehouseEditReady: () => true,
     document: { getElementById: id => fields[id] || null },
     prod: id => id === product.id ? product : null,
     isBundleProduct: () => false,
