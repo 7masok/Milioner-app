@@ -274,7 +274,7 @@ if(typeof originalLoadSharedOrderCache==='function'){
   };
 }
 window.syncNow=async function(){
-  const btn=document.getElementById('syncNowButton'),old=btn?.textContent;if(btn){btn.disabled=true;btn.textContent='…'}
+  const btn=document.getElementById('syncNowButton');if(btn){btn.disabled=true;btn.classList.add('sync-now-busy');btn.setAttribute('aria-busy','true')}
   try{
     cloudStatus('обновляю маркетплейсы…','warn');
     const syncRequest=async(path,body,label)=>{
@@ -294,7 +294,7 @@ window.syncNow=async function(){
     if(stockResult?.ok===false)console.warn('WB stock sync skipped',stockResult);
     cloudStatus('сервер подключён','ok');
   }catch(e){await window.loadSharedOrderCache?.({silent:true}).catch(()=>{});showMarketSyncTimes();cloudStatus('сервер подключён · ошибка синхронизации','warn')}
-  finally{if(btn){btn.disabled=false;btn.textContent=old||'↻'}}
+  finally{if(btn){btn.disabled=false;btn.classList.remove('sync-now-busy');btn.removeAttribute('aria-busy')}}
 };
 setInterval(()=>showMarketSyncTimes(),30000);
 setTimeout(showMarketSyncTimes,0);

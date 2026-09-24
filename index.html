@@ -12,7 +12,7 @@
 *{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font-family:system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
 button,input,select{font:inherit}button{cursor:pointer}.app{max-width:560px;margin:auto;min-height:100vh;padding-bottom:76px}
 header{position:sticky;top:0;z-index:5;background:#fff;border-bottom:1px solid var(--line);padding:15px 16px 12px}
-.headrow{display:flex;justify-content:space-between;align-items:center}.title{font-size:26px;font-weight:800}.sync{font-size:11px;color:var(--muted);margin-top:6px}.dot{display:inline-block;width:7px;height:7px;border-radius:50%;background:var(--ok);margin:0 4px}
+.headrow{display:flex;justify-content:space-between;align-items:center}.title{font-size:26px;font-weight:800}.sync-now-icon{display:inline-block}.sync-now-busy .sync-now-icon{animation:syncNowSpin .8s linear infinite}@keyframes syncNowSpin{to{transform:rotate(360deg)}}.sync{font-size:11px;color:var(--muted);margin-top:6px}.dot{display:inline-block;width:7px;height:7px;border-radius:50%;background:var(--ok);margin:0 4px}
 main{padding:14px}.view{display:none}.view.active{display:block}
 .metrics{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px}.metrics .card{min-width:0;padding:12px}.metrics .num{font-size:18px}.home-order-metrics{grid-template-columns:repeat(2,minmax(0,1fr))}.product-stock-metrics{grid-template-columns:repeat(2,minmax(0,1fr));margin-bottom:12px}.card{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:13px}.label{font-size:11px;color:var(--muted)}.num{font-size:19px;font-weight:800;margin-top:7px}.small{font-size:11px;color:var(--muted);margin-top:3px}
 .period{display:flex;gap:7px;margin:12px 0;overflow:auto}.chip{border:1px solid var(--line);background:#fff;border-radius:20px;padding:7px 11px;font-size:12px;white-space:nowrap}.chip.active{background:#111;color:#fff;border-color:#111}
@@ -80,7 +80,7 @@ body:has(#home.active) .fab{bottom:138px;background:#0b9b54}
 <div id="loginGate" class="login-gate"><div class="login-card"><form class="auth-form login-bio" onsubmit="ownerAuthSubmit(event)"><h1>Вход в склад</h1><input id="ownerPassword" type="password" autocomplete="current-password" placeholder="Код доступа" aria-label="Код доступа" autofocus><button id="ownerLoginButton" class="btn dark" type="submit">Войти</button></form></div></div>
 <div class="app">
 <header>
-  <div class="headrow"><div class="title">Склад</div><button id="syncNowButton" class="btn" onclick="syncNow()">↻</button></div>
+  <div class="headrow"><div class="title">Склад</div><button id="syncNowButton" class="btn" onclick="syncNow()" aria-label="Обновить"><span class="sync-now-icon" aria-hidden="true">↻</span></button></div>
   <div class="sync"><span id="dotKaspi" class="dot warn"></span>Kaspi · последняя синхронизация: <span id="lastSync">—</span> · облако: <span id="cloudStatus">подключение…</span> · WB: <span id="wbStockStatus">—</span></div>
 </header>
 <button id="storageAlert" class="storage-alert" type="button" onclick="openView('settings')" hidden><span id="storageAlertIcon">!</span><span><b id="storageAlertTitle">Хранилище заполняется</b><small id="storageAlertText"></small></span><span>›</span></button>

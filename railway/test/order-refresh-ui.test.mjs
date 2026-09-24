@@ -30,9 +30,13 @@ test('refresh rendering preserves unmatched filter and search badge reflects vis
   assert.match(src,/Непривязанных заказов нет/);
 });
 
-test('refresh button has a stable id so sync spinner cannot replace the bell',()=>{
-  assert.match(html,/id="syncNowButton"[^>]*onclick="syncNow\(\)"/);
+test('refresh button keeps the refresh icon visible while syncing',()=>{
+  assert.match(html,/id="syncNowButton"[^>]*onclick="syncNow\(\)"[^>]*><span class="sync-now-icon"[^>]*>↻<\/span>/);
+  assert.match(html,/\.sync-now-busy \.sync-now-icon\{animation:syncNowSpin/);
   const cloudSync=readFileSync(new URL('../../cloud-sync-v3.js',import.meta.url),'utf8');
   assert.match(cloudSync,/getElementById\('syncNowButton'\)/);
+  assert.match(cloudSync,/classList\.add\('sync-now-busy'\)/);
+  assert.match(cloudSync,/classList\.remove\('sync-now-busy'\)/);
+  assert.doesNotMatch(cloudSync,/textContent='…'/);
   assert.doesNotMatch(cloudSync,/querySelector\('header \.btn'\)/);
 });
