@@ -149,7 +149,6 @@ function repairMarketplaceUi(){
   if(!document.body?.classList.contains('auth-ready'))return false;
   ensureOzonReportTab();
   ensureOzonCompactRow();
-  refreshOzonCompactStatus();
   if(document.getElementById('reports')?.classList.contains('active')){
     setTimeout(()=>{try{window.renderReports?.()}catch(error){console.warn('Report retry after auth failed',error)}},120);
   }
