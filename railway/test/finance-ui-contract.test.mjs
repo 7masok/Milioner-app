@@ -49,15 +49,15 @@ test('finance is local-first with a durable IndexedDB outbox',()=>{
 });
 
 
-test('app startup always opens Home and Today',()=>{
+test('fresh login opens Home Today while browser reload preserves the current period',()=>{
   const start=html.indexOf('function startAppRuntime(){');
   assert.ok(start>=0);
-  const fn=html.slice(start,start+5000);
-  assert.ok(fn.includes("const startupView='home'"));
-  assert.ok(fn.includes("orderPeriodMode='today'"));
+  const fn=html.slice(start,start+7000);
+  assert.ok(fn.includes("const startupView='home',freshLogin=sessionStorage.getItem(APP_FRESH_LOGIN_KEY)==='1'"));
+  assert.ok(fn.includes("if(freshLogin){orderPeriodMode='today'"));
   assert.equal(fn.includes('localStorage.getItem(ACTIVE_VIEW_KEY)'),false);
-  assert.match(cloudSync,/orderPeriodMode='today';/);
-  assert.doesNotMatch(cloudSync,/orderPeriodMode=savedOrderPeriodUi\.mode/);
+  assert.match(cloudSync,/orderPeriodMode=savedOrderPeriodUi\.mode/);
+  assert.doesNotMatch(cloudSync,/Every fresh app start opens/);
 });
 
 test('startup does not duplicate the initial orders request',()=>{

@@ -186,9 +186,9 @@ if(typeof originalSetOrderCustomDate==='function')window.setOrderCustomDate=func
 const savedOrderPeriodUi=readOrderPeriodUi();
 if(savedOrderPeriodUi.from)orderCustomFrom=savedOrderPeriodUi.from;
 if(savedOrderPeriodUi.to)orderCustomTo=savedOrderPeriodUi.to;
-// Every fresh app start opens the operational default: Home → Today.
-// The user can still switch periods normally for the current session.
-orderPeriodMode='today';
+if(['today','yesterday','week','month','custom'].includes(savedOrderPeriodUi.mode))orderPeriodMode=savedOrderPeriodUi.mode;
+// A real code login resets Home to Today in startAppRuntime. A browser reload
+// keeps the user's current period instead of treating refresh as a new login.
 renderOrderPeriodControls?.();
 
 const ORDER_MARKET_UI_KEY='milioner_order_market_ui_v2';

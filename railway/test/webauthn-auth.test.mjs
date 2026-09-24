@@ -9,7 +9,7 @@ const auth = readFileSync(new URL('../src/auth.js', import.meta.url), 'utf8');
 
 test('login screen is minimal and uses the access code directly', () => {
   const start = html.indexOf('<div id="loginGate"');
-  const end = html.indexOf('<div id="warehouseLoadingGate"', start);
+  const end = html.indexOf('<div class="app">', start);
   const login = html.slice(start, end);
   assert.ok(start >= 0 && end > start);
   assert.match(login, /<h1>Вход в склад<\/h1>/);
@@ -26,6 +26,24 @@ test('login screen is minimal and uses the access code directly', () => {
   assert.doesNotMatch(login, /Другое устройство \/ код восстановления/);
 });
 
+
+test('browser refresh has no startup modal cards and validates an existing session first', () => {
+  assert.match(html, /<body class="auth-pending">/);
+  assert.doesNotMatch(html, /id="warehouseLoadingGate"/);
+  assert.doesNotMatch(html, /class="auth-checking"/);
+  assert.match(html, /body\.auth-locked \.login-gate\{display:grid\}/);
+  const start = html.indexOf('async function initOwnerAuth(){');
+  const end = html.indexOf('function rememberOwnerSession', start);
+  const init = html.slice(start, end);
+  assert.ok(init.indexOf("if(ownerSessionToken){const check=await nativeFetch(MILLIONER_API+'/api/auth/session'") >= 0);
+  assert.ok(init.indexOf("/api/auth/session") < init.indexOf("/api/auth/config"));
+});
+
+test('real code login marks a fresh UI entry, browser reload does not', () => {
+  assert.match(html, /sessionStorage\.setItem\(APP_FRESH_LOGIN_KEY,'1'\)/);
+  assert.match(html, /sessionStorage\.removeItem\(APP_FRESH_LOGIN_KEY\)/);
+  assert.match(html, /ORDER_SEARCH_SESSION_KEY/);
+});
 test('password login remains available even when passkeys exist', () => {
   const start = auth.indexOf('export async function login');
   const end = auth.indexOf('export async function webauthnRegisterOptions');
