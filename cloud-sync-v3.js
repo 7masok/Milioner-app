@@ -165,10 +165,8 @@ bootstrapWarehouseFromServer=async function(){
     clearWarehouseDirty();warehouseRemoteReady=true;setReadOnlyCache(false);reportPeriodUiPendingServerSave=false;
     writeFastCache(remote.state,warehouseRemoteRevision,warehouseRemoteUpdatedAt);
     render();setTimeout(restoreOrderMarketUi,0);cloudStatus('сервер подключён','ok');
-    // Initial order requests can race the session bootstrap and return 401.
-    // Once the authenticated warehouse bootstrap succeeds, reload the canonical
-    // marketplace feeds so Kaspi/WB status and orders cannot remain blank.
-    setTimeout(()=>window.loadSharedOrderCache?.({silent:true}).catch(()=>{}),0);
+    // The runtime owns the single initial marketplace load. Keeping it here as
+    // well caused a duplicate /api/orders request on every sign-in.
     return {mode:'server-authoritative',revision:warehouseRemoteRevision};
   }catch(error){warehouseRemoteReady=false;clearWarehouseDirty();setReadOnlyCache(Boolean(fastCached?.state));console.error('server bootstrap failed',error);cloudStatus(fastCached?.state?'сервер недоступен · показаны последние данные':'нет связи с сервером · изменения заблокированы','warn');return {mode:'server-unavailable',error:String(error?.message||error)}}
 };
@@ -186,7 +184,12 @@ if(typeof originalSetOrderPeriod==='function')window.setOrderPeriod=function(mod
 const originalSetOrderCustomDate=window.setOrderCustomDate;
 if(typeof originalSetOrderCustomDate==='function')window.setOrderCustomDate=function(which,value){const result=originalSetOrderCustomDate(which,value);rememberOrderPeriodUi('custom');return result};
 const savedOrderPeriodUi=readOrderPeriodUi();
-if(['today','yesterday','week','month','custom'].includes(savedOrderPeriodUi.mode)){orderPeriodMode=savedOrderPeriodUi.mode;if(savedOrderPeriodUi.from)orderCustomFrom=savedOrderPeriodUi.from;if(savedOrderPeriodUi.to)orderCustomTo=savedOrderPeriodUi.to;renderOrderPeriodControls?.()}
+if(savedOrderPeriodUi.from)orderCustomFrom=savedOrderPeriodUi.from;
+if(savedOrderPeriodUi.to)orderCustomTo=savedOrderPeriodUi.to;
+// Every fresh app start opens the operational default: Home → Today.
+// The user can still switch periods normally for the current session.
+orderPeriodMode='today';
+renderOrderPeriodControls?.();
 
 const ORDER_MARKET_UI_KEY='milioner_order_market_ui_v2';
 function readOrderMarketUi(){try{return JSON.parse(localStorage.getItem(ORDER_MARKET_UI_KEY)||'{}')||{}}catch{return {}}}
