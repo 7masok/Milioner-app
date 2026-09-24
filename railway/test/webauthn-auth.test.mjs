@@ -10,9 +10,10 @@ const auth = readFileSync(new URL('../src/auth.js', import.meta.url), 'utf8');
 test('login screen no longer asks for a 4-digit PIN', () => {
   assert.equal(/pattern="\[0-9\]\{4\}"/.test(html), false);
   assert.equal(/maxlength="4"/.test(html), false);
-  assert.match(html, /Войти по отпечатку/);
+  assert.match(html, /Войти по ключу доступа/);
   assert.match(html, /ownerWebAuthnLogin/);
-  assert.match(html, /Привязать отпечаток/);
+  assert.match(html, /Привязать ключ доступа/);
+  assert.match(html, /QR-код/);
 });
 
 test('server exposes WebAuthn routes before the session lock', () => {
@@ -28,9 +29,15 @@ test('server exposes WebAuthn routes before the session lock', () => {
 
 test('password login is disabled after a passkey exists', () => {
   assert.match(auth, /use-webauthn/);
-  assert.match(auth, /authenticatorAttachment: 'platform'/);
-  assert.match(auth, /residentKey: 'discouraged'/);
+  assert.doesNotMatch(auth, /authenticatorAttachment: 'platform'/);
+  assert.match(auth, /residentKey: 'preferred'/);
   assert.match(auth, /supportedAlgorithmIDs: \[-7, -257\]/);
+});
+
+test('desktop WebAuthn keeps cross-device transports and does not force platform auth', () => {
+  assert.doesNotMatch(html, /authenticatorAttachment:'platform'/);
+  assert.match(html, /item\.transports/);
+  assert.match(html, /authenticatorSelection:options\.authenticatorSelection/);
 });
 
 test('relying party follows the request origin', () => {
