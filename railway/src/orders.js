@@ -76,8 +76,11 @@ function safeNameFallback(row, products) {
 ordersRouter.get('/orders', asyncRoute(async (req, res) => {
   const selected = market(req.query.market);
   const limit = Math.max(1, Math.min(15000, Number(req.query.limit || 1000) || 1000));
-  const params = [];
-  const where = selected ? `WHERE o.market=$${params.push(selected)}` : '';
+  const after = Math.max(0, Number(req.query.after || 0) || 0);
+  const params = [], clauses = [];
+  if (selected) clauses.push(`o.market=${params.push(selected)}`);
+  if (after) clauses.push(`o.creation_date >= ${params.push(after)}`);
+  const where = clauses.length ? `WHERE ${clauses.join(' AND ')}` : '';
   params.push(limit);
   const [rows, products, warehouse] = await Promise.all([
     pool.query(`SELECT o.market,o.order_id AS "orderId",o.code,o.entry_id AS "entryId",o.status,o.state,
