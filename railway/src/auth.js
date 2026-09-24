@@ -208,8 +208,7 @@ export async function webauthnRegisterOptions(req, res, next) {
       supportedAlgorithmIDs: [-7, -257],
       excludeCredentials: existing.map(credentialDescriptor),
       authenticatorSelection: {
-        authenticatorAttachment: 'platform',
-        residentKey: 'discouraged',
+        residentKey: 'preferred',
         requireResidentKey: false,
         userVerification: 'required'
       }
