@@ -7,37 +7,36 @@ const html = readFileSync(new URL('../../index.html', import.meta.url), 'utf8');
 const server = readFileSync(new URL('../src/server.js', import.meta.url), 'utf8');
 const auth = readFileSync(new URL('../src/auth.js', import.meta.url), 'utf8');
 
-test('login screen no longer asks for a 4-digit PIN', () => {
-  assert.equal(/pattern="\[0-9\]\{4\}"/.test(html), false);
-  assert.equal(/maxlength="4"/.test(html), false);
-  assert.match(html, /Войти по ключу доступа/);
-  assert.match(html, /ownerWebAuthnLogin/);
-  assert.match(html, /Привязать ключ доступа/);
-  assert.match(html, /QR-код/);
+test('login screen uses the access code directly', () => {
+  assert.match(html, /Введите код доступа/);
+  assert.match(html, /id="ownerPassword"/);
+  assert.match(html, /id="ownerLoginButton"/);
+  assert.match(html, />Войти<\/button>/);
+  assert.doesNotMatch(html, /id="ownerBiometricButton"/);
+  assert.doesNotMatch(html, /id="ownerBindButton"/);
+  assert.doesNotMatch(html, /Другое устройство \/ код восстановления/);
 });
 
-test('server exposes WebAuthn routes before the session lock', () => {
+test('password login remains available even when passkeys exist', () => {
+  const start = auth.indexOf('export async function login');
+  const end = auth.indexOf('export async function webauthnRegisterOptions');
+  const login = auth.slice(start, end);
+  assert.ok(start >= 0 && end > start);
+  assert.doesNotMatch(login, /credentialCount/);
+  assert.doesNotMatch(login, /use-webauthn/);
+  assert.match(login, /safeEqual\(req\.body\?\.password, config\.adminToken\)/);
+});
+
+test('auth config advertises code login as the active mode', () => {
+  assert.match(auth, /webauthn: false/);
+  assert.match(auth, /passwordLogin: true/);
+});
+
+test('auth routes remain before the session lock', () => {
   const configAt = server.indexOf("app.get('/api/auth/config'");
+  const loginAt = server.indexOf("app.post('/api/auth/login'");
   const sessionLock = server.indexOf("app.use('/api', requireAppSession)");
-  const registerAt = server.indexOf("app.post('/api/auth/webauthn/register-options'");
-  const loginAt = server.indexOf("app.post('/api/auth/webauthn/login-options'");
-  assert.ok(configAt > 0 && sessionLock > configAt);
-  assert.ok(registerAt > configAt && registerAt < sessionLock);
-  assert.ok(loginAt > configAt && loginAt < sessionLock);
-  assert.match(server, /listWebauthnCredentials/);
-});
-
-test('password login is disabled after a passkey exists', () => {
-  assert.match(auth, /use-webauthn/);
-  assert.doesNotMatch(auth, /authenticatorAttachment: 'platform'/);
-  assert.match(auth, /residentKey: 'preferred'/);
-  assert.match(auth, /supportedAlgorithmIDs: \[-7, -257\]/);
-});
-
-test('desktop WebAuthn keeps cross-device transports and does not force platform auth', () => {
-  assert.doesNotMatch(html, /authenticatorAttachment:'platform'/);
-  assert.match(html, /item\.transports/);
-  assert.match(html, /authenticatorSelection:options\.authenticatorSelection/);
+  assert.ok(configAt > 0 && loginAt > configAt && loginAt < sessionLock);
 });
 
 test('relying party follows the request origin', () => {
