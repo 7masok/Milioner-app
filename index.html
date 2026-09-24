@@ -1303,6 +1303,12 @@ function hydrateHomeCache(){
   state.settings ||= {};
   if(cached.serverMarketStatus&&typeof cached.serverMarketStatus==='object')state.settings.serverMarketStatus=cached.serverMarketStatus;
   if(Number(cached.lastSync)>0)state.settings.lastSync=Number(cached.lastSync);
+  const clock=ts=>Number(ts)>0?new Date(Number(ts)).toLocaleTimeString('ru-RU',{hour:'2-digit',minute:'2-digit'}):'—';
+  for(const [market,timeId,dotId] of [['Kaspi','lastSync','dotKaspi'],['WB','wb1Sync','dotWB1'],['WB2','wb2Sync','dotWB2'],['Ozon','ozonTopStatus','dotOzonTop']]){
+    const status=state.settings.serverMarketStatus?.[market]||{},last=Number(status.lastSuccessAt||0),time=document.getElementById(timeId),dot=document.getElementById(dotId),latest=status.latest||null,failed=latest&&Number(latest.ok)!==1&&Number(latest.finished_at||0)>0&&Number(latest.started_at||0)>=last,age=last?Date.now()-last:Infinity;
+    if(time)time.textContent=clock(last);
+    if(dot)dot.className='dot '+(failed?'bad':age<=10*60*1000?'':age<=30*60*1000?'warn':last?'bad':'off');
+  }
   homeOrdersSettled=true;
   return true;
 }
