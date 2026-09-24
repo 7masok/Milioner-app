@@ -66,10 +66,11 @@ test('startup does not duplicate the initial orders request',()=>{
   const boot=cloudSync.slice(bootStart,bootEnd);
   assert.equal(boot.includes('loadSharedOrderCache?.({silent:true})'),false);
   const start=html.indexOf('function startAppRuntime(){');
-  const fn=html.slice(start,start+5000);
-  assert.equal((fn.match(/loadSharedOrderCache\(\{silent:true\}\)/g)||[]).length,1);
-  assert.ok(fn.indexOf('const ordersPromise=')<fn.indexOf('await ordersPromise'));
-  assert.ok(fn.indexOf('const financePromise=')<fn.indexOf('await ordersPromise'));
+  const intervalAt=html.indexOf('setInterval(()=>loadSharedOrderCache({silent:true})',start);
+  const immediate=html.slice(start,intervalAt>start?intervalAt:start+5000);
+  assert.equal((immediate.match(/loadSharedOrderCache\(\{silent:true\}\)/g)||[]).length,1);
+  assert.ok(immediate.indexOf('const ordersPromise=')<immediate.indexOf('await ordersPromise'));
+  assert.ok(immediate.indexOf('const financePromise=')<immediate.indexOf('await ordersPromise'));
 });
 test('normal finance flow no longer uses snapshot PATCH',()=>{
   assert.equal(html.includes("/api/finance-state',{method:'PATCH'"),false);
