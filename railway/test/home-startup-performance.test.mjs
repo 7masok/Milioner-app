@@ -51,14 +51,17 @@ test('Home startup does not run report, Ozon or compatibility fetches',()=>{
   assert.doesNotMatch(repair.slice(repairStart,repairEnd),/refreshOzonCompactStatus\(\)/);
 });
 
-test('expensive finance and maintenance work are deferred off first Home paint',()=>{
+test('expensive finance, Ozon and maintenance work are deferred off first Home paint',()=>{
   const start=html.indexOf('function startAppRuntime(){');
   const end=html.indexOf('// Wait for the server-sync module',start);
   const runtime=html.slice(start,end);
   assert.match(runtime,/setTimeout\(\(\)=>bootstrapFinance\(\),financePriority\?0:1800\)/);
+  assert.match(runtime,/ozonFboRefreshStatus\?\.\(\)/);
+  assert.match(runtime,/\),3200\);setTimeout\(\(\)=>Promise\.resolve\(loadStorageStatus/);
   assert.match(runtime,/loadStorageStatus\(\{silent:true\}\)\)\.catch\(\(\)=>\{\}\),6500/);
   assert.match(runtime,/setTimeout\(\(\)=>maybeAutoGoogleBackup\(\),10000\)/);
-  assert.doesNotMatch(runtime,/ozonFboRefreshStatus/);
+  assert.ok(runtime.indexOf('openView(startupView,false)')<runtime.indexOf('ozonFboRefreshStatus?.()'));
+  assert.doesNotMatch(runtime,/hydrateWarehouseFromLocalCache\(\);hydrateHomeCache\(\)/);
 });
 
 test('static assets can revalidate while API responses stay no-store',()=>{
