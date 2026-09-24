@@ -38,6 +38,7 @@ function setReadOnlyCache(on){
 }
 warehouseSnapshot=function(){return serverSnapshot(state)};
 applyWarehouseSnapshot=function(remote){
+  if(typeof invalidateProductRenderStats==='function')invalidateProductRenderStats();
   // Marketplace order feeds live in their own PostgreSQL tables and are intentionally
   // absent from warehouse-state. Preserve the already loaded read-only feeds when a
   // newer warehouse snapshot replaces state, otherwise the 20s cloud watcher makes
@@ -119,6 +120,7 @@ scheduleWarehouseSave=function(delay=350){
   }),delay);
 };
 save=function(){
+  if(typeof invalidateProductRenderStats==='function')invalidateProductRenderStats();
   if(!warehouseRemoteReady||showingReadOnlyCache){cloudStatus('только просмотр · подключаюсь…','warn');return false}
   stampChangedWarehouseEntities();warehouseLastObservedSnapshot=normalizeWarehouseSnapshot(state);
   if(snapshotText(state)!==warehouseLastSyncedText){state.settings=state.settings||{};state.settings.serverUpdatedAt=Date.now();markWarehouseDirty();scheduleWarehouseSave()}

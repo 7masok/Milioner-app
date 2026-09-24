@@ -60,9 +60,9 @@ test('manual order relinking saves current article and retains historical order 
   const html=readFileSync(new URL('../../index.html',import.meta.url),'utf8');
   const p={id:'p',wb:'',stock:100,wbRelinkRequired:{oldSku:'old'}};
   let saves=0;
-  const ctx={window:{pendingResolvedWbLink:{pid:'p',market:'WB',vendorCode:'Сто признаний платина',nmId:10,chrtId:20,barcode:'2049533372954',multipleSizes:false,link:{sku:'old',feedKey:'1:1'}}},prod:()=>p,marketplaceField:()=> 'wb',isWbMarket:()=>true,state:{wbOrderFeed:[{market:'WB',sku:'old'}]},applyMarketplaceTransitions:()=>{},save:()=>saves++,closeModal:()=>{},render:()=>{}};
+  const ctx={window:{pendingResolvedWbLink:{pid:'p',market:'WB',vendorCode:'Сто признаний платина',nmId:10,chrtId:20,barcode:'2049533372954',multipleSizes:false,link:{sku:'old',feedKey:'1:1'}}},prod:()=>p,marketplaceField:()=> 'wb',isWbMarket:()=>true,requireWarehouseEditReady:()=>true,state:{products:[p],wbOrderFeed:[{market:'WB',sku:'old'}]},alert:()=>{},applyMarketplaceTransitions:()=>{},save:()=>saves++,closeModal:()=>{},render:()=>{}};
   vm.createContext(ctx);
-  for(const name of ['applyEditedMarketplaceSku','attachMarketplaceSku','confirmResolvedWbOrderLink'])vm.runInContext(html.split('\n').find(l=>l.startsWith('function '+name+'(')),ctx);
+  for(const name of ['marketplaceSkuOwner','applyEditedMarketplaceSku','attachMarketplaceSku','confirmResolvedWbOrderLink'])vm.runInContext(html.split('\n').find(l=>l.startsWith('function '+name+'(')),ctx);
   ctx.confirmResolvedWbOrderLink();
   assert.equal(p.wb,'Сто признаний платина');assert.equal(p.stock,100);assert.equal(saves,1);
   assert.ok(p.wbAliases.includes('old'));assert.equal(p.wbRelinkRequired,undefined);
