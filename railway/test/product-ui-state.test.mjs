@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
 
 const html=readFileSync(new URL('../../index.html',import.meta.url),'utf8');
+const cloud=readFileSync(new URL('../../cloud-sync-v3.js',import.meta.url),'utf8');
 
 test('Products reload preserves tab and product-list controls',()=>{
   assert.match(html,/const PRODUCT_UI_KEY=KEY\+'_product_ui_v1'/);
