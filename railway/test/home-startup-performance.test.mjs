@@ -32,17 +32,33 @@ test('Home paints cached orders and market status before network refresh',()=>{
   assert.match(html,/state\.kaspiOrderFeed=rows\.filter/);
   assert.match(html,/state\.wbOrderFeed=rows\.filter/);
   assert.match(html,/homeCacheWriteScheduled/);
-  assert.match(html,/HOME_CACHE_FRESH_MS=15000/);
+  assert.match(html,/HOME_CACHE_FRESH_MS=10\*60\*1000/);
   assert.match(html,/verifiedAt:Number\(homeCacheVerifiedAt\|\|0\)/);
   assert.match(html,/Date\.now\(\)-verifiedAt>HOME_CACHE_FRESH_MS/);
   assert.match(html,/if\(allOrders\.status==='fulfilled'\)homeCacheVerifiedAt=Date\.now\(\)/);
   assert.match(html,/render\(\);writeHomeCache\(\)/);
+  assert.match(html,/function paintCachedHomeHeader\(cached\)/);
+  assert.ok(html.indexOf('paintCachedHomeHeader(cached)')<html.indexOf('Date.now()-verifiedAt>HOME_CACHE_FRESH_MS'));
   const start=html.indexOf('function startAppRuntime(){');
   const end=html.indexOf('// Wait for the server-sync module',start);
   const runtime=html.slice(start,end);
   assert.ok(runtime.indexOf('hydrateHomeCache()')<runtime.indexOf('openView(startupView,false)'));
   assert.ok(runtime.indexOf('openView(startupView,false)')<runtime.indexOf('bootstrapWarehouseFromServer()'));
   assert.match(html,/requestIdleCallback\(run,\{timeout:1500\}\)/);
+});
+
+
+test('Home UI preferences are resolved before auth can reveal the app',()=>{
+  const vars=html.slice(html.indexOf('let marketplaceReportContext=null;'),html.indexOf('let warehouseRemoteReady=',html.indexOf('let marketplaceReportContext=null;')));
+  assert.match(vars,/milioner_order_period_ui_v1/);
+  assert.match(vars,/milioner_order_market_ui_v2/);
+  assert.match(vars,/homeOrderPeriodUiPreference\.mode/);
+  assert.match(vars,/homeOrderMarketUiPreference\.market/);
+  const auth=html.slice(html.indexOf('async function initOwnerAuth()'),html.indexOf('function rememberOwnerSession',html.indexOf('async function initOwnerAuth()')));
+  assert.match(auth,/cloudStatus\('онлайн','ok'\);startAppRuntime\(\);setOwnerAuthMode\('ready'\)/);
+  assert.doesNotMatch(cloud,/\[0,250,800,1800,3500\]/);
+  assert.doesNotMatch(cloud,/showMarketSyncTimes\(\);restoreOrderMarketUi/);
+  assert.doesNotMatch(cloud,/render\(\);setTimeout\(restoreOrderMarketUi,0\)/);
 });
 
 test('Home startup does not run report, Ozon or compatibility fetches',()=>{
