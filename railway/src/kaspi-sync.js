@@ -133,7 +133,7 @@ async function directOrderPage({ days, state, page }) {
   };
 }
 
-async function directOrderLines(order, productCache) {
+async function directOrderLines(order, productCache, { requireMerchantCode = false } = {}) {
   const orderId = String(order?.id || '').trim();
   if (!orderId) return [];
   const entries = await fetchJson(`${KASPI_API}/orders/${encodeURIComponent(orderId)}/entries`, { headers: await kaspiHeaders() }, 'Kaspi order entries');
@@ -150,10 +150,14 @@ async function directOrderLines(order, productCache) {
           code: String(data?.data?.attributes?.code || '').trim(),
           name: String(data?.data?.attributes?.name || '').trim()
         };
-      } catch {
+      } catch (error) {
+        if (requireMerchantCode) throw new Error(`Kaspi merchant product ${masterProductId} unavailable: ${String(error?.message || error)}`);
         product = { code: '', name: '' };
       }
       productCache.set(masterProductId, product);
+    }
+    if (requireMerchantCode && !String(product?.code || '').trim()) {
+      throw new Error(`Kaspi order entry ${String(entry?.id || '')} has no merchant code`);
     }
     const qty = Math.max(1, n(attrs.quantity, 1));
     const totalPrice = n(attrs.totalPrice, n(attrs.basePrice, 0) * qty);
@@ -232,7 +236,7 @@ async function fetchAuthoritativeActiveOrders(days = ACTIVE_LOOKBACK_DAYS) {
 
   const orders = [];
   for (const raw of byId.values()) {
-    const lines = await directOrderLines(raw, productCache);
+    const lines = await directOrderLines(raw, productCache, { requireMerchantCode: true });
     if (!lines.length) throw new Error(`Kaspi active order ${String(raw?.id || '')} has no entries`);
     orders.push({ ...raw, lines });
   }
@@ -415,6 +419,9 @@ export async function syncKaspiOrders({ days = 2 } = {}) {
             .map(line => ({ orderId: order.orderId, entryId: line.entryId }));
         });
         reservationReconcile = await reconcileKaspiReservations(activeEntries);
+        if (reservationReconcile && (reservationReconcile.changed || reservationReconcile.unlinked || reservationReconcile.repairedLinks)) {
+          console.info('Kaspi reservation reconcile:', JSON.stringify(reservationReconcile));
+        }
       }
       const saleReconcile = await reconcileMarketplaceSales('Kaspi');
       const finishedAt = Date.now();
