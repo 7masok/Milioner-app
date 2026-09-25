@@ -875,7 +875,7 @@ function syncProductPeriodStatus(){
   const box=document.getElementById('productPeriodStatus');if(!box)return;
   const spec=productPeriodSpec(),ready=currentProductPeriodStats(spec) instanceof Map,loading=productPeriodRequests.has(spec.key)||productPeriodStatsLoading===spec.key,sort=currentProductSort();
   if(loading){box.textContent='Загружаю продажи и прибыль · '+spec.label+'…'+(PRODUCT_PERIOD_SORTS.has(sort)?' Сортировка обновится автоматически.':'');box.className='muted product-period-status loading';return}
-  if(productPeriodStatsErrorKey===spec.key&&!ready){box.textContent='Не удалось загрузить продажи и прибыль · '+spec.label+'. Остатки, поиск и фильтры продолжают работать.';box.className='muted product-period-status error';return}
+  if(productPeriodStatsErrorKey===spec.key&&!ready){box.textContent='Не удалось загрузить продажи и прибыль · '+spec.label+'. Остатки и поиск продолжают работать.';box.className='muted product-period-status error';return}
   box.textContent=ready?'':'Продажи и прибыль за период ещё не загружены.';
   box.className='muted product-period-status';
 }
