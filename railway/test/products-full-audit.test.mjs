@@ -46,6 +46,7 @@ test('Products inventory snapshot is one-pass and drives all stock filters',()=>
       ]
     },
     window:{ozonFboDataReady:()=>true,ozonFboQtyForProduct:p=>p.id==='fbo'?3:0},
+    productSearchHaystack:p=>String(p?.name||'').toLowerCase(),
     reportPeriodStart:()=>0,
     isRealPurchase:()=>true,
     Math,Number,String,Map,Set
