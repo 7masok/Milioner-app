@@ -8,8 +8,12 @@ const cloudSyncPath=fileURLToPath(new URL('../../cloud-sync-v3.js',import.meta.u
 const html=await fs.readFile(indexPath,'utf8');
 const cloudSync=await fs.readFile(cloudSyncPath,'utf8');
 
-test('finance analytics UI state is initialized before rendering',()=>{
-  assert.match(html,/let financeAnalyticsMode='expense',financeAnalyticsPeriod='year',financeAnalyticsAnchor=new Date\(\),financeHistoryPeriodOverride=null,financePeriodSwipePoint=null;/);
+test('finance analytics UI state restores from local preference before rendering',()=>{
+  assert.match(html,/const FINANCE_UI_KEY=KEY+'_finance_ui_v1'/);
+  assert.match(html,/function readFinanceUi\(\)/);
+  assert.match(html,/period=\['day','week','month','year','all'\]\.includes\(String\(raw\.period\)\)\?String\(raw\.period\):'month'/);
+  assert.match(html,/let financeAnalyticsMode=financeUi\.mode,financeAnalyticsPeriod=financeUi\.period,financeAnalyticsAnchor=financeUi\.anchor/);
+  assert.match(html,/function rememberFinanceUi\(\)/);
 });
 
 test('finance render isolates analytics and journal panels',()=>{
@@ -88,6 +92,31 @@ test('normal finance flow no longer uses snapshot PATCH',()=>{
 test('finance background watcher only drains the outbox',()=>{
   assert.ok(html.includes("setInterval(()=>financeSyncOutbox(),15000)"));
   assert.equal(html.includes("setInterval(()=>pullFinanceFromServer(),30000)"),false);
+});
+
+test('finance reload is hydration-safe and re-renders after IndexedDB/server restore',()=>{
+  assert.match(html,/financeReconcileInFlight=false,financeHydrated=false/);
+  const render=extractFunction('renderFinance');
+  assert.match(render,/if\(!financeHydrated\)/);
+  assert.match(render,/financeSyncStatus\('загрузка…'\)/);
+  assert.match(render,/Загружаю счета…/);
+  assert.match(render,/Загружаю категории…/);
+  const runtimeStart=html.indexOf('function startAppRuntime(){');
+  const runtime=html.slice(runtimeStart,runtimeStart+12000);
+  assert.match(runtime,/financePriority=startupView==='finance'\|\|new URLSearchParams/);
+  assert.match(runtime,/financeSnapshotHasData\(financeLocalBefore\)\)\{financeHydrated=true;renderFinanceIfActive\(\)\}/);
+  assert.match(runtime,/await bootstrapFinanceFromServer\(financeLocalBefore\);financeHydrated=true;renderFinanceIfActive\(\)/);
+  assert.match(html,/onclick="financeRefresh\(\)">↻<\/button>/);
+});
+
+test('finance analytics mode period and anchor survive reloads',()=>{
+  const mode=extractFunction('financeSetAnalyticsMode');
+  const period=extractFunction('financeSetAnalyticsPeriod');
+  const shift=extractFunction('financeShiftAnalyticsPeriod');
+  assert.match(mode,/rememberFinanceUi\(\)/);
+  assert.match(period,/rememberFinanceUi\(\)/);
+  assert.match(period,/:\'month\'/);
+  assert.match(shift,/financeAnalyticsAnchor=d;rememberFinanceUi\(\);renderFinanceBreakdown\(\)/);
 });
 
 test('warehouse cloud refresh cannot erase local finance accounts categories or transactions',()=>{
