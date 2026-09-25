@@ -9,7 +9,7 @@ const html=await fs.readFile(indexPath,'utf8');
 const cloudSync=await fs.readFile(cloudSyncPath,'utf8');
 
 test('finance analytics UI state restores from local preference before rendering',()=>{
-  assert.match(html,/const FINANCE_UI_KEY=KEY+'_finance_ui_v1'/);
+  assert.match(html,/const FINANCE_UI_KEY=KEY\+'_finance_ui_v1'/);
   assert.match(html,/function readFinanceUi\(\)/);
   assert.match(html,/period=\['day','week','month','year','all'\]\.includes\(String\(raw\.period\)\)\?String\(raw\.period\):'month'/);
   assert.match(html,/let financeAnalyticsMode=financeUi\.mode,financeAnalyticsPeriod=financeUi\.period,financeAnalyticsAnchor=financeUi\.anchor/);
