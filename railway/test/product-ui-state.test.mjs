@@ -92,7 +92,7 @@ test('Products paints the tab before heavy statistics and warms cache off the cr
   assert.match(html,/requestIdleCallback\(warm,\{timeout:1800\}\)/);
   assert.match(html,/function invalidateProductRenderStats\(\)\{productRenderStatsCache=null;scheduleProductRenderWarmup\(\)\}/);
   const start=html.indexOf('function openView(view,remember=true){');
-  const end=html.indexOf("document.querySelectorAll('nav button')",start);
+  const end=html.indexOf("document.querySelectorAll('nav button').forEach(b=>b.onclick",start);
   const fn=html.slice(start,end);
   assert.match(fn,/const productsNeedFirstPaint=view==='products'&&!productRenderStatsCache/);
   assert.match(fn,/requestAnimationFrame\(\(\)=>\{if\(document\.getElementById\('products'\)\?\.classList\.contains\('active'\)\)render\(\)\}\)/);
