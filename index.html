@@ -1229,9 +1229,9 @@ async function openProduct(pid,market='',days=null){
  const productListContext=!market&&(days===null||days===undefined)&&document.getElementById('products')?.classList.contains('active'),selectedSpec=productListContext?productPeriodSpec():null,
  displayStock=productDisplayStock(p),displayCost=productLifetimeAverageCost(p),daily7=productAverageDailySales(p,7),dailyAll=productAverageDailySales(p,'all'),
  bundleBlock=isBundleProduct(p)?`<div class="item" style="margin-top:8px"><b>Состав набора</b>${bundleComponents(p).map(x=>`<div class="row" style="margin-top:8px"><div class="grow">${esc(productNameById(x.productId,'Удалённый товар'))}</div><b>× ${x.qty}</b></div>`).join('')}<div class="muted" style="margin-top:9px">Доступно наборов: ${displayStock}. Остаток считается по самому дефицитному компоненту с учётом активных резервов.</div></div>`:'',
- raw=productListContext?Number(selectedSpec?.days):Number(days??30),periodDays=raw===-1?-1:Math.max(1,raw||30),
- explicitBounds=productListContext&&selectedSpec?.range?{start:Date.parse(selectedSpec.range.from+'T00:00:00+05:00'),end:Date.parse(selectedSpec.range.to+'T00:00:00+05:00')+86400000}:null,
- since=explicitBounds?.start??reportPeriodStart(periodDays),until=explicitBounds?.end??reportPeriodEnd(periodDays),periodText=productListContext?selectedSpec.label:(periodDays===-1?'вчера':periodDays===1?'сегодня':periodDays+' дней'),
+ raw=productListContext?Number(selectedSpec?.days):Number(days??30),periodDays=raw===-1?-1:raw===0?0:Math.max(1,raw||30),
+ explicitBounds=productListContext&&selectedSpec?.range?{start:Date.parse(selectedSpec.range.from+'T00:00:00+05:00'),end:Date.parse(selectedSpec.range.to+'T00:00:00+05:00')+86400000}:(!productListContext&&periodDays===0?reportCustomBounds():null),
+ since=explicitBounds?.start??reportPeriodStart(periodDays),until=explicitBounds?.end??reportPeriodEnd(periodDays),periodText=productListContext?selectedSpec.label:(periodDays===-1?'вчера':periodDays===0?'свой период':periodDays===1?'сегодня':periodDays+' дней'),
  combinedExpected=productListContext||(periodDays===30&&(!market||['Kaspi','WB','WB2','Ozon'].includes(market)));
  let selectedCombined=null;
  if(productListContext){
