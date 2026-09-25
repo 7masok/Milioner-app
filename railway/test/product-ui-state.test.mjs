@@ -83,3 +83,23 @@ test('Products filter and sort use anchored in-page pickers instead of Android n
   assert.match(html,/function setProductFilter\(value\)/);
   assert.match(html,/function setProductSort\(value\)/);
 });
+
+
+test('Products paints the tab before heavy statistics and warms cache off the critical path',()=>{
+  assert.match(html,/function scheduleProductRenderWarmup\(delay=250\)/);
+  assert.match(html,/requestIdleCallback\(warm,\{timeout:1800\}\)/);
+  assert.match(html,/function invalidateProductRenderStats\(\)\{productRenderStatsCache=null;scheduleProductRenderWarmup\(\)\}/);
+  const start=html.indexOf('function openView(view,remember=true){');
+  const end=html.indexOf("document.querySelectorAll('nav button')",start);
+  const fn=html.slice(start,end);
+  assert.match(fn,/const productsNeedFirstPaint=view==='products'&&!productRenderStatsCache/);
+  assert.match(fn,/requestAnimationFrame\(\(\)=>\{if\(document\.getElementById\('products'\)\?\.classList\.contains\('active'\)\)render\(\)\}\)/);
+  assert.ok(fn.indexOf("finalView.classList.add('active')")<fn.indexOf('requestAnimationFrame('));
+});
+
+test('Products static shell never shows unconfirmed zero totals',()=>{
+  for(const id of ['productStockQty','productReservedQty','productInboundQty','productAtWarehouseQty','productFboQty','productStockCost','productStockProfit','productReceived30']){
+    assert.match(html,new RegExp('id="'+id+'">—<'));
+  }
+  assert.match(html,/id="productList" class="list"><div class="empty">Подготавливаю товары…<\/div>/);
+});
