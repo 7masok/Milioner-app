@@ -54,8 +54,10 @@ test('Home UI preferences are resolved before auth can reveal the app',()=>{
   assert.match(vars,/milioner_order_market_ui_v2/);
   assert.match(vars,/homeOrderPeriodUiPreference\.mode/);
   assert.match(vars,/homeOrderMarketUiPreference\.market/);
-  const auth=html.slice(html.indexOf('async function initOwnerAuth()'),html.indexOf('function rememberOwnerSession',html.indexOf('async function initOwnerAuth()')));
-  assert.match(auth,/cloudStatus\('онлайн','ok'\);startAppRuntime\(\);setOwnerAuthMode\('ready'\)/);
+  const auth=html.slice(html.indexOf('function startOwnerRuntimeAfterAuth()'),html.indexOf('function ownerLogout',html.indexOf('function startOwnerRuntimeAfterAuth()')));
+  assert.match(auth,/function startOwnerRuntimeAfterAuth\(\)\{ownerAuthEnabled=true;cloudStatus\('онлайн','ok'\);setOwnerAuthMode\('ready'\);try\{startAppRuntime\(\)\}/);
+  const init=html.slice(html.indexOf('async function initOwnerAuth()'),html.indexOf('function rememberOwnerSession',html.indexOf('async function initOwnerAuth()')));
+  assert.match(init,/if\(check\.ok\)\{startOwnerRuntimeAfterAuth\(\);return\}/);
   assert.doesNotMatch(cloud,/\[0,250,800,1800,3500\]/);
   assert.doesNotMatch(cloud,/showMarketSyncTimes\(\);restoreOrderMarketUi/);
   assert.doesNotMatch(cloud,/render\(\);setTimeout\(restoreOrderMarketUi,0\)/);
