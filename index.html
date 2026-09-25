@@ -943,7 +943,7 @@ function productMatchesStockFilter(filter,{sale=0,warehouse=0,fbo=0,transit=0}={
 }
 function productMapAdd(map,key,value){key=String(key||'');value=Number(value)||0;if(key&&value)map.set(key,(map.get(key)||0)+value)}
 function buildProductRenderStats(){
-  const products=state.products||[],byId=new Map(products.map(p=>[String(p.id),p])),bundleParts=new Map(),directReservedMap=new Map(),reservedMap=new Map(),physicalMap=new Map(),stockMap=new Map(),atWarehouseMap=new Map(),transitMap=new Map(),fboMap=new Map(),fboReady=typeof window.ozonFboDataReady==='function'&&window.ozonFboDataReady();
+  const products=state.products||[],byId=new Map(products.map(p=>[String(p.id),p])),searchMap=new Map(products.map(p=>[String(p.id),productSearchHaystack(p)])),bundleParts=new Map(),directReservedMap=new Map(),reservedMap=new Map(),physicalMap=new Map(),stockMap=new Map(),atWarehouseMap=new Map(),transitMap=new Map(),fboMap=new Map(),fboReady=typeof window.ozonFboDataReady==='function'&&window.ozonFboDataReady();
   for(const p of products)if(isBundleProduct(p))bundleParts.set(String(p.id),bundleComponents(p));
   for(const row of state.reservations||[]){if(row?.active!==true)continue;productMapAdd(directReservedMap,row.productId,Math.max(0,Number(row.qty)||0))}
   for(const [key,value] of directReservedMap)reservedMap.set(key,value);
@@ -955,7 +955,7 @@ function buildProductRenderStats(){
   if(fboReady&&typeof window.ozonFboQtyForProduct==='function')for(const p of products)fboMap.set(String(p.id),Math.max(0,Number(window.ozonFboQtyForProduct(p))||0));
   let availableTotal=0,reservedTotal=0,transitTotal=0,warehouseTotal=0;
   for(const p of products){if(isBundleProduct(p))continue;const key=String(p.id);availableTotal+=stockMap.get(key)||0;reservedTotal+=Math.max(0,reservedMap.get(key)||0);transitTotal+=Math.max(0,transitMap.get(key)||0);warehouseTotal+=Math.max(0,atWarehouseMap.get(key)||0)}
-  return {products,byId,bundleParts,directReservedMap,reservedMap,physicalMap,stockMap,atWarehouseMap,transitMap,fboMap,fboReady,availableTotal,reservedTotal,transitTotal,warehouseTotal,received30,stockCostReady:false,stockCostLoading:false,stockCost:null};
+  return {products,byId,searchMap,bundleParts,directReservedMap,reservedMap,physicalMap,stockMap,atWarehouseMap,transitMap,fboMap,fboReady,availableTotal,reservedTotal,transitTotal,warehouseTotal,received30,stockCostReady:false,stockCostLoading:false,stockCost:null};
 }
 function productInventoryRow(stats,p){
   const key=String(p?.id||'');
@@ -1001,7 +1001,7 @@ function renderProducts(rebuildStats=false){
   if(!list)return;
   if((f==='fbo'||f==='zero')&&!stats.fboReady){list.innerHTML='<div class="empty">Загружаю остатки FBO Ozon…<div class="muted" style="margin-top:6px">Остальные фильтры уже доступны.</div></div>';if(pager)pager.innerHTML='';return}
   const q=normalizeName(document.getElementById('q')?.value||'');
-  let rows=(stats.products||[]).filter(p=>!q||productSearchHaystack(p).includes(q));
+  let rows=(stats.products||[]).filter(p=>!q||String(stats.searchMap.get(String(p.id))||'').includes(q));
   rows=rows.filter(p=>productMatchesStockFilter(f,{sale:stats.stockMap.get(String(p.id)),warehouse:stats.atWarehouseMap.get(String(p.id)),fbo:stats.fboMap.get(String(p.id)),transit:stats.transitMap.get(String(p.id))}));
   rows.sort((a,b)=>compareProductsForList(a,b,sort,direction,stats,periodStats,period,periodReady));
   if(!rows.length){productPage=1;rememberProductUi({page:1});list.innerHTML='<div class="empty">Нет товаров для фильтра «'+esc(PRODUCT_FILTER_LABELS[f])+'»'+(q?' и текущего поиска':'')+'.</div>';if(pager)pager.innerHTML='';return}
