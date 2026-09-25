@@ -59,3 +59,15 @@ test('unified Product-period profit includes Ozon and supports an explicit custo
   assert.match(kaspiAds,/function breakdown\(days = reportPeriod, range = null\)/);
   assert.match(kaspiAds,/effectiveRows\(days, '', range\)/);
 });
+
+
+test('opening a Product from the list keeps the selected list period',()=>{
+  const start=html.indexOf("async function openProduct(pid,market='',days=null){");
+  const end=html.indexOf('\nfunction openProductWarehouseRelease',start);
+  const fn=html.slice(start,end);
+  assert.match(fn,/productListContext=!market&&\(days===null\|\|days===undefined\)/);
+  assert.match(fn,/selectedSpec=productListContext\?productPeriodSpec\(\):null/);
+  assert.match(fn,/currentProductPeriodStats\(selectedSpec\)/);
+  assert.match(fn,/Продано · \$\{esc\(selectedSpec\.label\)\}/);
+  assert.match(fn,/Чистая прибыль · '\+esc\(selectedSpec\.label\)/);
+});
