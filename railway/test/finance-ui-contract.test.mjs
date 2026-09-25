@@ -46,7 +46,11 @@ test('finance is local-first with a durable IndexedDB outbox',()=>{
   assert.ok(html.includes("const bootstrapFinance=async()=>"));
   assert.ok(html.includes("await bootstrapFinanceFromServer(financeLocalBefore)"));
   assert.ok(html.includes("setTimeout(()=>bootstrapFinance(),financePriority?0:1800)"));
-  assert.ok(html.includes("await bootstrapWarehouseFromServer();await Promise.resolve(loadSharedOrderCache({silent:true}))"));
+  const runtimeStart=html.indexOf('function startAppRuntime(){');
+  const runtime=html.slice(runtimeStart,runtimeStart+12000);
+  assert.ok(runtime.includes("try{await bootstrapWarehouseFromServer()}catch(e){console.warn('initial warehouse bootstrap failed',e)}"));
+  assert.ok(runtime.includes("loadSharedOrderCache({silent:true})"));
+  assert.ok(runtime.indexOf('bootstrapWarehouseFromServer()')<runtime.indexOf('loadSharedOrderCache({silent:true})'));
 });
 
 
