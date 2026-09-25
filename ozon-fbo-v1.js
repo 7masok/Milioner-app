@@ -149,6 +149,7 @@ async function load(force=false){
   populateOzonOrderFeed();
   resolveOzonProductIds();
   updateFboMetric();
+  if(document.getElementById('products')?.classList.contains('active')){if(typeof invalidateProductRenderStats==='function')invalidateProductRenderStats();baseRenderProducts(false);}
  }
  catch(e){
   message='Не удалось загрузить Ozon: '+String(e.message||e);
@@ -210,7 +211,7 @@ productCard=function(...args){
 };
 renderProducts=function(rebuildStats=false){
  baseRenderProducts(rebuildStats);updateFboMetric();
- if(!data||Date.now()-loadedAt>=60000)load().then(()=>{updateFboMetric();if(typeof invalidateProductRenderStats==='function')invalidateProductRenderStats();if(document.getElementById('products')?.classList.contains('active'))baseRenderProducts(false);});
+ if((!data||Date.now()-loadedAt>=60000)&&!loading)load().catch(error=>console.warn('Ozon product refresh',error));
 };
 function reportBounds(days){const raw=Number(days);if(raw===0)return reportCustomBounds();const d=new Date();d.setHours(0,0,0,0);const today=d.getTime();if(raw===-1)return{start:today-86400000,end:today};const n=Math.max(1,raw||1);return{start:today-(n-1)*86400000,end:today+86400000};}
 function financeModel(days){

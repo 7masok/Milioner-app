@@ -26,6 +26,7 @@ test('Products inventory snapshot is one-pass and drives all stock filters',()=>
     between('function productMatchesStockFilter(','function productMapAdd(')
   ].join('\n');
   const context={
+    PRODUCT_FILTER_VALUES:['all','sale','warehouse','fbo','transit','zero'],
     state:{
       products:[
         {id:'sale',name:'Sale',stock:5},
@@ -140,10 +141,13 @@ test('Products first interaction avoids repeated reservation and purchase scans'
   assert.doesNotMatch(heavy,/warehouseInventoryCost\(\)/);
 });
 
-test('Products rebuild stale cache even when wrapper calls renderProducts(false)',()=>{
+test('Products rebuild stale cache and Ozon does not invalidate it on every tap',()=>{
   const render=between('function renderProducts(','function wbRelinkNotice(');
   assert.match(render,/const didRebuild=rebuildStats\|\|!productRenderStatsCache;if\(didRebuild\)productRenderStatsCache=buildProductRenderStats\(\)/);
-  assert.match(ozon,/invalidateProductRenderStats\(\).*baseRenderProducts\(false\)/s);
+  assert.match(ozon,/if\(document\.getElementById\('products'\)\?\.classList\.contains\('active'\)\)\{if\(typeof invalidateProductRenderStats==='function'\)invalidateProductRenderStats\(\);baseRenderProducts\(false\);\}/);
+  const wrapper=ozon.slice(ozon.indexOf('renderProducts=function'),ozon.indexOf('function reportBounds',ozon.indexOf('renderProducts=function')));
+  assert.match(wrapper,/&& !?loading|&&\!loading/);
+  assert.doesNotMatch(wrapper,/\.then\(\(\)=>\{updateFboMetric\(\);if\(typeof invalidateProductRenderStats/);
 });
 
 test('Products mobile period controls never clip the fifth option',()=>{
