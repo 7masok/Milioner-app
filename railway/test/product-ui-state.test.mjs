@@ -79,14 +79,15 @@ test('Product details show progress before waiting on combined finance',()=>{
 });
 
 
-test('Products visible controls are reduced to period and search',()=>{
+test('Products visible controls are reduced to search only',()=>{
   assert.doesNotMatch(html,/<select id="filter"/);
   assert.doesNotMatch(html,/<select id="sort"/);
   assert.doesNotMatch(html,/<input id="filter"/);
   assert.doesNotMatch(html,/<input id="sort"/);
   assert.doesNotMatch(html,/class="product-picker/);
   assert.doesNotMatch(html,/class="product-sort-direction"/);
-  for(const value of ['today','yesterday','7','30','custom'])assert.ok(html.includes('data-product-period="'+value+'"'));
+  assert.doesNotMatch(html,/data-product-period=/);
+  assert.match(html,/id="q" class="search" placeholder="Поиск по названию или артикулам"/);
 });
 
 
