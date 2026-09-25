@@ -230,9 +230,9 @@ try{
     const qty=model.products.reduce((n,row)=>n+Math.max(0,row.qty),0);
     const products=model.products.map(row=>{
       const financeAds=Number(row.financeAds!=null?row.financeAds:row.ads)||0;
-      return {name:row.product?.name||'Товар',qty:row.qty,sales:row.sales,cost:(row.cogs||0)+(row.fbo||0),fees:Math.max(0,(row.sales||0)-(row.net||0)-Math.abs(financeAds)),ads:Math.abs(row.ads||0),profit:row.profit};
+      return {productId:String(row.product?.id||''),name:row.product?.name||'Товар',qty:row.qty,sales:row.sales,cost:(row.cogs||0)+(row.fbo||0),fees:Math.max(0,(row.sales||0)-(row.net||0)-Math.abs(financeAds)),ads:Math.abs(row.ads||0),profit:row.profit};
     });
-    for(const row of model.looseAds||[])products.push({name:row.name||'Товар Ozon',qty:0,sales:0,cost:0,fees:0,ads:row.spent,profit:-row.spent});
+    for(const row of model.looseAds||[])products.push({productId:'',name:row.name||'Товар Ozon',qty:0,sales:0,cost:0,fees:0,ads:row.spent,profit:-row.spent});
     return{sales:g.sales,cost:g.cogs,fees,ads,profit:g.profit,qty,empty:false,products,unallocatedAds:adSource==='performance'?0:Math.abs(model.unallocatedAds||0),adSource};
   }
   const ozonAdsJobs=new Map();
