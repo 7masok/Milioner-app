@@ -5,7 +5,7 @@ import {readFileSync} from 'node:fs';
 const html=readFileSync(new URL('../../index.html',import.meta.url),'utf8');
 const cloud=readFileSync(new URL('../../cloud-sync-v3.js',import.meta.url),'utf8');
 
-test('Products reload preserves tab search page and period without restoring removed filters',()=>{
+test('Products reload preserves tab search and page while removed controls stay reset',()=>{
   assert.match(html,/const PRODUCT_UI_KEY=KEY\+'_product_ui_v1'/);
   assert.match(html,/savedView=localStorage\.getItem\(ACTIVE_VIEW_KEY\)/);
   assert.match(html,/startupView=!freshLogin/);
@@ -13,7 +13,7 @@ test('Products reload preserves tab search page and period without restoring rem
   assert.match(html,/function rememberProductUi\(patch=\{\}\)/);
   assert.match(html,/rememberProductUi\(\{q:/);
   assert.match(html,/rememberProductUi\(\{page:productPage\}/);
-  assert.match(html,/let productUi=\{\.\.\.readProductUi\(\),filter:'all',sort:'name',sortDirections:\{name:'asc'\}\}/);
+  assert.match(html,/let productUi=\{\.\.\.readProductUi\(\),filter:'all',sort:'name',sortDirections:\{name:'asc'\},period:'30',customFrom:'',customTo:''\}/);
   assert.match(html,/let productFilter='all';\nlet productSort='name';/);
 });
 
@@ -43,7 +43,7 @@ test('Products keep alias search but expose no filter or sort controls',()=>{
 });
 
 test('Products ignore legacy saved filter sort and direction state',()=>{
-  assert.match(html,/let productUi=\{\.\.\.readProductUi\(\),filter:'all',sort:'name',sortDirections:\{name:'asc'\}\}/);
+  assert.match(html,/let productUi=\{\.\.\.readProductUi\(\),filter:'all',sort:'name',sortDirections:\{name:'asc'\},period:'30',customFrom:'',customTo:''\}/);
   assert.match(html,/let productFilter='all';\nlet productSort='name';/);
   assert.doesNotMatch(html,/id="productAtWarehouseCard"[^>]*onclick=/);
 });
