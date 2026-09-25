@@ -814,7 +814,7 @@ let productRenderStatsCache=null;
 let productRenderWarmTimer=0;
 let productHeavyMetricTimer=0;
 function productUiFrame(fn){if(typeof requestAnimationFrame==='function')requestAnimationFrame(fn);else setTimeout(fn,0)}
-function productIdle(fn,timeout=1600){if(typeof requestIdleCallback==='function')requestIdleCallback(fn,{timeout});else setTimeout(fn,0)}
+function productIdle(fn,timeout=1600){if(typeof requestIdleCallback==='function')requestIdleCallback(fn,{timeout});else setTimeout(fn,180)}
 function scheduleProductRenderWarmup(delay=350){
   clearTimeout(productRenderWarmTimer);
   productRenderWarmTimer=setTimeout(()=>{
@@ -863,7 +863,8 @@ function rememberProductUi(patch={}){productUi={...productUi,...patch};try{local
 function productDateValue(offset=0){const date=new Date(Date.now()+Number(offset||0)*86400000),parts=new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Qyzylorda',year:'numeric',month:'2-digit',day:'2-digit'}).formatToParts(date),part=type=>parts.find(x=>x.type===type)?.value||'';return part('year')+'-'+part('month')+'-'+part('day')}
 function productCustomRange(){const min=productDateValue(-29),max=productDateValue(0);let from=/^\d{4}-\d{2}-\d{2}$/.test(productCustomFrom)?productCustomFrom:min,to=/^\d{4}-\d{2}-\d{2}$/.test(productCustomTo)?productCustomTo:max;if(from<min)from=min;if(to>max)to=max;if(from>to)from=to;productCustomFrom=from;productCustomTo=to;rememberProductUi({customFrom:from,customTo:to});return {from,to,min,max}}
 function productPeriodSpec(){if(productPeriod==='today')return {key:'today',days:1,label:'Сегодня',dayCount:1};if(productPeriod==='yesterday')return {key:'yesterday',days:-1,label:'Вчера',dayCount:1};if(productPeriod==='7')return {key:'7',days:7,label:'7 дней',dayCount:7};if(productPeriod==='custom'){const r=productCustomRange(),count=Math.floor((Date.parse(r.to+'T00:00:00Z')-Date.parse(r.from+'T00:00:00Z'))/86400000)+1;return {key:'custom:'+r.from+':'+r.to,days:0,label:r.from===r.to?r.from:r.from+' — '+r.to,dayCount:Math.max(1,count),range:{from:r.from,to:r.to}}}return {key:'30',days:30,label:'30 дней',dayCount:30}}
-function currentProductPeriodStats(period=productPeriodSpec()){const cached=productPeriodUiCache.get(period.key);if(cached instanceof Map)return cached;if(productPeriodStats instanceof Map&&productPeriodStatsKey===period.key)return productPeriodStats;return null}
+function currentProductPeriodStats(period=productPeriodSpec()){const cached=productPeriodUiCache.get(period.key);if(cached?.data instanceof Map)return cached.data;if(productPeriodStats instanceof Map&&productPeriodStatsKey===period.key)return productPeriodStats;return null}
+function productPeriodStatsFresh(period=productPeriodSpec()){const cached=productPeriodUiCache.get(period.key);return cached?.data instanceof Map&&Date.now()-Number(cached.at||0)<60000}
 function syncProductPeriodControls(){
   document.querySelectorAll('[data-product-period]').forEach(button=>button.classList.toggle('active',button.dataset.productPeriod===productPeriod));
   const custom=document.getElementById('productCustomRange'),fromInput=document.getElementById('productDateFrom'),toInput=document.getElementById('productDateTo');
@@ -924,12 +925,12 @@ function toggleProductSortDirection(){
 function setProductPage(page){productPage=Math.max(1,Number(page)||1);rememberProductUi({page:productPage});renderProducts(false);const section=document.getElementById('products');if(section)window.scrollTo({top:Math.max(0,section.offsetTop-8),behavior:'smooth'})}
 function ensureProductPeriodStats(force=false){
   const spec=productPeriodSpec(),ready=currentProductPeriodStats(spec);
-  if(!force&&ready instanceof Map)return Promise.resolve(ready);
+  if(!force&&ready instanceof Map&&productPeriodStatsFresh(spec))return Promise.resolve(ready);
   if(!force&&productPeriodRequests.has(spec.key))return productPeriodRequests.get(spec.key);
   if(typeof window.refreshProductPeriodStats!=='function')return Promise.resolve(null);
   productPeriodStatsLoading=spec.key;productPeriodStatsErrorKey='';productPeriodStatsError='';syncProductPeriodStatus();
   const request=Promise.resolve(window.refreshProductPeriodStats(spec,{force})).then(map=>{
-    if(map instanceof Map){productPeriodUiCache.set(spec.key,map);if(productPeriodSpec().key===spec.key){productPeriodStats=map;productPeriodStatsKey=spec.key;productPeriodStatsErrorKey='';productPeriodStatsError='';renderProducts(false)}}
+    if(map instanceof Map){productPeriodUiCache.set(spec.key,{at:Date.now(),data:map});if(productPeriodSpec().key===spec.key){productPeriodStats=map;productPeriodStatsKey=spec.key;productPeriodStatsErrorKey='';productPeriodStatsError='';renderProducts(false)}}
     else if(productPeriodSpec().key===spec.key){productPeriodStatsErrorKey=spec.key;productPeriodStatsError='Данные периода недоступны';syncProductPeriodStatus()}
     return map;
   }).catch(e=>{console.warn('product period stats failed',e);if(productPeriodSpec().key===spec.key){productPeriodStatsErrorKey=spec.key;productPeriodStatsError=String(e?.message||e);syncProductPeriodStatus()}return null}).finally(()=>{productPeriodRequests.delete(spec.key);if(productPeriodStatsLoading===spec.key)productPeriodStatsLoading='';syncProductPeriodStatus()});
@@ -943,7 +944,7 @@ function productMatchesStockFilter(filter,{sale=0,warehouse=0,fbo=0,transit=0}={
 }
 function productMapAdd(map,key,value){key=String(key||'');value=Number(value)||0;if(key&&value)map.set(key,(map.get(key)||0)+value)}
 function buildProductRenderStats(){
-  const products=state.products||[],byId=new Map(products.map(p=>[String(p.id),p])),searchMap=new Map(products.map(p=>[String(p.id),productSearchHaystack(p)])),bundleParts=new Map(),directReservedMap=new Map(),reservedMap=new Map(),physicalMap=new Map(),stockMap=new Map(),atWarehouseMap=new Map(),transitMap=new Map(),fboMap=new Map(),fboReady=typeof window.ozonFboDataReady==='function'&&window.ozonFboDataReady();
+  const products=state.products||[],byId=new Map(products.map(p=>[String(p.id),p])),searchMap=new Map(products.map(p=>[String(p.id),productSearchHaystack(p)])),bundleParts=new Map(),directReservedMap=new Map(),reservedMap=new Map(),physicalMap=new Map(),stockMap=new Map(),atWarehouseMap=new Map(),transitMap=new Map(),fboMap=new Map(),costLotsMap=new Map(),fboReady=typeof window.ozonFboDataReady==='function'&&window.ozonFboDataReady();
   for(const p of products)if(isBundleProduct(p))bundleParts.set(String(p.id),bundleComponents(p));
   for(const row of state.reservations||[]){if(row?.active!==true)continue;productMapAdd(directReservedMap,row.productId,Math.max(0,Number(row.qty)||0))}
   for(const [key,value] of directReservedMap)reservedMap.set(key,value);
@@ -951,11 +952,11 @@ function buildProductRenderStats(){
   for(const p of products){const key=String(p.id);if(isBundleProduct(p))continue;const physical=Math.max(0,Number(p.stock)||0),free=Math.max(0,physical-(reservedMap.get(key)||0));physicalMap.set(key,physical);stockMap.set(key,free)}
   for(const p of products){if(!isBundleProduct(p))continue;const key=String(p.id),parts=bundleParts.get(key)||[];let available=parts.length?Infinity:0;for(const part of parts){const componentFree=stockMap.get(String(part.productId))||0;available=Math.min(available,Math.floor(componentFree/Math.max(1,Number(part.qty)||1)))}available=Number.isFinite(available)?Math.max(0,available):0;physicalMap.set(key,available);stockMap.set(key,available)}
   const receivedSince=reportPeriodStart(30);let received30=0;
-  for(const row of state.purchases||[]){const key=String(row.productId||''),qty=Math.max(0,Number(row.qty)||0);if(!key||!qty)continue;const status=purchaseStatus(row);if(status==='at_warehouse')productMapAdd(atWarehouseMap,key,qty);else if(status==='to_forwarder'||status==='to_me')productMapAdd(transitMap,key,qty);else if(status==='received'&&isRealPurchase(row)&&Number(row.receivedAt)>=receivedSince)received30+=qty}
+  for(const row of state.purchases||[]){const key=String(row.productId||''),qty=Math.max(0,Number(row.qty)||0);if(!key||!qty)continue;const status=purchaseStatus(row);if(status==='at_warehouse')productMapAdd(atWarehouseMap,key,qty);else if(status==='to_forwarder'||status==='to_me')productMapAdd(transitMap,key,qty);else if(status==='received'){if(isRealPurchase(row)&&Number(row.receivedAt)>=receivedSince)received30+=qty;const remaining=Math.max(0,Number(row.remainingQty)||0);if(remaining>0){const lots=costLotsMap.get(key)||[];lots.push({remainingQty:remaining,unitCost:Math.max(0,Number(row.landedUnitCost)||Number(row.unitCost)||0),date:Number(row.receivedAt||row.date)||0});costLotsMap.set(key,lots)}}}
   if(fboReady&&typeof window.ozonFboQtyForProduct==='function')for(const p of products)fboMap.set(String(p.id),Math.max(0,Number(window.ozonFboQtyForProduct(p))||0));
   let availableTotal=0,reservedTotal=0,transitTotal=0,warehouseTotal=0;
   for(const p of products){if(isBundleProduct(p))continue;const key=String(p.id);availableTotal+=stockMap.get(key)||0;reservedTotal+=Math.max(0,reservedMap.get(key)||0);transitTotal+=Math.max(0,transitMap.get(key)||0);warehouseTotal+=Math.max(0,atWarehouseMap.get(key)||0)}
-  return {products,byId,searchMap,bundleParts,directReservedMap,reservedMap,physicalMap,stockMap,atWarehouseMap,transitMap,fboMap,fboReady,availableTotal,reservedTotal,transitTotal,warehouseTotal,received30,stockCostReady:false,stockCostLoading:false,stockCost:null};
+  return {products,byId,searchMap,bundleParts,directReservedMap,reservedMap,physicalMap,stockMap,atWarehouseMap,transitMap,fboMap,costLotsMap,fboReady,availableTotal,reservedTotal,transitTotal,warehouseTotal,received30,stockCostReady:false,stockCostLoading:false,stockCost:null};
 }
 function productInventoryRow(stats,p){
   const key=String(p?.id||'');
@@ -986,10 +987,11 @@ function renderProductSummary(stats,periodStats,periodReady){
   set('productStockCost',stats.stockCostReady?fmt(stats.stockCost):'—');
   set('productStockProfit',periodReady?fmt(warehouseProjectedProfit(periodStats,stats.stockMap)):'—');
 }
+function productStockCostFromSnapshot(stats){let total=0;for(const p of stats?.products||[]){if(isBundleProduct(p))continue;const key=String(p.id),lots=[...(stats.costLotsMap?.get(key)||[])].sort((a,b)=>(Number(a.date)||0)-(Number(b.date)||0));let left=Math.max(0,Number(p.stock)||0),value=0;for(const lot of lots){if(left<=0)break;const take=Math.min(left,Math.max(0,Number(lot.remainingQty)||0));value+=take*Math.max(0,Number(lot.unitCost)||0);left-=take}if(left>0)value+=left*Math.max(0,Number(p.cost)||0);total+=value}return total}
 function scheduleProductHeavyMetrics(stats){
   if(!stats||stats.stockCostReady||stats.stockCostLoading)return;
   stats.stockCostLoading=true;
-  const run=()=>{if(productRenderStatsCache!==stats){stats.stockCostLoading=false;return}let value=null;try{value=warehouseInventoryCost()}catch(e){console.warn('product stock cost failed',e)}if(productRenderStatsCache!==stats)return;stats.stockCost=Number.isFinite(Number(value))?Number(value):0;stats.stockCostReady=true;stats.stockCostLoading=false;const el=document.getElementById('productStockCost');if(el)el.textContent=fmt(stats.stockCost)};
+  const run=()=>{if(productRenderStatsCache!==stats){stats.stockCostLoading=false;return}let value=null;try{value=productStockCostFromSnapshot(stats)}catch(e){console.warn('product stock cost failed',e)}if(productRenderStatsCache!==stats)return;stats.stockCost=Number.isFinite(Number(value))?Number(value):0;stats.stockCostReady=true;stats.stockCostLoading=false;const el=document.getElementById('productStockCost');if(el)el.textContent=fmt(stats.stockCost)};
   productHeavyMetricTimer=setTimeout(()=>productIdle(run,1800),40);
 }
 function renderProducts(rebuildStats=false){
