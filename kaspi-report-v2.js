@@ -111,8 +111,7 @@ window.refreshAllMarketUnitProfit=function(){
  allMarketUnitProfitLoading=true;
  allMarketUnitProfitPromise=(async()=>{
   try{
-   const days=30,[kaspiSnapshot,wb1,wb2]=await Promise.all([loadKaspiOrders(days),loadWbModel('WB',days),loadWbModel('WB2',days)]),
-     totals=new Map((state.products||[]).map(p=>[String(p.id),{qty:0,profit:0,ads:0,sources:{}}])),
+   const days=30,[kaspiSnapshot,wb1,wb2,ozon]=await Promise.all([loadKaspiOrders(days),loadWbModel('WB',days),loadWbModel('WB2',days),loadOzonSummary(days)]);if(ozon?.missing)throw new Error('Ozon 30-day finance is not ready');totals=new Map((state.products||[]).map(p=>[String(p.id),{qty:0,profit:0,ads:0,sources:{}}])),
      add=(pid,qty,profit,source,ads=0)=>{pid=String(pid||'');qty=Math.max(0,Number(qty)||0);if(!pid)return;const row=totals.get(pid)||{qty:0,profit:0,ads:0,sources:{}};const profitValue=Number(profit)||0,adValue=Math.max(0,Number(ads)||0);row.qty+=qty;row.profit+=profitValue;row.ads+=adValue;if(source){const part=row.sources[source]||{qty:0,profit:0,ads:0};part.qty+=qty;part.profit+=profitValue;part.ads+=adValue;row.sources[source]=part}totals.set(pid,row)},
      kaspi=buildModel(kaspiSnapshot,days);
    const kaspiKnown=kaspi.rows.filter(x=>x.productId),kaspiRevenue=kaspiKnown.reduce((s,x)=>s+Math.max(0,Number(x.revenue)||0),0),kaspiLooseAds=kaspi.rows.filter(x=>!x.productId&&Number(x.revenue)===0).reduce((s,x)=>s+Math.max(0,Number(x.ads)||0),0);
@@ -131,6 +130,10 @@ window.refreshAllMarketUnitProfit=function(){
          productAds=Math.max(0,Number(x.advertising)||0)+unmatchedAds;
        add(v.pid,saleQty,Number(x.netBeforeCost||0)-cost-unmatchedAds,model.market,productAds);
      }
+   }
+   for(const x of ozon?.products||[]){
+     const pid=String(x?.productId||''),qty=Math.max(0,Number(x?.qty)||0);
+     if(pid&&qty>0)add(pid,qty,Number(x?.profit)||0,'Ozon',Math.max(0,Number(x?.ads)||0));
    }
    window.allMarketUnitProfit30=new Map([...totals].map(([pid,x])=>[pid,{qty:x.qty,profit:x.profit,ads:x.ads,unitProfit:x.qty?x.profit/x.qty:0,sources:x.sources}]));
    if(typeof productRenderStatsCache!=='undefined')productRenderStatsCache=null;
