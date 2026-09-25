@@ -70,3 +70,16 @@ test('Product details show progress before waiting on combined finance',()=>{
   assert.match(fn,/Обновляю данные товара…/);
   assert.ok(fn.indexOf('Обновляю данные товара…')<fn.indexOf('await window.refreshAllMarketUnitProfit()'));
 });
+
+
+test('Products filter and sort use anchored in-page pickers instead of Android native selects',()=>{
+  assert.doesNotMatch(html,/<select id="filter"/);
+  assert.doesNotMatch(html,/<select id="sort"/);
+  assert.match(html,/<input id="filter" type="hidden"/);
+  assert.match(html,/<input id="sort" type="hidden"/);
+  assert.match(html,/id="productFilterPicker" class="product-picker product-filter-picker"/);
+  assert.match(html,/id="productSortPicker" class="product-picker product-sort-picker"/);
+  assert.match(html,/\.product-picker-menu\{position:absolute;top:calc\(100% \+ 5px\);z-index:40/);
+  assert.match(html,/function setProductFilter\(value\)/);
+  assert.match(html,/function setProductSort\(value\)/);
+});
