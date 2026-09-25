@@ -66,6 +66,16 @@ test('Home UI preferences are resolved before auth can reveal the app',()=>{
   assert.doesNotMatch(cloud,/render\(\);setTimeout\(restoreOrderMarketUi,0\)/);
 });
 
+test('saved-session startup waits for runtime override scripts',()=>{
+  const cloudScript=html.indexOf('<script src="./cloud-sync-v3.js');
+  const lastRuntimeScript=html.indexOf('<script src="./business-dashboard-v1.js');
+  const authKickoff=html.lastIndexOf('<script>initOwnerAuth();</script>');
+  assert.ok(cloudScript>0);
+  assert.ok(lastRuntimeScript>cloudScript);
+  assert.ok(authKickoff>lastRuntimeScript);
+  assert.equal(html.split('<script>initOwnerAuth();</script>').length-1,1);
+});
+
 test('Home startup does not run report, Ozon or compatibility fetches',()=>{
   assert.doesNotMatch(compat,/loadSharedOrderCache/);
   assert.doesNotMatch(ads,/stock-alerts-rescue-v1\.js/);
