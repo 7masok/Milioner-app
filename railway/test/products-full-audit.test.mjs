@@ -62,7 +62,7 @@ test('Products inventory snapshot is one-pass and drives all stock filters',()=>
   assert.equal(stats.fboMap.get('fbo'),3);
   const rows=context.state.products.filter(p=>p.id!=='bundle');
   const ids=filter=>rows.filter(p=>context.productMatchesStockFilter(filter,{
-    sale:stats.stockMap.get(p.id),
+    sale:stats.physicalMap.get(p.id),
     warehouse:stats.atWarehouseMap.get(p.id),
     fbo:stats.fboMap.get(p.id),
     transit:stats.transitMap.get(p.id)
@@ -72,6 +72,20 @@ test('Products inventory snapshot is one-pass and drives all stock filters',()=>
   assert.deepEqual(ids('fbo'),['fbo']);
   assert.deepEqual(ids('transit'),['transit']);
   assert.deepEqual(ids('zero'),['zero']);
+  assert.equal(stats.physicalMap.get('sale'),5);
+  assert.equal(stats.stockMap.get('sale'),2);
+  assert.ok(ids('sale').includes('sale'),'reserved stock still belongs to the physical «В продаже» location');
+});
+
+test('Products distinguish physical «В продаже» from free-to-sell stock',()=>{
+  const render=between('function renderProducts(','function wbRelinkNotice(');
+  assert.match(render,/sale:stats\.physicalMap\.get/);
+  assert.doesNotMatch(render,/sale:stats\.stockMap\.get/);
+  const metric=between('function productMetricForSort(','function compareProductsForList(');
+  assert.match(metric,/if\(sort==='stock'\)return inventory\.physical/);
+  const card=html.split('\n').find(row=>row.startsWith('function productCard('))||'';
+  assert.match(card,/В продаже: \$\{physical\} шт\./);
+  assert.match(card,/Свободно к продаже: \$\{forSale\} шт\./);
 });
 
 test('Products filtering sorting and periods do not rebuild inventory on every tap',()=>{
