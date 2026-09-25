@@ -54,8 +54,13 @@ test('Home UI preferences are resolved before auth can reveal the app',()=>{
   assert.match(vars,/milioner_order_market_ui_v2/);
   assert.match(vars,/homeOrderPeriodUiPreference\.mode/);
   assert.match(vars,/homeOrderMarketUiPreference\.market/);
+  const helperStart=html.indexOf('function startOwnerRuntimeAfterAuth()');
+  const helperEnd=html.indexOf('\nasync function initOwnerAuth()',helperStart);
+  const helper=html.slice(helperStart,helperEnd);
+  assert.match(helper,/cloudStatus\('онлайн','ok'\)/);
+  assert.ok(helper.indexOf("setOwnerAuthMode('ready')")<helper.indexOf('startAppRuntime()'));
   const auth=html.slice(html.indexOf('async function initOwnerAuth()'),html.indexOf('function rememberOwnerSession',html.indexOf('async function initOwnerAuth()')));
-  assert.match(auth,/cloudStatus\('онлайн','ok'\);startAppRuntime\(\);setOwnerAuthMode\('ready'\)/);
+  assert.match(auth,/if\(check\.ok\)\{startOwnerRuntimeAfterAuth\(\);return\}/);
   assert.doesNotMatch(cloud,/\[0,250,800,1800,3500\]/);
   assert.doesNotMatch(cloud,/showMarketSyncTimes\(\);restoreOrderMarketUi/);
   assert.doesNotMatch(cloud,/render\(\);setTimeout\(restoreOrderMarketUi,0\)/);
