@@ -68,99 +68,6 @@ test('partial statistics retain valid spend and expose failure and freshness', a
   assert.match(h.calls[0], /statuses=4,9,11$/);
 });
 
-test('campaign statistics keep daily rows for the last 30 days while today stays separate', async () => {
-  const h = harness();
-  const today = h.api.localDate();
-  const previous = new Date(Date.parse(today + 'T00:00:00Z') - 86400000).toISOString().slice(0, 10);
-  h.context.mockRequest = async url => {
-    h.calls.push(url);
-    if (url.includes('/api/advert/v2/adverts')) return { adverts: [{ id: 1, status: 9, name: 'One' }] };
-    if (url.includes('/fullstats')) return [{
-      advertId: 1,
-      stats: [
-        { date: previous, sum: 100, orders: 1, sum_price: 500, views: 10, clicks: 2, atbs: 1 },
-        { date: today, sum: 200, orders: 2, sum_price: 1000, views: 20, clicks: 4, atbs: 2 },
-      ],
-    }];
-    return { cards: [] };
-  };
-  const result = await h.api.fetchCampaigns('WB', { day: today, campaigns: [] });
-  const row = result.campaigns[0];
-  assert.equal(row.todaySpend, 200);
-  assert.equal(row.orders, 2);
-  assert.equal(row.periodMetrics.length, 30);
-  assert.deepEqual(
-    Array.from(row.periodMetrics.slice(-2), x => ({ date: x.date, spend: x.spend, orders: x.orders })),
-    [{ date: previous, spend: 100, orders: 1 }, { date: today, spend: 200, orders: 2 }],
-  );
-  const statsUrl = h.calls.find(url => url.includes('/fullstats'));
-  assert.match(statsUrl, new RegExp('beginDate=' + result.historyFrom + '&endDate=' + result.historyTo + '
-  const h = harness();
-  await h.api.setStoredCampaignStatus('WB', 1, 11);
-  assert.equal(h.queries.length, 1);
-  assert.match(h.queries[0].sql, /UPDATE wb_ads_snapshots SET payload=jsonb_set/);
-  assert.doesNotMatch(h.queries[0].sql, /updated_at=|last_error=|next_attempt_at=/);
-});
-
-test('zero stock pauses even without a saved limit rule', async () => {
-  const h=harness();
-  vm.runInContext('inventoryFor = async () => new Map([[1,{known:true,allEmpty:true,allRisky:true}]]);',h.context);
-  await h.api.enforce('WB',{day:h.api.localDate(),campaigns:[campaign(1,9,0)]},{allowStarts:false});
-  assert.equal(h.calls.length,1);assert.match(h.calls[0],/pause\?id=1$/);
-  assert.ok(h.queries.some(q=>q.sql.includes('stock_paused=TRUE')));
-});
-
-test('stock guard blocks scheduled start when inventory is unknown or empty', async () => {
-  for(const stock of [{known:false},{known:true,allEmpty:true}]) {
-    const h=harness([limit(1,{scheduleEnabled:true,startTime:'00:00'})]);
-    h.context.stock=stock;vm.runInContext('inventoryFor = async () => new Map([[1,stock]]);',h.context);
-    await h.api.enforce('WB',{day:h.api.localDate(),campaigns:[campaign(1,11,0)]});
-    assert.equal(h.calls.length,0);
-  }
-});
-
-test('stock pause remains paused after replenishment until manual resume', async () => {
-  const h=harness([limit(1,{stockPaused:true,scheduleEnabled:true,startTime:'00:00'})]);
-  await h.api.enforce('WB',{day:h.api.localDate(),campaigns:[campaign(1,11,0)]});assert.equal(h.calls.length,0);
-});
-
-test('pending manual pause retries even without an enabled daily limit', async () => {
-  const h=harness([limit(1,{manualPaused:true,enabled:false})]);
-  await h.api.enforce('WB',{day:h.api.localDate(),campaigns:[campaign(1,9,0)]});assert.match(h.calls[0],/pause\?id=1$/);
-});
-
-test('campaign list and start actions have independent WB rate-limit lanes', () => {
-  const h=harness();
-  assert.equal(h.api.requestInterval('https://advert-api.wildberries.ru/api/advert/v2/adverts').key,'campaign-list');
-  assert.equal(h.api.requestInterval('https://advert-api.wildberries.ru/adv/v0/start?id=1').key,'/adv/v0/start');
-  assert.equal(h.api.requestInterval('https://advert-api.wildberries.ru/adv/v0/pause?id=1').key,'/adv/v0/pause');
-});
-
-test('scheduler permits due starts from the stored snapshot before refresh', () => {
-  assert.match(source,/await enforce\(marketName, previous, \{ allowSchedule: true, allowStarts: true \}\);/);
-});
-
-test('product title never replaces a campaign name omitted by WB', () => {
-  const h=harness();
-  const cards=new Map([[77,{title:'Крылья',vendorCode:'wings'}]]);
-  const value=h.api.campaignName({id:1,nmId:77},null,cards);
-  assert.equal(value.title,'Кампания 1');
-});
-
-test('current WB campaign endpoint supplies the exact campaign name', async () => {
-  const h=harness();
-  h.context.mockRequest=async url=>url.includes('/api/advert/v2/adverts')?{adverts:[{id:1,status:9,name:'Крылья'}]}:{cards:[]};
-  const result=await h.api.fetchCampaigns('WB',null);
-  assert.equal(result.campaigns[0].name,'Крылья');
-});
-
-test('explicit WB campaign settings name wins over a generic row name', () => {
-  const h=harness();
-  assert.equal(h.api.campaignApiName({name:'Скелет',settings:{name:'Крылья'}}),'Крылья');
-});
-));
-});
-
 test('status-only writes do not clear refresh errors or advance stats timestamp', async () => {
   const h = harness();
   await h.api.setStoredCampaignStatus('WB', 1, 11);
@@ -224,4 +131,33 @@ test('current WB campaign endpoint supplies the exact campaign name', async () =
 test('explicit WB campaign settings name wins over a generic row name', () => {
   const h=harness();
   assert.equal(h.api.campaignApiName({name:'Скелет',settings:{name:'Крылья'}}),'Крылья');
+});
+
+test('campaign statistics keep daily rows for the last 30 days while today stays separate', async () => {
+  const h = harness();
+  const today = h.api.localDate();
+  const previous = new Date(Date.parse(today + 'T00:00:00Z') - 86400000).toISOString().slice(0, 10);
+  h.context.mockRequest = async url => {
+    h.calls.push(url);
+    if (url.includes('/api/advert/v2/adverts')) return { adverts: [{ id: 1, status: 9, name: 'One' }] };
+    if (url.includes('/fullstats')) return [{
+      advertId: 1,
+      stats: [
+        { date: previous, sum: 100, orders: 1, sum_price: 500, views: 10, clicks: 2, atbs: 1 },
+        { date: today, sum: 200, orders: 2, sum_price: 1000, views: 20, clicks: 4, atbs: 2 },
+      ],
+    }];
+    return { cards: [] };
+  };
+  const result = await h.api.fetchCampaigns('WB', { day: today, campaigns: [] });
+  const row = result.campaigns[0];
+  assert.equal(row.todaySpend, 200);
+  assert.equal(row.orders, 2);
+  assert.equal(row.periodMetrics.length, 30);
+  assert.deepEqual(
+    Array.from(row.periodMetrics.slice(-2), x => ({ date: x.date, spend: x.spend, orders: x.orders })),
+    [{ date: previous, spend: 100, orders: 1 }, { date: today, spend: 200, orders: 2 }],
+  );
+  const statsUrl = h.calls.find(url => url.includes('/fullstats'));
+  assert.ok(statsUrl.includes('beginDate=' + result.historyFrom + '&endDate=' + result.historyTo));
 });
