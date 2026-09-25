@@ -89,7 +89,7 @@ test('runtime compatibility scripts finish before owner runtime starts',()=>{
 
 test('Products first paint retries instead of leaving the static loading shell forever',()=>{
   const start=html.indexOf('function openView(view,remember=true)');
-  const end=html.indexOf('document.querySelectorAll(\'nav button\')',start);
+  const end=html.indexOf("document.querySelectorAll('nav button').forEach(b=>b.onclick",start);
   const openView=html.slice(start,end);
   assert.match(openView,/products first paint failed/);
   assert.match(openView,/invalidateProductRenderStats\(\);renderProducts\(true\)/);
