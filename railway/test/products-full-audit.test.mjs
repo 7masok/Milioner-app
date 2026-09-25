@@ -41,7 +41,7 @@ test('Products inventory snapshot is one-pass and drives all stock filters',()=>
         {productId:'bundle',qty:1,active:true}
       ],
       purchases:[
-        {productId:'warehouse',qty:4,status:'at_warehouse'},
+        {productId:'warehouse',qty:4,status:'at_warehouse',unitCost:11},
         {productId:'transit',qty:2,status:'to_me'},
         {productId:'sale',qty:5,status:'received',receivedAt:100}
       ]
@@ -58,6 +58,7 @@ test('Products inventory snapshot is one-pass and drives all stock filters',()=>
   assert.equal(stats.reservedMap.get('sale'),3);
   assert.equal(stats.stockMap.get('bundle'),1);
   assert.equal(stats.atWarehouseMap.get('warehouse'),4);
+  assert.equal(stats.atWarehouseCostMap.get('warehouse'),44);
   assert.equal(stats.transitMap.get('transit'),2);
   assert.equal(stats.fboMap.get('fbo'),3);
   const rows=context.state.products.filter(p=>p.id!=='bundle');
@@ -216,4 +217,5 @@ test('Products audit contract is recorded for future AI changes',()=>{
   assert.match(passport,/PRODUCT-15/);
   assert.match(passport,/PRODUCT-16/);
   assert.match(passport,/PRODUCT-17/);
+  assert.match(passport,/PRODUCT-22/);
 });
