@@ -28,6 +28,7 @@ test('login screen is minimal and uses the access code directly', () => {
 
 
 test('browser refresh has no startup modal cards and validates an existing session first', () => {
+  assert.match(html, /ownerSessionToken=localStorage\.getItem\(APP_SESSION_KEY\)\|\|sessionStorage\.getItem\(APP_SESSION_KEY\)/);
   assert.match(html, /<body class="auth-pending">/);
   assert.doesNotMatch(html, /id="warehouseLoadingGate"/);
   assert.doesNotMatch(html, /class="auth-checking"/);
@@ -42,6 +43,12 @@ test('browser refresh has no startup modal cards and validates an existing sessi
   const rememberEnd=html.indexOf('async function ownerAuthSubmit',rememberStart);
   const remember=html.slice(rememberStart,rememberEnd);
   assert.ok(remember.indexOf("startAppRuntime();setOwnerAuthMode('ready')") >= 0);
+});
+
+test('owner session survives mobile/browser reload but still expires server-side', () => {
+  assert.match(html, /localStorage\.setItem\(APP_SESSION_KEY,ownerSessionToken\)/);
+  assert.match(html, /localStorage\.removeItem\(APP_SESSION_KEY\)/);
+  assert.match(auth, /const SESSION_TTL_MS = 12 \* 60 \* 60 \* 1000/);
 });
 
 test('real code login marks a fresh UI entry, browser reload does not', () => {
