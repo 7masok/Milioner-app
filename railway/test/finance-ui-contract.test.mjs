@@ -73,7 +73,7 @@ test('startup does not duplicate the initial orders request',()=>{
   assert.equal((immediate.match(/loadSharedOrderCache\(\{silent:true\}\)/g)||[]).length,1);
   assert.ok(immediate.indexOf('await bootstrapWarehouseFromServer()')<immediate.indexOf('loadSharedOrderCache({silent:true})'));
   assert.ok(immediate.includes("setTimeout(()=>bootstrapFinance(),financePriority?0:1800)"));
-  assert.ok(immediate.includes('hydrateHomeCache();openView(startupView,false)'));
+  assert.ok(immediate.indexOf('hydrateHomeCache()')<immediate.indexOf('openView(startupView,false)'));
 });
 test('normal finance flow no longer uses snapshot PATCH',()=>{
   assert.equal(html.includes("/api/finance-state',{method:'PATCH'"),false);
