@@ -120,8 +120,11 @@ test('Products paints the tab before heavy statistics and warms cache off the cr
   const end=html.indexOf("document.querySelectorAll('nav button').forEach(b=>b.onclick",start);
   const fn=html.slice(start,end);
   assert.match(fn,/const productsNeedFirstPaint=view==='products'&&!productRenderStatsCache/);
-  assert.match(fn,/requestAnimationFrame\(\(\)=>\{if\(document\.getElementById\('products'\)\?\.classList\.contains\('active'\)\)render\(\)\}\)/);
+  assert.match(fn,/requestAnimationFrame\(\(\)=>\{/);
+  assert.match(fn,/try\{render\(\)\}/);
+  assert.match(fn,/invalidateProductRenderStats\(\);renderProducts\(true\)/);
   assert.ok(fn.indexOf("finalView.classList.add('active')")<fn.indexOf('requestAnimationFrame('));
+  assert.ok(fn.indexOf('requestAnimationFrame(')<fn.indexOf('try{render()}'));
 });
 
 test('Products static shell never shows unconfirmed zero totals',()=>{
