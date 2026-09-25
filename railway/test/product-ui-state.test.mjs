@@ -1,23 +1,20 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
-import vm from 'node:vm';
 
 const html=readFileSync(new URL('../../index.html',import.meta.url),'utf8');
 const cloud=readFileSync(new URL('../../cloud-sync-v3.js',import.meta.url),'utf8');
 
-test('Products reload preserves tab and product-list controls',()=>{
+test('Products reload preserves tab search page and period without restoring removed filters',()=>{
   assert.match(html,/const PRODUCT_UI_KEY=KEY\+'_product_ui_v1'/);
   assert.match(html,/savedView=localStorage\.getItem\(ACTIVE_VIEW_KEY\)/);
   assert.match(html,/startupView=!freshLogin/);
   assert.match(html,/function readProductUi\(\)/);
   assert.match(html,/function rememberProductUi\(patch=\{\}\)/);
   assert.match(html,/rememberProductUi\(\{q:/);
-  assert.match(html,/rememberProductUi\(\{filter:/);
   assert.match(html,/rememberProductUi\(\{page:productPage\}/);
-  const sortStart=html.indexOf('function productSortChanged(){');
-  const sortEnd=html.indexOf('\nfunction toggleProductSortDirection',sortStart);
-  assert.doesNotMatch(html.slice(sortStart,sortEnd),/save\(\)/);
+  assert.match(html,/let productUi=\{\.\.\.readProductUi\(\),filter:'all',sort:'name',sortDirections:\{name:'asc'\}\}/);
+  assert.match(html,/let productFilter='all';\nlet productSort='name';/);
 });
 
 test('bottom nav allocates one column per eight visible tabs',()=>{
@@ -34,38 +31,21 @@ test('Products reject invalid quantities and remove the ignored duplicate minimu
   assert.match(html,/bundle-qty" type="number" min="1" step="1"/);
 });
 
-test('Products search aliases and expose the agreed stock filters',()=>{
+test('Products keep alias search but expose no filter or sort controls',()=>{
   const search=html.slice(html.indexOf('function productSearchHaystack('),html.indexOf('\nfunction readProductUi',html.indexOf('function productSearchHaystack(')));
   for(const token of ['kaspiAliases','wbAliases','wb2Aliases','ozonAliases','vendorCode','nmId','chrtId','barcode'])assert.match(search,new RegExp(token));
-  for(const value of ['all','sale','warehouse','fbo','transit','zero'])assert.ok(html.includes('data-product-filter="'+value+'"'));
-  assert.doesNotMatch(html,/data-product-filter="low"/);
-  assert.doesNotMatch(html,/data-product-filter="buy"/);
-  const render=html.slice(html.indexOf('function renderProducts('),html.indexOf('\nfunction wbRelinkNotice',html.indexOf('function renderProducts(')));
-  assert.match(render,/productMatchesStockFilter\(f,/);
+  assert.match(html,/id="q" class="search" placeholder="Поиск по названию или артикулам"/);
+  assert.doesNotMatch(html,/data-product-filter=/);
+  assert.doesNotMatch(html,/data-product-sort=/);
+  assert.doesNotMatch(html,/id="productFilterPicker"/);
+  assert.doesNotMatch(html,/id="productSortPicker"/);
+  assert.doesNotMatch(html,/id="productSortDirection"/);
 });
 
-test('Products stock filter changes the actual product set, not only the label',()=>{
-  const slice=(name,next)=>html.slice(html.indexOf('function '+name+'('),html.indexOf('\nfunction '+next+'(',html.indexOf('function '+name+'(')));
-  const context={PRODUCT_FILTER_VALUES:['all','sale','warehouse','fbo','transit','zero']};
-  vm.runInNewContext(slice('normalizeProductFilter','currentProductFilter')+'\n'+slice('productMatchesStockFilter','productMapAdd'),context);
-  const rows=[
-    {id:'sale',sale:3,warehouse:0,fbo:0,transit:0},
-    {id:'warehouse',sale:0,warehouse:4,fbo:0,transit:0},
-    {id:'fbo',sale:0,warehouse:0,fbo:5,transit:0},
-    {id:'transit',sale:0,warehouse:0,fbo:0,transit:2},
-    {id:'zero',sale:0,warehouse:0,fbo:0,transit:0}
-  ];
-  const ids=filter=>rows.filter(row=>context.productMatchesStockFilter(filter,row)).map(row=>row.id);
-  assert.deepEqual(ids('sale'),['sale']);
-  assert.deepEqual(ids('warehouse'),['warehouse']);
-  assert.deepEqual(ids('fbo'),['fbo']);
-  assert.deepEqual(ids('transit'),['transit']);
-  assert.deepEqual(ids('zero'),['zero']);
-  assert.deepEqual(ids('all'),rows.map(x=>x.id));
-  const setter=slice('setProductFilter','setProductSort');
-  assert.match(setter,/productFilter=normalizeProductFilter\(value\)/);
-  assert.match(setter,/productUiFrame\(\(\)=>renderProducts\(false\)\)/);
-  assert.doesNotMatch(setter,/invalidateProductRenderStats|renderProducts\(true\)/);
+test('Products ignore legacy saved filter sort and direction state',()=>{
+  assert.match(html,/let productUi=\{\.\.\.readProductUi\(\),filter:'all',sort:'name',sortDirections:\{name:'asc'\}\}/);
+  assert.match(html,/let productFilter='all';\nlet productSort='name';/);
+  assert.doesNotMatch(html,/id="productAtWarehouseCard"[^>]*onclick=/);
 });
 
 test('Products protect read-only cached state and live stock deletion',()=>{
@@ -99,16 +79,14 @@ test('Product details show progress before waiting on combined finance',()=>{
 });
 
 
-test('Products filter and sort use anchored in-page pickers instead of Android native selects',()=>{
+test('Products visible controls are reduced to period and search',()=>{
   assert.doesNotMatch(html,/<select id="filter"/);
   assert.doesNotMatch(html,/<select id="sort"/);
-  assert.match(html,/<input id="filter" type="hidden"/);
-  assert.match(html,/<input id="sort" type="hidden"/);
-  assert.match(html,/id="productFilterPicker" class="product-picker product-filter-picker"/);
-  assert.match(html,/id="productSortPicker" class="product-picker product-sort-picker"/);
-  assert.match(html,/\.product-picker-menu\{position:absolute;top:calc\(100% \+ 5px\);z-index:40/);
-  assert.match(html,/function setProductFilter\(value\)/);
-  assert.match(html,/function setProductSort\(value\)/);
+  assert.doesNotMatch(html,/<input id="filter"/);
+  assert.doesNotMatch(html,/<input id="sort"/);
+  assert.doesNotMatch(html,/class="product-picker/);
+  assert.doesNotMatch(html,/class="product-sort-direction"/);
+  for(const value of ['today','yesterday','7','30','custom'])assert.ok(html.includes('data-product-period="'+value+'"'));
 });
 
 
@@ -143,11 +121,10 @@ test('Products use the unified period standard instead of a fixed 25-day sales w
   assert.doesNotMatch(html,/Продажи\/день за 25 дней/);
 });
 
-test('Products sorts are explicit and keep a direction per sort',()=>{
-  for(const value of ['name','sales','profit','unitProfit','stock','days'])assert.ok(html.includes('data-product-sort="'+value+'"'));
-  assert.match(html,/productUi\.sortDirections\?\.\[sort\]/);
-  assert.match(html,/if\(sort==='sales'\)return qty/);
-  assert.match(html,/if\(sort==='profit'\)return periodReady/);
-  assert.match(html,/if\(sort==='unitProfit'\)return periodReady&&qty>0/);
+test('Products use deterministic alphabetical order after removing sort controls',()=>{
+  assert.match(html,/let productSort='name';/);
+  assert.match(html,/sortDirections:\{name:'asc'\}/);
   assert.match(html,/function compareProductsForList\(/);
+  assert.doesNotMatch(html,/data-product-sort=/);
+  assert.doesNotMatch(html,/productSortDirection" type="button"/);
 });
