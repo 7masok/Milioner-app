@@ -118,6 +118,27 @@ test('Products replace received-30 metric with current buyer-delivery stock',()=
   assert.match(html,/COMPLETED'\]\.includes\(u\)\|\|st==='ARCHIVE'/);
 });
 
+test('buyer-delivery metric excludes reserve and completed states',()=>{
+  const isWb=html.slice(html.indexOf('function isWbMarket('),html.indexOf('function isCompletedOrder('));
+  const start=html.indexOf('function marketplaceOrderInTransitToBuyer(');
+  const end=html.indexOf('\nfunction marketplaceLineStockUnits(',start);
+  const context={String};
+  vm.runInNewContext(isWb+'\n'+html.slice(start,end),context);
+  const f=context.marketplaceOrderInTransitToBuyer;
+  assert.equal(f('WB','complete','waiting'),false);
+  assert.equal(f('WB','complete','sorted'),true);
+  assert.equal(f('WB2','complete','accepted_by_carrier'),true);
+  assert.equal(f('WB','complete','sent_to_carrier'),true);
+  assert.equal(f('WB','complete','ready_for_pickup'),true);
+  assert.equal(f('WB','complete','sold'),false);
+  assert.equal(f('Kaspi','ACCEPTED_BY_MERCHANT','KASPI_DELIVERY_ASSEMBLED'),false);
+  assert.equal(f('Kaspi','ACCEPTED_BY_MERCHANT','KASPI_DELIVERY_TRANSIT'),true);
+  assert.equal(f('Kaspi','COMPLETED','DELIVERY'),false);
+  assert.equal(f('Kaspi','ACCEPTED_BY_MERCHANT','ARCHIVE'),false);
+  assert.equal(f('Ozon','delivering',''),true);
+  assert.equal(f('Ozon','delivered',''),false);
+});
+
 test('Products static shell never shows unconfirmed zero totals',()=>{
   for(const id of ['productStockQty','productReservedQty','productInboundQty','productAtWarehouseQty','productFboQty','productStockCost','productStockProfit','productToBuyerQty']){
     assert.match(html,new RegExp('id="'+id+'">—<'));
