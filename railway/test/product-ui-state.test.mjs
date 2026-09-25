@@ -33,12 +33,14 @@ test('Products reject invalid quantities and remove the ignored duplicate minimu
   assert.match(html,/bundle-qty" type="number" min="1" step="1"/);
 });
 
-test('Products search aliases and WB identifiers and compute buy filter once',()=>{
+test('Products search aliases and expose the agreed stock filters',()=>{
   const search=html.slice(html.indexOf('function productSearchHaystack('),html.indexOf('\nfunction readProductUi',html.indexOf('function productSearchHaystack(')));
   for(const token of ['kaspiAliases','wbAliases','wb2Aliases','ozonAliases','vendorCode','nmId','chrtId','barcode'])assert.match(search,new RegExp(token));
+  for(const value of ['all','sale','warehouse','fbo','transit','zero'])assert.ok(html.includes('data-product-filter="'+value+'"'));
+  assert.doesNotMatch(html,/data-product-filter="low"/);
+  assert.doesNotMatch(html,/data-product-filter="buy"/);
   const render=html.slice(html.indexOf('function renderProducts('),html.indexOf('\nfunction wbRelinkNotice',html.indexOf('function renderProducts(')));
-  assert.match(render,/buyIds=f==='buy'\?new Set\(purchaseRecommendations\(\)\.map/);
-  assert.doesNotMatch(render,/f==='buy'&&!!purchaseRecommendation\(p\)/);
+  assert.match(render,/f==='zero'&&sale<=0&&warehouse<=0&&transit<=0&&fbo<=0/);
 });
 
 test('Products protect read-only cached state and live stock deletion',()=>{
@@ -90,7 +92,7 @@ test('Products paints the tab before heavy statistics and warms cache off the cr
   assert.match(html,/requestIdleCallback\(warm,\{timeout:1800\}\)/);
   assert.match(html,/function invalidateProductRenderStats\(\)\{productRenderStatsCache=null;scheduleProductRenderWarmup\(\)\}/);
   const start=html.indexOf('function openView(view,remember=true){');
-  const end=html.indexOf("document.querySelectorAll('nav button')",start);
+  const end=html.indexOf("document.querySelectorAll('nav button').forEach(b=>b.onclick",start);
   const fn=html.slice(start,end);
   assert.match(fn,/const productsNeedFirstPaint=view==='products'&&!productRenderStatsCache/);
   assert.match(fn,/requestAnimationFrame\(\(\)=>\{if\(document\.getElementById\('products'\)\?\.classList\.contains\('active'\)\)render\(\)\}\)/);
@@ -102,4 +104,21 @@ test('Products static shell never shows unconfirmed zero totals',()=>{
     assert.match(html,new RegExp('id="'+id+'">—<'));
   }
   assert.match(html,/id="productList" class="list"><div class="empty">Подготавливаю товары…<\/div>/);
+});
+
+
+test('Products use the unified period standard instead of a fixed 25-day sales window',()=>{
+  for(const value of ['today','yesterday','7','30','custom'])assert.ok(html.includes('data-product-period="'+value+'"'));
+  for(const label of ['Сегодня','Вчера','7 дней','30 дней','Свой период'])assert.ok(html.includes('>'+label+'</button>'));
+  assert.match(html,/function productPeriodSpec\(\)/);
+  assert.match(html,/function ensureProductPeriodStats\(force=false\)/);
+  assert.doesNotMatch(html,/Продажи\/день за 25 дней/);
+});
+
+test('Products sorts are explicit and keep a direction per sort',()=>{
+  for(const value of ['name','sales','profit','unitProfit','stock','days'])assert.ok(html.includes('data-product-sort="'+value+'"'));
+  assert.match(html,/productUi\.sortDirections\?\.\[sort\]/);
+  assert.match(html,/sort==='sales'\?xq-yq/);
+  assert.match(html,/sort==='profit'\?xp-yp/);
+  assert.match(html,/sort==='unitProfit'\?xu-yu/);
 });

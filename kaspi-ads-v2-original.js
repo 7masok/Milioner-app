@@ -26,7 +26,12 @@
     return kaspiAdsNameKey(raw || 'kaspi marketing');
   }
 
-  function queryBounds(days) {
+  function queryBounds(days, range = null) {
+    if (range?.from && range?.to) {
+      const a = orderDayStart(String(range.from));
+      const b = orderDayStart(String(range.to));
+      if (a !== null && b !== null) return { start: Math.min(a, b), end: Math.max(a, b) + DAY_MS };
+    }
     if (days === 'all') return { start: Number.NEGATIVE_INFINITY, end: Number.POSITIVE_INFINITY };
     return { start: reportPeriodStart(days), end: reportPeriodEnd(days) };
   }
@@ -58,8 +63,8 @@
     return set;
   }
 
-  function effectiveRows(days = 'all', sourceOnly = '') {
-    const { start, end } = queryBounds(days);
+  function effectiveRows(days = 'all', sourceOnly = '', range = null) {
+    const { start, end } = queryBounds(days, range);
     const coveredByCampaign = new Map();
     const rows = [];
     let replacedRows = 0;
@@ -193,8 +198,8 @@
     return { rows, replacedRows, replacedAmount, skippedLegacy, skippedLegacyAmount };
   }
 
-  function breakdown(days = reportPeriod) {
-    const effective = effectiveRows(days);
+  function breakdown(days = reportPeriod, range = null) {
+    const effective = effectiveRows(days, '', range);
     const byProduct = new Map();
     const campaignTotals = new Map();
     let total = 0;

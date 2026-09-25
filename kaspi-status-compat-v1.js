@@ -113,7 +113,8 @@ try{
     if(name.includes('услуг')||name.includes('хран')||name.includes('приём')||name.includes('эквайр'))return 'services';
     return 'other';
   }
-  function ozonBounds(days){
+  function ozonBounds(days,range=null){
+    if(range?.from&&range?.to){const start=Date.parse(String(range.from)+'T00:00:00+05:00'),end=Date.parse(String(range.to)+'T00:00:00+05:00')+86400000;if(Number.isFinite(start)&&Number.isFinite(end)&&end>start)return{start,end};}
     const raw=Number(days);
     if(raw===0&&typeof reportCustomBounds==='function')return reportCustomBounds();
     const d=new Date();d.setHours(0,0,0,0);const today=d.getTime();
@@ -159,8 +160,8 @@ try{
     for(const line of state.ozonOrderFeed||[]){const p=prod(line?.productId);if(p&&line?.sku)aliasToProduct.set(String(line.sku),p);}
     return{aliasToProduct,postingQty};
   }
-  function ozonProfitModel(payload,days){
-    const bounds=ozonBounds(days),maps=buildOzonMaps(payload),groups=new Map(),products=new Map();let unallocated=0,unallocatedAds=0;
+  function ozonProfitModel(payload,days,range=null){
+    const bounds=ozonBounds(days,range),maps=buildOzonMaps(payload),groups=new Map(),products=new Map();let unallocated=0,unallocatedAds=0;
     const productRow=p=>{const id=String(p.id);if(!products.has(id))products.set(id,{product:p,qty:0,sales:0,commission:0,delivery:0,ads:0,services:0,other:0,net:0,cogs:0,fbo:0});return products.get(id);};
     for(const account of payload?.accounts||[])for(const raw of account?.finance?.rows||[]){
       const t=Date.parse(raw?.operation_date||'');if(!(t>=bounds.start&&t<bounds.end))continue;
@@ -212,12 +213,12 @@ try{
     return [...loose.values()];
   }
   function ozonDay(ts){const d=new Date(ts);return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');}
-  async function loadOzonSkuAds(days){
-    const bounds=ozonBounds(days),from=ozonDay(bounds.start),to=ozonDay(bounds.end-1);
+  async function loadOzonSkuAds(days,range=null){
+    const bounds=ozonBounds(days,range),from=ozonDay(bounds.start),to=ozonDay(bounds.end-1);
     return apiJson(MILLIONER_API+'/api/ozon-ads?from='+from+'&to='+to);
   }
-  function ozonSummaryFrom(payload,days,adPayload){
-    const model=ozonProfitModel(payload,days);
+  function ozonSummaryFrom(payload,days,adPayload,range=null){
+    const model=ozonProfitModel(payload,days,range);
     let adSource='';
     if(adPayload?.configured&&Array.isArray(adPayload.rows)&&adPayload.rows.length){
       const loose=applyPerformanceAds(model,buildOzonMaps(payload),adPayload.rows);
@@ -236,27 +237,27 @@ try{
     return{sales:g.sales,cost:g.cogs,fees,ads,profit:g.profit,qty,empty:false,products,unallocatedAds:adSource==='performance'?0:Math.abs(model.unallocatedAds||0),adSource};
   }
   const ozonAdsJobs=new Map();
-  function watchOzonAds(days,payload){
-    const bounds=ozonBounds(days),from=ozonDay(bounds.start),to=ozonDay(bounds.end-1),key=from+'|'+to;
+  function watchOzonAds(days,payload,range=null){
+    const bounds=ozonBounds(days,range),from=ozonDay(bounds.start),to=ozonDay(bounds.end-1),key=from+'|'+to;
     if(ozonAdsJobs.get(key))return;
     ozonAdsJobs.set(key,1);
     let n=0;
     const tick=async()=>{
       try{
-        const ads=await loadOzonSkuAds(days);
+        const ads=await loadOzonSkuAds(days,range);
         if(ads?.pending){if(++n<24){setTimeout(tick,4000);return;}ozonAdsJobs.delete(key);return;}
         ozonAdsJobs.delete(key);
         if(!ads?.configured||!Array.isArray(ads.rows)||!ads.rows.length)return;
-        const next=ozonSummaryFrom(payload,days,ads);
+        const next=ozonSummaryFrom(payload,days,ads,range);
         if(typeof window.onOzonSummary==='function')window.onOzonSummary(Number(days),next);
       }catch(error){if(++n<8){setTimeout(tick,4000);return;}ozonAdsJobs.delete(key);console.warn('Ozon ads',error);}
     };
     tick();
   }
-  window.summarizeOzonReport=async function(days){
+  window.summarizeOzonReport=async function(days,range=null){
     const payload=await loadOzonProfitData();
-    watchOzonAds(days,payload);
-    return ozonSummaryFrom(payload,days,null);
+    if(!range)watchOzonAds(days,payload);
+    return ozonSummaryFrom(payload,days,null,range);
   };
   window.ozonStoreDetail=window.summarizeOzonReport;
   const sumText=(groups,key)=>groups.length?groups.map(g=>ozonMoney(g[key],g.currency)).join(' + '):'—';

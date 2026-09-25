@@ -5,30 +5,30 @@ import {readFileSync} from 'node:fs';
 const html=readFileSync(new URL('../../index.html',import.meta.url),'utf8');
 const report=readFileSync(new URL('../../kaspi-report-v2.js',import.meta.url),'utf8');
 const compat=readFileSync(new URL('../../kaspi-status-compat-v1.js',import.meta.url),'utf8');
+const kaspiAds=readFileSync(new URL('../../kaspi-ads-v2-original.js',import.meta.url),'utf8');
 
-test('product list shows unit cost and unit profit in the right column',()=>{
+test('product list shows selected-period sales, total profit and unit profit',()=>{
   const line=html.split('\n').find(row=>row.startsWith('function productCard('));
   assert.match(line,/Себестоимость/);
-  assert.match(line,/Средняя прибыль \/ шт\. · 30 дней/);
-  assert.match(line,/profitReady=window\.allMarketUnitProfit30 instanceof Map/);
-  assert.match(line,/hasProfitData=profitReady&&Number\(profit\?\.qty\)>0/);
-  assert.match(line,/profitText=hasProfitData\?fmt\(profit\.unitProfit\):'—'/);
+  assert.match(line,/Продано · \$\{esc\(period\.label\)\}/);
+  assert.match(line,/Прибыль · \$\{esc\(period\.label\)\}/);
+  assert.match(line,/Прибыль \/ шт\./);
+  assert.match(line,/qty=periodReady\?Math\.max/);
+  assert.match(line,/profitText=periodReady\?fmt/);
+  assert.match(line,/unitProfitText=periodReady&&qty>0\?fmt/);
 });
 
-
-test('projected stock profit is transparent and product cost input is rounded',()=>{
+test('projected stock profit follows the selected Product period transparently',()=>{
   assert.match(html,/Ожидаемая прибыль с остатка/);
   assert.match(html,/onclick="openStockProfitBreakdown\(\)"/);
   assert.match(html,/function warehouseProjectedProfitRows\(profitStats\)/);
-  assert.match(html,/свободный остаток × средняя чистая прибыль/);
-  assert.match(html,/последним 30 дням: Kaspi \+ WB1 \+ WB2 \+ Ozon/);
-  assert.match(html,/продано за 30 дней/);
-  assert.match(html,/stats\.profitReady\?fmt\(warehouseProjectedProfit\(profitStats\)\):'—'/);
-  assert.doesNotMatch(html,/profitStats\?\.get\(String\(p\.id\)\)\|\|productAllTimeProfitStats\(p\)/);
-  assert.match(html,/sources:value\?\.sources/);
-  assert.match(html,/возвраты уменьшают саму прибыль/);
-  assert.match(html,/id="ecost"[^>]*step="0\.01"[^>]*Math\.round/);
+  assert.match(html,/свободный остаток × чистая прибыль на 1 проданную штуку за выбранный период/);
+  assert.match(html,/продано · '\+esc\(label\)/);
+  assert.match(html,/stats\.periodReady\?fmt\(warehouseProjectedProfit\(periodStats\)\):'—'/);
+  assert.match(html,/rows=warehouseProjectedProfitRows\(stats\.periodStats\)/);
+  assert.match(html,/выбранному периоду: Kaspi \+ WB1 \+ WB2 \+ Ozon/);
 });
+
 
 
 test('product details use combined 30-day net profit including Kaspi and WB advertising',()=>{
@@ -42,11 +42,17 @@ test('product details use combined 30-day net profit including Kaspi and WB adve
 });
 
 
-test('unified 30-day product profit includes Ozon and never publishes a partial fallback',()=>{
-  assert.match(report,/loadOzonSummary\(days\)/);
-  assert.match(report,/if\(ozon\?\.missing\)throw new Error\('Ozon 30-day finance is not ready'\)/);
+test('unified Product-period profit includes Ozon and supports an explicit custom range',()=>{
+  assert.match(report,/window\.refreshProductPeriodStats=function/);
+  assert.match(report,/loadOzonSummary\(days,\{range\}\)/);
+  assert.match(report,/loadWbModel\('WB',days,\{range\}\)/);
   assert.match(report,/add\(pid,qty,Number\(x\?\.profit\)\|\|0,'Ozon'/);
-  assert.match(compat,/productId:String\(row\.product\?\.id\|\|''\)/);
-  assert.match(html,/profitReady=combined instanceof Map/);
-  assert.match(html,/Прогноз не показываю, чтобы не подставить другую формулу/);
+  assert.match(report,/periodCacheKey\(days,range\)/);
+  assert.match(compat,/window\.summarizeOzonReport=async function\(days,range=null\)/);
+  assert.match(compat,/ozonProfitModel\(payload,days,range\)/);
+  assert.match(html,/Не удалось загрузить единый расчёт прибыли за выбранный период/);
+  assert.match(report,/kaspi=buildModel\(kaspiSnapshot,days,range\)/);
+  assert.match(report,/kaspiAdsBreakdown\(days,range\)/);
+  assert.match(kaspiAds,/function breakdown\(days = reportPeriod, range = null\)/);
+  assert.match(kaspiAds,/effectiveRows\(days, '', range\)/);
 });
