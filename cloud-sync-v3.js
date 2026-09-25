@@ -18,6 +18,7 @@ function serverSnapshot(source){
   snapshot.kaspiAdExpenses=Array.isArray(snapshot.kaspiAdExpenses)?snapshot.kaspiAdExpenses:[];
   snapshot.settings=snapshot.settings&&typeof snapshot.settings==='object'?snapshot.settings:{};
   for(const key of WAREHOUSE_VOLATILE_SETTINGS||[])delete snapshot.settings[key];
+  if(typeof FINANCE_STORAGE_KEYS!=='undefined')for(const key of FINANCE_STORAGE_KEYS)delete snapshot.settings[key];
   delete snapshot.settings.serverUpdatedAt;
   delete snapshot.kaspiPayImports;
   for(const key of SERVER_MANAGED_CACHE_KEYS)delete snapshot[key];
@@ -48,10 +49,14 @@ applyWarehouseSnapshot=function(remote){
     wbOrderFeed:Array.isArray(state?.wbOrderFeed)?state.wbOrderFeed:[],
     ozonOrderFeed:Array.isArray(state?.ozonOrderFeed)?state.ozonOrderFeed:[]
   };
-  const liveMarketStatus=state?.settings?.serverMarketStatus&&typeof state.settings.serverMarketStatus==='object'?state.settings.serverMarketStatus:null;
-  const liveLastSync=Number(state?.settings?.lastSync||0);
+  const previousSettings=state?.settings&&typeof state.settings==='object'?state.settings:{};
+  const liveMarketStatus=previousSettings.serverMarketStatus&&typeof previousSettings.serverMarketStatus==='object'?previousSettings.serverMarketStatus:null;
+  const liveLastSync=Number(previousSettings.lastSync||0);
+  const localOnlySettings={};
+  if(typeof WAREHOUSE_VOLATILE_SETTINGS!=='undefined')for(const key of WAREHOUSE_VOLATILE_SETTINGS)if(previousSettings[key]!==undefined)localOnlySettings[key]=previousSettings[key];
+  if(typeof FINANCE_STORAGE_KEYS!=='undefined')for(const key of FINANCE_STORAGE_KEYS)if(previousSettings[key]!==undefined)localOnlySettings[key]=previousSettings[key];
   state=serverSnapshot(remote);
-  state.settings=state.settings&&typeof state.settings==='object'?state.settings:{};
+  state.settings={...(state.settings&&typeof state.settings==='object'?state.settings:{}),...localOnlySettings};
   if(liveMarketStatus)state.settings.serverMarketStatus=liveMarketStatus;
   if(liveLastSync>Number(state.settings.lastSync||0))state.settings.lastSync=liveLastSync;
   state.kaspiOrderFeed=orderFeeds.kaspiOrderFeed;
