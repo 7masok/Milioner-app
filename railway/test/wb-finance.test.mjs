@@ -68,7 +68,8 @@ test('WB stock-profit denominator uses gross sales while returns stay in profit'
   assert.match(ui, /productAds=Math\.max\(0,Number\(x\.advertising\)/);
   assert.match(ui, /ads:x\.ads/);
   assert.match(ui, /sources:x\.sources/);
-  assert.match(ui, /allMarketUnitProfitPromise/);
+  assert.match(ui, /const productPeriodStatsCache=new Map\(\),productPeriodStatsJobs=new Map\(\)/);
+  assert.match(ui, /window\.refreshAllMarketUnitProfit=function\(\)\{return window\.refreshProductPeriodStats/);
 });
 
 test('WB product report keeps multi-product advertising unallocated', () => {
