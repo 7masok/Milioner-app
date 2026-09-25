@@ -113,7 +113,7 @@ test('Products sorting direction changes real comparator output',()=>{
   const a={id:'a',name:'A'},b={id:'b',name:'B'};
   const stats={
     stockMap:new Map([['a',10],['b',2]]),
-    reservedMap:new Map(),physicalMap:new Map(),atWarehouseMap:new Map(),transitMap:new Map(),fboMap:new Map()
+    reservedMap:new Map(),physicalMap:new Map([['a',10],['b',2]]),atWarehouseMap:new Map(),transitMap:new Map(),fboMap:new Map()
   };
   const periodStats=new Map([
     ['a',{qty:2,profit:20,unitProfit:10}],
