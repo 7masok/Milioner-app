@@ -5,6 +5,7 @@ import {readFileSync} from 'node:fs';
 const html=readFileSync(new URL('../../index.html',import.meta.url),'utf8');
 const report=readFileSync(new URL('../../kaspi-report-v2.js',import.meta.url),'utf8');
 const compat=readFileSync(new URL('../../kaspi-status-compat-v1.js',import.meta.url),'utf8');
+const kaspiAds=readFileSync(new URL('../../kaspi-ads-v2-original.js',import.meta.url),'utf8');
 
 test('product list shows selected-period sales, total profit and unit profit',()=>{
   const line=html.split('\n').find(row=>row.startsWith('function productCard('));
@@ -50,4 +51,8 @@ test('unified Product-period profit includes Ozon and supports an explicit custo
   assert.match(compat,/window\.summarizeOzonReport=async function\(days,range=null\)/);
   assert.match(compat,/ozonProfitModel\(payload,days,range\)/);
   assert.match(html,/Не удалось загрузить единый расчёт прибыли за выбранный период/);
+  assert.match(report,/kaspi=buildModel\(kaspiSnapshot,days,range\)/);
+  assert.match(report,/kaspiAdsBreakdown\(days,range\)/);
+  assert.match(kaspiAds,/function breakdown\(days = reportPeriod, range = null\)/);
+  assert.match(kaspiAds,/effectiveRows\(days, '', range\)/);
 });
