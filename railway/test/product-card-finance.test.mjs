@@ -29,15 +29,17 @@ test('opening Products warms both 30-day operating stats and six-month card prof
   assert.match(html,/cardProfitReady=productCardProfitStats instanceof Map/);
 });
 
-test('projected stock profit follows the selected Product period transparently',()=>{
+test('projected stock profit uses the same six-month unit profit as product cards',()=>{
   assert.match(html,/Ожидаемая прибыль с остатка/);
   assert.match(html,/onclick="openStockProfitBreakdown\(\)"/);
   assert.match(html,/function warehouseProjectedProfitRows\(profitStats,stockMap=null\)/);
-  assert.match(html,/\(доступно к продаже \+ резерв \+ «На складе»\) × чистая прибыль на 1 проданную штуку за выбранный период/);
+  assert.match(html,/\(доступно к продаже \+ резерв \+ «На складе»\) × чистая прибыль на 1 проданную штуку за 6 месяцев/);
   assert.match(html,/продано · '\+esc\(label\)/);
-  assert.match(html,/periodReady\?fmt\(warehouseProjectedProfit\(periodStats,productValuationStockMap\(stats\)\)\):'—'/);
+  assert.match(html,/cardProfitReady\?fmt\(warehouseProjectedProfit\(cardProfitStats,productValuationStockMap\(stats\)\)\):'—'/);
+  assert.match(html,/const spec=PRODUCT_CARD_PROFIT_SPEC;let periodStats=productCardProfitStats/);
+  assert.match(html,/await ensureProductCardProfitStats\(\)/);
   assert.match(html,/rows=warehouseProjectedProfitRows\(periodStats,productValuationStockMap\(inventory\)\)/);
-  assert.match(html,/выбранному периоду: Kaspi \+ WB1 \+ WB2 \+ Ozon/);
+  assert.match(html,/рассчитана за 6 месяцев: Kaspi \+ WB1 \+ WB2 \+ Ozon/);
 });
 
 
