@@ -148,3 +148,38 @@ test('Products sorts are explicit and keep a direction per sort',()=>{
   assert.match(html,/if\(sort==='unitProfit'\)return periodReady&&qty>0/);
   assert.match(html,/function compareProductsForList\(/);
 });
+
+
+test('Products controls stay interactive while period finance loads',()=>{
+  const filterStart=html.indexOf('function setProductFilter(value){');
+  const filterEnd=html.indexOf('\nfunction setProductSort',filterStart);
+  const filterFn=html.slice(filterStart,filterEnd);
+  assert.match(filterFn,/productUiFrame\(\(\)=>renderProducts\(false\)\)/);
+  assert.doesNotMatch(filterFn,/ensureProductPeriodStats|invalidateProductRenderStats/);
+
+  const sortStart=html.indexOf('function toggleProductSortDirection(){');
+  const sortEnd=html.indexOf('\nfunction setProductPage',sortStart);
+  const sortFn=html.slice(sortStart,sortEnd);
+  assert.match(sortFn,/productUiFrame\(\(\)=>renderProducts\(false\)\)/);
+  assert.doesNotMatch(sortFn,/ensureProductPeriodStats/);
+
+  assert.match(html,/id="productPeriodStatus"/);
+  assert.match(html,/Остатки, поиск и фильтры продолжают работать/);
+});
+
+test('Products inventory snapshot is linear and reused by filtering',()=>{
+  const start=html.indexOf('function buildProductRenderStats(){');
+  const end=html.indexOf('\nfunction productInventoryRow',start);
+  const fn=html.slice(start,end);
+  assert.match(fn,/directReservedMap=new Map\(\)/);
+  assert.match(fn,/reservedMap=new Map\(\)/);
+  assert.match(fn,/for\(const row of state\.reservations\|\|\[\]\)/);
+  assert.match(fn,/for\(const row of state\.purchases\|\|\[\]\)/);
+  assert.doesNotMatch(fn,/productAvailableStock\(p\)/);
+  assert.match(html,/productMatchesStockFilter\(f,\{sale:stats\.stockMap\.get/);
+});
+
+test('Products period controls fit mobile without horizontal scroller',()=>{
+  assert.match(html,/#productPeriod\{display:grid;grid-template-columns:repeat\(3,minmax\(0,1fr\)\)/);
+  assert.match(html,/#productPeriod \[data-product-period="custom"\]\{grid-column:span 2\}/);
+});
