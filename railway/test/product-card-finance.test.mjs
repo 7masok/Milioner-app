@@ -21,18 +21,21 @@ test('product list shows selected-period sales, total profit and unit profit',()
 test('projected stock profit follows the selected Product period transparently',()=>{
   assert.match(html,/Ожидаемая прибыль с остатка/);
   assert.match(html,/onclick="openStockProfitBreakdown\(\)"/);
-  assert.match(html,/function warehouseProjectedProfitRows\(profitStats\)/);
+  assert.match(html,/function warehouseProjectedProfitRows\(profitStats,stockMap=null\)/);
   assert.match(html,/свободный остаток × чистая прибыль на 1 проданную штуку за выбранный период/);
   assert.match(html,/продано · '\+esc\(label\)/);
-  assert.match(html,/stats\.periodReady\?fmt\(warehouseProjectedProfit\(periodStats\)\):'—'/);
-  assert.match(html,/rows=warehouseProjectedProfitRows\(stats\.periodStats\)/);
+  assert.match(html,/periodReady\?fmt\(warehouseProjectedProfit\(periodStats,stats\.stockMap\)\):'—'/);
+  assert.match(html,/rows=warehouseProjectedProfitRows\(periodStats,inventory\.stockMap\)/);
   assert.match(html,/выбранному периоду: Kaspi \+ WB1 \+ WB2 \+ Ozon/);
 });
 
 
 
 test('product details use combined 30-day net profit including Kaspi and WB advertising',()=>{
-  assert.match(html,/async function openProduct\(pid,market='',days=30\)/);
+  assert.match(html,/async function openProduct\(pid,market='',days=null\)/);
+  assert.match(html,/productListContext=!market&&\(days===null\|\|days===undefined\)/);
+  assert.match(html,/selectedSpec=productListContext\?productPeriodSpec\(\):null/);
+  assert.match(html,/await ensureProductPeriodStats\(\)/);
   assert.match(html,/window\.refreshAllMarketUnitProfit/);
   assert.match(html,/Реклама Kaspi \+ WB1 \+ WB2 \+ Ozon за 30 дней/);
   assert.match(html,/Чистая прибыль за 30 дней/);
