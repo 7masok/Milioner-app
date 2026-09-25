@@ -160,7 +160,7 @@ test('Products static shell never shows unconfirmed zero totals',()=>{
 });
 
 
-test('Products expose no time filters and use one fixed 30-day internal window',()=>{
+test('Products expose no time controls while using 30-day sales and six-month card profit internally',()=>{
   assert.doesNotMatch(html,/data-product-period=/);
   assert.doesNotMatch(html,/id="productPeriod"/);
   assert.doesNotMatch(html,/id="productPeriodStatus"/);
@@ -169,6 +169,8 @@ test('Products expose no time filters and use one fixed 30-day internal window',
   assert.match(html,/period:'30',customFrom:'',customTo:''/);
   assert.match(html,/function productPeriodSpec\(\)/);
   assert.match(html,/function ensureProductPeriodStats\(force=false\)/);
+  assert.match(html,/PRODUCT_CARD_PROFIT_SPEC=\{days:180,key:'card-profit-180',label:'6 мес\.'/);
+  assert.match(html,/function ensureProductCardProfitStats\(force=false\)/);
   assert.doesNotMatch(html,/Продажи\/день за 25 дней/);
 });
 
