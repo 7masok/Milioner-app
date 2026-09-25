@@ -154,7 +154,8 @@ test('compact status renderer paints Ozon without rebuilding the header',()=>{
 });
 
 test('warehouse snapshots preserve live marketplace status and UI paint errors do not downgrade connectivity',()=>{
-  assert.match(cloud,/const liveMarketStatus=state\?\.settings\?\.serverMarketStatus/);
+  assert.match(cloud,/const previousSettings=state\?\.settings&&typeof state\.settings==='object'\?state\.settings:\{\}/);
+  assert.match(cloud,/const liveMarketStatus=previousSettings\.serverMarketStatus/);
   assert.match(cloud,/if\(liveMarketStatus\)state\.settings\.serverMarketStatus=liveMarketStatus/);
   const start=cloud.indexOf('bootstrapWarehouseFromServer=async function(){');
   const end=cloud.indexOf('startWarehouseServerWatcher=function',start);
