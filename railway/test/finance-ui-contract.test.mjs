@@ -69,7 +69,7 @@ test('startup does not duplicate the initial orders request',()=>{
   assert.equal(boot.includes('loadSharedOrderCache?.({silent:true})'),false);
   const start=html.indexOf('function startAppRuntime(){');
   const intervalAt=html.indexOf('setInterval(()=>loadSharedOrderCache({silent:true})',start);
-  const immediate=html.slice(start,intervalAt>start?intervalAt:start+5000);
+  const immediate=html.slice(start,intervalAt>start?intervalAt:start+12000);
   assert.equal((immediate.match(/loadSharedOrderCache\(\{silent:true\}\)/g)||[]).length,1);
   assert.ok(immediate.indexOf('await bootstrapWarehouseFromServer()')<immediate.indexOf('loadSharedOrderCache({silent:true})'));
   assert.ok(immediate.includes("setTimeout(()=>bootstrapFinance(),financePriority?0:1800)"));
