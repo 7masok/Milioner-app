@@ -113,9 +113,13 @@ test('Products static shell never shows unconfirmed zero totals',()=>{
 });
 
 
-test('Products use the unified period standard instead of a fixed 25-day sales window',()=>{
-  for(const value of ['today','yesterday','7','30','custom'])assert.ok(html.includes('data-product-period="'+value+'"'));
-  for(const label of ['Сегодня','Вчера','7 дней','30 дней','Свой период'])assert.ok(html.includes('>'+label+'</button>'));
+test('Products expose no time filters and use one fixed 30-day internal window',()=>{
+  assert.doesNotMatch(html,/data-product-period=/);
+  assert.doesNotMatch(html,/id="productPeriod"/);
+  assert.doesNotMatch(html,/id="productPeriodStatus"/);
+  assert.doesNotMatch(html,/id="productCustomRange"/);
+  assert.match(html,/let productPeriod='30';/);
+  assert.match(html,/period:'30',customFrom:'',customTo:''/);
   assert.match(html,/function productPeriodSpec\(\)/);
   assert.match(html,/function ensureProductPeriodStats\(force=false\)/);
   assert.doesNotMatch(html,/Продажи\/день за 25 дней/);

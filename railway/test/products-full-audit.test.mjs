@@ -164,15 +164,17 @@ test('Products rebuild stale cache and Ozon does not invalidate it on every tap'
   assert.doesNotMatch(wrapper,/\.then\(\(\)=>\{updateFboMetric\(\);if\(typeof invalidateProductRenderStats/);
 });
 
-test('Products mobile period controls never clip the fifth option',()=>{
-  assert.match(html,/#productPeriod\{display:grid;grid-template-columns:repeat\(3,minmax\(0,1fr\)\)/);
-  assert.match(html,/#productPeriod \[data-product-period="custom"\]\{grid-column:span 2\}/);
-  assert.match(html,/id="productPeriodStatus" class="muted product-period-status"/);
-  for(const value of ['today','yesterday','7','30','custom'])assert.ok(html.includes('data-product-period="'+value+'"'));
+test('Products have no visible time-filter controls',()=>{
+  assert.doesNotMatch(html,/data-product-period=/);
+  assert.doesNotMatch(html,/id="productPeriod"/);
+  assert.doesNotMatch(html,/id="productPeriodStatus"/);
+  assert.doesNotMatch(html,/id="productCustomRange"/);
+  assert.match(html,/let productPeriod='30';/);
 });
 
-test('Product opened from Products inherits the selected Product period',()=>{
+test('Product opened from Products uses the fixed Products 30-day window',()=>{
   const detail=between("async function openProduct(","function openProductWarehouseRelease(");
+  assert.match(html,/let productPeriod='30';/);
   assert.match(detail,/productListContext=!market&&\(days===null\|\|days===undefined\)/);
   assert.match(detail,/selectedSpec=productListContext\?productPeriodSpec\(\):null/);
   assert.match(detail,/currentProductPeriodStats\(selectedSpec\)/);
