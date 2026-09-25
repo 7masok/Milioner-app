@@ -1656,6 +1656,8 @@ function startAppRuntime(){if(appRuntimeStarted)return;appRuntimeStarted=true;co
 // showing an empty warehouse instead of the last server-confirmed snapshot.
 window.addEventListener('pagehide',()=>{if(homeOrdersSettled)writeHomeCache()});
 if('serviceWorker'in navigator)window.addEventListener('load',()=>navigator.serviceWorker.register('/sw.js',{scope:'/'}).catch(e=>console.warn('share target service worker failed',e)),{once:true});
+initOwnerAuth();
+
 function enhanceArrivalProductSearch(){}
 </script>
 <script src="./warehouse-insights.js?v=20260906"></script>
@@ -1670,7 +1672,6 @@ function enhanceArrivalProductSearch(){}
 <!-- cloud-authoritative-sync-with-safe-startup-edits -->
 <script src="./ozon-fbo-v1.js?v=20260923-report-unify"></script>
 <script src="./business-dashboard-v1.js?v=20260924-full-yesterday"></script>
-<script>initOwnerAuth();</script>
 </body>
 </html>
 
