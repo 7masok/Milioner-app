@@ -138,8 +138,8 @@ window.refreshAllMarketUnitProfit=function(){
      if(pid&&qty>0)add(pid,qty,Number(x?.profit)||0,'Ozon',Math.max(0,Number(x?.ads)||0));
    }
    window.allMarketUnitProfit30=new Map([...totals].map(([pid,x])=>[pid,{qty:x.qty,profit:x.profit,ads:x.ads,unitProfit:x.qty?x.profit/x.qty:0,sources:x.sources}]));
-   if(typeof productRenderStatsCache!=='undefined')productRenderStatsCache=null;
-   if(document.querySelector('#products.view.active')&&typeof renderProducts==='function')renderProducts(true);
+   if(typeof invalidateProductRenderStats==='function')invalidateProductRenderStats();else if(typeof productRenderStatsCache!=='undefined')productRenderStatsCache=null;
+   if(document.querySelector('#products.view.active')&&typeof renderProducts==='function')requestAnimationFrame(()=>{if(document.querySelector('#products.view.active'))renderProducts(true)});
    return window.allMarketUnitProfit30;
   }catch(e){console.warn('All-market unit profit',e);return null}
   finally{allMarketUnitProfitLoading=false;allMarketUnitProfitPromise=null}
