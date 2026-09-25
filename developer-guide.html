@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="robots" content="noindex,nofollow">
+  <meta name="theme-color" content="#111111">
+  <title>Для разработчиков — Склад</title>
+  <link rel="stylesheet" href="/developer-guide.css">
+  <script src="/developer-guide.js" defer></script>
+</head>
+<body>
+  <header>
+    <div class="header-row"><a class="back" href="/">← В склад</a><span class="read-only">Только чтение</span></div>
+    <h1>Для разработчиков</h1>
+    <p>Как устроен сайт, что нужно сохранять и как проверять изменения.</p>
+  </header>
+  <main>
+    <div class="tools">
+      <label for="guideSearch">Найти правило или функцию</label>
+      <div class="tool-row"><input id="guideSearch" type="search" placeholder="Например: фильтры, цвета, остатки" disabled><button id="downloadGuide" type="button" disabled>Скачать .md</button></div>
+    </div>
+    <p id="guideStatus" role="status" aria-live="polite">Загружаю паспорт…</p>
+    <div id="guideError" class="error" hidden><p id="guideErrorText"></p><a href="/">Открыть склад и войти</a> <button id="retryGuide" type="button">Повторить</button></div>
+    <div id="guideLayout" class="layout" hidden>
+      <nav aria-label="Содержание паспорта"><b>Содержание</b><div id="guideContents"></div></nav>
+      <article id="guideBody" aria-label="Паспорт сайта"></article>
+    </div>
+    <noscript><p>Для чтения паспорта здесь нужен JavaScript. В репозитории он находится в docs/SITE-PASSPORT.md.</p></noscript>
+  </main>
+</body>
+</html>
