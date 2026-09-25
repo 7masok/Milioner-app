@@ -812,7 +812,10 @@ let productPage=1;
 let productSearchTimer=0;
 let productRenderStatsCache=null;
 let productRenderWarmTimer=0;
-function scheduleProductRenderWarmup(delay=250){
+let productHeavyMetricTimer=0;
+function productUiFrame(fn){if(typeof requestAnimationFrame==='function')requestAnimationFrame(fn);else setTimeout(fn,0)}
+function productIdle(fn,timeout=1600){if(typeof requestIdleCallback==='function')requestIdleCallback(fn,{timeout});else setTimeout(fn,0)}
+function scheduleProductRenderWarmup(delay=350){
   clearTimeout(productRenderWarmTimer);
   productRenderWarmTimer=setTimeout(()=>{
     productRenderWarmTimer=0;
@@ -820,75 +823,192 @@ function scheduleProductRenderWarmup(delay=250){
       if(productRenderStatsCache||document.getElementById('products')?.classList.contains('active'))return;
       try{productRenderStatsCache=buildProductRenderStats()}catch(e){console.warn('product stats warmup failed',e)}
     };
-    if(typeof requestIdleCallback==='function')requestIdleCallback(warm,{timeout:1800});else setTimeout(warm,0);
+    productIdle(warm,1800);
   },Math.max(0,Number(delay)||0));
 }
-function invalidateProductRenderStats(){productRenderStatsCache=null;scheduleProductRenderWarmup()}
+function invalidateProductRenderStats(){productRenderStatsCache=null;clearTimeout(productHeavyMetricTimer);scheduleProductRenderWarmup()}
 const PRODUCT_PAGE_SIZE=15;
 const PRODUCT_SORT_VALUES=['name','sales','profit','unitProfit','stock','days'];
 const PRODUCT_FILTER_VALUES=['all','sale','warehouse','fbo','transit','zero'];
 const PRODUCT_FILTER_LABELS={all:'Все',sale:'В продаже',warehouse:'На складе',fbo:'FBO Ozon',transit:'В пути',zero:'Нет в наличии'};
 const PRODUCT_SORT_LABELS={name:'По названию',sales:'По продажам',profit:'По прибыли',unitProfit:'По прибыли за штуку',stock:'По остатку',days:'По запасу в днях'};
 const PRODUCT_PERIOD_VALUES=new Set(['today','yesterday','7','30','custom']);
-let productPeriodStats=null,productPeriodStatsKey='',productPeriodStatsLoading='';
+const PRODUCT_PERIOD_SORTS=new Set(['sales','profit','unitProfit','days']);
+const productPeriodUiCache=new Map(),productPeriodRequests=new Map();
+let productPeriodStats=null,productPeriodStatsKey='',productPeriodStatsLoading='',productPeriodStatsErrorKey='',productPeriodStatsError='';
 function normalizeProductSort(value){return PRODUCT_SORT_VALUES.includes(String(value||''))?String(value):'name'}
 function normalizeProductFilter(value){return PRODUCT_FILTER_VALUES.includes(String(value||''))?String(value):'all'}
 function currentProductFilter(){return normalizeProductFilter(productFilter)}
-function syncProductPickerLabels(){const filter=currentProductFilter(),sort=normalizeProductSort(document.getElementById('sort')?.value),filterInput=document.getElementById('filter'),filterLabel=document.getElementById('productFilterLabel'),sortLabel=document.getElementById('productSortLabel');if(filterInput&&filterInput.value!==filter)filterInput.value=filter;if(filterLabel)filterLabel.textContent=PRODUCT_FILTER_LABELS[filter];if(sortLabel)sortLabel.textContent=PRODUCT_SORT_LABELS[sort];document.querySelectorAll('[data-product-filter]').forEach(button=>button.classList.toggle('active',button.dataset.productFilter===filter));document.querySelectorAll('[data-product-sort]').forEach(button=>button.classList.toggle('active',button.dataset.productSort===sort))}
+function currentProductSort(){return normalizeProductSort(productSort)}
+function syncProductPickerLabels(){
+  const filter=currentProductFilter(),sort=currentProductSort(),filterInput=document.getElementById('filter'),sortInput=document.getElementById('sort'),filterLabel=document.getElementById('productFilterLabel'),sortLabel=document.getElementById('productSortLabel');
+  if(filterInput&&filterInput.value!==filter)filterInput.value=filter;
+  if(sortInput&&sortInput.value!==sort)sortInput.value=sort;
+  if(filterLabel)filterLabel.textContent=PRODUCT_FILTER_LABELS[filter];
+  if(sortLabel)sortLabel.textContent=PRODUCT_SORT_LABELS[sort];
+  document.querySelectorAll('[data-product-filter]').forEach(button=>button.classList.toggle('active',button.dataset.productFilter===filter));
+  document.querySelectorAll('[data-product-sort]').forEach(button=>button.classList.toggle('active',button.dataset.productSort===sort));
+}
 function closeOtherProductPickers(id=''){document.querySelectorAll('.product-picker[open]').forEach(picker=>{if(picker.id!==id)picker.removeAttribute('open')})}
 function closeProductPickers(){document.querySelectorAll('.product-picker[open]').forEach(picker=>picker.removeAttribute('open'))}
-function setProductFilter(value){productFilter=normalizeProductFilter(value);productPage=1;rememberProductUi({filter:productFilter,page:1});closeProductPickers();syncProductPickerLabels();invalidateProductRenderStats();renderProducts(true)}
-function setProductSort(value){const el=document.getElementById('sort');if(!el)return;el.value=normalizeProductSort(value);closeProductPickers();syncProductPickerLabels();productSortChanged()}
 function productSearchHaystack(p){const aliases=[...(Array.isArray(p?.kaspiAliases)?p.kaspiAliases:[]),...(Array.isArray(p?.wbAliases)?p.wbAliases:[]),...(Array.isArray(p?.wb2Aliases)?p.wb2Aliases:[]),...(Array.isArray(p?.ozonAliases)?p.ozonAliases:[])],variant=p?.wbVariant||{};return normalizeName([p?.name,p?.category,p?.kaspi,p?.wb,p?.wb2,p?.ozon,...aliases,variant.vendorCode,variant.nmId,variant.chrtId,variant.barcode].filter(Boolean).join(' '))}
 function readProductUi(){try{return JSON.parse(localStorage.getItem(PRODUCT_UI_KEY)||'{}')||{}}catch{return {}}}
 let productUi=readProductUi();
 if(Number.isInteger(Number(productUi.page))&&Number(productUi.page)>0)productPage=Number(productUi.page);
 let productFilter=normalizeProductFilter(productUi.filter);
+let productSort=normalizeProductSort(productUi.sort||state.settings.productSort);
 let productPeriod=PRODUCT_PERIOD_VALUES.has(String(productUi.period||''))?String(productUi.period):'30';
 let productCustomFrom=String(productUi.customFrom||''),productCustomTo=String(productUi.customTo||'');
 function rememberProductUi(patch={}){productUi={...productUi,...patch};try{localStorage.setItem(PRODUCT_UI_KEY,JSON.stringify(productUi))}catch{}}
 function productDateValue(offset=0){const date=new Date(Date.now()+Number(offset||0)*86400000),parts=new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Qyzylorda',year:'numeric',month:'2-digit',day:'2-digit'}).formatToParts(date),part=type=>parts.find(x=>x.type===type)?.value||'';return part('year')+'-'+part('month')+'-'+part('day')}
 function productCustomRange(){const min=productDateValue(-29),max=productDateValue(0);let from=/^\d{4}-\d{2}-\d{2}$/.test(productCustomFrom)?productCustomFrom:min,to=/^\d{4}-\d{2}-\d{2}$/.test(productCustomTo)?productCustomTo:max;if(from<min)from=min;if(to>max)to=max;if(from>to)from=to;productCustomFrom=from;productCustomTo=to;rememberProductUi({customFrom:from,customTo:to});return {from,to,min,max}}
 function productPeriodSpec(){if(productPeriod==='today')return {key:'today',days:1,label:'Сегодня',dayCount:1};if(productPeriod==='yesterday')return {key:'yesterday',days:-1,label:'Вчера',dayCount:1};if(productPeriod==='7')return {key:'7',days:7,label:'7 дней',dayCount:7};if(productPeriod==='custom'){const r=productCustomRange(),count=Math.floor((Date.parse(r.to+'T00:00:00Z')-Date.parse(r.from+'T00:00:00Z'))/86400000)+1;return {key:'custom:'+r.from+':'+r.to,days:0,label:r.from===r.to?r.from:r.from+' — '+r.to,dayCount:Math.max(1,count),range:{from:r.from,to:r.to}}}return {key:'30',days:30,label:'30 дней',dayCount:30}}
-function syncProductPeriodControls(){document.querySelectorAll('[data-product-period]').forEach(button=>button.classList.toggle('active',button.dataset.productPeriod===productPeriod));const custom=document.getElementById('productCustomRange'),fromInput=document.getElementById('productDateFrom'),toInput=document.getElementById('productDateTo');if(custom)custom.style.display=productPeriod==='custom'?'grid':'none';if(fromInput&&toInput){const r=productCustomRange();fromInput.min=r.min;fromInput.max=r.max;toInput.min=r.min;toInput.max=r.max;fromInput.value=r.from;toInput.value=r.to}}
-function setProductPeriod(value){if(!PRODUCT_PERIOD_VALUES.has(String(value)))return;productPeriod=String(value);rememberProductUi({period:productPeriod});syncProductPeriodControls();invalidateProductRenderStats();renderProducts(true);ensureProductPeriodStats()}
-function setProductCustomDate(side,value){if(!/^\d{4}-\d{2}-\d{2}$/.test(String(value||'')))return;const r=productCustomRange();if(value<r.min||value>r.max)return alert('Для товаров доступен период в пределах последних 30 дней.');if(side==='from'){productCustomFrom=value;if(productCustomTo&&productCustomFrom>productCustomTo)productCustomTo=productCustomFrom}else{productCustomTo=value;if(productCustomFrom&&productCustomTo<productCustomFrom)productCustomFrom=productCustomTo}productPeriod='custom';rememberProductUi({period:'custom',customFrom:productCustomFrom,customTo:productCustomTo});syncProductPeriodControls();invalidateProductRenderStats();renderProducts(true);ensureProductPeriodStats()}
-function currentProductSort(){return normalizeProductSort(document.getElementById('sort')?.value||productUi.sort||state.settings.productSort)}
-function restoreProductUiControls(){const q=document.getElementById('q'),filter=document.getElementById('filter'),sort=document.getElementById('sort');productFilter=normalizeProductFilter(productUi.filter);if(q)q.value=String(productUi.q||'');if(filter)filter.value=productFilter;if(sort)sort.value=normalizeProductSort(productUi.sort||state.settings.productSort);syncProductPickerLabels();syncProductPeriodControls();updateProductSortDirectionButton(currentProductSort())}
-function scheduleProductSearch(){productPage=1;rememberProductUi({q:document.getElementById('q')?.value||'',page:1});clearTimeout(productSearchTimer);productSearchTimer=setTimeout(()=>renderProducts(),160)}
-function productFilterChanged(){clearTimeout(productSearchTimer);productFilter=normalizeProductFilter(document.getElementById('filter')?.value||productFilter);productPage=1;rememberProductUi({filter:productFilter,page:1});syncProductPickerLabels();invalidateProductRenderStats();renderProducts(true)}
+function currentProductPeriodStats(period=productPeriodSpec()){const cached=productPeriodUiCache.get(period.key);if(cached instanceof Map)return cached;if(productPeriodStats instanceof Map&&productPeriodStatsKey===period.key)return productPeriodStats;return null}
+function syncProductPeriodControls(){
+  document.querySelectorAll('[data-product-period]').forEach(button=>button.classList.toggle('active',button.dataset.productPeriod===productPeriod));
+  const custom=document.getElementById('productCustomRange'),fromInput=document.getElementById('productDateFrom'),toInput=document.getElementById('productDateTo');
+  if(custom)custom.style.display=productPeriod==='custom'?'grid':'none';
+  if(fromInput&&toInput){const r=productCustomRange();fromInput.min=r.min;fromInput.max=r.max;toInput.min=r.min;toInput.max=r.max;fromInput.value=r.from;toInput.value=r.to}
+}
+function syncProductPeriodStatus(){
+  const box=document.getElementById('productPeriodStatus');if(!box)return;
+  const spec=productPeriodSpec(),ready=currentProductPeriodStats(spec) instanceof Map,loading=productPeriodRequests.has(spec.key)||productPeriodStatsLoading===spec.key,sort=currentProductSort();
+  if(loading){box.textContent='Загружаю продажи и прибыль · '+spec.label+'…'+(PRODUCT_PERIOD_SORTS.has(sort)?' Сортировка обновится автоматически.':'');box.className='muted product-period-status loading';return}
+  if(productPeriodStatsErrorKey===spec.key&&!ready){box.textContent='Не удалось загрузить продажи и прибыль · '+spec.label+'. Остатки, поиск и фильтры продолжают работать.';box.className='muted product-period-status error';return}
+  box.textContent=ready?'':'Продажи и прибыль за период ещё не загружены.';
+  box.className='muted product-period-status';
+}
+function setProductFilter(value){
+  productFilter=normalizeProductFilter(value);productPage=1;rememberProductUi({filter:productFilter,page:1});closeProductPickers();syncProductPickerLabels();
+  productUiFrame(()=>renderProducts(false));
+}
+function setProductSort(value){
+  productSort=normalizeProductSort(value);productPage=1;rememberProductUi({sort:productSort,page:1});closeProductPickers();syncProductPickerLabels();updateProductSortDirectionButton(productSort);syncProductPeriodStatus();
+  productUiFrame(()=>renderProducts(false));
+}
+function setProductPeriod(value){
+  if(!PRODUCT_PERIOD_VALUES.has(String(value)))return;
+  productPeriod=String(value);productPage=1;rememberProductUi({period:productPeriod,page:1});syncProductPeriodControls();syncProductPeriodStatus();
+  productUiFrame(()=>{renderProducts(false);ensureProductPeriodStats()});
+}
+function setProductCustomDate(side,value){
+  if(!/^\d{4}-\d{2}-\d{2}$/.test(String(value||'')))return;
+  const r=productCustomRange();if(value<r.min||value>r.max)return alert('Для товаров доступен период в пределах последних 30 дней.');
+  if(side==='from'){productCustomFrom=value;if(productCustomTo&&productCustomFrom>productCustomTo)productCustomTo=productCustomFrom}else{productCustomTo=value;if(productCustomFrom&&productCustomTo<productCustomFrom)productCustomFrom=productCustomTo}
+  productPeriod='custom';productPage=1;rememberProductUi({period:'custom',customFrom:productCustomFrom,customTo:productCustomTo,page:1});syncProductPeriodControls();syncProductPeriodStatus();
+  productUiFrame(()=>{renderProducts(false);ensureProductPeriodStats()});
+}
+function restoreProductUiControls(){
+  const q=document.getElementById('q'),filter=document.getElementById('filter'),sort=document.getElementById('sort');
+  productFilter=normalizeProductFilter(productUi.filter);productSort=normalizeProductSort(productUi.sort||state.settings.productSort);
+  if(q)q.value=String(productUi.q||'');if(filter)filter.value=productFilter;if(sort)sort.value=productSort;
+  syncProductPickerLabels();syncProductPeriodControls();updateProductSortDirectionButton(productSort);syncProductPeriodStatus();
+}
+function scheduleProductSearch(){productPage=1;rememberProductUi({q:document.getElementById('q')?.value||'',page:1});clearTimeout(productSearchTimer);productSearchTimer=setTimeout(()=>productUiFrame(()=>renderProducts(false)),120)}
+function productFilterChanged(){productFilter=normalizeProductFilter(document.getElementById('filter')?.value||productFilter);setProductFilter(productFilter)}
 function setProductWarehouseFilter(){setProductFilter(currentProductFilter()==='warehouse'?'all':'warehouse')}
 function productSortDirection(sort){const saved=String(productUi.sortDirections?.[sort]||'');if(saved==='asc'||saved==='desc')return saved;return sort==='name'||sort==='days'?'asc':'desc'}
-function updateProductSortDirectionButton(sort){const button=document.getElementById('productSortDirection');if(!button)return;const direction=productSortDirection(sort);button.textContent=direction==='asc'?'↑':'↓';button.title=direction==='asc'?'Сначала меньше / от А до Я':'Сначала больше / от Я до А';button.setAttribute('aria-label',button.title)}
-function productSortChanged(){const sort=normalizeProductSort(document.getElementById('sort')?.value);productPage=1;rememberProductUi({sort,page:1});updateProductSortDirectionButton(sort);renderProducts()}
-function toggleProductSortDirection(){const sort=currentProductSort(),current=productSortDirection(sort),directions={...(productUi.sortDirections||{}),[sort]:current==='asc'?'desc':'asc'};productPage=1;rememberProductUi({sortDirections:directions,page:1});updateProductSortDirectionButton(sort);renderProducts()}
-function setProductPage(page){productPage=Math.max(1,Number(page)||1);rememberProductUi({page:productPage});renderProducts();const section=document.getElementById('products');if(section)window.scrollTo({top:Math.max(0,section.offsetTop-8),behavior:'smooth'})}
-function ensureProductPeriodStats(force=false){const spec=productPeriodSpec();if(!force&&productPeriodStats instanceof Map&&productPeriodStatsKey===spec.key)return Promise.resolve(productPeriodStats);if(typeof window.refreshProductPeriodStats!=='function')return Promise.resolve(null);productPeriodStatsLoading=spec.key;return Promise.resolve(window.refreshProductPeriodStats(spec,{force})).then(map=>{if(map instanceof Map&&productPeriodSpec().key===spec.key){productPeriodStats=map;productPeriodStatsKey=spec.key;invalidateProductRenderStats();if(document.getElementById('products')?.classList.contains('active'))renderProducts(true)}return map}).catch(e=>{console.warn('product period stats failed',e);return null}).finally(()=>{if(productPeriodStatsLoading===spec.key)productPeriodStatsLoading=''})}
+function updateProductSortDirectionButton(sort){
+  const button=document.getElementById('productSortDirection');if(!button)return;
+  const direction=productSortDirection(sort),nameSort=sort==='name';
+  button.textContent=direction==='asc'?'↑':'↓';
+  button.title=nameSort?(direction==='asc'?'А → Я':'Я → А'):(direction==='asc'?'Сначала меньше':'Сначала больше');
+  button.setAttribute('aria-label','Направление: '+button.title);
+}
+function productSortChanged(){productSort=normalizeProductSort(document.getElementById('sort')?.value||productSort);setProductSort(productSort)}
+function toggleProductSortDirection(){
+  const sort=currentProductSort(),current=productSortDirection(sort),directions={...(productUi.sortDirections||{}),[sort]:current==='asc'?'desc':'asc'};
+  productPage=1;rememberProductUi({sortDirections:directions,page:1});updateProductSortDirectionButton(sort);
+  productUiFrame(()=>renderProducts(false));
+}
+function setProductPage(page){productPage=Math.max(1,Number(page)||1);rememberProductUi({page:productPage});renderProducts(false);const section=document.getElementById('products');if(section)window.scrollTo({top:Math.max(0,section.offsetTop-8),behavior:'smooth'})}
+function ensureProductPeriodStats(force=false){
+  const spec=productPeriodSpec(),ready=currentProductPeriodStats(spec);
+  if(!force&&ready instanceof Map)return Promise.resolve(ready);
+  if(!force&&productPeriodRequests.has(spec.key))return productPeriodRequests.get(spec.key);
+  if(typeof window.refreshProductPeriodStats!=='function')return Promise.resolve(null);
+  productPeriodStatsLoading=spec.key;productPeriodStatsErrorKey='';productPeriodStatsError='';syncProductPeriodStatus();
+  const request=Promise.resolve(window.refreshProductPeriodStats(spec,{force})).then(map=>{
+    if(map instanceof Map){productPeriodUiCache.set(spec.key,map);if(productPeriodSpec().key===spec.key){productPeriodStats=map;productPeriodStatsKey=spec.key;productPeriodStatsErrorKey='';productPeriodStatsError='';renderProducts(false)}}
+    else if(productPeriodSpec().key===spec.key){productPeriodStatsErrorKey=spec.key;productPeriodStatsError='Данные периода недоступны';syncProductPeriodStatus()}
+    return map;
+  }).catch(e=>{console.warn('product period stats failed',e);if(productPeriodSpec().key===spec.key){productPeriodStatsErrorKey=spec.key;productPeriodStatsError=String(e?.message||e);syncProductPeriodStatus()}return null}).finally(()=>{productPeriodRequests.delete(spec.key);if(productPeriodStatsLoading===spec.key)productPeriodStatsLoading='';syncProductPeriodStatus()});
+  productPeriodRequests.set(spec.key,request);return request;
+}
 restoreProductUiControls();
 document.addEventListener('pointerdown',event=>{if(!event.target.closest('.product-picker'))closeProductPickers()});
-function productMatchesStockFilter(filter,{sale=0,warehouse=0,fbo=0,transit=0}={}){filter=normalizeProductFilter(filter);sale=Number(sale)||0;warehouse=Number(warehouse)||0;fbo=Number(fbo)||0;transit=Number(transit)||0;if(filter==='sale')return sale>0;if(filter==='warehouse')return warehouse>0;if(filter==='fbo')return fbo>0;if(filter==='transit')return transit>0;if(filter==='zero')return sale<=0&&warehouse<=0&&fbo<=0&&transit<=0;return true}
+function productMatchesStockFilter(filter,{sale=0,warehouse=0,fbo=0,transit=0}={}){
+  filter=normalizeProductFilter(filter);sale=Number(sale)||0;warehouse=Number(warehouse)||0;fbo=Number(fbo)||0;transit=Number(transit)||0;
+  if(filter==='sale')return sale>0;if(filter==='warehouse')return warehouse>0;if(filter==='fbo')return fbo>0;if(filter==='transit')return transit>0;if(filter==='zero')return sale<=0&&warehouse<=0&&fbo<=0&&transit<=0;return true;
+}
+function productMapAdd(map,key,value){key=String(key||'');value=Number(value)||0;if(key&&value)map.set(key,(map.get(key)||0)+value)}
 function buildProductRenderStats(){
-  const products=state.products||[],period=productPeriodSpec(),periodReady=productPeriodStats instanceof Map&&productPeriodStatsKey===period.key,periodStats=new Map(),stockMap=new Map(),atWarehouseMap=new Map(),transitMap=new Map(),fboMap=new Map(),fboReady=typeof window.ozonFboDataReady==='function'&&window.ozonFboDataReady();
-  for(const row of state.purchases||[]){const key=String(row.productId||''),qty=Math.max(0,Number(row.qty)||0);if(!key||!qty)continue;const status=purchaseStatus(row);if(status==='at_warehouse')atWarehouseMap.set(key,(atWarehouseMap.get(key)||0)+qty);else if(status==='to_forwarder'||status==='to_me')transitMap.set(key,(transitMap.get(key)||0)+qty)}
-  for(const p of products){const key=String(p.id);stockMap.set(key,productAvailableStock(p));const metric=periodReady?(productPeriodStats.get(key)||{qty:0,profit:0,ads:0,unitProfit:0,sources:{}}):{qty:0,profit:0,ads:0,unitProfit:0,sources:null};periodStats.set(key,metric);if(fboReady&&typeof window.ozonFboQtyForProduct==='function')fboMap.set(key,Math.max(0,Number(window.ozonFboQtyForProduct(p))||0))}
-  return {period,periodStats,stockMap,atWarehouseMap,transitMap,fboMap,fboReady,periodReady}
+  const products=state.products||[],byId=new Map(products.map(p=>[String(p.id),p])),bundleParts=new Map(),directReservedMap=new Map(),reservedMap=new Map(),physicalMap=new Map(),stockMap=new Map(),atWarehouseMap=new Map(),transitMap=new Map(),fboMap=new Map(),fboReady=typeof window.ozonFboDataReady==='function'&&window.ozonFboDataReady();
+  for(const p of products)if(isBundleProduct(p))bundleParts.set(String(p.id),bundleComponents(p));
+  for(const row of state.reservations||[]){if(row?.active!==true)continue;productMapAdd(directReservedMap,row.productId,Math.max(0,Number(row.qty)||0))}
+  for(const [key,value] of directReservedMap)reservedMap.set(key,value);
+  for(const [bundleId,parts] of bundleParts){const count=directReservedMap.get(bundleId)||0;if(!count)continue;for(const part of parts)productMapAdd(reservedMap,part.productId,count*Math.max(1,Number(part.qty)||1))}
+  for(const p of products){const key=String(p.id);if(isBundleProduct(p))continue;const physical=Math.max(0,Number(p.stock)||0),free=Math.max(0,physical-(reservedMap.get(key)||0));physicalMap.set(key,physical);stockMap.set(key,free)}
+  for(const p of products){if(!isBundleProduct(p))continue;const key=String(p.id),parts=bundleParts.get(key)||[];let available=parts.length?Infinity:0;for(const part of parts){const componentFree=stockMap.get(String(part.productId))||0;available=Math.min(available,Math.floor(componentFree/Math.max(1,Number(part.qty)||1)))}available=Number.isFinite(available)?Math.max(0,available):0;physicalMap.set(key,available);stockMap.set(key,available)}
+  const receivedSince=reportPeriodStart(30);let received30=0;
+  for(const row of state.purchases||[]){const key=String(row.productId||''),qty=Math.max(0,Number(row.qty)||0);if(!key||!qty)continue;const status=purchaseStatus(row);if(status==='at_warehouse')productMapAdd(atWarehouseMap,key,qty);else if(status==='to_forwarder'||status==='to_me')productMapAdd(transitMap,key,qty);else if(status==='received'&&isRealPurchase(row)&&Number(row.receivedAt)>=receivedSince)received30+=qty}
+  if(fboReady&&typeof window.ozonFboQtyForProduct==='function')for(const p of products)fboMap.set(String(p.id),Math.max(0,Number(window.ozonFboQtyForProduct(p))||0));
+  let availableTotal=0,reservedTotal=0,transitTotal=0,warehouseTotal=0;
+  for(const p of products){if(isBundleProduct(p))continue;const key=String(p.id);availableTotal+=stockMap.get(key)||0;reservedTotal+=Math.max(0,reservedMap.get(key)||0);transitTotal+=Math.max(0,transitMap.get(key)||0);warehouseTotal+=Math.max(0,atWarehouseMap.get(key)||0)}
+  return {products,byId,bundleParts,directReservedMap,reservedMap,physicalMap,stockMap,atWarehouseMap,transitMap,fboMap,fboReady,availableTotal,reservedTotal,transitTotal,warehouseTotal,received30,stockCostReady:false,stockCostLoading:false,stockCost:null};
+}
+function productInventoryRow(stats,p){
+  const key=String(p?.id||'');
+  return {available:Math.max(0,Number(stats?.stockMap?.get(key))||0),reserved:Math.max(0,Number(stats?.reservedMap?.get(key))||0),physical:Math.max(0,Number(stats?.physicalMap?.get(key))||0),warehouse:Math.max(0,Number(stats?.atWarehouseMap?.get(key))||0),transit:Math.max(0,Number(stats?.transitMap?.get(key))||0),fbo:Math.max(0,Number(stats?.fboMap?.get(key))||0)};
+}
+function productMetricForSort(p,sort,stats,periodStats,period,periodReady){
+  const key=String(p.id),inventory=productInventoryRow(stats,p),metric=periodStats.get(key)||{},qty=periodReady?Math.max(0,Number(metric.qty)||0):0;
+  if(sort==='stock')return inventory.available;
+  if(sort==='sales')return qty;
+  if(sort==='profit')return periodReady?(Number(metric.profit)||0):0;
+  if(sort==='unitProfit')return periodReady&&qty>0?(Number(metric.unitProfit)||0):Number.NEGATIVE_INFINITY;
+  if(sort==='days')return periodReady&&qty>0?inventory.available/(qty/Math.max(1,period.dayCount)):Number.POSITIVE_INFINITY;
+  return 0;
+}
+function compareProductsForList(a,b,sort,direction,stats,periodStats,period,periodReady){
+  let comparison=0;
+  if(sort==='name')comparison=String(a.name||'').localeCompare(String(b.name||''),'ru');
+  else{const av=productMetricForSort(a,sort,stats,periodStats,period,periodReady),bv=productMetricForSort(b,sort,stats,periodStats,period,periodReady);comparison=av===bv?0:(av<bv?-1:1);if(!comparison)comparison=String(a.name||'').localeCompare(String(b.name||''),'ru')}
+  return direction==='asc'?comparison:-comparison;
+}
+function renderProductSummary(stats,periodStats,periodReady){
+  const set=(id,value)=>{const el=document.getElementById(id);if(el)el.textContent=value};
+  set('productStockQty',Math.round(stats.availableTotal).toLocaleString('ru-RU')+' шт.');
+  set('productReservedQty',Math.round(stats.reservedTotal).toLocaleString('ru-RU')+' шт.');
+  set('productInboundQty',Math.round(stats.transitTotal).toLocaleString('ru-RU')+' шт.');
+  set('productAtWarehouseQty',Math.round(stats.warehouseTotal).toLocaleString('ru-RU')+' шт.');
+  set('productReceived30',Math.round(stats.received30).toLocaleString('ru-RU')+' шт.');
+  set('productStockCost',stats.stockCostReady?fmt(stats.stockCost):'—');
+  set('productStockProfit',periodReady?fmt(warehouseProjectedProfit(periodStats,stats.stockMap)):'—');
+}
+function scheduleProductHeavyMetrics(stats){
+  if(!stats||stats.stockCostReady||stats.stockCostLoading)return;
+  stats.stockCostLoading=true;
+  const run=()=>{if(productRenderStatsCache!==stats){stats.stockCostLoading=false;return}let value=null;try{value=warehouseInventoryCost()}catch(e){console.warn('product stock cost failed',e)}if(productRenderStatsCache!==stats)return;stats.stockCost=Number.isFinite(Number(value))?Number(value):0;stats.stockCostReady=true;stats.stockCostLoading=false;const el=document.getElementById('productStockCost');if(el)el.textContent=fmt(stats.stockCost)};
+  productHeavyMetricTimer=setTimeout(()=>productIdle(run,1800),40);
 }
 function renderProducts(rebuildStats=false){
-  if(rebuildStats||!productRenderStatsCache)productRenderStatsCache=buildProductRenderStats();
-  const stats=productRenderStatsCache,period=stats.period,periodStats=stats.periodStats,stockMap=stats.stockMap,atWarehouseMap=stats.atWarehouseMap||new Map(),transitMap=stats.transitMap||new Map(),fboMap=stats.fboMap||new Map(),stockQty=document.getElementById('productStockQty'),reservedQty=document.getElementById('productReservedQty'),inboundQty=document.getElementById('productInboundQty'),atWarehouseQty=document.getElementById('productAtWarehouseQty'),stockCost=document.getElementById('productStockCost'),stockProfit=document.getElementById('productStockProfit');
-  syncProductPeriodControls();
-  if(rebuildStats){if(stockQty)stockQty.textContent=availableStockTotal().toLocaleString('ru-RU')+' шт.';if(reservedQty)reservedQty.textContent=reservedStockTotal().toLocaleString('ru-RU')+' шт.';if(inboundQty)inboundQty.textContent=purchaseTransitTotalQty().toLocaleString('ru-RU')+' шт.';if(atWarehouseQty)atWarehouseQty.textContent=[...atWarehouseMap.values()].reduce((a,n)=>a+n,0).toLocaleString('ru-RU')+' шт.';if(stockCost)stockCost.textContent=fmt(warehouseInventoryCost());if(stockProfit)stockProfit.textContent=stats.periodReady?fmt(warehouseProjectedProfit(periodStats)):'—';const since=reportPeriodStart(30),received30=(state.purchases||[]).filter(isRealPurchase).filter(x=>purchaseStatus(x)==='received'&&Number(x.receivedAt)>=since).reduce((n,x)=>n+Math.max(0,Number(x.qty)||0),0),received30El=document.getElementById('productReceived30');if(received30El)received30El.textContent=received30.toLocaleString('ru-RU')+' шт.'}
-  const warehouseCard=document.getElementById('productAtWarehouseCard'),f=currentProductFilter();if(warehouseCard)warehouseCard.classList.toggle('active',f==='warehouse');
-  const sortEl=document.getElementById('sort'),sort=currentProductSort();if(sortEl&&sortEl.value!==sort)sortEl.value=sort;updateProductSortDirectionButton(sort);
-  const q=normalizeName(document.getElementById('q')?.value||''),list=document.getElementById('productList'),pager=document.getElementById('productPager');if(!list)return;
-  if((f==='fbo'||f==='zero')&&!stats.fboReady){list.innerHTML='<div class="empty">Загружаю остатки FBO Ozon…</div>';if(pager)pager.innerHTML='';return}
-  let a=state.products.filter(p=>!q||productSearchHaystack(p).includes(q));
-  a=a.filter(p=>{const key=String(p.id);return productMatchesStockFilter(f,{sale:stockMap.get(key),warehouse:atWarehouseMap.get(key),fbo:fboMap.get(key),transit:transitMap.get(key)})});
-  a.sort((x,y)=>{const xk=String(x.id),yk=String(y.id),xs=stockMap.get(xk)||0,ys=stockMap.get(yk)||0,xm=periodStats.get(xk)||{},ym=periodStats.get(yk)||{},xq=stats.periodReady?Number(xm.qty)||0:0,yq=stats.periodReady?Number(ym.qty)||0:0,xp=stats.periodReady?Number(xm.profit)||0:0,yp=stats.periodReady?Number(ym.profit)||0:0,xu=stats.periodReady&&xq>0?Number(xm.unitProfit)||0:-Infinity,yu=stats.periodReady&&yq>0?Number(ym.unitProfit)||0:-Infinity,xd=xq>0?xs/(xq/period.dayCount):Infinity,yd=yq>0?ys/(yq/period.dayCount):Infinity;let comparison=sort==='name'?String(x.name||'').localeCompare(String(y.name||''),'ru'):sort==='stock'?xs-ys:sort==='sales'?xq-yq:sort==='profit'?xp-yp:sort==='unitProfit'?xu-yu:xd-yd;if(!comparison)comparison=String(x.name||'').localeCompare(String(y.name||''),'ru');return productSortDirection(sort)==='asc'?comparison:-comparison});
-  if(!a.length){productPage=1;list.innerHTML='<div class="empty">Товаров не найдено</div>';if(pager)pager.innerHTML='';return}
-  const totalPages=Math.max(1,Math.ceil(a.length/PRODUCT_PAGE_SIZE));productPage=Math.min(Math.max(1,productPage),totalPages);rememberProductUi({page:productPage});const pageProducts=a.slice((productPage-1)*PRODUCT_PAGE_SIZE,productPage*PRODUCT_PAGE_SIZE);
-  list.innerHTML=pageProducts.map(p=>productCard(p,periodStats.get(String(p.id)),period,stockMap.get(String(p.id))||0,stats.periodReady)).join('');
-  if(pager)pager.innerHTML=totalPages>1?`<div class="item" style="padding:10px;margin-top:8px"><div class="row" style="justify-content:space-between"><button class="btn" ${productPage<=1?'disabled':''} onclick="setProductPage(${productPage-1})">← Назад</button><div class="muted" style="text-align:center">Страница ${productPage} из ${totalPages}<br>${a.length} товаров</div><button class="btn" ${productPage>=totalPages?'disabled':''} onclick="setProductPage(${productPage+1})">Вперёд →</button></div></div>`:''
+  const didRebuild=rebuildStats||!productRenderStatsCache;if(didRebuild)productRenderStatsCache=buildProductRenderStats();
+  const stats=productRenderStatsCache,period=productPeriodSpec(),periodStats=currentProductPeriodStats(period)||new Map(),periodReady=currentProductPeriodStats(period) instanceof Map,f=currentProductFilter(),sort=currentProductSort(),direction=productSortDirection(sort),list=document.getElementById('productList'),pager=document.getElementById('productPager');
+  syncProductPickerLabels();syncProductPeriodControls();syncProductPeriodStatus();renderProductSummary(stats,periodStats,periodReady);scheduleProductHeavyMetrics(stats);
+  const warehouseCard=document.getElementById('productAtWarehouseCard');if(warehouseCard)warehouseCard.classList.toggle('active',f==='warehouse');
+  updateProductSortDirectionButton(sort);
+  if(!list)return;
+  if((f==='fbo'||f==='zero')&&!stats.fboReady){list.innerHTML='<div class="empty">Загружаю остатки FBO Ozon…<div class="muted" style="margin-top:6px">Остальные фильтры уже доступны.</div></div>';if(pager)pager.innerHTML='';return}
+  const q=normalizeName(document.getElementById('q')?.value||'');
+  let rows=(stats.products||[]).filter(p=>!q||productSearchHaystack(p).includes(q));
+  rows=rows.filter(p=>productMatchesStockFilter(f,{sale:stats.stockMap.get(String(p.id)),warehouse:stats.atWarehouseMap.get(String(p.id)),fbo:stats.fboMap.get(String(p.id)),transit:stats.transitMap.get(String(p.id))}));
+  rows.sort((a,b)=>compareProductsForList(a,b,sort,direction,stats,periodStats,period,periodReady));
+  if(!rows.length){productPage=1;rememberProductUi({page:1});list.innerHTML='<div class="empty">Нет товаров для фильтра «'+esc(PRODUCT_FILTER_LABELS[f])+'»'+(q?' и текущего поиска':'')+'.</div>';if(pager)pager.innerHTML='';return}
+  const totalPages=Math.max(1,Math.ceil(rows.length/PRODUCT_PAGE_SIZE));productPage=Math.min(Math.max(1,productPage),totalPages);rememberProductUi({page:productPage});
+  const pageProducts=rows.slice((productPage-1)*PRODUCT_PAGE_SIZE,productPage*PRODUCT_PAGE_SIZE);
+  list.innerHTML=pageProducts.map(p=>{const inv=productInventoryRow(stats,p);return productCard(p,periodStats.get(String(p.id)),period,inv.available,periodReady,inv)}).join('');
+  if(pager)pager.innerHTML=totalPages>1?`<div class="item" style="padding:10px;margin-top:8px"><div class="row" style="justify-content:space-between"><button class="btn" ${productPage<=1?'disabled':''} onclick="setProductPage(${productPage-1})">← Назад</button><div class="muted" style="text-align:center">Страница ${productPage} из ${totalPages}<br>${rows.length} товаров</div><button class="btn" ${productPage>=totalPages?'disabled':''} onclick="setProductPage(${productPage+1})">Вперёд →</button></div></div>`:'';
 }
 function wbRelinkNotice(p){return ['wb','wb2'].filter(f=>p[f+'RelinkRequired']&&!p[f]).map(f=>`<div class="muted" style="color:#a40000;margin-top:6px"><b>${f==='wb'?'WB1':'WB2'}: требует перепривязки</b><br>Старый артикул: ${esc(p[f+'RelinkRequired'].oldSku||'—')}. Передача остатков отключена.<button class="btn" onclick="event.stopPropagation();relinkWbArticle('${p.id}','${f}')">Перепривязать</button></div>`).join('')}
 function relinkWbArticle(pid,field){const p=prod(pid);if(!p||!['wb','wb2'].includes(field))return;const marker=p[field+'RelinkRequired'];showSheet(`<h3>Перепривязать ${field==='wb'?'WB1':'WB2'}</h3><p>${esc(p.name)}</p><p class="muted">Введите актуальный артикул продавца из карточки WB. Старый артикул: ${esc(marker?.oldSku||'—')}. Остаток не изменится.</p><label for="wbRelinkSku">Новый артикул WB</label><input id="wbRelinkSku" value="${esc(marker?.currentSku||'')}" autocomplete="off"><div id="wbRelinkError" role="alert" style="color:#a40000;margin-top:8px"></div><button class="btn dark full" onclick="saveWbRelinkArticle('${pid}','${field}')">Сохранить привязку</button>`)}
