@@ -106,8 +106,20 @@ test('Products paints the tab before heavy statistics and warms cache off the cr
   assert.ok(fn.indexOf('requestAnimationFrame(')<fn.indexOf('try{render()}'));
 });
 
+test('Products replace received-30 metric with current buyer-delivery stock',()=>{
+  assert.doesNotMatch(html,/Введено в продажу за 30 дней|productReceived30/);
+  assert.match(html,/В пути до покупателя/);
+  assert.match(html,/id="productToBuyerQty">—</);
+  assert.match(html,/function marketplaceOrderInTransitToBuyer\(/);
+  assert.match(html,/SORTED','ACCEPTED_BY_CARRIER','SENT_TO_CARRIER','READY_FOR_PICKUP/);
+  assert.match(html,/KASPI_DELIVERY_TRANSIT/);
+  assert.match(html,/DELIVERING/);
+  assert.match(html,/SOLD'\]\.includes\(st\)\)return false/);
+  assert.match(html,/COMPLETED'\]\.includes\(u\)\|\|st==='ARCHIVE'/);
+});
+
 test('Products static shell never shows unconfirmed zero totals',()=>{
-  for(const id of ['productStockQty','productReservedQty','productInboundQty','productAtWarehouseQty','productFboQty','productStockCost','productStockProfit','productReceived30']){
+  for(const id of ['productStockQty','productReservedQty','productInboundQty','productAtWarehouseQty','productFboQty','productStockCost','productStockProfit','productToBuyerQty']){
     assert.match(html,new RegExp('id="'+id+'">—<'));
   }
   assert.match(html,/id="productList" class="list"><div class="empty">Подготавливаю товары…<\/div>/);
