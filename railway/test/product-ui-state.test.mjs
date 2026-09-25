@@ -65,9 +65,14 @@ test('Marketplace SKU ownership is checked in create edit and relink paths',()=>
   assert.match(html,/marketplaceSkuOwner\(field,next,p\?\.id\)/);
 });
 
-test('Product cards escape image URL and Ozon zero is not shown before load',()=>{
-  const card=html.split('\n').find(x=>x.startsWith('function productCard('));
-  assert.match(card,/src="\$\{esc\(p\.photo\)\}"/);
+test('Product list cards are compact text-only and Ozon zero is not shown before load',()=>{
+  const card=html.split('\n').find(x=>x.startsWith('function productCard('))||'';
+  assert.doesNotMatch(card,/p\.photo|class="thumb"|p\.category|Без категории/);
+  assert.doesNotMatch(card,/<b>\$\{physical\} шт\.<\/b><div class="muted">в продаже<\/div>/);
+  assert.match(card,/class="name">\$\{esc\(p\.name\)\}<\/div>/);
+  assert.match(html,/#productList \.name\{font-size:12px;line-height:1\.15;white-space:nowrap;overflow:hidden;text-overflow:ellipsis\}/);
+  assert.match(html,/#productList\{gap:1px\}/);
+  assert.match(html,/#productList>\.item\{padding:6px 8px;border-radius:9px\}/);
   assert.match(html,/id="productFboQty">—</);
 });
 
