@@ -41,13 +41,13 @@ function allowed(value) {
   return /^WB(?:[2-9]\d*|1\d+)?$/.test(value);
 }
 
-function localDate() {
+function localDate(value = Date.now()) {
   const parts = new Intl.DateTimeFormat('en-CA', {
     timeZone: 'Asia/Qyzylorda',
     year: 'numeric',
     month: '2-digit',
     day: '2-digit',
-  }).formatToParts(new Date());
+  }).formatToParts(new Date(Number(value) || Date.now()));
   const value = type => parts.find(part => part.type === type)?.value || '';
   return value('year') + '-' + value('month') + '-' + value('day');
 }
@@ -223,6 +223,45 @@ function spend(row, day) {
   return statMetric(row, day, ['sum', 'spend', 'expenses', 'cost']);
 }
 
+function isoDayRange(from, to) {
+  const start = Date.parse(String(from || '') + 'T00:00:00Z');
+  const end = Date.parse(String(to || '') + 'T00:00:00Z');
+  if (!Number.isFinite(start) || !Number.isFinite(end) || end < start) return [];
+  const days = [];
+  for (let value = start; value <= end; value += 86400000) days.push(new Date(value).toISOString().slice(0, 10));
+  return days;
+}
+
+function campaignPeriodMetrics(row, from, to) {
+  const stats = Array.isArray(row?.stats)
+    ? row.stats
+    : Array.isArray(row?.dailyStats)
+      ? row.dailyStats
+      : Array.isArray(row?.days)
+        ? row.days
+        : [];
+  const byDate = new Map(stats
+    .map(item => [String(item?.date || '').slice(0, 10), item])
+    .filter(([date]) => /^\d{4}-\d{2}-\d{2}$/.test(date)));
+  const metric = (item, fields) => {
+    const value = fields.map(field => item?.[field]).find(candidate => Number.isFinite(Number(candidate)));
+    return Math.max(0, Number(value) || 0);
+  };
+  return isoDayRange(from, to).map(date => {
+    const item = byDate.get(date);
+    return {
+      date,
+      spend: metric(item, ['sum', 'spend', 'expenses', 'cost']),
+      orders: metric(item, ['orders']),
+      orderedItems: metric(item, ['shks', 'orders']),
+      revenue: metric(item, ['sum_price', 'revenue']),
+      views: metric(item, ['views']),
+      clicks: metric(item, ['clicks']),
+      cartAdds: metric(item, ['atbs', 'addToCart', 'add_to_cart']),
+    };
+  });
+}
+
 function monotonicDailyMetric(freshValue, priorValue, previousIsToday) {
   const fresh = Math.max(0, Number(freshValue) || 0);
   return previousIsToday ? Math.max(fresh, Math.max(0, Number(priorValue) || 0)) : fresh;
@@ -318,6 +357,8 @@ async function fetchCampaigns(marketName, previous) {
     })));
   }
   const day = localDate();
+  const historyFrom = localDate(Date.now() - 29 * 86400000);
+  const historyTo = day;
   const previousIsToday = String(previous?.day || '') === day;
   const statIds = [...new Set(list
     .filter(row => MANAGEABLE_CAMPAIGN_STATUSES.has(Number(row?.status ?? row?.statusId ?? 0)))
@@ -329,7 +370,7 @@ async function fetchCampaigns(marketName, previous) {
     for (let offset = 0; offset < statIds.length; offset += 50) {
       const ids = statIds.slice(offset, offset + 50);
       stats.push(...campaignRows(await request(
-        ADVERT_API + '/adv/v3/fullstats?ids=' + ids.join(',') + '&beginDate=' + day + '&endDate=' + day,
+        ADVERT_API + '/adv/v3/fullstats?ids=' + ids.join(',') + '&beginDate=' + historyFrom + '&endDate=' + historyTo,
         token,
       )));
     }
@@ -380,6 +421,9 @@ async function fetchCampaigns(marketName, previous) {
       views: hasFreshStats ? statMetric(statRow, day, ['views']) : (previousIsToday ? Number(prior?.views || 0) : 0),
       clicks: hasFreshStats ? statMetric(statRow, day, ['clicks']) : (previousIsToday ? Number(prior?.clicks || 0) : 0),
       cartAdds: hasFreshStats ? statMetric(statRow, day, ['atbs', 'addToCart', 'add_to_cart']) : (previousIsToday ? Number(prior?.cartAdds || 0) : 0),
+      periodMetrics: hasFreshStats
+        ? campaignPeriodMetrics(statRow, historyFrom, historyTo)
+        : (Array.isArray(prior?.periodMetrics) ? prior.periodMetrics : []),
       membershipSource: 'wb-settings-v1',
       nmIds: label.nmIds,
       productTitles: label.productTitles,
@@ -401,7 +445,7 @@ async function fetchCampaigns(marketName, previous) {
       vendorCodes: [...new Set([...(existing.vendorCodes || []), ...(row.vendorCodes || [])])],
     });
   }
-  return { campaigns: [...unique.values()], statsError };
+  return { campaigns: [...unique.values()], statsError, historyFrom, historyTo };
 }
 
 async function inventoryFor(marketName, campaigns) {
@@ -449,6 +493,8 @@ async function storedSnapshot(marketName) {
     day: String(payload.day || localDate()),
     // Legacy snapshots mixed statistics products into membership. Never use them
     // for displayed inventory or stock automation while waiting for a fresh sync.
+    historyFrom: String(payload.historyFrom || ''),
+    historyTo: String(payload.historyTo || ''),
     campaigns: (Array.isArray(payload.campaigns) ? payload.campaigns : []).map(row =>
       row.membershipSource === 'wb-settings-v1' ? row :
         { ...row, nmIds: [], productTitles: [], vendorCodes: [] }),
@@ -507,8 +553,8 @@ async function refreshMarket(marketName) {
     const previous = await storedSnapshot(marketName);
     if (previous?.nextAttemptAt > Date.now()) return previous;
     try {
-      const { campaigns, statsError } = await fetchCampaigns(marketName, previous);
-      const saved = await saveSnapshot(marketName, { market: marketName, day: localDate(), campaigns });
+      const { campaigns, statsError, historyFrom, historyTo } = await fetchCampaigns(marketName, previous);
+      const saved = await saveSnapshot(marketName, { market: marketName, day: localDate(), historyFrom, historyTo, campaigns });
       if (!verifiedSnapshots.has(marketName)) {
         verifiedSnapshots.add(marketName);
       }
