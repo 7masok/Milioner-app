@@ -7,15 +7,26 @@ const report=readFileSync(new URL('../../kaspi-report-v2.js',import.meta.url),'u
 const compat=readFileSync(new URL('../../kaspi-status-compat-v1.js',import.meta.url),'utf8');
 const kaspiAds=readFileSync(new URL('../../kaspi-ads-v2-original.js',import.meta.url),'utf8');
 
-test('product list shows selected-period sales, total profit and unit profit',()=>{
-  const line=html.split('\n').find(row=>row.startsWith('function productCard('));
+test('product list keeps 30-day sales on the left and uses six-month profit on the right',()=>{
+  const line=html.split('\n').find(row=>row.startsWith('function productCard('))||'';
   assert.match(line,/Себестоимость/);
   assert.match(line,/Продано · \$\{esc\(period\.label\)\}/);
-  assert.match(line,/Прибыль · \$\{esc\(period\.label\)\}/);
+  assert.match(line,/Прибыль · \$\{esc\(profitLabel\)\}/);
   assert.match(line,/Прибыль \/ шт\./);
   assert.match(line,/qty=periodReady\?Math\.max/);
-  assert.match(line,/profitText=periodReady\?fmt/);
-  assert.match(line,/unitProfitText=periodReady&&qty>0\?fmt/);
+  assert.match(line,/profitQty=profitReady\?Math\.max/);
+  assert.match(line,/profitText=profitReady\?fmt/);
+  assert.match(line,/unitProfitText=profitReady&&profitQty>0\?fmt/);
+  assert.match(html,/const PRODUCT_CARD_PROFIT_SPEC=\{days:180,key:'card-profit-180',label:'6 мес\.',dayCount:180\}/);
+  assert.match(html,/function ensureProductCardProfitStats\(force=false\)/);
+  assert.match(html,/window\.refreshProductPeriodStats\(spec,\{force\}\)/);
+  assert.match(html,/cardProfitStats\.get\(String\(p\.id\)\),cardProfitReady,PRODUCT_CARD_PROFIT_SPEC\.label/);
+});
+
+test('opening Products warms both 30-day operating stats and six-month card profit stats',()=>{
+  assert.match(html,/if\(view==='products'\)setTimeout\(\(\)=>\{Promise\.resolve\(ensureProductPeriodStats\(\)\).*Promise\.resolve\(ensureProductCardProfitStats\(\)\)/);
+  assert.match(html,/productCardProfitStats instanceof Map\?productCardProfitStats:new Map\(\)/);
+  assert.match(html,/cardProfitReady=productCardProfitStats instanceof Map/);
 });
 
 test('projected stock profit follows the selected Product period transparently',()=>{
