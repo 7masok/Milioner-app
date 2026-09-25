@@ -100,7 +100,7 @@ test('Ozon FBO module owns the compact Ozon header after it is available',()=>{
   assert.match(cloud,/typeof window\.ozonFboRefreshStatus!==['\"]function['\"]\)paint\(['\"]Ozon['\"]/);
 });
 
-test('Home startup does not run report, Ozon or compatibility fetches',()=>{
+test('Home avoids unauthenticated compatibility fetches and repairs Ozon once after auth',()=>{
   assert.doesNotMatch(compat,/loadSharedOrderCache/);
   assert.doesNotMatch(ads,/stock-alerts-rescue-v1\.js/);
   assert.doesNotMatch(report,/setTimeout\(\(\)=>window\.refreshAllMarketUnitProfit\(\),1500\)/);
@@ -110,7 +110,10 @@ test('Home startup does not run report, Ozon or compatibility fetches',()=>{
   assert.doesNotMatch(tail,/\nload\(\)\.then/);
   const repairStart=repair.indexOf('function repairMarketplaceUi(){');
   const repairEnd=repair.indexOf('\nfunction installMarketplaceUiRepair',repairStart);
-  assert.doesNotMatch(repair.slice(repairStart,repairEnd),/refreshOzonCompactStatus\(\)/);
+  const repairFn=repair.slice(repairStart,repairEnd);
+  assert.match(repairFn,/if\(!document\.body\?\.classList\.contains\('auth-ready'\)\)return false/);
+  assert.match(repairFn,/ozonCompactAuthRefreshStarted=true/);
+  assert.match(repairFn,/refreshOzonCompactStatus\(\)\.catch/);
 });
 
 test('expensive finance, Ozon and maintenance work are deferred off first Home paint',()=>{
@@ -145,5 +148,19 @@ test('bell is present immediately and does not pulse on first paint',()=>{
 
 test('compact status renderer paints Ozon without rebuilding the header',()=>{
   assert.match(cloud,/document\.querySelector\('\.sync\.sync-compact\[data-compact-built="1"\]'\)/);
+  assert.match(cloud,/window\.ozonFboPaintStatus/);
+  assert.match(cloud,/window\.refreshCompactMarketStatus=refresh/);
   assert.match(cloud,/paint\('Ozon','dotOzonTop','ozonTopStatus'\)/);
+});
+
+test('warehouse snapshots preserve live marketplace status and UI paint errors do not downgrade connectivity',()=>{
+  assert.match(cloud,/const liveMarketStatus=state\?\.settings\?\.serverMarketStatus/);
+  assert.match(cloud,/if\(liveMarketStatus\)state\.settings\.serverMarketStatus=liveMarketStatus/);
+  const start=cloud.indexOf('bootstrapWarehouseFromServer=async function(){');
+  const end=cloud.indexOf('startWarehouseServerWatcher=function',start);
+  const boot=cloud.slice(start,end);
+  assert.match(boot,/cloudStatus\('сервер подключён','ok'\)/);
+  assert.match(boot,/try\{render\(\)\}catch\(error\)\{console\.error\('warehouse bootstrap render failed'/);
+  assert.ok(boot.indexOf("cloudStatus('сервер подключён','ok')")<boot.indexOf("try{render()}catch"));
+  assert.match(html,/window\.refreshCompactMarketStatus\?\.\(\)/);
 });
