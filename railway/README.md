@@ -2,6 +2,9 @@
 
 This is the only active application service for Склад.
 
+Before changes, read `../AGENTS.md` and `../docs/SITE-PASSPORT.md`.
+The same passport is available after sign-in under Settings → For developers.
+
 ## Architecture
 
 ```text

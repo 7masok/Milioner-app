@@ -24,6 +24,7 @@ import { wbVariantsRouter } from './wb-variants.js';
 import { wbReturnsRouter } from './wb-returns.js';
 import { wbAdsRouter, startWbAdsLimitLoop } from './wb-ads.js';
 import { aiAssistantRouter } from './ai-assistant.js';
+import { registerDeveloperGuideRoutes } from './developer-guide.js';
 
 assertRuntimeConfig();
 
@@ -101,6 +102,7 @@ app.post('/api/auth/webauthn/register-verify', requireTrustedOrigin, webauthnReg
 app.post('/api/auth/webauthn/login-options', requireTrustedOrigin, webauthnLoginOptions);
 app.post('/api/auth/webauthn/login-verify', requireTrustedOrigin, webauthnLoginVerify);
 app.use('/api', requireAppSession);
+registerDeveloperGuideRoutes(app, repositoryRoot);
 app.get('/api/auth/webauthn/credentials', requireTrustedOrigin, listWebauthnCredentials);
 app.delete('/api/auth/webauthn/credentials/:id', requireTrustedOrigin, deleteWebauthnCredential);
 

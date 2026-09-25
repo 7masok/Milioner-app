@@ -172,6 +172,10 @@ body:has(#home.active) .fab{bottom:138px;background:#0b9b54}
     <div class="settings-backup-actions"><button class="btn" onclick="backup()">Скачать копию</button><button class="btn" onclick="restore()">Восстановить из файла</button></div>
     <button id="ownerLogoutBtn" class="btn full owner-logout" onclick="ownerLogout()" style="display:none">Выйти из склада</button>
   </div>
+  <div class="settings-block">
+    <div class="settings-block-head"><div><h3>Для разработчиков</h3></div></div>
+    <a id="developerGuideLink" class="btn" href="/developers" target="_blank" rel="noopener">Открыть паспорт сайта ↗</a>
+  </div>
 </section>
 </main>
 <button class="fab" aria-label="Добавить" onclick="openModal('menu')"><span class="fab-plus">+</span></button><nav><button class="active" data-view="home"><span>⌂</span>Главная</button><button data-view="products"><span>▦</span>Товары</button><button data-view="movement"><span>↕</span>Движение</button><button data-view="purchases"><span>□</span>Закупки</button><button data-view="reports"><span>◒</span>Отчёты</button><button data-view="ads"><span>◉</span>Реклама</button><button data-view="settings"><span>⚙</span>Настройки</button><button data-view="finance"><span>₸</span>Финансы</button></nav><div id="modal" class="modal" onclick="if(event.target===this)closeModal()"><div class="sheet" id="sheet"></div></div></div>
