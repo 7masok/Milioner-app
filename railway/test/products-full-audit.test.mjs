@@ -79,8 +79,8 @@ test('Products inventory snapshot is one-pass and drives all stock filters',()=>
 
 test('Products distinguish physical «В продаже» from free-to-sell stock',()=>{
   const render=between('function renderProducts(','function wbRelinkNotice(');
-  assert.match(render,/sale:stats\.physicalMap\.get/);
-  assert.doesNotMatch(render,/sale:stats\.stockMap\.get/);
+  assert.match(render,/productInventoryRow\(stats,p\)/);
+  assert.doesNotMatch(render,/productMatchesStockFilter\(/);
   const metric=between('function productMetricForSort(','function compareProductsForList(');
   assert.match(metric,/if\(sort==='stock'\)return inventory\.physical/);
   const card=html.split('\n').find(row=>row.startsWith('function productCard('))||'';
@@ -88,18 +88,19 @@ test('Products distinguish physical «В продаже» from free-to-sell stoc
   assert.match(card,/Свободно к продаже: \$\{forSale\} шт\./);
 });
 
-test('Products filtering sorting and periods do not rebuild inventory on every tap',()=>{
-  const filter=between('function setProductFilter(','function setProductSort(');
-  const sort=between('function setProductSort(','function setProductPeriod(');
-  const period=between('function setProductPeriod(','function setProductCustomDate(');
-  const arrow=between('function toggleProductSortDirection(','function setProductPage(');
-  for(const source of [filter,sort,period,arrow]){
-    assert.doesNotMatch(source,/invalidateProductRenderStats\(|renderProducts\(true\)/);
-    assert.match(source,/productUiFrame\(/);
-  }
-  assert.match(filter,/renderProducts\(false\)/);
-  assert.match(sort,/renderProducts\(false\)/);
-  assert.match(period,/renderProducts\(false\);ensureProductPeriodStats\(\)/);
+test('Products critical render is search-only after removed controls',()=>{
+  const render=between('function renderProducts(','function wbRelinkNotice(');
+  assert.match(render,/const q=normalizeName\(document\.getElementById\('q'\)\?\.value\|\|''\)/);
+  assert.match(render,/rows\.sort\(\(a,b\)=>String\(a\?\.name\|\|''\)\.localeCompare/);
+  assert.doesNotMatch(render,/currentProductFilter\(/);
+  assert.doesNotMatch(render,/currentProductSort\(/);
+  assert.doesNotMatch(render,/productSortDirection\(/);
+  assert.doesNotMatch(render,/syncProductPickerLabels\(/);
+  assert.doesNotMatch(render,/syncProductPeriodControls\(/);
+  assert.doesNotMatch(render,/updateProductSortDirectionButton\(/);
+  assert.doesNotMatch(render,/productMatchesStockFilter\(/);
+  assert.match(render,/product card render failed/);
+  assert.match(render,/Карточка показана в безопасном режиме/);
 });
 
 test('Products sorting direction changes real comparator output',()=>{
@@ -128,14 +129,14 @@ test('Products sorting direction changes real comparator output',()=>{
   assert.ok(context.compareProductsForList(a,b,'name','desc',stats,periodStats,period,true)>0);
 });
 
-test('Products remain usable while selected-period finance is loading',()=>{
+test('Products remain usable while fixed-period finance is loading',()=>{
   const render=between('function renderProducts(','function wbRelinkNotice(');
   assert.match(render,/currentProductPeriodStats\(period\)\|\|new Map\(\)/);
   assert.match(render,/periodReady=currentProductPeriodStats\(period\) instanceof Map/);
   assert.doesNotMatch(render,/if\(!periodReady\).*return/);
-  assert.match(render,/rows=rows\.filter\(p=>productMatchesStockFilter/);
+  assert.doesNotMatch(render,/productMatchesStockFilter/);
   assert.match(html,/Загружаю продажи и прибыль · /);
-  assert.match(html,/Остатки, поиск и фильтры продолжают работать/);
+  assert.match(html,/Остатки и поиск продолжают работать/);
 });
 
 test('Products first interaction avoids repeated reservation and purchase scans',()=>{
