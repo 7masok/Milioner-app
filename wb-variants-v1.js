@@ -7,6 +7,7 @@ const originalDisplayStock=productDisplayStock;
 const originalAvailableStock=productAvailableStock;
 const originalProductCard=productCard;
 const originalOpenProduct=openProduct;
+const originalBuildProductRenderStats=buildProductRenderStats;
 
 function norm(value){return String(value||'').toLocaleLowerCase('ru-RU').replace(/ё/g,'е').replace(/[^a-zа-я0-9]+/gi,' ').trim().replace(/\s+/g,' ')}
 function isGroup(product){return String(product?.kind||'')==='variant-group'}
@@ -24,24 +25,34 @@ reserved=function(product){return isGroup(product)?children(product.id).reduce((
 productDisplayStock=function(product){return isGroup(product)?groupTotals(product).physical:originalDisplayStock(product)};
 productAvailableStock=function(product){return isGroup(product)?groupTotals(product).available:originalAvailableStock(product)};
 
-productCard=function(product,profit,daily,stock){
-  if(!isGroup(product))return originalProductCard(product,profit,daily,stock);
+productCard=function(...args){
+  const product=args[0];
+  if(!isGroup(product))return originalProductCard(...args);
   const totals=groupTotals(product),mismatch=totals.hasWb&&totals.wb!==totals.physical;
   return `<div class="item variant-group-card" onclick="openProduct('${product.id}')"><div class="row"><div class="variant-group-icon">◫</div><div class="grow"><div class="name">${esc(product.name)}</div><div class="muted">WB1 · ${totals.rows.length} размеров · одна карточка</div><div class="muted" style="color:#16752d">В продаже: ${totals.available} шт.</div>${totals.reserve?`<div class="muted" style="color:#8a5300">Резерв: ${totals.reserve} шт.</div>`:''}${mismatch?`<div class="muted" style="color:#a40000">WB показывает ${totals.wb} шт. · склад ${totals.physical} шт.</div>`:''}</div><div class="right"><b>${totals.available}</b><div class="muted">в продаже</div><span class="badge" style="margin-top:6px">Размеры ›</span></div></div></div>`;
 };
 
-renderProducts=function(){
-  const stats=buildProductRenderStats(),profitStats=stats.profitStats,daily25=stats.daily25,stockMap=stats.stockMap,stockQty=document.getElementById('productStockQty'),reservedQty=document.getElementById('productReservedQty'),inboundQty=document.getElementById('productInboundQty'),atWarehouseQty=document.getElementById('productAtWarehouseQty'),stockCost=document.getElementById('productStockCost'),stockProfit=document.getElementById('productStockProfit');
-  if(stockQty)stockQty.textContent=availableStockTotal().toLocaleString('ru-RU')+' шт.';if(reservedQty)reservedQty.textContent=reservedStockTotal().toLocaleString('ru-RU')+' шт.';if(inboundQty)inboundQty.textContent=purchaseTransitTotalQty().toLocaleString('ru-RU')+' шт.';if(atWarehouseQty)atWarehouseQty.textContent=purchaseAtWarehouseTotalQty().toLocaleString('ru-RU')+' шт.';
-  const warehouseCard=document.getElementById('productAtWarehouseCard'),productFilterEl=document.getElementById('filter');if(warehouseCard)warehouseCard.classList.toggle('active',productFilterEl?.value==='warehouse');if(stockCost)stockCost.textContent=fmt(warehouseInventoryCost());if(stockProfit)stockProfit.textContent=fmt(warehouseProjectedProfit(profitStats));
-  const sortEl=document.getElementById('sort'),sort=normalizeProductSort(state.settings.productSort);if(sortEl&&sortEl.value!==sort)sortEl.value=sort;updateProductSortDirectionButton(sort);
-  const q=(document.getElementById('q')?.value||'').toLowerCase(),f=document.getElementById('filter')?.value||'all';
-  let listRows=(state.products||[]).filter(product=>!product.variantGroupId).filter(product=>{const related=isGroup(product)?children(product.id):[];return [product.name,product.kaspi,product.wb,product.wb2,product.ozon,...related.flatMap(row=>[row.name,row.wb,row.wb2])].join(' ').toLowerCase().includes(q)});
-  const displayStock=product=>isGroup(product)?groupTotals(product).available:(stockMap.get(String(product.id))||0),daily=product=>isGroup(product)?children(product.id).reduce((sum,row)=>sum+(daily25.get(String(row.id))||0),0):(daily25.get(String(product.id))||0);
-  listRows=listRows.filter(product=>{const amount=displayStock(product);return f==='all'||f==='low'&&amount<=product.min&&amount>0||f==='zero'&&amount<=0||f==='warehouse'&&(isGroup(product)?children(product.id).some(row=>purchaseAtWarehouseQty(row.id)>0):purchaseAtWarehouseQty(product.id)>0)||f==='buy'&&(isGroup(product)?children(product.id).some(row=>!!purchaseRecommendation(row)):!!purchaseRecommendation(product))});
-  listRows.sort((left,right)=>{const ls=displayStock(left),rs=displayStock(right),ld=daily(left),rd=daily(right);const comparison=sort==='name'?left.name.localeCompare(right.name):sort==='stock'?ls-rs:sort==='sales'?ld-rd:sort==='profit'?(profitStats.get(String(left.id))?.unitProfit||0)-(profitStats.get(String(right.id))?.unitProfit||0):(ld?ls/ld:Infinity)-(rd?rs/rd:Infinity);return productSortDirection(sort)==='asc'?comparison:-comparison});
-  const list=document.getElementById('productList'),pager=document.getElementById('productPager');if(!list)return;if(!listRows.length){productPage=1;list.innerHTML='<div class="empty">Товаров не найдено</div>';if(pager)pager.innerHTML='';return}
-  const totalPages=Math.max(1,Math.ceil(listRows.length/PRODUCT_PAGE_SIZE));productPage=Math.min(Math.max(1,productPage),totalPages);const pageProducts=listRows.slice((productPage-1)*PRODUCT_PAGE_SIZE,productPage*PRODUCT_PAGE_SIZE);list.innerHTML=pageProducts.map(product=>productCard(product,profitStats.get(String(product.id)),daily(product),displayStock(product))).join('');if(pager)pager.innerHTML=totalPages>1?`<div class="item" style="padding:10px;margin-top:8px"><div class="row" style="justify-content:space-between"><button class="btn" ${productPage<=1?'disabled':''} onclick="setProductPage(${productPage-1})">← Назад</button><div class="muted" style="text-align:center">Страница ${productPage} из ${totalPages}<br>${listRows.length} товаров</div><button class="btn" ${productPage>=totalPages?'disabled':''} onclick="setProductPage(${productPage+1})">Вперёд →</button></div></div>`:'';
+buildProductRenderStats=function(){
+  const stats=originalBuildProductRenderStats();
+  const products=Array.isArray(stats?.products)?stats.products:[];
+  const groups=products.filter(isGroup);
+  const sumMap=(map,rows)=>rows.reduce((sum,row)=>sum+(Number(map?.get(String(row.id)))||0),0);
+  for(const group of groups){
+    const rows=children(group.id),key=String(group.id);
+    if(stats.physicalMap)stats.physicalMap.set(key,sumMap(stats.physicalMap,rows));
+    if(stats.reservedMap)stats.reservedMap.set(key,sumMap(stats.reservedMap,rows));
+    if(stats.stockMap)stats.stockMap.set(key,sumMap(stats.stockMap,rows));
+    if(stats.atWarehouseMap)stats.atWarehouseMap.set(key,sumMap(stats.atWarehouseMap,rows));
+    if(stats.transitMap)stats.transitMap.set(key,sumMap(stats.transitMap,rows));
+    if(stats.fboMap)stats.fboMap.set(key,sumMap(stats.fboMap,rows));
+    if(stats.searchMap){
+      const own=String(stats.searchMap.get(key)||'');
+      const childText=rows.map(row=>String(stats.searchMap.get(String(row.id))||productSearchHaystack(row))).join(' ');
+      stats.searchMap.set(key,(own+' '+childText).trim());
+    }
+  }
+  stats.products=products.filter(product=>product&&!product.variantGroupId);
+  return stats;
 };
 
 openProduct=function(pid,market='',days=30){

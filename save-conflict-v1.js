@@ -113,7 +113,7 @@ pushWarehouseToServer=async function(){
 // Marketplace modules are loaded before owner authentication finishes. Their
 // first protected requests can therefore return 401. Repair only after the
 // authenticated app is ready; do not restart auth and do not observe the DOM.
-let marketplaceUiRepairInstalled=false;
+let marketplaceUiRepairInstalled=false,ozonCompactAuthRefreshStarted=false;
 function ensureOzonReportTab(){
   const tabs=document.getElementById('reportMarketTabs');
   if(!tabs||tabs.querySelector('[data-report-market="Ozon"]'))return;
@@ -145,10 +145,15 @@ async function refreshOzonCompactStatus(){
     dot.className='dot bad';status.textContent='ошибка';
   }
 }
+window.refreshOzonCompactStatus=refreshOzonCompactStatus;
 function repairMarketplaceUi(){
   if(!document.body?.classList.contains('auth-ready'))return false;
   ensureOzonReportTab();
   ensureOzonCompactRow();
+  if(!ozonCompactAuthRefreshStarted){
+    ozonCompactAuthRefreshStarted=true;
+    setTimeout(()=>refreshOzonCompactStatus().catch(error=>console.warn('Ozon status refresh after auth failed',error)),0);
+  }
   if(document.getElementById('reports')?.classList.contains('active')){
     setTimeout(()=>{try{window.renderReports?.()}catch(error){console.warn('Report retry after auth failed',error)}},120);
   }

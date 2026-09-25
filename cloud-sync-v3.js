@@ -48,7 +48,12 @@ applyWarehouseSnapshot=function(remote){
     wbOrderFeed:Array.isArray(state?.wbOrderFeed)?state.wbOrderFeed:[],
     ozonOrderFeed:Array.isArray(state?.ozonOrderFeed)?state.ozonOrderFeed:[]
   };
+  const liveMarketStatus=state?.settings?.serverMarketStatus&&typeof state.settings.serverMarketStatus==='object'?state.settings.serverMarketStatus:null;
+  const liveLastSync=Number(state?.settings?.lastSync||0);
   state=serverSnapshot(remote);
+  state.settings=state.settings&&typeof state.settings==='object'?state.settings:{};
+  if(liveMarketStatus)state.settings.serverMarketStatus=liveMarketStatus;
+  if(liveLastSync>Number(state.settings.lastSync||0))state.settings.lastSync=liveLastSync;
   state.kaspiOrderFeed=orderFeeds.kaspiOrderFeed;
   state.wbOrderFeed=orderFeeds.wbOrderFeed;
   state.ozonOrderFeed=orderFeeds.ozonOrderFeed;
@@ -137,7 +142,7 @@ pushWarehouseToServer=async function(){
     if(response.status===409){
       const remote=await fetchServer(false,3);warehouseRemoteRevision=Number(remote.revision||0);warehouseRemoteUpdatedAt=Number(remote.updatedAt||0);
       warehouseLastCloudSnapshot=serverSnapshot(remote.state);warehouseLastSyncedText=snapshotText(remote.state);applyWarehouseSnapshot(remote.state);
-      clearWarehouseDirty();setReadOnlyCache(false);writeFastCache(remote.state,warehouseRemoteRevision,warehouseRemoteUpdatedAt);render();cloudStatus('обновлено с сервера','ok');return false;
+      clearWarehouseDirty();setReadOnlyCache(false);writeFastCache(remote.state,warehouseRemoteRevision,warehouseRemoteUpdatedAt);cloudStatus('обновлено с сервера','ok');try{render()}catch(error){console.error('warehouse conflict render failed',error)}return false;
     }
     if(!response.ok||data.ok===false)throw new Error(data.error||('HTTP '+response.status));
     warehouseRemoteRevision=Number(data.revision||warehouseRemoteRevision);warehouseRemoteUpdatedAt=Number(data.updatedAt||Date.now());
@@ -155,7 +160,9 @@ pullWarehouseFromServer=async function({force=false}={}){
     if(revision<=warehouseRemoteRevision&&warehouseRemoteReady){setReadOnlyCache(false);cloudStatus('сервер подключён','ok');return true}
     const remote=await fetchServer(false,3);warehouseRemoteRevision=Number(remote.revision||revision);warehouseRemoteUpdatedAt=Number(remote.updatedAt||0);
     warehouseRemoteReady=true;warehouseLastCloudSnapshot=serverSnapshot(remote.state);warehouseLastSyncedText=snapshotText(remote.state);
-    applyWarehouseSnapshot(remote.state);clearWarehouseDirty();setReadOnlyCache(false);writeFastCache(remote.state,warehouseRemoteRevision,warehouseRemoteUpdatedAt);render();cloudStatus('обновлено с сервера','ok');return true;
+    applyWarehouseSnapshot(remote.state);clearWarehouseDirty();setReadOnlyCache(false);writeFastCache(remote.state,warehouseRemoteRevision,warehouseRemoteUpdatedAt);cloudStatus('обновлено с сервера','ok');
+    try{render()}catch(error){console.error('warehouse pull render failed',error)}
+    return true;
   }catch(error){console.warn('server warehouse pull failed',error);cloudStatus(fastCached?.state?'сервер недоступен · показаны последние данные':'сервер временно недоступен','warn');return false}
   finally{warehousePullInFlight=false}
 };
@@ -167,9 +174,10 @@ bootstrapWarehouseFromServer=async function(){
     warehouseLastCloudSnapshot=serverSnapshot(remote.state);warehouseLastSyncedText=snapshotText(remote.state);applyWarehouseSnapshot(remote.state);
     clearWarehouseDirty();warehouseRemoteReady=true;setReadOnlyCache(false);reportPeriodUiPendingServerSave=false;
     writeFastCache(remote.state,warehouseRemoteRevision,warehouseRemoteUpdatedAt);
-    render();cloudStatus('сервер подключён','ok');
-    // The runtime owns the single initial marketplace load. Keeping it here as
-    // well caused a duplicate /api/orders request on every sign-in.
+    cloudStatus('сервер подключён','ok');
+    try{render()}catch(error){console.error('warehouse bootstrap render failed',error)}
+    // Data connectivity is authoritative even if one UI view fails to paint.
+    // Marketplace status/orders must still continue loading after this point.
     return {mode:'server-authoritative',revision:warehouseRemoteRevision};
   }catch(error){warehouseRemoteReady=false;clearWarehouseDirty();setReadOnlyCache(Boolean(fastCached?.state));console.error('server bootstrap failed',error);cloudStatus(fastCached?.state?'сервер недоступен · показаны последние данные':'нет связи с сервером · изменения заблокированы','warn');return {mode:'server-unavailable',error:String(error?.message||error)}}
 };
@@ -352,7 +360,8 @@ function health(name){
 }
 function paint(name,dotId,timeId){const h=health(name),dot=document.getElementById(dotId),time=document.getElementById(timeId);if(dot){dot.className='dot'+(h.cls?' '+h.cls:'');dot.title=(name==='WB'?'WB1':name)+': '+h.label}if(time)time.textContent=fmt(h.last);return h}
 function compactCloudText(){const el=document.getElementById('cloudStatus');if(!el)return;const raw=String(el.textContent||'').trim().toLowerCase();let short='';if(/сохраня|отправля/.test(raw))short='сохранение…';else if(/сохранено|синхронизировано/.test(raw))short='сохранено ✓';else if(/подключ|обновлено|сервер подключён/.test(raw))short='онлайн';else if(/последние данные/.test(raw))short='кэш';else if(/только просмотр/.test(raw))short='только просмотр';else if(/загружа|проверя/.test(raw))short='…';else if(/ошиб|нет связи|недоступ/.test(raw))short='ошибка';if(short&&el.textContent!==short)el.textContent=short}
-function refresh(){if(!buildCompactStatus())return;paint('Kaspi','dotKaspi','lastSync');paint('WB','dotWB1','wb1Sync');paint('WB2','dotWB2','wb2Sync');if(typeof window.ozonFboRefreshStatus!=='function')paint('Ozon','dotOzonTop','ozonTopStatus');compactCloudText()}
+function refresh(){if(!buildCompactStatus())return;paint('Kaspi','dotKaspi','lastSync');paint('WB','dotWB1','wb1Sync');paint('WB2','dotWB2','wb2Sync');if(typeof window.ozonFboPaintStatus==='function')window.ozonFboPaintStatus();else if(typeof window.ozonFboRefreshStatus!=='function')paint('Ozon','dotOzonTop','ozonTopStatus');compactCloudText()}
+window.refreshCompactMarketStatus=refresh;
 async function details(name){
   const label=name==='WB2'?'WB2':'WB1',h=health(name);let extra='';
   try{const r=await fetch(MILLIONER_API+'/api/wb-sync-status',{cache:'no-store',headers:{Accept:'application/json'}}),data=await r.json().catch(()=>({}));if(r.ok&&data?.ok){const latest=(data.latest||[]).find(x=>String(x.market)===name),newest=(data.newestOrders||[]).find(x=>String(x.market)===name);if(latest){extra+=`\nПоследняя попытка: ${Number(latest.ok)===1?'OK':'ОШИБКА'}`;if(latest.error)extra+=`\n${String(latest.error).slice(0,350)}`}if(newest?.newest_order_at)extra+=`\nПоследний заказ: ${fmt(newest.newest_order_at)}`}}catch{extra+='\nДиагностика недоступна'}
