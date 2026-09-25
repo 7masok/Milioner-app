@@ -45,9 +45,9 @@ test('Products search aliases and expose the agreed stock filters',()=>{
 });
 
 test('Products stock filter changes the actual product set, not only the label',()=>{
-  const line=name=>html.split('\n').find(row=>row.startsWith('function '+name+'('));
+  const slice=(name,next)=>html.slice(html.indexOf('function '+name+'('),html.indexOf('\nfunction '+next+'(',html.indexOf('function '+name+'(')));
   const context={PRODUCT_FILTER_VALUES:['all','sale','warehouse','fbo','transit','zero']};
-  vm.runInNewContext(line('normalizeProductFilter')+'\n'+line('productMatchesStockFilter'),context);
+  vm.runInNewContext(slice('normalizeProductFilter','currentProductFilter')+'\n'+slice('productMatchesStockFilter','productMapAdd'),context);
   const rows=[
     {id:'sale',sale:3,warehouse:0,fbo:0,transit:0},
     {id:'warehouse',sale:0,warehouse:4,fbo:0,transit:0},
@@ -62,9 +62,10 @@ test('Products stock filter changes the actual product set, not only the label',
   assert.deepEqual(ids('transit'),['transit']);
   assert.deepEqual(ids('zero'),['zero']);
   assert.deepEqual(ids('all'),rows.map(x=>x.id));
-  assert.match(html,/function currentProductFilter\(\)/);
-  assert.match(html,/function setProductFilter\(value\)\{productFilter=normalizeProductFilter\(value\)/);
-  assert.match(html,/invalidateProductRenderStats\(\);renderProducts\(true\)/);
+  const setter=slice('setProductFilter','setProductSort');
+  assert.match(setter,/productFilter=normalizeProductFilter\(value\)/);
+  assert.match(setter,/productUiFrame\(\(\)=>renderProducts\(false\)\)/);
+  assert.doesNotMatch(setter,/invalidateProductRenderStats|renderProducts\(true\)/);
 });
 
 test('Products protect read-only cached state and live stock deletion',()=>{
@@ -112,9 +113,9 @@ test('Products filter and sort use anchored in-page pickers instead of Android n
 
 
 test('Products paints the tab before heavy statistics and warms cache off the critical path',()=>{
-  assert.match(html,/function scheduleProductRenderWarmup\(delay=250\)/);
-  assert.match(html,/requestIdleCallback\(warm,\{timeout:1800\}\)/);
-  assert.match(html,/function invalidateProductRenderStats\(\)\{productRenderStatsCache=null;scheduleProductRenderWarmup\(\)\}/);
+  assert.match(html,/function scheduleProductRenderWarmup\(delay=350\)/);
+  assert.match(html,/productIdle\(warm,1800\)/);
+  assert.match(html,/function invalidateProductRenderStats\(\)\{productRenderStatsCache=null;clearTimeout\(productHeavyMetricTimer\);scheduleProductRenderWarmup\(\)\}/);
   const start=html.indexOf('function openView(view,remember=true){');
   const end=html.indexOf("document.querySelectorAll('nav button').forEach(b=>b.onclick",start);
   const fn=html.slice(start,end);
@@ -142,7 +143,8 @@ test('Products use the unified period standard instead of a fixed 25-day sales w
 test('Products sorts are explicit and keep a direction per sort',()=>{
   for(const value of ['name','sales','profit','unitProfit','stock','days'])assert.ok(html.includes('data-product-sort="'+value+'"'));
   assert.match(html,/productUi\.sortDirections\?\.\[sort\]/);
-  assert.match(html,/sort==='sales'\?xq-yq/);
-  assert.match(html,/sort==='profit'\?xp-yp/);
-  assert.match(html,/sort==='unitProfit'\?xu-yu/);
+  assert.match(html,/if\(sort==='sales'\)return qty/);
+  assert.match(html,/if\(sort==='profit'\)return periodReady/);
+  assert.match(html,/if\(sort==='unitProfit'\)return periodReady&&qty>0/);
+  assert.match(html,/function compareProductsForList\(/);
 });
