@@ -111,7 +111,9 @@ window.refreshAllMarketUnitProfit=function(){
  allMarketUnitProfitLoading=true;
  allMarketUnitProfitPromise=(async()=>{
   try{
-   const days=30,[kaspiSnapshot,wb1,wb2,ozon]=await Promise.all([loadKaspiOrders(days),loadWbModel('WB',days),loadWbModel('WB2',days),loadOzonSummary(days)]);if(ozon?.missing)throw new Error('Ozon 30-day finance is not ready');totals=new Map((state.products||[]).map(p=>[String(p.id),{qty:0,profit:0,ads:0,sources:{}}])),
+   const days=30,[kaspiSnapshot,wb1,wb2,ozon]=await Promise.all([loadKaspiOrders(days),loadWbModel('WB',days),loadWbModel('WB2',days),loadOzonSummary(days)]);
+   if(ozon?.missing)throw new Error('Ozon 30-day finance is not ready');
+   const totals=new Map((state.products||[]).map(p=>[String(p.id),{qty:0,profit:0,ads:0,sources:{}}])),
      add=(pid,qty,profit,source,ads=0)=>{pid=String(pid||'');qty=Math.max(0,Number(qty)||0);if(!pid)return;const row=totals.get(pid)||{qty:0,profit:0,ads:0,sources:{}};const profitValue=Number(profit)||0,adValue=Math.max(0,Number(ads)||0);row.qty+=qty;row.profit+=profitValue;row.ads+=adValue;if(source){const part=row.sources[source]||{qty:0,profit:0,ads:0};part.qty+=qty;part.profit+=profitValue;part.ads+=adValue;row.sources[source]=part}totals.set(pid,row)},
      kaspi=buildModel(kaspiSnapshot,days);
    const kaspiKnown=kaspi.rows.filter(x=>x.productId),kaspiRevenue=kaspiKnown.reduce((s,x)=>s+Math.max(0,Number(x.revenue)||0),0),kaspiLooseAds=kaspi.rows.filter(x=>!x.productId&&Number(x.revenue)===0).reduce((s,x)=>s+Math.max(0,Number(x.ads)||0),0);
