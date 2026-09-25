@@ -89,10 +89,12 @@ test('Products distinguish physical «В продаже» from free-to-sell stoc
   assert.match(card,/Свободно: \$\{forSale\} шт\./);
 });
 
-test('Products critical render is search-only after removed controls',()=>{
+test('Products critical render stays lightweight with search and direct FBO snapshot filter',()=>{
   const render=between('function renderProducts(','function wbRelinkNotice(');
   assert.match(render,/const q=normalizeName\(document\.getElementById\('q'\)\?\.value\|\|''\)/);
   assert.match(render,/rows\.sort\(\(a,b\)=>String\(a\?\.name\|\|''\)\.localeCompare/);
+  assert.match(render,/stats\.fboMap\?\.get\(String\(p\.id\)\)/);
+  assert.doesNotMatch(render,/ozonFboQtyForProduct\(/);
   assert.doesNotMatch(render,/currentProductFilter\(/);
   assert.doesNotMatch(render,/currentProductSort\(/);
   assert.doesNotMatch(render,/productSortDirection\(/);
@@ -220,4 +222,5 @@ test('Products audit contract is recorded for future AI changes',()=>{
   assert.match(passport,/PRODUCT-22/);
   assert.match(passport,/PRODUCT-23/);
   assert.match(passport,/PRODUCT-24/);
+  assert.match(passport,/PRODUCT-25/);
 });
