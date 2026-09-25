@@ -38,11 +38,12 @@ test('browser refresh has no startup modal cards and validates an existing sessi
   const init = html.slice(start, end);
   assert.ok(init.indexOf("if(ownerSessionToken){const check=await nativeFetch(MILLIONER_API+'/api/auth/session'") >= 0);
   assert.ok(init.indexOf("/api/auth/session") < init.indexOf("/api/auth/config"));
-  assert.ok(init.indexOf("startAppRuntime();setOwnerAuthMode('ready')") >= 0);
+  assert.match(html,/function startOwnerRuntimeAfterAuth\(\)\{ownerAuthEnabled=true;cloudStatus\('онлайн','ok'\);setOwnerAuthMode\('ready'\);try\{startAppRuntime\(\)\}catch/);
+  assert.ok(init.indexOf("if(check.ok){startOwnerRuntimeAfterAuth();return}") >= 0);
   const rememberStart=html.indexOf('function rememberOwnerSession');
   const rememberEnd=html.indexOf('async function ownerAuthSubmit',rememberStart);
   const remember=html.slice(rememberStart,rememberEnd);
-  assert.ok(remember.indexOf("startAppRuntime();setOwnerAuthMode('ready')") >= 0);
+  assert.match(remember,/startOwnerRuntimeAfterAuth\(\)/);
 });
 
 test('owner session survives mobile/browser reload but still expires server-side', () => {
@@ -88,4 +89,18 @@ test('relying party follows the request origin', () => {
   assert.equal(rp.rpID, 'milioner-app-staging.up.railway.app');
   assert.equal(rp.origin, 'https://milioner-app-staging.up.railway.app');
   assert.equal(rp.rpName, 'Склад');
+});
+
+
+test('valid session cannot fall back to login because a saved view render throws', () => {
+  const start = html.indexOf('function startOwnerRuntimeAfterAuth(){');
+  const end = html.indexOf('async function initOwnerAuth(){', start);
+  const helper = html.slice(start, end);
+  assert.ok(helper.indexOf("setOwnerAuthMode('ready')") < helper.indexOf('startAppRuntime()'));
+  assert.doesNotMatch(helper,/setOwnerAuthMode\('locked'/);
+  const runtimeStart=html.indexOf('function startAppRuntime(){');
+  const runtimeEnd=html.indexOf('// Wait for the server-sync module',runtimeStart);
+  const runtime=html.slice(runtimeStart,runtimeEnd);
+  assert.match(runtime,/try\{openView\(startupView,false\);startupViewRendered=true\}catch/);
+  assert.match(runtime,/startup view retry failed/);
 });
