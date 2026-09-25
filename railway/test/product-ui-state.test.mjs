@@ -129,7 +129,10 @@ test('Products expose no time filters and use one fixed 30-day internal window',
 test('Products use deterministic alphabetical order after removing sort controls',()=>{
   assert.match(html,/let productSort='name';/);
   assert.match(html,/sortDirections:\{name:'asc'\}/);
-  assert.match(html,/function compareProductsForList\(/);
-  assert.doesNotMatch(html,/data-product-sort=/);
+  const start=html.indexOf('function renderProducts(rebuildStats=false){');
+  const end=html.indexOf('\nfunction wbRelinkNotice(',start);
+  const render=html.slice(start,end);
+  assert.match(render,/rows\.sort\(\(a,b\)=>String\(a\?\.name\|\|''\)\.localeCompare\(String\(b\?\.name\|\|''\),'ru'\)\)/);
+  assert.doesNotMatch(render,/currentProductSort\(|productSortDirection\(|data-product-sort/);
   assert.doesNotMatch(html,/productSortDirection" type="button"/);
 });
