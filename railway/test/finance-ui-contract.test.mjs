@@ -90,6 +90,23 @@ test('finance background watcher only drains the outbox',()=>{
   assert.equal(html.includes("setInterval(()=>pullFinanceFromServer(),30000)"),false);
 });
 
+test('warehouse cloud refresh cannot erase local finance accounts categories or transactions',()=>{
+  const snapStart=cloudSync.indexOf('function serverSnapshot(source){');
+  const snapEnd=cloudSync.indexOf('\nfunction snapshotText',snapStart);
+  const snap=cloudSync.slice(snapStart,snapEnd);
+  assert.match(snap,/FINANCE_STORAGE_KEYS/);
+  assert.match(snap,/delete snapshot\.settings\[key\]/);
+
+  const applyStart=cloudSync.indexOf('applyWarehouseSnapshot=function(remote){');
+  const applyEnd=cloudSync.indexOf('\n\/\/ Safe instant start',applyStart);
+  const apply=cloudSync.slice(applyStart,applyEnd);
+  assert.match(apply,/const previousSettings=state\?\.settings/);
+  assert.match(apply,/for\(const key of FINANCE_STORAGE_KEYS\)if\(previousSettings\[key\]!==undefined\)localOnlySettings\[key\]=previousSettings\[key\]/);
+  assert.match(apply,/state\.settings=\{\.\.\.\(state\.settings&&typeof state\.settings==='object'\?state\.settings:\{\}\),\.\.\.localOnlySettings\}/);
+  assert.ok(apply.indexOf('localOnlySettings')<apply.indexOf('state=serverSnapshot(remote)'));
+});
+
+
 function extractFunction(name){
   const markers=[`function ${name}(`,`async function ${name}(`];
   let start=-1;
