@@ -134,9 +134,10 @@ test('Products first interaction avoids repeated reservation and purchase scans'
   assert.match(card,/inventory\?\.reserved/);
   assert.match(card,/inventory\?\.transit/);
   assert.match(card,/inventory\?\.warehouse/);
-  const heavy=between('function scheduleProductHeavyMetrics(','function renderProducts(');
+  const heavy=between('function productStockCostFromSnapshot(','function renderProducts(');
   assert.match(heavy,/productIdle\(run,1800\)/);
-  assert.match(heavy,/warehouseInventoryCost\(\)/);
+  assert.match(heavy,/productStockCostFromSnapshot\(stats\)/);
+  assert.doesNotMatch(heavy,/warehouseInventoryCost\(\)/);
 });
 
 test('Products rebuild stale cache even when wrapper calls renderProducts(false)',()=>{
@@ -159,6 +160,35 @@ test('Product opened from Products inherits the selected Product period',()=>{
   assert.match(detail,/currentProductPeriodStats\(selectedSpec\)/);
   assert.match(detail,/await ensureProductPeriodStats\(\)/);
   assert.match(detail,/Продано · \$\{esc\(selectedSpec\.label\)\}/);
+});
+
+
+
+test('Products period cache stays instant but refreshes stale finance in background',()=>{
+  const current=between('function currentProductPeriodStats(','function syncProductPeriodControls(');
+  const ensure=between('function ensureProductPeriodStats(','function productMatchesStockFilter(');
+  assert.match(current,/cached\?\.data instanceof Map/);
+  assert.match(current,/Date\.now\(\)-Number\(cached\.at\|\|0\)<60000/);
+  assert.match(ensure,/ready instanceof Map&&productPeriodStatsFresh\(spec\)/);
+  assert.match(ensure,/productPeriodRequests\.has\(spec\.key\)/);
+  assert.match(ensure,/productPeriodUiCache\.set\(spec\.key,\{at:Date\.now\(\),data:map\}\)/);
+});
+
+test('Products CRUD and stock actions keep write guards and ledger-safe entry points',()=>{
+  for(const name of ['saveProductEdit','createProduct','releaseProductWarehouseQty','delistProductQty','deleteProduct','createWriteoff','doInventory']){
+    const marker='function '+name+'(';
+    const start=html.indexOf(marker);
+    assert.ok(start>=0,'missing '+name);
+    const end=html.indexOf('\nfunction ',start+marker.length);
+    const source=html.slice(start,end>start?end:start+10000);
+    assert.match(source,/requireWarehouseEditReady\(\)/,name+' must keep the authoritative write guard');
+  }
+  assert.match(html,/function createProduct\(\)[\s\S]*log\('инвентаризация'/);
+  assert.match(html,/function releaseProductWarehouseQty\(pid\)[\s\S]*log\('приход'/);
+  assert.match(html,/function delistProductQty\(pid\)[\s\S]*log\('снятие с продажи'/);
+  assert.match(html,/function createWriteoff\(\)[\s\S]*log\('списание'/);
+  assert.match(html,/function doInventory\(\)[\s\S]*log\('инвентаризация'/);
+  assert.match(html,/Нельзя удалить товар с остатком/);
 });
 
 test('Products audit contract is recorded for future AI changes',()=>{
