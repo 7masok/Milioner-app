@@ -24,6 +24,8 @@ function rebuildFboMap(){
 }
 function productOzonKeys(p){return [...new Set([p?.ozon,...(Array.isArray(p?.ozonAliases)?p.ozonAliases:[])].map(x=>String(x||'').trim()).filter(Boolean))];};
 function ozonFboQtyForProduct(p){return productOzonKeys(p).reduce((n,key)=>n+(fboByKey.get(key)||0),0);}
+window.ozonFboQtyForProduct=ozonFboQtyForProduct;
+window.ozonFboDataReady=()=>Boolean(data);
 function updateFboMetric(){const el=document.getElementById('productFboQty');if(el)el.textContent=data?fboTotal.toLocaleString('ru-RU')+' шт.':'—';}
 function populateOzonOrderFeed(){
  if(!data?.accounts)return;
@@ -201,14 +203,14 @@ renderMarketplaceOrders=function(){
  });
 };
 applyMarketplaceTransitions=function(market,feed){if(String(market).startsWith('Ozon'))return {reservedCount:0,soldCount:0,cancelledCount:0};return baseTransition(market,feed);};
-productCard=function(p,profit,d,stock){
- let html=baseProductCard(p,profit,d,stock),keys=productOzonKeys(p);if(!keys.length)return html;
+productCard=function(...args){
+ const p=args[0];let html=baseProductCard(...args),keys=productOzonKeys(p);if(!keys.length)return html;
  const qty=data?ozonFboQtyForProduct(p):null,line='<div class="muted" style="color:#1c62bb;font-weight:700">FBO Ozon: '+(qty===null?'—':qty+' шт.')+'</div>';
  return html.replace('</div><div class="right" style="min-width:112px">',line+'</div><div class="right" style="min-width:112px">');
 };
 renderProducts=function(rebuildStats=false){
  baseRenderProducts(rebuildStats);updateFboMetric();
- if(!data||Date.now()-loadedAt>=60000)load().then(()=>{updateFboMetric();if(document.getElementById('products')?.classList.contains('active'))baseRenderProducts(false);});
+ if(!data||Date.now()-loadedAt>=60000)load().then(()=>{updateFboMetric();if(typeof invalidateProductRenderStats==='function')invalidateProductRenderStats();if(document.getElementById('products')?.classList.contains('active'))baseRenderProducts(false);});
 };
 function reportBounds(days){const raw=Number(days);if(raw===0)return reportCustomBounds();const d=new Date();d.setHours(0,0,0,0);const today=d.getTime();if(raw===-1)return{start:today-86400000,end:today};const n=Math.max(1,raw||1);return{start:today-(n-1)*86400000,end:today+86400000};}
 function financeModel(days){
