@@ -86,7 +86,7 @@ test('Products distinguish physical «В продаже» from free-to-sell stoc
   assert.match(metric,/if\(sort==='stock'\)return inventory\.physical/);
   const card=html.split('\n').find(row=>row.startsWith('function productCard('))||'';
   assert.match(card,/В продаже: \$\{physical\} шт\./);
-  assert.match(card,/Свободно к продаже: \$\{forSale\} шт\./);
+  assert.match(card,/Свободно: \$\{forSale\} шт\./);
 });
 
 test('Products critical render is search-only after removed controls',()=>{
