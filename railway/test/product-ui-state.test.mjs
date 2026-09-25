@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
+import vm from 'node:vm';
 
 const html=readFileSync(new URL('../../index.html',import.meta.url),'utf8');
 const cloud=readFileSync(new URL('../../cloud-sync-v3.js',import.meta.url),'utf8');
@@ -40,7 +41,30 @@ test('Products search aliases and expose the agreed stock filters',()=>{
   assert.doesNotMatch(html,/data-product-filter="low"/);
   assert.doesNotMatch(html,/data-product-filter="buy"/);
   const render=html.slice(html.indexOf('function renderProducts('),html.indexOf('\nfunction wbRelinkNotice',html.indexOf('function renderProducts(')));
-  assert.match(render,/f==='zero'&&sale<=0&&warehouse<=0&&transit<=0&&fbo<=0/);
+  assert.match(render,/productMatchesStockFilter\(f,/);
+});
+
+test('Products stock filter changes the actual product set, not only the label',()=>{
+  const line=name=>html.split('\n').find(row=>row.startsWith('function '+name+'('));
+  const context={PRODUCT_FILTER_VALUES:['all','sale','warehouse','fbo','transit','zero']};
+  vm.runInNewContext(line('normalizeProductFilter')+'\n'+line('productMatchesStockFilter'),context);
+  const rows=[
+    {id:'sale',sale:3,warehouse:0,fbo:0,transit:0},
+    {id:'warehouse',sale:0,warehouse:4,fbo:0,transit:0},
+    {id:'fbo',sale:0,warehouse:0,fbo:5,transit:0},
+    {id:'transit',sale:0,warehouse:0,fbo:0,transit:2},
+    {id:'zero',sale:0,warehouse:0,fbo:0,transit:0}
+  ];
+  const ids=filter=>rows.filter(row=>context.productMatchesStockFilter(filter,row)).map(row=>row.id);
+  assert.deepEqual(ids('sale'),['sale']);
+  assert.deepEqual(ids('warehouse'),['warehouse']);
+  assert.deepEqual(ids('fbo'),['fbo']);
+  assert.deepEqual(ids('transit'),['transit']);
+  assert.deepEqual(ids('zero'),['zero']);
+  assert.deepEqual(ids('all'),rows.map(x=>x.id));
+  assert.match(html,/function currentProductFilter\(\)/);
+  assert.match(html,/function setProductFilter\(value\)\{productFilter=normalizeProductFilter\(value\)/);
+  assert.match(html,/invalidateProductRenderStats\(\);renderProducts\(true\)/);
 });
 
 test('Products protect read-only cached state and live stock deletion',()=>{
