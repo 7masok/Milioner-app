@@ -66,6 +66,40 @@ test('Home UI preferences are resolved before auth can reveal the app',()=>{
   assert.doesNotMatch(cloud,/render\(\);setTimeout\(restoreOrderMarketUi,0\)/);
 });
 
+test('runtime compatibility scripts finish before owner runtime starts',()=>{
+  const ordered=[
+    './cloud-sync-v3.js',
+    './save-conflict-v1.js',
+    './purchase-delete-v1.js',
+    './purchase-plan-ignore-v1.js',
+    './kaspi-status-compat-v1.js',
+    './kaspi-ads-v2-original.js',
+    './reservation-compat-v1.js',
+    './kaspi-ads-v2.js',
+    './ozon-fbo-v1.js',
+    './business-dashboard-v1.js'
+  ];
+  let previous=-1;
+  for(const src of ordered){const at=html.indexOf(src);assert.ok(at>previous,src+' must load in deterministic order');previous=at}
+  const authAt=html.lastIndexOf('<script>initOwnerAuth();</script>');
+  assert.ok(authAt>previous);
+  assert.equal(html.split('<script>initOwnerAuth();</script>').length-1,1);
+  assert.doesNotMatch(ads,/createElement\(['\"]script['\"]\)/);
+});
+
+test('Products first paint retries instead of leaving the static loading shell forever',()=>{
+  const start=html.indexOf('function openView(view,remember=true)');
+  const end=html.indexOf('document.querySelectorAll(\'nav button\')',start);
+  const openView=html.slice(start,end);
+  assert.match(openView,/products first paint failed/);
+  assert.match(openView,/invalidateProductRenderStats\(\);renderProducts\(true\)/);
+  assert.match(openView,/Повторно подготавливаю товары/);
+});
+
+test('Ozon FBO module owns the compact Ozon header after it is available',()=>{
+  assert.match(cloud,/typeof window\.ozonFboRefreshStatus!==['\"]function['\"]\)paint\(['\"]Ozon['\"]/);
+});
+
 test('Home startup does not run report, Ozon or compatibility fetches',()=>{
   assert.doesNotMatch(compat,/loadSharedOrderCache/);
   assert.doesNotMatch(ads,/stock-alerts-rescue-v1\.js/);
