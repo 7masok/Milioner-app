@@ -22,3 +22,15 @@ test('manual WB linking creates a separate warehouse child for a size', async ()
   assert.match(source, /choosePendingWbVariant/);
   assert.match(source, /attachMarketplaceSku\(product,market,link\.sku\|\|size\.barcode/);
 });
+
+
+test('WB variants extend the modern Products renderer instead of replacing it', async () => {
+  const source = await import('node:fs').then(fs => fs.readFileSync(new URL('../../wb-variants-v1.js', import.meta.url), 'utf8'));
+  assert.doesNotMatch(source, /renderProducts=function/);
+  assert.match(source, /const originalBuildProductRenderStats=buildProductRenderStats/);
+  assert.match(source, /buildProductRenderStats=function\(\)/);
+  assert.match(source, /stats\.products=products\.filter\(product=>product&&!product\.variantGroupId\)/);
+  assert.match(source, /productCard=function\(\.\.\.args\)/);
+  assert.match(source, /originalProductCard\(\.\.\.args\)/);
+  assert.doesNotMatch(source, /stats\.profitStats|stats\.daily25/);
+});
