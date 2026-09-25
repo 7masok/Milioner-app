@@ -133,7 +133,7 @@ function updateOzonHeaderIndicator(){
 function ensureOzonHeaderIndicator(){
  const syncEl=document.querySelector('.sync');
  if(!syncEl)return;
- if(document.getElementById('dotOzonTop'))return;
+ if(document.getElementById('dotOzonTop')){updateOzonHeaderIndicator();return;}
  syncEl.insertAdjacentHTML('beforeend',' · <span id="dotOzonTop" class="dot warn"></span>Ozon: <span id="ozonTopStatus">подключение...</span>');
  updateOzonHeaderIndicator();
 }
@@ -164,6 +164,7 @@ async function load(force=false){
  }
  return data;
 }
+window.ozonFboPaintStatus=updateOzonHeaderIndicator;
 window.ozonFboRefreshStatus=async()=>{await load();updateOzonHeaderIndicator();return data;};
 window.ozonFboSync=async()=>{
  try{
