@@ -41,15 +41,15 @@ function allowed(value) {
   return /^WB(?:[2-9]\d*|1\d+)?$/.test(value);
 }
 
-function localDate(value = Date.now()) {
+function localDate(timestamp = Date.now()) {
   const parts = new Intl.DateTimeFormat('en-CA', {
     timeZone: 'Asia/Qyzylorda',
     year: 'numeric',
     month: '2-digit',
     day: '2-digit',
-  }).formatToParts(new Date(Number(value) || Date.now()));
-  const value = type => parts.find(part => part.type === type)?.value || '';
-  return value('year') + '-' + value('month') + '-' + value('day');
+  }).formatToParts(new Date(Number(timestamp) || Date.now()));
+  const part = type => parts.find(item => item.type === type)?.value || '';
+  return part('year') + '-' + part('month') + '-' + part('day');
 }
 
 async function tokenFor(marketName) {
