@@ -76,10 +76,13 @@
 - **PRODUCT-12.** Фильтр наличия: «Все», «В продаже», «На складе», «FBO Ozon», «В пути», «Нет в наличии». «Нет в наличии» означает отсутствие положительного остатка во всех четырёх текущих местах/состояниях: в продаже, на складе, FBO и в пути. Старые пункты «Заканчиваются» и «На закупку» не относятся к этому фильтру наличия.
 - **PRODUCT-13.** «Свой период» Товаров ограничен последними 30 днями, потому что единый расчёт включает Ozon и другие источники с ограниченной доступной историей. Даты включаются с обеих сторон. Период, диапазон, поиск, фильтр, сортировка, направления сортировок и страница сохраняются локально при перезагрузке.
 - **PRODUCT-14.** Пока единая статистика выбранного периода не подтверждена, продажи и прибыль показываются как «—»/состояние загрузки, а не как подтверждённые нули. Выбор периода может запускать фоновое получение расчёта, но не должен блокировать первый кадр вкладки «Товары».
+- **PRODUCT-15.** Фильтр, сортировка, стрелка направления и переключатель периода должны реагировать сразу. Изменение только UI-состояния не является причиной заново пересчитывать текущие остатки, резервы и поставки. Инвентарный снимок пересобирается только при изменении складских/FBO-данных; выбранный фильтр и сортировка применяются к уже готовому снимку.
+- **PRODUCT-16.** Список Товаров строится из одного предрассчитанного снимка текущего состояния: «В продаже», резерв, «На складе», FBO и «В пути». Не возвращать вычисление, где для каждой карточки заново сканируются все резервы, закупки или наборы. Тяжёлую себестоимость общего остатка считать вне критического первого кадра. Загрузка продаж/прибыли не должна скрывать товары и не должна блокировать поиск или фильтры.
+- **PRODUCT-17.** Карточка товара, открытая из списка «Товары», наследует выбранный там период, включая «Свой период». Карточка, открытая из отчёта, сохраняет период/магазин отчёта. Не подменять период списка фиксированными 30 днями.
 
-Точки: `readProductUi`, `rememberProductUi`, `productPeriodSpec`, `ensureProductPeriodStats`, `renderProducts`, `refreshProductPeriodStats`, `openProduct`, `requireWarehouseEditReady`, `validateProductMarketplaceSkus`, `productAvailableStock`, `reserved`.
+Точки: `readProductUi`, `rememberProductUi`, `productPeriodSpec`, `ensureProductPeriodStats`, `buildProductRenderStats`, `productMatchesStockFilter`, `compareProductsForList`, `renderProducts`, `refreshProductPeriodStats`, `openProduct`, `requireWarehouseEditReady`, `validateProductMarketplaceSkus`, `productAvailableStock`, `reserved`.
 
-Тесты: `product-ui-state.test.mjs`, `product-article-relink.test.mjs`, `product-card-finance.test.mjs`, `wb-link-validation.test.mjs`, `wb-stock-aliases.test.mjs`.
+Тесты: `product-ui-state.test.mjs`, `products-full-audit.test.mjs`, `product-article-relink.test.mjs`, `product-card-finance.test.mjs`, `wb-link-validation.test.mjs`, `wb-stock-aliases.test.mjs`.
 
 ## 6. Движение и закупки
 
