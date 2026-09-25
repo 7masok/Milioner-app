@@ -22,13 +22,23 @@ test('projected stock profit follows the selected Product period transparently',
   assert.match(html,/Ожидаемая прибыль с остатка/);
   assert.match(html,/onclick="openStockProfitBreakdown\(\)"/);
   assert.match(html,/function warehouseProjectedProfitRows\(profitStats,stockMap=null\)/);
-  assert.match(html,/свободный остаток × чистая прибыль на 1 проданную штуку за выбранный период/);
+  assert.match(html,/\(доступно к продаже \+ резерв \+ «На складе»\) × чистая прибыль на 1 проданную штуку за выбранный период/);
   assert.match(html,/продано · '\+esc\(label\)/);
-  assert.match(html,/periodReady\?fmt\(warehouseProjectedProfit\(periodStats,stats\.stockMap\)\):'—'/);
-  assert.match(html,/rows=warehouseProjectedProfitRows\(periodStats,inventory\.stockMap\)/);
+  assert.match(html,/periodReady\?fmt\(warehouseProjectedProfit\(periodStats,productValuationStockMap\(stats\)\)\):'—'/);
+  assert.match(html,/rows=warehouseProjectedProfitRows\(periodStats,productValuationStockMap\(inventory\)\)/);
   assert.match(html,/выбранному периоду: Kaspi \+ WB1 \+ WB2 \+ Ozon/);
 });
 
+
+
+test('stock valuation uses sale plus covered reserve plus warehouse stock',()=>{
+  assert.match(html,/function productValuationStockMap\(stats\)/);
+  assert.match(html,/available\+coveredReserve\+warehouse/);
+  assert.match(html,/atWarehouseCostMap=new Map\(\)/);
+  assert.match(html,/productMapAdd\(atWarehouseCostMap,key,qty\*Math\.max\(0,Number\(row\.landedUnitCost\)\|\|Number\(row\.unitCost\)\|\|0\)\)/);
+  assert.match(html,/total\+=value\+Math\.max\(0,Number\(stats\?\.atWarehouseCostMap\?\.get\(key\)\)\|\|0\)/);
+  assert.match(html,/Для расчёта: '\+Math\.round\(x\.stock\).*доступно \+ резерв \+ на складе/);
+});
 
 
 test('product details use combined 30-day net profit including Kaspi and WB advertising',()=>{
