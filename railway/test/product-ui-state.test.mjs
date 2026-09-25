@@ -14,7 +14,7 @@ test('Products reload preserves tab search and page while removed controls stay 
   assert.match(html,/rememberProductUi\(\{q:/);
   assert.match(html,/rememberProductUi\(\{page:productPage\}/);
   assert.match(html,/let productUi=\{\.\.\.readProductUi\(\),filter:'all',sort:'name',sortDirections:\{name:'asc'\},period:'30',customFrom:'',customTo:''\}/);
-  assert.match(html,/let productFilter='all';\nlet productSort='name';/);
+  assert.match(html,/let productFilter='all';\nlet productFboOnly=false;\nlet productSort='name';/);
 });
 
 test('bottom nav allocates one column per eight visible tabs',()=>{
@@ -44,7 +44,7 @@ test('Products keep alias search but expose no filter or sort controls',()=>{
 
 test('Products ignore legacy saved filter sort and direction state',()=>{
   assert.match(html,/let productUi=\{\.\.\.readProductUi\(\),filter:'all',sort:'name',sortDirections:\{name:'asc'\},period:'30',customFrom:'',customTo:''\}/);
-  assert.match(html,/let productFilter='all';\nlet productSort='name';/);
+  assert.match(html,/let productFilter='all';\nlet productFboOnly=false;\nlet productSort='name';/);
   assert.doesNotMatch(html,/id="productAtWarehouseCard"/);
   assert.doesNotMatch(html,/id="productAtWarehouseQty"/);
 });
@@ -85,7 +85,7 @@ test('Product details show progress before waiting on combined finance',()=>{
 });
 
 
-test('Products visible controls are reduced to search only',()=>{
+test('Products keep search plus the direct FBO metric filter without old dropdown controls',()=>{
   assert.doesNotMatch(html,/<select id="filter"/);
   assert.doesNotMatch(html,/<select id="sort"/);
   assert.doesNotMatch(html,/<input id="filter"/);
@@ -94,6 +94,21 @@ test('Products visible controls are reduced to search only',()=>{
   assert.doesNotMatch(html,/class="product-sort-direction"/);
   assert.doesNotMatch(html,/data-product-period=/);
   assert.match(html,/id="q" class="search" placeholder="Поиск по названию или артикулам"/);
+  assert.match(html,/id="productFboCard" type="button" class="card purchase-filter-card" onclick="toggleProductFboFilter\(\)"/);
+  assert.match(html,/aria-pressed="false"/);
+});
+
+test('FBO Ozon metric toggles a positive-FBO product filter and keeps search combined',()=>{
+  assert.match(html,/function syncProductFboFilterCard\(\)/);
+  assert.match(html,/button\.classList\.toggle\('active',productFboOnly\)/);
+  assert.match(html,/button\.setAttribute\('aria-pressed',productFboOnly\?'true':'false'\)/);
+  assert.match(html,/function toggleProductFboFilter\(\)\{productFboOnly=!productFboOnly;productPage=1;/);
+  const start=html.indexOf('function renderProducts(rebuildStats=false){');
+  const end=html.indexOf('\nfunction wbRelinkNotice(',start);
+  const render=html.slice(start,end);
+  assert.match(render,/!productFboOnly\|\|\(Number\(stats\.fboMap\?\.get\(String\(p\.id\)\)\)\|\|0\)>0/);
+  assert.match(render,/&&\(!q\|\|String\(stats\.searchMap\.get\(String\(p\.id\)\)\|\|''\)\.includes\(q\)\)/);
+  assert.match(render,/На FBO Ozon по этому запросу товаров нет\./);
 });
 
 
