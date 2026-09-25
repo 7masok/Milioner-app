@@ -45,7 +45,8 @@ test('Products keep alias search but expose no filter or sort controls',()=>{
 test('Products ignore legacy saved filter sort and direction state',()=>{
   assert.match(html,/let productUi=\{\.\.\.readProductUi\(\),filter:'all',sort:'name',sortDirections:\{name:'asc'\},period:'30',customFrom:'',customTo:''\}/);
   assert.match(html,/let productFilter='all';\nlet productSort='name';/);
-  assert.doesNotMatch(html,/id="productAtWarehouseCard"[^>]*onclick=/);
+  assert.doesNotMatch(html,/id="productAtWarehouseCard"/);
+  assert.doesNotMatch(html,/id="productAtWarehouseQty"/);
 });
 
 test('Products protect read-only cached state and live stock deletion',()=>{
@@ -106,11 +107,17 @@ test('Products paints the tab before heavy statistics and warms cache off the cr
   assert.ok(fn.indexOf('requestAnimationFrame(')<fn.indexOf('try{render()}'));
 });
 
-test('Products replace received-30 metric with current buyer-delivery stock',()=>{
+test('Products show current buyer-delivery stock and projected profit',()=>{
   assert.doesNotMatch(html,/Введено в продажу за 30 дней|productReceived30/);
   assert.match(html,/В пути до покупателя/);
   assert.match(html,/id="productToBuyerQty">—</);
+  assert.match(html,/Прибыль в пути до покупателя/);
+  assert.match(html,/id="productToBuyerProfit">—</);
   assert.match(html,/function marketplaceOrderInTransitToBuyer\(/);
+  assert.match(html,/function marketplaceToBuyerSnapshot\(/);
+  assert.match(html,/function marketplaceToBuyerProfit\(periodStats,snapshot=marketplaceToBuyerSnapshot\(\)\)/);
+  assert.match(html,/total\+=Math\.max\(0,Number\(qty\)\|\|0\)\*unitProfit/);
+  assert.match(html,/buyer&&periodReady\?fmt\(marketplaceToBuyerProfit\(periodStats,buyer\)\):'—'/);
   assert.match(html,/SORTED','ACCEPTED_BY_CARRIER','SENT_TO_CARRIER','READY_FOR_PICKUP/);
   assert.match(html,/KASPI_DELIVERY_TRANSIT/);
   assert.match(html,/DELIVERING/);
@@ -118,8 +125,15 @@ test('Products replace received-30 metric with current buyer-delivery stock',()=
   assert.match(html,/COMPLETED'\]\.includes\(u\)\|\|st==='ARCHIVE'/);
 });
 
+test('Products combine free sale and warehouse stock in one top metric',()=>{
+  const section=html.slice(html.indexOf('<section id="products"'),html.indexOf('<section id="movement"'));
+  assert.match(section,/<div class="label">Доступно<\/div><div class="num" id="productStockQty">—<\/div>/);
+  assert.doesNotMatch(section,/productAtWarehouseQty|productAtWarehouseCard/);
+  assert.match(html,/set\('productStockQty',Math\.round\(stats\.availableTotal\+stats\.warehouseTotal\)/);
+});
+
 test('Products static shell never shows unconfirmed zero totals',()=>{
-  for(const id of ['productStockQty','productReservedQty','productInboundQty','productAtWarehouseQty','productFboQty','productStockCost','productStockProfit','productToBuyerQty']){
+  for(const id of ['productStockQty','productReservedQty','productInboundQty','productFboQty','productStockCost','productStockProfit','productToBuyerQty','productToBuyerProfit']){
     assert.match(html,new RegExp('id="'+id+'">—<'));
   }
   assert.match(html,/id="productList" class="list"><div class="empty">Подготавливаю товары…<\/div>/);
