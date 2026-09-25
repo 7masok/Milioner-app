@@ -73,7 +73,7 @@ test('saved-session startup waits for runtime override scripts',()=>{
   assert.ok(cloudScript>0);
   assert.ok(lastRuntimeScript>cloudScript);
   assert.ok(authKickoff>lastRuntimeScript);
-  assert.equal((html.match(/<script>initOwnerAuth\\(\\);<\\/script>/g)||[]).length,1);
+  assert.equal(html.split('<script>initOwnerAuth();</script>').length-1,1);
 });
 
 test('Home startup does not run report, Ozon or compatibility fetches',()=>{
