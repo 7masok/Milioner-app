@@ -14,6 +14,8 @@ const WB_ADVERT_API = 'https://advert-api.wildberries.ru';
 const SYNC_MS = 10 * 60 * 1000;
 const TIMEOUT_MS = 25_000;
 const LOOKBACK_DAYS = 14;
+const STALE_STATUS_REFRESH_MS = 60 * 60 * 1000;
+const STALE_STATUS_STATES = Object.freeze(['WAITING','SORTED','ACCEPTED_BY_CARRIER','SENT_TO_CARRIER','READY_FOR_PICKUP']);
 const LIVE_SALES_LOOKBACK_DAYS = 45;
 const LIVE_SALES_SYNC_MS = 6 * 60 * 60 * 1000 + 35 * 60 * 1000;
 const LIVE_SALES_RETRY_MS = 65 * 60 * 1000;
@@ -84,6 +86,60 @@ async function requestJson(url, options, label) {
   } finally {
     clearTimeout(timer);
   }
+}
+
+async function refreshStoredWbStatuses(market, token, now = Date.now()) {
+  const cutoff = now - LOOKBACK_DAYS * 86_400_000;
+  const staleBefore = now - STALE_STATUS_REFRESH_MS;
+  const result = await pool.query(`SELECT DISTINCT ON (order_id) order_id AS "orderId",status,state,updated_at AS "updatedAt"
+    FROM marketplace_order_lines
+    WHERE market=$1 AND creation_date < $2 AND updated_at < $3
+      AND upper(state)=ANY($4::text[]) AND order_id ~ '^[0-9]+$'
+    ORDER BY order_id,updated_at DESC LIMIT 5000`, [market, cutoff, staleBefore, STALE_STATUS_STATES]);
+  const current = new Map(result.rows.map(row => [String(row.orderId), {
+    status: String(row.status || '').trim(), state: String(row.state || '').trim()
+  }]));
+  const ids = [...current.keys()].map(Number).filter(Number.isFinite);
+  if (!ids.length) return { checked: 0, returned: 0, changed: 0, missing: 0 };
+
+  const statuses = new Map();
+  const headers = { Accept: 'application/json', Authorization: token, 'Content-Type': 'application/json' };
+  for (let start = 0; start < ids.length; start += 1000) {
+    const data = await requestJson(`${WB_API}/api/v3/orders/status`, {
+      method: 'POST', headers, body: JSON.stringify({ orders: ids.slice(start, start + 1000) })
+    }, 'WB stale order statuses');
+    for (const row of data?.orders || []) {
+      const id = String(row?.id ?? '').trim();
+      if (!id) continue;
+      statuses.set(id, {
+        status: String(row?.supplierStatus || '').trim(),
+        state: String(row?.wbStatus || '').trim()
+      });
+    }
+  }
+
+  let changed = 0;
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    for (const [orderId, before] of current) {
+      const after = statuses.get(orderId);
+      if (!after) {
+        await client.query('UPDATE marketplace_order_lines SET updated_at=$3 WHERE market=$1 AND order_id=$2', [market, orderId, now]);
+        continue;
+      }
+      if (before.status !== after.status || before.state !== after.state) changed += 1;
+      await client.query('UPDATE marketplace_order_lines SET status=$3,state=$4,updated_at=$5 WHERE market=$1 AND order_id=$2',
+        [market, orderId, after.status, after.state, now]);
+    }
+    await client.query('COMMIT');
+  } catch (error) {
+    await client.query('ROLLBACK').catch(() => {});
+    throw error;
+  } finally {
+    client.release();
+  }
+  return { checked: ids.length, returned: statuses.size, changed, missing: Math.max(0, ids.length - statuses.size) };
 }
 
 async function fetchOrders(market, token) {
@@ -525,10 +581,23 @@ export async function syncWbOrders(market, { force = false } = {}) {
   const task = (async () => {
     const token = await tokenFor(market);
     if (!token) return { ok: false, market, skipped: true, error: `${market === 'WB2' ? 'WB_TOKEN_2' : 'WB_TOKEN'} is not configured` };
+    const now = Date.now();
+    let staleStatusRefresh = { checked: 0, returned: 0, changed: 0, missing: 0 };
+    try {
+      staleStatusRefresh = await refreshStoredWbStatuses(market, token, now);
+      if (staleStatusRefresh.checked) console.info('WB stale status refresh', JSON.stringify({ market, ...staleStatusRefresh }));
+    } catch (error) {
+      console.warn(`WB stale status refresh failed (${market})`, String(error?.message || error));
+      staleStatusRefresh = { checked: 0, returned: 0, changed: 0, missing: 0, error: String(error?.message || error) };
+    }
     const prior = await pool.query('SELECT * FROM sync_runs WHERE market=$1 ORDER BY id DESC LIMIT 1', [market]);
-    const previous = prior.rows[0], now = Date.now();
+    const previous = prior.rows[0];
     if (!force && previous?.started_at && now - Number(previous.started_at) < SYNC_MS) {
-      return { ok: Number(previous.ok) === 1, market, skipped: true, nextSyncAt: Number(previous.started_at) + SYNC_MS, error: String(previous.error || '') };
+      if (staleStatusRefresh.changed > 0) {
+        try { await reconcileWbReservations(market, now); } catch (error) { console.warn(`WB stale reservation reconcile failed (${market})`, String(error?.message || error)); }
+        try { await reconcileMarketplaceSales(market); } catch (error) { console.warn(`WB stale sale reconcile failed (${market})`, String(error?.message || error)); }
+      }
+      return { ok: Number(previous.ok) === 1, market, skipped: true, staleStatusRefresh, nextSyncAt: Number(previous.started_at) + SYNC_MS, error: String(previous.error || '') };
     }
     const created = await pool.query("INSERT INTO sync_runs(market,started_at,ok,items,error) VALUES($1,$2,0,0,'') RETURNING id", [market, now]);
     const runId = created.rows[0].id;
@@ -563,7 +632,7 @@ export async function syncWbOrders(market, { force = false } = {}) {
       }
       const finishedAt = Date.now();
       await pool.query("UPDATE sync_runs SET finished_at=$1,ok=1,items=$2,error='' WHERE id=$3", [finishedAt, rows.length, runId]);
-      return { ok: true, market, items: rows.length, stickerCache, ...finance, ...liveSales, reservationReconcile, saleReconcile, stockSync, finishedAt, nextSyncAt: finishedAt + SYNC_MS };
+      return { ok: true, market, items: rows.length, stickerCache, staleStatusRefresh, ...finance, ...liveSales, reservationReconcile, saleReconcile, stockSync, finishedAt, nextSyncAt: finishedAt + SYNC_MS };
     } catch (error) {
       const message = String(error?.message || error).slice(0, 2000);
       await pool.query('UPDATE sync_runs SET finished_at=$1,ok=0,error=$2 WHERE id=$3', [Date.now(), message, runId]).catch(() => {});
