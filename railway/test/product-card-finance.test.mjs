@@ -68,6 +68,13 @@ test('stock valuation uses sale plus covered reserve plus warehouse stock',()=>{
 });
 
 
+test('unmatched marketplace advertising is never spread across unrelated products',()=>{
+  assert.match(report,/for\(const x of kaspiKnown\)add\(x\.productId,x\.qty,Number\(x\.profit\)\|\|0,'Kaspi',Math\.max\(0,Number\(x\.ads\)\|\|0\)\)/);
+  assert.match(report,/productAds=Math\.max\(0,Number\(x\.advertising\)\|\|0\);add\(v\.pid,saleQty,Number\(x\.netBeforeCost\|\|0\)-cost,model\.market,productAds\)/);
+  assert.doesNotMatch(report,/kaspiLooseAds|looseShare/);
+  assert.doesNotMatch(report,/unmatchedAds=Math\.max\(0,Number\(model\.unmatchedAdvertising\)/);
+});
+
 test('product details use combined 30-day net profit including Kaspi and WB advertising',()=>{
   assert.match(html,/async function openProduct\(pid,market='',days=null\)/);
   assert.match(html,/productListContext=!market&&\(days===null\|\|days===undefined\)/);
