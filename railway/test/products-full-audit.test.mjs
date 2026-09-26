@@ -226,4 +226,5 @@ test('Products audit contract is recorded for future AI changes',()=>{
   assert.match(passport,/PRODUCT-26/);
   assert.match(passport,/PRODUCT-27/);
   assert.match(passport,/PRODUCT-28/);
+  assert.match(passport,/PRODUCT-29/);
 });
