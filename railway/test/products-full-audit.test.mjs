@@ -134,14 +134,13 @@ test('Products sorting direction changes real comparator output',()=>{
   assert.ok(context.compareProductsForList(a,b,'name','desc',stats,periodStats,period,true)>0);
 });
 
-test('Products remain usable while fixed-period finance is loading',()=>{
+test('Products remain usable while selected-period finance is loading',()=>{
   const render=between('function renderProducts(','function wbRelinkNotice(');
-  assert.match(render,/currentProductPeriodStats\(period\)\|\|new Map\(\)/);
+  assert.match(render,/period=productRankSpec\(\),periodStats=currentProductPeriodStats\(period\)\|\|new Map\(\)/);
   assert.match(render,/periodReady=currentProductPeriodStats\(period\) instanceof Map/);
   assert.doesNotMatch(render,/if\(!periodReady\).*return/);
   assert.doesNotMatch(render,/productMatchesStockFilter/);
-  assert.match(html,/Загружаю продажи и прибыль · /);
-  assert.match(html,/Остатки и поиск продолжают работать/);
+  assert.match(html,/product analytics stats failed/);
 });
 
 test('Products first interaction avoids repeated reservation and purchase scans',()=>{
@@ -180,13 +179,12 @@ test('Products have no preset time chips and use one numeric ranking period',()=
   assert.match(html,/let productPeriod='30';/);
 });
 
-test('Product opened from Products uses the fixed Products 30-day window',()=>{
+test('Product opened from Products uses the selected Products period',()=>{
   const detail=between("async function openProduct(","function openProductWarehouseRelease(");
-  assert.match(html,/let productPeriod='30';/);
   assert.match(detail,/productListContext=!market&&\(days===null\|\|days===undefined\)/);
-  assert.match(detail,/selectedSpec=productListContext\?productPeriodSpec\(\):null/);
+  assert.match(detail,/selectedSpec=productListContext\?productRankSpec\(\):null/);
   assert.match(detail,/currentProductPeriodStats\(selectedSpec\)/);
-  assert.match(detail,/await ensureProductPeriodStats\(\)/);
+  assert.match(detail,/await ensureProductRankStats\(\)/);
   assert.match(detail,/Продано · \$\{esc\(selectedSpec\.label\)\}/);
 });
 
@@ -234,4 +232,5 @@ test('Products audit contract is recorded for future AI changes',()=>{
   assert.match(passport,/PRODUCT-30/);
   assert.match(passport,/PRODUCT-31/);
   assert.match(passport,/PRODUCT-32/);
+  assert.match(passport,/PRODUCT-33/);
 });
