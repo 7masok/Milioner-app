@@ -127,17 +127,21 @@ test('Products paints the tab before heavy statistics and warms cache off the cr
   assert.ok(fn.indexOf('requestAnimationFrame(')<fn.indexOf('try{render()}'));
 });
 
-test('Products show current buyer-delivery stock and projected profit',()=>{
+test('Products show current buyer-delivery stock and six-month projected profit',()=>{
   assert.doesNotMatch(html,/Введено в продажу за 30 дней|productReceived30/);
   assert.match(html,/В пути до покупателя/);
   assert.match(html,/id="productToBuyerQty">—</);
   assert.match(html,/Прибыль в пути до покупателя/);
   assert.match(html,/id="productToBuyerProfit">—</);
+  assert.match(html,/onclick="openToBuyerProfitBreakdown\(\)"/);
   assert.match(html,/function marketplaceOrderInTransitToBuyer\(/);
   assert.match(html,/function marketplaceToBuyerSnapshot\(/);
+  assert.match(html,/marketProductQtyMap=new Map\(\)/);
+  assert.match(html,/function marketplaceToBuyerProfitRows\(periodStats,snapshot=marketplaceToBuyerSnapshot\(\)\)/);
+  assert.match(html,/projected=transitQty\*unitProfit/);
   assert.match(html,/function marketplaceToBuyerProfit\(periodStats,snapshot=marketplaceToBuyerSnapshot\(\)\)/);
-  assert.match(html,/total\+=Math\.max\(0,Number\(qty\)\|\|0\)\*unitProfit/);
-  assert.match(html,/buyer&&periodReady\?fmt\(marketplaceToBuyerProfit\(periodStats,buyer\)\):'—'/);
+  assert.match(html,/buyer&&cardProfitReady\?fmt\(marketplaceToBuyerProfit\(cardProfitStats,buyer\)\):'—'/);
+  assert.match(html,/const title='Прибыль в пути до покупателя',spec=PRODUCT_CARD_PROFIT_SPEC/);
   assert.match(html,/SORTED','ACCEPTED_BY_CARRIER','SENT_TO_CARRIER','READY_FOR_PICKUP/);
   assert.match(html,/KASPI_DELIVERY_TRANSIT/);
   assert.match(html,/DELIVERING/);
