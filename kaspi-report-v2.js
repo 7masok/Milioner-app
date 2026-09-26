@@ -118,11 +118,13 @@ window.refreshProductPeriodStats=function(spec={days:30,key:'30'},{force=false}=
    const totals=new Map((state.products||[]).map(p=>[String(p.id),{qty:0,profit:0,ads:0,sources:{}}])),
      add=(pid,qty,profit,source,ads=0)=>{pid=String(pid||'');qty=Math.max(0,Number(qty)||0);if(!pid)return;const row=totals.get(pid)||{qty:0,profit:0,ads:0,sources:{}};const profitValue=Number(profit)||0,adValue=Math.max(0,Number(ads)||0);row.qty+=qty;row.profit+=profitValue;row.ads+=adValue;if(source){const part=row.sources[source]||{qty:0,profit:0,ads:0};part.qty+=qty;part.profit+=profitValue;part.ads+=adValue;row.sources[source]=part}totals.set(pid,row)},
      kaspi=buildModel(kaspiSnapshot,days,range);
-   const kaspiKnown=kaspi.rows.filter(x=>x.productId),kaspiRevenue=kaspiKnown.reduce((s,x)=>s+Math.max(0,Number(x.revenue)||0),0),kaspiLooseAds=kaspi.rows.filter(x=>!x.productId&&Number(x.revenue)===0).reduce((s,x)=>s+Math.max(0,Number(x.ads)||0),0);
-   for(const x of kaspiKnown){const looseShare=kaspiRevenue>0?kaspiLooseAds*Math.max(0,Number(x.revenue)||0)/kaspiRevenue:0;add(x.productId,x.qty,Number(x.profit)-looseShare,'Kaspi',Math.max(0,Number(x.ads)||0)+looseShare)}
+   const kaspiKnown=kaspi.rows.filter(x=>x.productId);
+   // Product-level economics must only use advertising that is explicitly linked to that product.
+   // Unmatched marketplace advertising remains in marketplace totals instead of being spread across unrelated SKUs.
+   for(const x of kaspiKnown)add(x.productId,x.qty,Number(x.profit)||0,'Kaspi',Math.max(0,Number(x.ads)||0));
    for(const model of[wb1,wb2]){
-     const linked=model.products.map(x=>({x,pid:wbLiveProductId(model.market,x)})).filter(v=>v.pid),revenue=linked.reduce((s,v)=>s+Math.max(0,Number(v.x.retailAmount)||0),0);
-     for(const v of linked){const x=v.x,netQty=Number(x.qty)||0,saleQty=Math.max(0,Number(x.saleQty??netQty)||0),cost=wbRealizedFifoCost(v.pid,model.market,days,netQty,range),share=revenue>0?Math.max(0,Number(x.retailAmount)||0)/revenue:0,unmatchedAds=Math.max(0,Number(model.unmatchedAdvertising)||0)*share,productAds=Math.max(0,Number(x.advertising)||0)+unmatchedAds;add(v.pid,saleQty,Number(x.netBeforeCost||0)-cost-unmatchedAds,model.market,productAds)}
+     const linked=model.products.map(x=>({x,pid:wbLiveProductId(model.market,x)})).filter(v=>v.pid);
+     for(const v of linked){const x=v.x,netQty=Number(x.qty)||0,saleQty=Math.max(0,Number(x.saleQty??netQty)||0),cost=wbRealizedFifoCost(v.pid,model.market,days,netQty,range),productAds=Math.max(0,Number(x.advertising)||0);add(v.pid,saleQty,Number(x.netBeforeCost||0)-cost,model.market,productAds)}
    }
    for(const x of ozon?.products||[]){const pid=String(x?.productId||''),qty=Math.max(0,Number(x?.qty)||0);if(pid)add(pid,qty,Number(x?.profit)||0,'Ozon',Math.max(0,Number(x?.ads)||0))}
    const result=new Map([...totals].map(([pid,x])=>[pid,{qty:x.qty,profit:x.profit,ads:x.ads,unitProfit:x.qty?x.profit/x.qty:0,sources:x.sources}]));
