@@ -85,6 +85,16 @@ test('Product details show progress before waiting on combined finance',()=>{
 });
 
 
+test('Advertising page exposes a six-month link audit for Kaspi, WB1 and WB2',()=>{
+  assert.match(html,/onclick="openAdsLinkAudit\(\)">Аудит привязки<\/button>/);
+  assert.match(html,/async function openAdsLinkAudit\(\)/);
+  assert.match(html,/window\.kaspiAdsRepairLinksStrict/);
+  assert.match(html,/window\.kaspiAdsLinkAudit\('?[0-9]*'?\)/);
+  assert.match(html,/\/api\/wb-ad-link-audit\?market=/);
+  assert.match(html,/Проверяю Kaspi, WB1 и WB2 за 6 месяцев/);
+  assert.match(html,/Суммы кампаний по нескольким разным товарам не делятся наугад/);
+});
+
 test('Products keep search plus the direct FBO metric filter without old dropdown controls',()=>{
   assert.doesNotMatch(html,/<select id="filter"/);
   assert.doesNotMatch(html,/<select id="sort"/);
