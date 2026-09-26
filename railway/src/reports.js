@@ -221,6 +221,91 @@ reportsRouter.get('/wb-finance-summary', asyncRoute(async (req, res) => {
     wbCharges, netBeforeCost: Number(row.forPay) - wbCharges + Number(row.additionalPayment) - Number(row.accountAdvertising) });
 }));
 
+function wbAdNmIds(value) {
+  if (Array.isArray(value)) return [...new Set(value.map(String).map(x => x.trim()).filter(Boolean))];
+  try {
+    const parsed = JSON.parse(String(value || '[]'));
+    return Array.isArray(parsed) ? [...new Set(parsed.map(String).map(x => x.trim()).filter(Boolean))] : [];
+  } catch { return []; }
+}
+
+async function resolveWbAdvertising(selected, adRows = []) {
+  const entries = (Array.isArray(adRows) ? adRows : []).map(row => ({
+    day: String(row.day || ''), advertId: String(row.advertId || ''), campaign: String(row.campaign || ''),
+    paymentType: String(row.paymentType || ''), amount: Math.max(0, Number(row.amount) || 0),
+    nmIds: wbAdNmIds(row.nmIds)
+  })).filter(row => row.amount > 0);
+  const allNmIds = [...new Set(entries.flatMap(row => row.nmIds))];
+  const directMap = new Map(), identityByNmId = new Map(), fallbackLinkMap = new Map();
+
+  if (allNmIds.length) {
+    const direct = await pool.query('SELECT sku,product_id AS "productId" FROM product_links WHERE market=$1 AND sku=ANY($2::text[])', [selected, allNmIds]);
+    for (const row of direct.rows) directMap.set(String(row.sku), String(row.productId));
+
+    const identities = await pool.query(`SELECT DISTINCT ON (nm_id) nm_id AS "nmId",vendor_code AS "vendorCode",barcode
+      FROM wb_sales_live_rows WHERE market=$1 AND nm_id=ANY($2::text[])
+      ORDER BY nm_id,last_change_date DESC,updated_at DESC`, [selected, allNmIds]);
+    const fallbackSkus = [];
+    for (const row of identities.rows) {
+      const nmId = String(row.nmId || ''), vendorCode = String(row.vendorCode || '').trim(), barcode = String(row.barcode || '').trim();
+      identityByNmId.set(nmId, { vendorCode, barcode });
+      if (vendorCode) fallbackSkus.push(vendorCode);
+      if (barcode) fallbackSkus.push(barcode);
+    }
+    const uniqueFallbackSkus = [...new Set(fallbackSkus)];
+    if (uniqueFallbackSkus.length) {
+      const linked = await pool.query('SELECT sku,product_id AS "productId" FROM product_links WHERE market=$1 AND sku=ANY($2::text[])', [selected, uniqueFallbackSkus]);
+      for (const row of linked.rows) fallbackLinkMap.set(String(row.sku), String(row.productId));
+    }
+  }
+
+  const resolveNmId = nmId => {
+    const direct = directMap.get(String(nmId));
+    if (direct) return { nmId: String(nmId), productId: direct, source: 'nmId' };
+    const identity = identityByNmId.get(String(nmId)) || {};
+    if (identity.vendorCode && fallbackLinkMap.has(identity.vendorCode)) return { nmId: String(nmId), productId: fallbackLinkMap.get(identity.vendorCode), source: 'vendorCode', vendorCode: identity.vendorCode };
+    if (identity.barcode && fallbackLinkMap.has(identity.barcode)) return { nmId: String(nmId), productId: fallbackLinkMap.get(identity.barcode), source: 'barcode', barcode: identity.barcode };
+    return { nmId: String(nmId), productId: '', source: 'none', vendorCode: identity.vendorCode || '', barcode: identity.barcode || '' };
+  };
+
+  let total = 0, unmatched = 0, autoRecovered = 0;
+  const byProduct = new Map();
+  const audited = entries.map(row => {
+    total += row.amount;
+    const resolved = row.nmIds.map(resolveNmId), linked = resolved.filter(x => x.productId), missing = resolved.filter(x => !x.productId);
+    const productIds = [...new Set(linked.map(x => x.productId))];
+    let productId = '', status = 'unmatched', reason = '', reasonText = '';
+    if (!row.nmIds.length) {
+      reason = 'no_nm_ids'; reasonText = 'WB не передал товары кампании (nmId отсутствуют)';
+    } else if (!missing.length && productIds.length === 1) {
+      productId = productIds[0]; status = 'linked';
+      const recovered = row.nmIds.length > 1 || resolved.some(x => x.source !== 'nmId');
+      if (recovered) autoRecovered += row.amount;
+      byProduct.set(productId, (byProduct.get(productId) || 0) + row.amount);
+      reason = recovered ? 'auto_recovered' : 'exact';
+      reasonText = row.nmIds.length > 1 ? 'Все nmId кампании относятся к одному товару' : resolved[0]?.source === 'vendorCode' ? 'Связано через артикул продавца' : resolved[0]?.source === 'barcode' ? 'Связано через штрихкод' : 'Точная связь по nmId';
+    } else if (productIds.length > 1) {
+      reason = 'multiple_products'; reasonText = 'Одна рекламная сумма относится к нескольким разным товарам — WB не дал разбивку суммы';
+    } else if (missing.length && linked.length) {
+      reason = 'partial_unlinked'; reasonText = 'Часть nmId распознана, часть не связана с товарами';
+    } else {
+      reason = 'unlinked_nmids'; reasonText = 'nmId кампании не найдены среди связей товара, артикула продавца или штрихкода';
+    }
+    if (status !== 'linked') unmatched += row.amount;
+    return { ...row, productId, status, reason, reasonText, resolved };
+  });
+
+  const productIds = [...byProduct.keys()];
+  const productNames = new Map();
+  if (productIds.length) {
+    const names = await pool.query('SELECT id,name FROM products WHERE id=ANY($1::text[])', [productIds]);
+    for (const row of names.rows) productNames.set(String(row.id), String(row.name || ''));
+  }
+  for (const row of audited) if (row.productId) row.productName = productNames.get(row.productId) || '';
+
+  return { rows: audited, byProduct, total, unmatched, autoRecovered };
+}
+
 reportsRouter.get('/wb-finance-products', asyncRoute(async (req, res) => {
   const selected = market(req.query.market);
   if (!['WB', 'WB2'].includes(selected)) return res.status(400).json({ ok: false, error: 'market must be WB or WB2' });
@@ -246,37 +331,47 @@ reportsRouter.get('/wb-finance-products', asyncRoute(async (req, res) => {
     WHERE f.market=$1 AND f.rr_date >= $2 AND f.rr_date < $3
     GROUP BY f.vendor_code,f.nm_id,l.product_id ORDER BY SUM(f.for_pay) DESC`, [selected, since, until]),
     daysList.length
-      ? pool.query('SELECT amount,nm_ids AS "nmIds" FROM wb_ad_costs WHERE market=$1 AND day=ANY($2::text[])', [selected, daysList])
+      ? pool.query('SELECT day,advert_id AS "advertId",campaign,payment_type AS "paymentType",amount,nm_ids AS "nmIds" FROM wb_ad_costs WHERE market=$1 AND day=ANY($2::text[])', [selected, daysList])
       : Promise.resolve({ rows: [] })]);
-  const advertisingByNmId = new Map();
-  let advertising = 0, unmatchedAdvertising = 0;
-  for (const row of adResult.rows) {
-    const amount = Math.max(0, Number(row.amount) || 0);
-    advertising += amount;
-    const ids = Array.isArray(row.nmIds) ? [...new Set(row.nmIds.map(String).filter(Boolean))] : [];
-    if (ids.length !== 1) { unmatchedAdvertising += amount; continue; }
-    advertisingByNmId.set(ids[0], (advertisingByNmId.get(ids[0]) || 0) + amount);
-  }
-  // Keep advertising even when the product has no buyouts in this period.
+  const attribution = await resolveWbAdvertising(selected, adResult.rows);
   const rows = [...result.rows];
-  for (const [nmId, amount] of advertisingByNmId) {
-    if (rows.some(row => String(row.nmId || '') === nmId)) continue;
-    const identity = await pool.query(`SELECT vendor_code AS "vendorCode" FROM wb_sales_live_rows
-      WHERE market=$1 AND nm_id=$2 AND vendor_code<>'' LIMIT 1`, [selected, nmId]);
-    rows.push({ nmId, vendorCode: identity.rows[0]?.vendorCode || '', qty: 0, saleQty: 0, returnQty: 0,
-      retailAmount: 0, forPay: 0 });
+  for (const [productId] of attribution.byProduct) {
+    if (rows.some(row => String(row.productId || '') === String(productId))) continue;
+    const linkedAd = attribution.rows.find(row => row.productId === String(productId));
+    rows.push({ productId: String(productId), nmId: linkedAd?.nmIds?.[0] || '', vendorCode: '', title: linkedAd?.productName || '',
+      qty: 0, saleQty: 0, returnQty: 0, retailAmount: 0, forPay: 0, acquiring: 0, delivery: 0, storage: 0,
+      acceptance: 0, deduction: 0, promotionDeduction: 0, penalty: 0, additionalPayment: 0, rebill: 0 });
   }
   const consumedAdvertising = new Set();
   const products = rows.map(row => {
     const wbCharges = Number(row.acquiring || 0) + Number(row.delivery || 0) + Number(row.storage || 0) + Number(row.acceptance || 0) + Number(row.deduction || 0) + Number(row.penalty || 0) + Number(row.rebill || 0);
-    const nmId = String(row.nmId || '');
-    const productAdvertising = consumedAdvertising.has(nmId) ? 0 : advertisingByNmId.get(nmId) || 0;
-    consumedAdvertising.add(nmId);
+    const productId = String(row.productId || ''), key = productId ? 'p:' + productId : 'nm:' + String(row.nmId || '');
+    const productAdvertising = productId && !consumedAdvertising.has(key) ? attribution.byProduct.get(productId) || 0 : 0;
+    consumedAdvertising.add(key);
     const wbExpenses = Number(row.retailAmount || 0) - Number(row.forPay || 0) + wbCharges;
     return { ...row, wbCharges, wbExpenses, advertising: productAdvertising,
       netBeforeCost: Number(row.forPay || 0) - wbCharges + Number(row.additionalPayment || 0) - productAdvertising };
   });
-  res.json({ ok: true, market: selected, days, range: { since, until, timezone: 'Asia/Almaty' }, products, advertising, unmatchedAdvertising });
+  res.json({ ok: true, market: selected, days, range: { since, until, timezone: 'Asia/Almaty' }, products,
+    advertising: attribution.total, unmatchedAdvertising: attribution.unmatched, autoRecoveredAdvertising: attribution.autoRecovered });
+}));
+
+reportsRouter.get('/wb-ad-link-audit', asyncRoute(async (req, res) => {
+  const selected = market(req.query.market);
+  if (!['WB', 'WB2'].includes(selected)) return res.status(400).json({ ok: false, error: 'market must be WB or WB2' });
+  const days = Math.max(1, Math.min(365, Number(req.query.days || 180) || 180));
+  const { since, until } = periodBounds(days), daysList = [];
+  for (let time = since; time < until; time += 86_400_000) daysList.push(dateKey(time));
+  const adResult = daysList.length
+    ? await pool.query('SELECT day,advert_id AS "advertId",campaign,payment_type AS "paymentType",amount,nm_ids AS "nmIds" FROM wb_ad_costs WHERE market=$1 AND day=ANY($2::text[]) ORDER BY day DESC,advert_id', [selected, daysList])
+    : { rows: [] };
+  const attribution = await resolveWbAdvertising(selected, adResult.rows);
+  res.json({ ok: true, market: selected, days, range: { since, until, timezone: 'Asia/Almaty' },
+    totalAdvertising: attribution.total, linkedAdvertising: attribution.total - attribution.unmatched,
+    unmatchedAdvertising: attribution.unmatched, autoRecoveredAdvertising: attribution.autoRecovered,
+    linkedRows: attribution.rows.filter(row => row.status === 'linked').length,
+    unmatchedRows: attribution.rows.filter(row => row.status !== 'linked').length,
+    rows: attribution.rows });
 }));
 
 reportsRouter.get('/wb-dashboard-buyouts', asyncRoute(async (req, res) => {

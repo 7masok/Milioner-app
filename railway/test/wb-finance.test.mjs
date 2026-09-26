@@ -72,10 +72,18 @@ test('WB stock-profit denominator uses gross sales while returns stay in profit'
   assert.match(ui, /window\.refreshAllMarketUnitProfit=function\(\)\{return window\.refreshProductPeriodStats/);
 });
 
-test('WB product report keeps multi-product advertising unallocated', () => {
+test('WB advertising recovers deterministic links but keeps true multi-product spend unallocated', () => {
   const source = readFileSync(new URL('../src/reports.js', import.meta.url), 'utf8');
-  assert.match(source, /ids\.length !== 1/);
-  assert.match(source, /unmatchedAdvertising/);
+  assert.match(source, /async function resolveWbAdvertising\(selected, adRows = \[\]\)/);
+  assert.match(source, /source: 'vendorCode'/);
+  assert.match(source, /source: 'barcode'/);
+  assert.match(source, /!missing\.length && productIds\.length === 1/);
+  assert.match(source, /row\.nmIds\.length > 1/);
+  assert.match(source, /reason = 'multiple_products'/);
+  assert.match(source, /Одна рекламная сумма относится к нескольким разным товарам/);
+  assert.match(source, /reportsRouter\.get\('\/wb-ad-link-audit'/);
+  assert.match(source, /autoRecoveredAdvertising/);
+  assert.match(source, /unmatchedAdvertising: attribution\.unmatched/);
   assert.match(source, /wbExpenses/);
   const ui = readFileSync(new URL('../../kaspi-report-v2.js', import.meta.url), 'utf8');
   assert.match(ui, /Себестоимость<\/th><th>Расходы WB<\/th><th>Реклама<\/th><th>Прибыль/);

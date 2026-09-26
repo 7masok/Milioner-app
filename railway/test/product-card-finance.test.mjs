@@ -68,6 +68,18 @@ test('stock valuation uses sale plus covered reserve plus warehouse stock',()=>{
 });
 
 
+test('Kaspi advertising uses deterministic links and exposes repair audit',()=>{
+  assert.match(html,/function kaspiAdsMatchProduct\(line\)/);
+  assert.match(html,/Array\.isArray\(p\?\.kaspiAliases\)\?p\.kaspiAliases:\[\]/);
+  assert.match(html,/identityMatches=state\.products\.filter\(p=>\{const key=kaspiAdsIdentityKey\(p\.name\);return key&&identity&&key===identity\}\)/);
+  assert.doesNotMatch(html,/key\.includes\(identity\)\|\|identity\.includes\(key\)/);
+  assert.doesNotMatch(html,/nn\.includes\(x\.key\)\|\|x\.key\.includes\(nn\)/);
+  assert.match(kaspiAds,/window\.kaspiAdsRepairLinksStrict = function \(\)/);
+  assert.match(kaspiAds,/window\.kaspiAdsLinkAudit = function \(days = 'all', range = null\)/);
+  assert.match(kaspiAds,/ambiguous_sku/);
+  assert.match(kaspiAds,/stored_only/);
+});
+
 test('unmatched marketplace advertising is never spread across unrelated products',()=>{
   assert.match(report,/for\(const x of kaspiKnown\)add\(x\.productId,x\.qty,Number\(x\.profit\)\|\|0,'Kaspi',Math\.max\(0,Number\(x\.ads\)\|\|0\)\)/);
   assert.match(report,/productAds=Math\.max\(0,Number\(x\.advertising\)\|\|0\);add\(v\.pid,saleQty,Number\(x\.netBeforeCost\|\|0\)-cost,model\.market,productAds\)/);
