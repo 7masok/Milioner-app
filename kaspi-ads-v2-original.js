@@ -234,6 +234,97 @@
   }
 
   window.kaspiAdsBreakdown = breakdown;
+  function kaspiStrictSkuMatches(sku) {
+    const raw = String(sku || '').trim();
+    if (!raw) return [];
+    const exact = (state.products || []).filter(p => [p?.kaspi, ...(Array.isArray(p?.kaspiAliases) ? p.kaspiAliases : [])].some(v => adsSkuEqual(v, raw)));
+    if (exact.length) return exact;
+    return (state.products || []).filter(p => [p?.kaspi, ...(Array.isArray(p?.kaspiAliases) ? p.kaspiAliases : [])].some(v => {
+      const stored = String(v || '').trim();
+      return stored.includes('_') && adsSkuEqual(stored.split('_')[0], raw);
+    }));
+  }
+
+  function kaspiStrictNameMatches(name) {
+    const raw = String(name || '').trim();
+    if (!raw) return [];
+    const nn = kaspiAdsNameKey(raw);
+    const bridge = window.__kaspiAdsCatalogProducts instanceof Map ? window.__kaspiAdsCatalogProducts.get(nn) : null;
+    if (bridge) return [bridge];
+    const exact = (state.products || []).filter(p => kaspiAdsNameKey(p?.name || '') === nn);
+    if (exact.length) return exact;
+    const identity = kaspiAdsIdentityKey(raw);
+    if (!identity) return [];
+    return (state.products || []).filter(p => kaspiAdsIdentityKey(p?.name || '') === identity);
+  }
+
+  function kaspiAdAuditReason(row) {
+    const sku = String(row?.sku || '').trim(), name = String(row?.name || '').trim();
+    if (!sku && !name && !row?.productId) return { reason: 'no_identity', reasonText: 'В строке нет SKU, названия или сохранённого productId' };
+    if (sku) {
+      const matches = kaspiStrictSkuMatches(sku);
+      if (matches.length > 1) return { reason: 'ambiguous_sku', reasonText: 'SKU совпадает с несколькими товарами' };
+    }
+    if (name) {
+      const matches = kaspiStrictNameMatches(name);
+      if (matches.length > 1) return { reason: 'ambiguous_name', reasonText: 'Название совпадает с несколькими товарами' };
+    }
+    if (row?.productId && !kaspiAdsMatchProduct(row)) return { reason: 'stored_only', reasonText: 'Старая сохранённая привязка не подтверждается текущим SKU/названием' };
+    return { reason: 'no_match', reasonText: 'По SKU и названию не найдено однозначного товара' };
+  }
+
+  window.kaspiAdsRepairLinksStrict = function () {
+    let repairedRows = 0, clearedRows = 0, repairedAmount = 0, changed = false;
+    for (const batch of state.kaspiAdExpenses || []) {
+      const lines = Array.isArray(batch.lines) ? batch.lines : [];
+      if (lines.length) {
+        const perProduct = new Map();
+        let unmatchedAmount = 0;
+        for (const line of lines) {
+          const before = String(line?.productId || ''), product = kaspiAdsMatchProduct(line), amount = Math.max(0, Number(line?.amount) || 0);
+          if (product) {
+            if (before !== String(product.id)) { line.productId = product.id; repairedRows += 1; repairedAmount += amount; changed = true; }
+            const old = perProduct.get(String(product.id)) || { productId: product.id, sku: line.sku || '', name: product.name, amount: 0 };
+            old.amount += amount; perProduct.set(String(product.id), old);
+          } else {
+            unmatchedAmount += amount;
+            if (before) { line.productId = null; clearedRows += 1; changed = true; }
+          }
+        }
+        const nextPerProduct = [...perProduct.values()];
+        if (JSON.stringify(batch.perProduct || []) !== JSON.stringify(nextPerProduct)) { batch.perProduct = nextPerProduct; changed = true; }
+        if (Math.abs(Number(batch.unmatchedAmount || 0) - unmatchedAmount) > 0.001) { batch.unmatchedAmount = unmatchedAmount; changed = true; }
+      } else if (Array.isArray(batch.perProduct)) {
+        for (const row of batch.perProduct) {
+          const before = String(row?.productId || ''), product = kaspiAdsMatchProduct(row), amount = Math.max(0, Number(row?.amount) || 0);
+          if (product && before !== String(product.id)) { row.productId = product.id; repairedRows += 1; repairedAmount += amount; changed = true; }
+          else if (!product && before) { row.productId = null; clearedRows += 1; changed = true; }
+        }
+      }
+    }
+    if (changed && typeof save === 'function') save();
+    return { repairedRows, clearedRows, repairedAmount };
+  };
+
+  window.kaspiAdsLinkAudit = function (days = 'all', range = null) {
+    const effective = effectiveRows(days, '', range), rows = [];
+    let total = 0, linked = 0, unmatched = 0;
+    for (const row of effective.rows) {
+      const amount = Math.max(0, Number(row?.amount) || 0);
+      if (!(amount > 0)) continue;
+      total += amount;
+      const product = kaspiAdsMatchProduct(row);
+      if (product) {
+        linked += amount;
+        rows.push({ ...row, amount, status: 'linked', productId: String(product.id), productName: String(product.name || ''), reason: 'exact', reasonText: 'Однозначная связь по SKU, названию или сохранённому productId' });
+      } else {
+        unmatched += amount;
+        rows.push({ ...row, amount, status: 'unmatched', ...kaspiAdAuditReason(row) });
+      }
+    }
+    return { total, linked, unmatched, rows, replacedRows: effective.replacedRows, replacedAmount: effective.replacedAmount };
+  };
+
   window.kaspiAdsForProduct = function (productId, days = reportPeriod) {
     return breakdown(days).byProduct.get(String(productId)) || 0;
   };
