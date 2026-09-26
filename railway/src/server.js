@@ -310,9 +310,92 @@ async function verifyBackupRestoreReadiness() {
   }
 }
 
+async function logWb2WingsTransitDiagnostic() {
+  try {
+    const productRow = await pool.query("SELECT id,name FROM products WHERE lower(name)=lower($1) ORDER BY id LIMIT 1", ['Крылья ангела']);
+    if (!productRow.rowCount) return console.info('WB2_WINGS_DIAG', JSON.stringify({ ok:false, reason:'product-not-found' }));
+    const productId = String(productRow.rows[0].id);
+    const [links, warehouse] = await Promise.all([
+      pool.query("SELECT market,sku FROM product_links WHERE product_id=$1 AND market='WB2' ORDER BY sku", [productId]),
+      pool.query("SELECT payload FROM warehouse_state WHERE id=1")
+    ]);
+    let visibleSkus = [];
+    try {
+      const state = await hydrateWarehouseProducts(pool, JSON.parse(String(warehouse.rows[0]?.payload || '{}')));
+      const product = (state.products || []).find(x => String(x?.id || '') === productId);
+      visibleSkus = [...new Set([product?.wb2, ...(Array.isArray(product?.wb2Aliases) ? product.wb2Aliases : [])].map(x => String(x || '').trim()).filter(Boolean))];
+    } catch {}
+    const allLinkedSkus = [...new Set(links.rows.map(row => String(row.sku || '').trim()).filter(Boolean))];
+    const skus = visibleSkus.length ? visibleSkus : allLinkedSkus;
+    const rows = skus.length ? await pool.query(`SELECT order_id AS "orderId",code,entry_id AS "entryId",status,state,creation_date AS "creationDate",
+      sku,product_name AS "productName",qty,updated_at AS "updatedAt"
+      FROM marketplace_order_lines WHERE market='WB2' AND sku=ANY($1::text[])
+      ORDER BY creation_date DESC,updated_at DESC`, [skus]) : { rows: [] };
+
+    const groups = new Map();
+    for (const row of rows.rows) {
+      const orderKey = String(row.orderId || row.code || '').trim() || String(row.code || '').trim();
+      if (!orderKey) continue;
+      let g = groups.get(orderKey);
+      if (!g) {
+        g = { orderKey, creationDate:Number(row.creationDate)||0, status:row.status, state:row.state, lines:[] };
+        groups.set(orderKey,g);
+      }
+      if ((Number(row.creationDate)||0) >= g.creationDate) {
+        g.creationDate = Number(row.creationDate)||g.creationDate;
+        g.status = row.status || g.status;
+        g.state = row.state || g.state;
+      }
+      g.lines.push(row);
+    }
+    for (const g of groups.values()) {
+      const distinct = new Map();
+      for (const row of g.lines) {
+        const lineKey = String(row.entryId || row.sku || row.productName || '__pending__');
+        const previous = distinct.get(lineKey);
+        if (!previous || Number(row.updatedAt||0) >= Number(previous.updatedAt||0)) distinct.set(lineKey,row);
+      }
+      g.lines = [...distinct.values()];
+    }
+    const transitStates = new Set(['SORTED','ACCEPTED_BY_CARRIER','SENT_TO_CARRIER','READY_FOR_PICKUP']);
+    const cancelledStatuses = new Set(['CANCEL','CANCELLED']);
+    const cancelledStates = new Set(['CANCELED','CANCELLED','CANCELED_BY_CLIENT','CANCELLED_BY_CLIENT','DECLINED_BY_CLIENT','DEFECT','SOLD']);
+    let clientTransitQty = 0;
+    const byState = new Map(), bySkuState = new Map();
+    for (const g of groups.values()) {
+      const status = String(g.status || '').trim().toUpperCase();
+      const state = String(g.state || '').trim().toUpperCase();
+      const counted = !cancelledStatuses.has(status) && !cancelledStates.has(state) && transitStates.has(state);
+      for (const line of g.lines) {
+        const qty = Math.max(0, Number(line.qty)||0);
+        const stateKey = status + '|' + state;
+        const skuKey = String(line.sku || '') + '|' + stateKey;
+        byState.set(stateKey,(byState.get(stateKey)||0)+qty);
+        bySkuState.set(skuKey,(bySkuState.get(skuKey)||0)+qty);
+        if (counted) clientTransitQty += qty;
+      }
+    }
+    console.info('WB2_WINGS_DIAG', JSON.stringify({
+      ok:true,
+      productId,
+      productName:productRow.rows[0].name,
+      visibleSkus,
+      productLinks:allLinkedSkus,
+      dbRows:rows.rows.length,
+      groupedOrders:groups.size,
+      clientTransitQty,
+      byState:[...byState.entries()].map(([key,qty])=>({key,qty})).sort((a,b)=>b.qty-a.qty),
+      bySkuState:[...bySkuState.entries()].map(([key,qty])=>({key,qty})).sort((a,b)=>b.qty-a.qty)
+    }));
+  } catch (error) {
+    console.warn('WB2_WINGS_DIAG', JSON.stringify({ ok:false,error:String(error?.message||error) }));
+  }
+}
+
 const server = app.listen(config.port, '0.0.0.0', () => {
   console.log(`millioner Railway API listening on ${config.port}`);
   setTimeout(()=>verifyBackupRestoreReadiness(),4000).unref();
+  setTimeout(()=>logWb2WingsTransitDiagnostic(),7000).unref();
   startOzonSyncLoop();
   startKaspiSyncLoop();
   startWbSyncLoop();
