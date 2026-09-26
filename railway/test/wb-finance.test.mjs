@@ -50,6 +50,21 @@ test('WB synchronization uses current Finance API, daily rows and prunes stale s
   assert.match(source, /next_allowed_at/);
 });
 
+test('WB refreshes old active statuses beyond the 14-day order lookback', () => {
+  const source = readFileSync(new URL('../src/wb-sync.js', import.meta.url), 'utf8');
+  assert.match(source, /const LOOKBACK_DAYS = 14/);
+  assert.match(source, /STALE_STATUS_REFRESH_MS = 60 \* 60 \* 1000/);
+  assert.match(source, /async function refreshStoredWbStatuses\(market, token, now = Date\.now\(\)\)/);
+  assert.match(source, /creation_date < \$2 AND updated_at < \$3/);
+  assert.match(source, /upper\(state\)=ANY\(\$4::text\[\]\)/);
+  assert.match(source, /WB stale order statuses/);
+  assert.match(source, /UPDATE marketplace_order_lines SET status=\$3,state=\$4,updated_at=\$5 WHERE market=\$1 AND order_id=\$2/);
+  assert.match(source, /staleStatusRefresh = await refreshStoredWbStatuses\(market, token, now\)/);
+  assert.match(source, /if \(staleStatusRefresh\.changed > 0\)/);
+  assert.match(source, /reconcileWbReservations\(market, now\)/);
+  assert.match(source, /reconcileMarketplaceSales\(market\)/);
+});
+
 test('browser sync avoids five-second warehouse polling and duplicate order loads', () => {
   const source = readFileSync(new URL('../../cloud-sync-v3.js', import.meta.url), 'utf8');
   assert.doesNotMatch(source, /setInterval\(\(\)=>pullWarehouseFromServer\(\),5000\)/);
