@@ -7,56 +7,53 @@ const report=readFileSync(new URL('../../kaspi-report-v2.js',import.meta.url),'u
 const compat=readFileSync(new URL('../../kaspi-status-compat-v1.js',import.meta.url),'utf8');
 const kaspiAds=readFileSync(new URL('../../kaspi-ads-v2-original.js',import.meta.url),'utf8');
 
-test('product list keeps 30-day sales on the left and uses six-month profit on the right',()=>{
+test('product list uses one selected period for sales profit and stock days',()=>{
   const line=html.split('\n').find(row=>row.startsWith('function productCard('))||'';
-  assert.match(line,/Себестоимость/);
+  assert.match(line,/period=productRankSpec\(\)/);
   assert.match(line,/Продано · \$\{esc\(period\.label\)\}/);
   assert.match(line,/Прибыль · \$\{esc\(profitLabel\)\}/);
-  assert.match(line,/Прибыль \/ шт\./);
-  assert.match(line,/qty=periodReady\?Math\.max/);
-  assert.match(line,/profitQty=profitReady\?Math\.max/);
-  assert.match(line,/profitText=profitReady\?fmt/);
-  assert.match(line,/unitProfitText=profitReady&&profitQty>0\?fmt/);
-  assert.match(html,/const PRODUCT_CARD_PROFIT_SPEC=\{days:180,key:'card-profit-180',label:'6 мес\.',dayCount:180\}/);
-  assert.match(html,/function ensureProductCardProfitStats\(force=false\)/);
-  assert.match(html,/window\.refreshProductPeriodStats\(spec,\{force\}\)/);
-  assert.match(html,/cardProfitStats\.get\(String\(p\.id\)\),cardProfitReady,PRODUCT_CARD_PROFIT_SPEC\.label/);
+  assert.match(line,/profitLabel=period\?\.label\|\|'30 дней'/);
+  assert.match(line,/avgPerDay=periodReady&&period\.dayCount>0\?qty\/period\.dayCount:0/);
+  const start=html.indexOf('function renderProducts(rebuildStats=false){');
+  const end=html.indexOf('\nfunction wbRelinkNotice(',start);
+  const render=html.slice(start,end);
+  assert.match(render,/period=productRankSpec\(\)/);
+  assert.match(render,/rankSpec=period,rankStats=periodStats,rankReady=periodReady/);
+  assert.match(render,/periodStats\.get\(String\(p\.id\)\).*periodStats\.get\(String\(p\.id\)\).*period\.label/);
+  assert.doesNotMatch(html,/PRODUCT_CARD_PROFIT_SPEC/);
 });
 
-test('opening Products warms both 30-day operating stats and six-month card profit stats',()=>{
-  assert.match(html,/if\(view==='products'\)setTimeout\(\(\)=>\{Promise\.resolve\(ensureProductPeriodStats\(\)\).*Promise\.resolve\(ensureProductCardProfitStats\(\)\)/);
-  assert.match(html,/productCardProfitStats instanceof Map\?productCardProfitStats:new Map\(\)/);
-  assert.match(html,/cardProfitReady=productCardProfitStats instanceof Map/);
+test('opening Products warms only the selected-period analytics payload',()=>{
+  const start=html.indexOf('function openView(view,remember=true){');
+  const end=html.indexOf("document.querySelectorAll('nav button').forEach(b=>b.onclick",start);
+  const fn=html.slice(start,end);
+  assert.match(fn,/if\(view==='products'\)setTimeout\(\(\)=>\{Promise\.resolve\(ensureProductRankStats\(\)\)/);
+  assert.doesNotMatch(fn,/ensureProductPeriodStats\(\)/);
+  assert.doesNotMatch(fn,/ensureProductCardProfitStats\(\)/);
 });
 
-test('projected stock profit uses the same six-month unit profit as product cards',()=>{
+test('projected stock profit uses the same selected-period unit profit as product cards',()=>{
   assert.match(html,/Ожидаемая прибыль с остатка/);
   assert.match(html,/onclick="openStockProfitBreakdown\(\)"/);
   assert.match(html,/function warehouseProjectedProfitRows\(profitStats,stockMap=null\)/);
-  assert.match(html,/\(доступно к продаже \+ резерв \+ «На складе»\) × чистая прибыль на 1 проданную штуку за 6 месяцев/);
-  assert.match(html,/продано · '\+esc\(label\)/);
-  assert.match(html,/cardProfitReady\?fmt\(warehouseProjectedProfit\(cardProfitStats,productValuationStockMap\(stats\)\)\):'—'/);
-  assert.match(html,/const spec=PRODUCT_CARD_PROFIT_SPEC;let periodStats=productCardProfitStats/);
-  assert.match(html,/await ensureProductCardProfitStats\(\)/);
+  assert.match(html,/async function openStockProfitBreakdown\(\)\{try\{const spec=productRankSpec\(\);let periodStats=currentProductPeriodStats\(spec\)/);
+  assert.match(html,/await ensureProductRankStats\(\)/);
   assert.match(html,/rows=warehouseProjectedProfitRows\(periodStats,productValuationStockMap\(inventory\)\)/);
-  assert.match(html,/рассчитана за 6 месяцев: Kaspi \+ WB1 \+ WB2 \+ Ozon/);
+  assert.match(html,/чистая прибыль на 1 проданную штуку за '\+esc\(label\)/);
+  assert.match(html,/Чистая прибыль на 1 шт\. рассчитана за '\+esc\(label\)/);
 });
 
-
-
-test('buyer-transit profit uses the six-month average and opens a detailed breakdown',()=>{
+test('buyer-transit profit uses the same selected-period average and opens a detailed breakdown',()=>{
   assert.match(html,/onclick="openToBuyerProfitBreakdown\(\)"/);
   assert.match(html,/function marketplaceToBuyerProfitRows\(periodStats,snapshot=marketplaceToBuyerSnapshot\(\)\)/);
   assert.match(html,/marketProductQtyMap=new Map\(\)/);
-  assert.match(html,/buyer&&cardProfitReady\?fmt\(marketplaceToBuyerProfit\(cardProfitStats,buyer\)\):'—'/);
-  assert.match(html,/async function openToBuyerProfitBreakdown\(\)/);
-  assert.match(html,/const title='Прибыль в пути до покупателя',spec=PRODUCT_CARD_PROFIT_SPEC/);
-  assert.match(html,/await ensureProductCardProfitStats\(\)/);
-  assert.match(html,/количество в пути до покупателя × средняя чистая прибыль на 1 проданную штуку за 6 месяцев/);
+  assert.match(html,/projected=transitQty\*unitProfit/);
+  assert.match(html,/const title='Прибыль в пути до покупателя',spec=productRankSpec\(\)/);
+  assert.match(html,/let periodStats=currentProductPeriodStats\(spec\)/);
+  assert.match(html,/await ensureProductRankStats\(\)/);
+  assert.match(html,/количество в пути до покупателя × средняя чистая прибыль на 1 проданную штуку за '\+esc\(spec\.label\)/);
   assert.match(html,/Продано · '\+esc\(spec\.label\).*средняя прибыль \/ шт\./);
-  assert.match(html,/Нет товаров в пути до покупателя с рассчитанной прибылью за 6 месяцев/);
 });
-
 
 test('stock valuation uses sale plus covered reserve plus warehouse stock',()=>{
   assert.match(html,/function productValuationStockMap\(stats\)/);
@@ -87,19 +84,16 @@ test('unmatched marketplace advertising is never spread across unrelated product
   assert.doesNotMatch(report,/unmatchedAds=Math\.max\(0,Number\(model\.unmatchedAdvertising\)/);
 });
 
-test('product details use combined 30-day net profit including Kaspi and WB advertising',()=>{
+test('product details opened from Products use the same selected period',()=>{
   assert.match(html,/async function openProduct\(pid,market='',days=null\)/);
   assert.match(html,/productListContext=!market&&\(days===null\|\|days===undefined\)/);
-  assert.match(html,/selectedSpec=productListContext\?productPeriodSpec\(\):null/);
-  assert.match(html,/await ensureProductPeriodStats\(\)/);
-  assert.match(html,/window\.refreshAllMarketUnitProfit/);
-  assert.match(html,/Реклама Kaspi \+ WB1 \+ WB2 \+ Ozon за 30 дней/);
-  assert.match(html,/Чистая прибыль за 30 дней/);
+  assert.match(html,/selectedSpec=productListContext\?productRankSpec\(\):null/);
+  assert.match(html,/await ensureProductRankStats\(\)/);
+  assert.match(html,/Продано · \$\{esc\(selectedSpec\.label\)\}/);
+  assert.match(html,/Чистая прибыль · '\+esc\(selectedSpec\.label\)/);
+  assert.match(html,/Реклама Kaspi \+ WB1 \+ WB2 \+ Ozon · '\+esc\(selectedSpec\.label\)/);
   assert.match(html,/после себестоимости, комиссий, логистики, рекламы и возвратов/);
-  assert.match(html,/combined30\?Math\.max\(0,Number\(combined30\.ads\)/);
-  assert.match(html,/По магазинам/);
 });
-
 
 test('unified Product-period profit includes Ozon and supports an explicit custom range',()=>{
   assert.match(report,/window\.refreshProductPeriodStats=function/);
@@ -109,7 +103,7 @@ test('unified Product-period profit includes Ozon and supports an explicit custo
   assert.match(report,/periodCacheKey\(days,range\)/);
   assert.match(compat,/window\.summarizeOzonReport=async function\(days,range=null\)/);
   assert.match(compat,/ozonProfitModel\(payload,days,range\)/);
-  assert.match(html,/Не удалось загрузить единый расчёт прибыли за 6 месяцев/);
+  assert.match(html,/Не удалось загрузить расчёт за '\+esc\(spec\.label\)/);
   assert.match(report,/kaspi=buildModel\(kaspiSnapshot,days,range\)/);
   assert.match(report,/kaspiAdsBreakdown\(days,range\)/);
   assert.match(kaspiAds,/function breakdown\(days = reportPeriod, range = null\)/);

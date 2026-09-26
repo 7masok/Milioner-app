@@ -143,7 +143,7 @@ test('Products paints the tab before heavy statistics and warms cache off the cr
   assert.ok(fn.indexOf('requestAnimationFrame(')<fn.indexOf('try{render()}'));
 });
 
-test('Products show current buyer-delivery stock and six-month projected profit',()=>{
+test('Products show current buyer-delivery stock and selected-period projected profit',()=>{
   assert.doesNotMatch(html,/Введено в продажу за 30 дней|productReceived30/);
   assert.match(html,/В пути до покупателя/);
   assert.match(html,/id="productToBuyerQty">—</);
@@ -157,7 +157,7 @@ test('Products show current buyer-delivery stock and six-month projected profit'
   assert.match(html,/projected=transitQty\*unitProfit/);
   assert.match(html,/function marketplaceToBuyerProfit\(periodStats,snapshot=marketplaceToBuyerSnapshot\(\)\)/);
   assert.match(html,/buyer&&cardProfitReady\?fmt\(marketplaceToBuyerProfit\(cardProfitStats,buyer\)\):'—'/);
-  assert.match(html,/const title='Прибыль в пути до покупателя',spec=PRODUCT_CARD_PROFIT_SPEC/);
+  assert.match(html,/const title='Прибыль в пути до покупателя',spec=productRankSpec\(\)/);
   assert.match(html,/SORTED','ACCEPTED_BY_CARRIER','SENT_TO_CARRIER','READY_FOR_PICKUP/);
   assert.match(html,/KASPI_DELIVERY_TRANSIT/);
   assert.match(html,/DELIVERING/);
@@ -180,19 +180,18 @@ test('Products static shell never shows unconfirmed zero totals',()=>{
 });
 
 
-test('Products expose one numeric ranking period while card sales stay 30-day and card profit stays six-month',()=>{
+test('Products expose one numeric period and use it across card analytics',()=>{
   assert.doesNotMatch(html,/data-product-period=/);
   assert.doesNotMatch(html,/id="productPeriod"/);
   assert.doesNotMatch(html,/id="productPeriodStatus"/);
   assert.doesNotMatch(html,/id="productCustomRange"/);
   assert.match(html,/id="productRankDaysInput" type="number" min="1" max="365"/);
   assert.match(html,/function productRankSpec\(\)/);
-  assert.match(html,/let productPeriod='30';/);
-  assert.match(html,/period:'30',customFrom:'',customTo:''/);
-  assert.match(html,/function productPeriodSpec\(\)/);
-  assert.match(html,/function ensureProductPeriodStats\(force=false\)/);
-  assert.match(html,/PRODUCT_CARD_PROFIT_SPEC=\{days:180,key:'card-profit-180',label:'6 мес\.'/);
-  assert.match(html,/function ensureProductCardProfitStats\(force=false\)/);
+  assert.match(html,/function productRankButtonText\(\).*Период · /);
+  assert.match(html,/function productCard\(p,metric=.*period=productRankSpec\(\)/);
+  assert.match(html,/profitLabel=period\?\.label\|\|'30 дней'/);
+  assert.match(html,/period=productRankSpec\(\),periodStats=currentProductPeriodStats\(period\)/);
+  assert.doesNotMatch(html,/PRODUCT_CARD_PROFIT_SPEC/);
   assert.doesNotMatch(html,/Продажи\/день за 25 дней/);
 });
 
