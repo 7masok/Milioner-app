@@ -89,10 +89,11 @@ test('Products distinguish physical «В продаже» from free-to-sell stoc
   assert.match(card,/Свободно: \$\{forSale\} шт\./);
 });
 
-test('Products critical render stays lightweight with search and direct FBO snapshot filter',()=>{
+test('Products critical render stays lightweight with search FBO snapshot and cached ranking data',()=>{
   const render=between('function renderProducts(','function wbRelinkNotice(');
   assert.match(render,/const q=normalizeName\(document\.getElementById\('q'\)\?\.value\|\|''\)/);
-  assert.match(render,/rows\.sort\(\(a,b\)=>String\(a\?\.name\|\|''\)\.localeCompare/);
+  assert.match(render,/if\(productRankSort!=='name'&&rankReady\)rows\.sort\(\(a,b\)=>compareProductsForList/);
+  assert.match(render,/else rows\.sort\(\(a,b\)=>String\(a\?\.name\|\|''\)\.localeCompare/);
   assert.match(render,/stats\.fboMap\?\.get\(String\(p\.id\)\)/);
   assert.doesNotMatch(render,/ozonFboQtyForProduct\(/);
   assert.doesNotMatch(render,/currentProductFilter\(/);
@@ -100,6 +101,7 @@ test('Products critical render stays lightweight with search and direct FBO snap
   assert.doesNotMatch(render,/productSortDirection\(/);
   assert.doesNotMatch(render,/syncProductPickerLabels\(/);
   assert.doesNotMatch(render,/syncProductPeriodControls\(/);
+  assert.match(render,/syncProductRankButton\(\)/);
   assert.doesNotMatch(render,/updateProductSortDirectionButton\(/);
   assert.doesNotMatch(render,/productMatchesStockFilter\(/);
   assert.match(render,/product card render failed/);
@@ -168,11 +170,13 @@ test('Products rebuild stale cache and Ozon does not invalidate it on every tap'
   assert.doesNotMatch(wrapper,/\.then\(\(\)=>\{updateFboMetric\(\);if\(typeof invalidateProductRenderStats/);
 });
 
-test('Products have no visible time-filter controls',()=>{
+test('Products have no preset time chips and use one numeric ranking period',()=>{
   assert.doesNotMatch(html,/data-product-period=/);
   assert.doesNotMatch(html,/id="productPeriod"/);
   assert.doesNotMatch(html,/id="productPeriodStatus"/);
   assert.doesNotMatch(html,/id="productCustomRange"/);
+  assert.match(html,/id="productRankDaysInput" type="number" min="1" max="365"/);
+  assert.match(html,/function productRankSpec\(\)/);
   assert.match(html,/let productPeriod='30';/);
 });
 
@@ -229,4 +233,5 @@ test('Products audit contract is recorded for future AI changes',()=>{
   assert.match(passport,/PRODUCT-29/);
   assert.match(passport,/PRODUCT-30/);
   assert.match(passport,/PRODUCT-31/);
+  assert.match(passport,/PRODUCT-32/);
 });
