@@ -1,6 +1,8 @@
 import express from 'express';
 import { pool } from './db.js';
 import { asyncRoute } from './http.js';
+import { config } from './config.js';
+import { credentialFor } from './connections.js';
 
 export const reportsRouter = express.Router();
 const ALMATY_OFFSET = 5 * 60 * 60 * 1000;
@@ -10,6 +12,79 @@ function market(value) {
   if (normalized === 'WB1') return 'WB';
   if (normalized === 'KASPI') return 'Kaspi';
   return normalized;
+}
+
+const WB_ANALYTICS_STOCKS_URL='https://seller-analytics-api.wildberries.ru/api/analytics/v1/stocks-report/wb-warehouses';
+const WB_TRANSIT_CACHE_MS=25*60*1000;
+const wbTransitCache=new Map();
+
+async function wbTokenFor(marketId){
+  const fallback=marketId==='WB2'?config.wbToken2:config.wbToken;
+  return credentialFor(marketId,fallback);
+}
+
+async function fetchWbTransitRows(marketId){
+  const cached=wbTransitCache.get(marketId);
+  if(cached&&Date.now()-cached.at<WB_TRANSIT_CACHE_MS)return cached;
+  const token=await wbTokenFor(marketId);
+  if(!token){const error=new Error(marketId+' API token is not configured');error.status=503;throw error}
+  const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),25000);
+  try{
+    const rows=[];let offset=0;
+    for(let page=0;page<4;page++){
+      const response=await fetch(WB_ANALYTICS_STOCKS_URL,{method:'POST',signal:controller.signal,headers:{Accept:'application/json','Content-Type':'application/json',Authorization:token},body:JSON.stringify({nmIds:[],chrtIds:[],limit:250000,offset})});
+      const text=await response.text();let payload={};try{payload=text?JSON.parse(text):{}}catch{}
+      if(!response.ok){
+        const detail=String(payload?.message||payload?.detail||payload?.error||'').trim();
+        const error=new Error('WB analytics HTTP '+response.status+(detail?' · '+detail:''));
+        error.status=response.status;throw error;
+      }
+      const batch=Array.isArray(payload?.data?.items)?payload.data.items:[];
+      rows.push(...batch);
+      if(batch.length<250000)break;
+      offset+=batch.length;
+    }
+    const entry={at:Date.now(),rows};wbTransitCache.set(marketId,entry);return entry;
+  }finally{clearTimeout(timer)}
+}
+
+async function wbTransitProductMap(marketId,rows){
+  const nmIds=[...new Set((rows||[]).map(row=>String(row?.nmId||'').trim()).filter(Boolean))];
+  const direct=new Map(),identityByNmId=new Map(),fallback=new Map();
+  if(nmIds.length){
+    const directRows=await pool.query('SELECT sku,product_id AS "productId" FROM product_links WHERE market=$1 AND sku=ANY($2::text[])',[marketId,nmIds]);
+    for(const row of directRows.rows)direct.set(String(row.sku),String(row.productId));
+    const live=await pool.query(`SELECT DISTINCT ON (nm_id) nm_id AS "nmId",vendor_code AS "vendorCode",barcode
+      FROM wb_sales_live_rows WHERE market=$1 AND nm_id=ANY($2::text[])
+      ORDER BY nm_id,last_change_date DESC,updated_at DESC`,[marketId,nmIds]);
+    const fallbackSkus=[];
+    for(const row of live.rows){
+      const nmId=String(row.nmId||''),vendorCode=String(row.vendorCode||'').trim(),barcode=String(row.barcode||'').trim();
+      identityByNmId.set(nmId,{vendorCode,barcode});
+      if(vendorCode)fallbackSkus.push(vendorCode);if(barcode)fallbackSkus.push(barcode);
+    }
+    const unique=[...new Set(fallbackSkus)];
+    if(unique.length){
+      const linked=await pool.query('SELECT sku,product_id AS "productId" FROM product_links WHERE market=$1 AND sku=ANY($2::text[])',[marketId,unique]);
+      for(const row of linked.rows)fallback.set(String(row.sku),String(row.productId));
+    }
+  }
+  const resolve=nmId=>{
+    const key=String(nmId||'').trim();if(!key)return '';
+    if(direct.has(key))return direct.get(key);
+    const identity=identityByNmId.get(key)||{};
+    if(identity.vendorCode&&fallback.has(identity.vendorCode))return fallback.get(identity.vendorCode);
+    if(identity.barcode&&fallback.has(identity.barcode))return fallback.get(identity.barcode);
+    return '';
+  };
+  const byProduct=new Map(),unlinked=[];
+  for(const row of rows||[]){
+    const nmId=String(row?.nmId||'').trim(),productId=resolve(nmId),toClient=Math.max(0,Number(row?.inWayToClient)||0),fromClient=Math.max(0,Number(row?.inWayFromClient)||0),quantity=Math.max(0,Number(row?.quantity)||0);
+    if(!productId){if(toClient||fromClient)unlinked.push({nmId,chrtId:String(row?.chrtId||''),toClient,fromClient});continue}
+    const old=byProduct.get(productId)||{productId,inWayToClient:0,inWayFromClient:0,quantity:0,nmIds:new Set()};
+    old.inWayToClient+=toClient;old.inWayFromClient+=fromClient;old.quantity+=quantity;if(nmId)old.nmIds.add(nmId);byProduct.set(productId,old);
+  }
+  return {products:[...byProduct.values()].map(x=>({...x,nmIds:[...x.nmIds]})),unlinked};
 }
 
 function periodBounds(days = 1) {
@@ -305,6 +380,14 @@ async function resolveWbAdvertising(selected, adRows = []) {
 
   return { rows: audited, byProduct, total, unmatched, autoRecovered };
 }
+
+reportsRouter.get('/wb-transit-stock', asyncRoute(async (req,res)=>{
+  const selected=market(req.query.market);
+  if(!['WB','WB2'].includes(selected))return res.status(400).json({ok:false,error:'market must be WB or WB2'});
+  const snapshot=await fetchWbTransitRows(selected),mapped=await wbTransitProductMap(selected,snapshot.rows);
+  const totals=mapped.products.reduce((acc,row)=>{acc.inWayToClient+=row.inWayToClient;acc.inWayFromClient+=row.inWayFromClient;acc.quantity+=row.quantity;return acc},{inWayToClient:0,inWayFromClient:0,quantity:0});
+  res.json({ok:true,market:selected,source:'WB analytics stocks-report',updatedAt:snapshot.at,totals,products:mapped.products,unlinked:mapped.unlinked});
+}));
 
 reportsRouter.get('/wb-finance-products', asyncRoute(async (req, res) => {
   const selected = market(req.query.market);
