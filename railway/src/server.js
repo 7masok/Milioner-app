@@ -360,8 +360,17 @@ async function logWb2WingsTransitDiagnostic() {
     const transitStates = new Set(['SORTED','ACCEPTED_BY_CARRIER','SENT_TO_CARRIER','READY_FOR_PICKUP']);
     const cancelledStatuses = new Set(['CANCEL','CANCELLED']);
     const cancelledStates = new Set(['CANCELED','CANCELLED','CANCELED_BY_CLIENT','CANCELLED_BY_CLIENT','DECLINED_BY_CLIENT','DEFECT','SOLD']);
-    let clientTransitQty = 0;
-    const byState = new Map(), bySkuState = new Map();
+    let clientTransitQty = 0, transitOlder14 = 0, transitOlder7 = 0, transitOlder3 = 0;
+    const byState = new Map(), bySkuState = new Map(), transitByAge = new Map(), transitByCreatedDay = new Map(), transitByUpdatedAge = new Map();
+    const now = Date.now();
+    const ageBucket = ms => {
+      const days = Math.floor(Math.max(0, now - Number(ms || 0)) / 86400000);
+      if (days >= 14) return '14d+';
+      if (days >= 7) return '7-13d';
+      if (days >= 3) return '3-6d';
+      if (days >= 1) return '1-2d';
+      return '<1d';
+    };
     for (const g of groups.values()) {
       const status = String(g.status || '').trim().toUpperCase();
       const state = String(g.state || '').trim().toUpperCase();
@@ -372,7 +381,18 @@ async function logWb2WingsTransitDiagnostic() {
         const skuKey = String(line.sku || '') + '|' + stateKey;
         byState.set(stateKey,(byState.get(stateKey)||0)+qty);
         bySkuState.set(skuKey,(bySkuState.get(skuKey)||0)+qty);
-        if (counted) clientTransitQty += qty;
+        if (counted) {
+          clientTransitQty += qty;
+          const creation = Number(line.creationDate)||0, updated = Number(line.updatedAt)||0;
+          const createdAge = ageBucket(creation), updatedAge = ageBucket(updated);
+          transitByAge.set(createdAge,(transitByAge.get(createdAge)||0)+qty);
+          transitByUpdatedAge.set(updatedAge,(transitByUpdatedAge.get(updatedAge)||0)+qty);
+          const day = creation ? new Date(creation).toISOString().slice(0,10) : 'unknown';
+          transitByCreatedDay.set(day,(transitByCreatedDay.get(day)||0)+qty);
+          if (creation && now-creation >= 14*86400000) transitOlder14 += qty;
+          if (creation && now-creation >= 7*86400000) transitOlder7 += qty;
+          if (creation && now-creation >= 3*86400000) transitOlder3 += qty;
+        }
       }
     }
     console.info('WB2_WINGS_DIAG', JSON.stringify({
@@ -384,6 +404,12 @@ async function logWb2WingsTransitDiagnostic() {
       dbRows:rows.rows.length,
       groupedOrders:groups.size,
       clientTransitQty,
+      transitOlder14,
+      transitOlder7,
+      transitOlder3,
+      transitByAge:Object.fromEntries(transitByAge),
+      transitByUpdatedAge:Object.fromEntries(transitByUpdatedAge),
+      transitByCreatedDay:[...transitByCreatedDay.entries()].map(([day,qty])=>({day,qty})).sort((a,b)=>a.day.localeCompare(b.day)),
       byState:[...byState.entries()].map(([key,qty])=>({key,qty})).sort((a,b)=>b.qty-a.qty),
       bySkuState:[...bySkuState.entries()].map(([key,qty])=>({key,qty})).sort((a,b)=>b.qty-a.qty)
     }));
