@@ -5,7 +5,7 @@ import {readFileSync} from 'node:fs';
 const html=readFileSync(new URL('../../index.html',import.meta.url),'utf8');
 const cloud=readFileSync(new URL('../../cloud-sync-v3.js',import.meta.url),'utf8');
 
-test('Products reload preserves tab search and page while removed controls stay reset',()=>{
+test('Products reload preserves search page and the approved ranking filter while legacy controls stay reset',()=>{
   assert.match(html,/const PRODUCT_UI_KEY=KEY\+'_product_ui_v1'/);
   assert.match(html,/savedView=localStorage\.getItem\(ACTIVE_VIEW_KEY\)/);
   assert.match(html,/startupView=!freshLogin/);
@@ -13,8 +13,10 @@ test('Products reload preserves tab search and page while removed controls stay 
   assert.match(html,/function rememberProductUi\(patch=\{\}\)/);
   assert.match(html,/rememberProductUi\(\{q:/);
   assert.match(html,/rememberProductUi\(\{page:productPage\}/);
-  assert.match(html,/let productUi=\{\.\.\.readProductUi\(\),filter:'all',sort:'name',sortDirections:\{name:'asc'\},period:'30',customFrom:'',customTo:''\}/);
+  assert.match(html,/const savedProductUi=readProductUi\(\),savedRankSort=/);
+  assert.match(html,/rankSort:savedRankSort,rankDays:savedRankDays,rankDirection:savedRankDirection/);
   assert.match(html,/let productFilter='all';\nlet productFboOnly=false;\nlet productSort='name';/);
+  assert.match(html,/let productRankSort=savedRankSort,productRankDays=savedRankDays,productRankDirection=savedRankDirection/);
 });
 
 test('bottom nav allocates one column per eight visible tabs',()=>{
@@ -31,7 +33,7 @@ test('Products reject invalid quantities and remove the ignored duplicate minimu
   assert.match(html,/bundle-qty" type="number" min="1" step="1"/);
 });
 
-test('Products keep alias search but expose no filter or sort controls',()=>{
+test('Products keep alias search and expose only one compact ranking control',()=>{
   const search=html.slice(html.indexOf('function productSearchHaystack('),html.indexOf('\nfunction readProductUi',html.indexOf('function productSearchHaystack(')));
   for(const token of ['kaspiAliases','wbAliases','wb2Aliases','ozonAliases','vendorCode','nmId','chrtId','barcode'])assert.match(search,new RegExp(token));
   assert.match(html,/id="q" class="search" placeholder="Поиск по названию или артикулам"/);
@@ -40,10 +42,13 @@ test('Products keep alias search but expose no filter or sort controls',()=>{
   assert.doesNotMatch(html,/id="productFilterPicker"/);
   assert.doesNotMatch(html,/id="productSortPicker"/);
   assert.doesNotMatch(html,/id="productSortDirection"/);
+  assert.match(html,/id="productRankButton" type="button" class="btn product-rank-button" onclick="openProductRankFilter\(\)"/);
+  assert.match(html,/id="productRankDaysInput" type="number" min="1" max="365"/);
 });
 
-test('Products ignore legacy saved filter sort and direction state',()=>{
-  assert.match(html,/let productUi=\{\.\.\.readProductUi\(\),filter:'all',sort:'name',sortDirections:\{name:'asc'\},period:'30',customFrom:'',customTo:''\}/);
+test('Products ignore legacy saved filter sort state but persist the new ranking state',()=>{
+  assert.match(html,/filter:'all',sort:'name',sortDirections:\{name:'asc'\},period:'30',customFrom:'',customTo:''/);
+  assert.match(html,/rememberProductUi\(\{rankSort:productRankSort,rankDays:productRankDays,rankDirection:productRankDirection,page:1\}\)/);
   assert.match(html,/let productFilter='all';\nlet productFboOnly=false;\nlet productSort='name';/);
   assert.doesNotMatch(html,/id="productAtWarehouseCard"/);
   assert.doesNotMatch(html,/id="productAtWarehouseQty"/);
@@ -95,7 +100,7 @@ test('Advertising page exposes a six-month link audit for Kaspi, WB1 and WB2',()
   assert.match(html,/Суммы кампаний по нескольким разным товарам не делятся наугад/);
 });
 
-test('Products keep search plus the direct FBO metric filter without old dropdown controls',()=>{
+test('Products keep search FBO filter and one ranking button without old dropdown controls',()=>{
   assert.doesNotMatch(html,/<select id="filter"/);
   assert.doesNotMatch(html,/<select id="sort"/);
   assert.doesNotMatch(html,/<input id="filter"/);
@@ -104,6 +109,7 @@ test('Products keep search plus the direct FBO metric filter without old dropdow
   assert.doesNotMatch(html,/class="product-sort-direction"/);
   assert.doesNotMatch(html,/data-product-period=/);
   assert.match(html,/id="q" class="search" placeholder="Поиск по названию или артикулам"/);
+  assert.match(html,/id="productRankButton" type="button" class="btn product-rank-button"/);
   assert.match(html,/id="productFboCard" type="button" class="card purchase-filter-card" onclick="toggleProductFboFilter\(\)"/);
   assert.match(html,/aria-pressed="false"/);
 });
@@ -174,11 +180,13 @@ test('Products static shell never shows unconfirmed zero totals',()=>{
 });
 
 
-test('Products expose no time controls while using 30-day sales and six-month card profit internally',()=>{
+test('Products expose one numeric ranking period while card sales stay 30-day and card profit stays six-month',()=>{
   assert.doesNotMatch(html,/data-product-period=/);
   assert.doesNotMatch(html,/id="productPeriod"/);
   assert.doesNotMatch(html,/id="productPeriodStatus"/);
   assert.doesNotMatch(html,/id="productCustomRange"/);
+  assert.match(html,/id="productRankDaysInput" type="number" min="1" max="365"/);
+  assert.match(html,/function productRankSpec\(\)/);
   assert.match(html,/let productPeriod='30';/);
   assert.match(html,/period:'30',customFrom:'',customTo:''/);
   assert.match(html,/function productPeriodSpec\(\)/);
@@ -188,13 +196,17 @@ test('Products expose no time controls while using 30-day sales and six-month ca
   assert.doesNotMatch(html,/Продажи\/день за 25 дней/);
 });
 
-test('Products use deterministic alphabetical order after removing sort controls',()=>{
-  assert.match(html,/let productSort='name';/);
-  assert.match(html,/sortDirections:\{name:'asc'\}/);
+test('Products rank by sales or total profit for one persistent custom day count',()=>{
+  assert.match(html,/function openProductRankFilter\(\)/);
+  assert.match(html,/option value="sales".*>Количеству продаж<\/option>/);
+  assert.match(html,/option value="profit".*>Общей прибыли<\/option>/);
+  assert.match(html,/function applyProductRankFilter\(\)/);
+  assert.match(html,/days<1\|\|days>365/);
+  assert.match(html,/function ensureProductRankStats\(force=false\)/);
   const start=html.indexOf('function renderProducts(rebuildStats=false){');
   const end=html.indexOf('\nfunction wbRelinkNotice(',start);
   const render=html.slice(start,end);
-  assert.match(render,/rows\.sort\(\(a,b\)=>String\(a\?\.name\|\|''\)\.localeCompare\(String\(b\?\.name\|\|''\),'ru'\)\)/);
+  assert.match(render,/if\(productRankSort!=='name'&&rankReady\)rows\.sort\(\(a,b\)=>compareProductsForList\(a,b,productRankSort,productRankDirection,stats,rankStats,rankSpec,true\)\)/);
+  assert.match(render,/else rows\.sort\(\(a,b\)=>String\(a\?\.name\|\|''\)\.localeCompare/);
   assert.doesNotMatch(render,/currentProductSort\(|productSortDirection\(|data-product-sort/);
-  assert.doesNotMatch(html,/productSortDirection" type="button"/);
 });
