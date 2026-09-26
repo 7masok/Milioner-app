@@ -44,6 +44,20 @@ test('projected stock profit uses the same six-month unit profit as product card
 
 
 
+test('buyer-transit profit uses the six-month average and opens a detailed breakdown',()=>{
+  assert.match(html,/onclick="openToBuyerProfitBreakdown\(\)"/);
+  assert.match(html,/function marketplaceToBuyerProfitRows\(periodStats,snapshot=marketplaceToBuyerSnapshot\(\)\)/);
+  assert.match(html,/marketProductQtyMap=new Map\(\)/);
+  assert.match(html,/buyer&&cardProfitReady\?fmt\(marketplaceToBuyerProfit\(cardProfitStats,buyer\)\):'—'/);
+  assert.match(html,/async function openToBuyerProfitBreakdown\(\)/);
+  assert.match(html,/const title='Прибыль в пути до покупателя',spec=PRODUCT_CARD_PROFIT_SPEC/);
+  assert.match(html,/await ensureProductCardProfitStats\(\)/);
+  assert.match(html,/количество в пути до покупателя × средняя чистая прибыль на 1 проданную штуку за 6 месяцев/);
+  assert.match(html,/Продано · '\+esc\(spec\.label\).*средняя прибыль \/ шт\./);
+  assert.match(html,/Нет товаров в пути до покупателя с рассчитанной прибылью за 6 месяцев/);
+});
+
+
 test('stock valuation uses sale plus covered reserve plus warehouse stock',()=>{
   assert.match(html,/function productValuationStockMap\(stats\)/);
   assert.match(html,/available\+coveredReserve\+warehouse/);
