@@ -164,8 +164,8 @@ async function listWbPrices(market, force = false) {
   for (let offset = 0, page = 0; page < 100; page++, offset += 1000) {
     const data = await requestWb(token, '/api/v2/list/goods/filter?limit=1000&offset=' + offset);
     const batch = Array.isArray(data?.data?.listGoods) ? data.data.listGoods : [];
+    if (!batch.length) break;
     rows.push(...batch);
-    if (batch.length < 1000) break;
   }
   const links = await productLinks(market);
   const normalized = rows.map(row => {
@@ -247,11 +247,12 @@ async function ozonAccounts() {
 
 function ozonPriceObject(item) {
   const price = item?.price && typeof item.price === 'object' ? item.price : {};
-  const current = Math.max(0, number(price.price, item?.price, price.marketing_seller_price, item?.marketing_seller_price));
+  const current = Math.max(0, number(price.price, item?.price));
+  const sellerDiscountPrice = Math.max(0, number(price.marketing_seller_price, item?.marketing_seller_price));
   const oldPrice = Math.max(0, number(price.old_price, item?.old_price));
   const minPrice = Math.max(0, number(price.min_price, price.min_ozon_price, item?.min_price, item?.min_ozon_price));
   const currency = cleanText(price.currency_code || price.currency || item?.currency_code || item?.currency) || 'RUB';
-  return { current, oldPrice, minPrice, currency };
+  return { current, sellerDiscountPrice, oldPrice, minPrice, currency };
 }
 
 async function listOzonPrices(force = false) {
@@ -295,8 +296,10 @@ async function listOzonPrices(force = false) {
         const productId = cleanText(item?.product_id);
         const link = links.get(offerId) || null;
         const p = ozonPriceObject(item);
-        const discount = p.oldPrice > p.current && p.current > 0
-          ? Math.max(0, Math.min(99, Math.round((1 - p.current / p.oldPrice) * 100)))
+        const effective = p.sellerDiscountPrice > 0 ? p.sellerDiscountPrice : p.current;
+        const discountBase = p.oldPrice > effective ? p.oldPrice : p.current;
+        const discount = discountBase > effective && effective > 0
+          ? Math.max(0, Math.min(99, Math.round((1 - effective / discountBase) * 100)))
           : 0;
         all.push({
           id: 'Ozon:' + account.id + ':' + (offerId || productId),
@@ -309,7 +312,8 @@ async function listOzonPrices(force = false) {
           remoteId: productId,
           linked: Boolean(link),
           price: p.current,
-          finalPrice: p.current,
+          finalPrice: effective,
+          sellerDiscountPrice: p.sellerDiscountPrice,
           oldPrice: p.oldPrice,
           minPrice: p.minPrice,
           discount,
