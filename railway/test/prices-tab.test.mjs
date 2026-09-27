@@ -260,8 +260,9 @@ test('WB promotion automation scans regular promotions in persisted safe steps a
   assert.match(wbPromo,/\/api\/v1\/calendar\/promotions\/nomenclatures\?/);
   assert.match(wbPromo,/\/api\/v1\/calendar\/promotions\/upload/);
   assert.match(wbPromo,/cleanText\(item\?\.type\)\.toLowerCase\(\) === 'regular'/);
-  assert.match(wbPromo,/WB_PROMO_MIN_INTERVAL_MS = 650/);
-  assert.match(wbPromo,/WB_PROMO_STEP_MS = 5_000/);
+  assert.match(wbPromo,/WB_PROMO_SLOT_MS = 60 \* 60 \* 1000 \+ 5_000/);
+  assert.match(wbPromo,/WB_PROMO_MIN_INTERVAL_MS = WB_PROMO_SLOT_MS/);
+  assert.match(wbPromo,/WB_PROMO_FALLBACK_COOLDOWN_MS = WB_PROMO_SLOT_MS/);
   assert.match(wbPromo,/WB_PROMO_MAX_CAMPAIGNS = 10/);
   assert.match(wbPromo,/eligibleIndex/);
   assert.match(wbPromo,/betterPromoCandidate/);
