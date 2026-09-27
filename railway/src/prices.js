@@ -344,7 +344,7 @@ function jsonValue(value, fallback) {
 }
 
 function timeToMinute(value) {
-  const match = /^(\\d{2}):(\\d{2})$/.exec(cleanText(value));
+  const match = /^(\d{2}):(\d{2})$/.exec(cleanText(value));
   if (!match) return null;
   const hour = Number(match[1]), minute = Number(match[2]);
   if (!Number.isInteger(hour) || hour < 0 || hour > 23 || !Number.isInteger(minute) || minute < 0 || minute > 59) return null;
