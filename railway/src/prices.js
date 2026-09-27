@@ -139,7 +139,8 @@ async function requestWb(token, path, options = {}) {
   if (!response.ok || data?.error === true) {
     const detail = cleanText(data?.errorText || data?.message || data?.detail);
     const error = new Error('WB цены: HTTP ' + response.status + (detail ? ' · ' + detail : ''));
-    error.status = response.status === 401 || response.status === 403 ? 403 : 502;
+    error.status = response.status === 401 || response.status === 403 ? 403
+      : data?.error === true || (response.status >= 400 && response.status < 500) ? 400 : 502;
     throw error;
   }
   return data;
@@ -236,7 +237,8 @@ async function requestOzon(credentials, path, body) {
     }
     detail = detail.slice(0, 400);
     const error = new Error('Ozon цены: HTTP ' + response.status + (detail ? ' · ' + detail : ''));
-    error.status = response.status === 401 || response.status === 403 ? 403 : 502;
+    error.status = response.status === 401 || response.status === 403 ? 403
+      : response.status >= 400 && response.status < 500 ? 400 : 502;
     throw error;
   }
   return data;
