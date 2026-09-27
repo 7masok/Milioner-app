@@ -324,23 +324,6 @@ async function updatePreference(market, nmId, values, client = pool) {
     [...params, Date.now()]);
 }
 
-async function restorePromoDiscountIfNeeded(market, pref, row) {
-  if (!row) return;
-  const baseDiscount = pref.baseDiscount === null ? clampDiscount(row.discount) : clampDiscount(pref.baseDiscount);
-  const queue = await currentQueueRow(market, pref.nmId);
-  if (['manual','schedule'].includes(cleanText(queue?.source))) return;
-  if (clampDiscount(row.discount) !== baseDiscount) {
-    await queuePromoDiscount(market, pref.nmId, baseDiscount, 0);
-    await updatePreference(market, pref.nmId, {
-      status: 'restoring', promotion_id: 0, promotion_name: '', plan_price: null, plan_discount: null, last_error: ''
-    });
-  } else {
-    await updatePreference(market, pref.nmId, {
-      status: 'idle', promotion_id: 0, promotion_name: '', plan_price: null, plan_discount: null, last_error: ''
-    });
-  }
-}
-
 async function promoListStep(market, token, prefs, byNm, now) {
   const startDateTime = isoSeconds(now - 24 * 60 * 60 * 1000);
   const endDateTime = isoSeconds(now + WB_PROMO_LOOKAHEAD_MS);
@@ -354,7 +337,6 @@ async function promoListStep(market, token, prefs, byNm, now) {
 
   if (!promotions.length) {
     for (const pref of prefs) {
-      await restorePromoDiscountIfNeeded(market, pref, byNm.get(pref.nmId));
       if (autoCount > 0) {
         await updatePreference(market, pref.nmId, {
           status: 'auto_only', promotion_id: 0, promotion_name: '',
@@ -440,7 +422,6 @@ async function promoEligibleStep(market, token, prefs, byNm, state, now) {
 
     const candidate = byCandidate.get(pref.nmId);
     if (!candidate) {
-      await restorePromoDiscountIfNeeded(market, pref, row);
       if (number(state.payload?.autoCount) > 0) {
         await updatePreference(market, pref.nmId, {
           status: 'auto_only', promotion_id: 0, promotion_name: '',
