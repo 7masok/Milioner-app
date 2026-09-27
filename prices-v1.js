@@ -157,7 +157,7 @@ function priceInlineEditor(row,index){
       '<div class="price-inline-fields"><div class="field"><label>Цена, '+pEsc(row.currency||'RUB')+'</label><input id="priceEditCurrent" type="number" min="1" step="1" inputmode="decimal" value="'+pEsc(pNum(row.price)||'')+'" '+(priceDisabled?'disabled':'')+'></div>'+
       '<div class="field"><label>Скидка, %</label><input id="priceEditDiscount" type="number" min="0" max="99" step="1" inputmode="numeric" value="'+pEsc(Math.round(pNum(row.discount)))+'"></div></div>'+
       (priceDisabled?'<div class="price-inline-warning">Разные цены по размерам · меняется только скидка</div>':'')+
-      '<div class="price-inline-actions"><button type="button" class="btn dark" onclick="submitPriceEdit('+Number(index)+')">Сохранить</button><button type="button" class="btn price-hide-action" onclick="hidePriceRow('+Number(index)+')">Скрыть</button></div>'+
+      '<div class="price-inline-actions wb"><label class="price-promo-toggle"><input type="checkbox" '+(row.promoEnabled?'checked':'')+' onchange="togglePricePromo('+Number(index)+',this.checked)">Акции</label><button type="button" class="btn dark" onclick="submitPriceEdit('+Number(index)+')">Сохранить</button><button type="button" class="btn price-hide-action" onclick="hidePriceRow('+Number(index)+')">Скрыть</button></div>'+
       '</div>';
   }
   if(row.market==='Ozon'){
@@ -195,11 +195,14 @@ function priceCard(row,index){
     :row.syncState==='sent'
       ?'<div class="price-sync-state sent">Отправлено в WB · ждём проверки</div>'
       :'';
+  const promo=row.promoEnabled
+    ?'<span class="price-promo-badge '+(row.promoStatus==='participating'?'active':'')+'"> · Акции '+(row.promoStatus==='participating'?'✓':'')+'</span>'
+    :'';
   const expanded=Boolean(priceExpanded&&priceExpanded.market===priceUi.market&&priceExpanded.index===Number(index));
   return '<div class="item price-item '+(!linked?'unlinked':'')+(expanded?' expanded':'')+'" data-price-row="'+index+'">'+
     '<button type="button" class="price-card-toggle" onclick="openPriceEditor('+index+')" aria-expanded="'+(expanded?'true':'false')+'">'+
       '<div class="price-item-head"><div class="grow"><div class="name">'+pEsc(row.name||row.sku||'Товар')+'</div>'+
-      '<div class="muted">'+pEsc(account?(row.account+' · '):'')+pEsc(row.sku?('Арт. '+row.sku):row.remoteId||'')+(linked?'':' · не привязан к товару склада')+'</div>'+sync+'</div><span class="price-chevron">'+(expanded?'⌄':'›')+'</span></div>'+
+      '<div class="muted">'+pEsc(account?(row.account+' · '):'')+pEsc(row.sku?('Арт. '+row.sku):row.remoteId||'')+(linked?'':' · не привязан к товару склада')+promo+'</div>'+sync+'</div><span class="price-chevron">'+(expanded?'⌄':'›')+'</span></div>'+
       '<div class="price-values">'+lines+'</div>'+
     '</button>'+priceInlineEditor(row,index)+'</div>';
 }
@@ -356,6 +359,29 @@ window.collapsePriceEditor=function(){
   priceExpanded=null;paintPrices();
 };
 
+async function remotePromoToggle(body){
+  const response=await fetch(MILLIONER_API+'/api/market-prices/promo',{
+    method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({...body,confirm:true})
+  });
+  const text=await response.text();
+  let data=null;if(text){try{data=JSON.parse(text)}catch{throw new Error('Сервер акций вернул некорректный ответ')}}
+  if(!response.ok||data?.ok===false)throw new Error(data?.error||('HTTP '+response.status));
+  return data;
+}
+window.togglePricePromo=async function(index,enabled){
+  const row=activeRows()[Number(index)];if(!row||(row.market!=='WB'&&row.market!=='WB2'))return;
+  const checkbox=document.querySelector('[data-price-row="'+Number(index)+'"] .price-promo-toggle input');
+  if(checkbox)checkbox.disabled=true;
+  try{
+    const result=await remotePromoToggle({market:row.market,remoteId:row.remoteId,enabled:Boolean(enabled)});
+    row.promoEnabled=Boolean(result.enabled);row.promoStatus=row.promoEnabled?'idle':'off';
+    if(!row.promoEnabled){row.promoName='';row.promoPlanPrice=null;row.promoPlanDiscount=null}
+    paintPrices();setPriceStatus(row.promoEnabled?'Акции включены':'Акции выключены','ok');
+  }catch(error){
+    if(checkbox){checkbox.checked=!enabled;checkbox.disabled=false}
+    alert(priceErrorText(error));
+  }
+};
 async function remotePriceUpdate(body){
   const response=await fetch(MILLIONER_API+'/api/market-prices/update',{
     method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({...body,confirm:true})
@@ -368,7 +394,7 @@ async function remotePriceUpdate(body){
 }
 window.submitPriceEdit=async function(index){
   const row=activeRows()[Number(index)];if(!row)return;
-  const button=document.querySelector('[data-price-row="'+Number(index)+'"] .price-inline-editor .btn.dark.full');if(button){button.disabled=true;button.textContent='Сохраняю…';}
+  const button=document.querySelector('[data-price-row="'+Number(index)+'"] .price-inline-editor .btn.dark');if(button){button.disabled=true;button.textContent='Сохраняю…';}
   try{
     if(row.market==='Kaspi'){
       const price=inputNumber('priceEditCurrent');
