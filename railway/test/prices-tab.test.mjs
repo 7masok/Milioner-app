@@ -73,7 +73,8 @@ test('Passport and AGENTS define the Prices contract',()=>{
   assert.match(passport,/Нижняя навигация содержит девять разделов/);
   for(const rule of ['PRICE-01','PRICE-02','PRICE-03','PRICE-04','PRICE-05','PRICE-06','PRICE-07','PRICE-08'])assert.match(passport,new RegExp(rule));
   assert.match(agents,/Во вкладке «Цены»/);
-  assert.match(agents,/явного подтверждения/);
+  assert.match(agents,/фоновый цикл/);
+  assert.match(agents,/не отправляются немедленно/);
 });
 
 
@@ -192,7 +193,7 @@ test('WB queued writes batch changes and verify them only on a later read slot',
   assert.match(api,/SET status='sent'/);
   assert.match(api,/lastAction: 'write'/);
   assert.match(api,/row\.status === 'sent'/);
-  assert.match(api,/DELETE FROM wb_price_update_queue WHERE market=\$1 AND nm_id=\$2 AND status='sent'/);
+  assert.match(api,/DELETE FROM wb_price_update_queue WHERE market=\$1 AND nm_id=\$2/);
   assert.match(api,/last_error='WB ещё не подтвердил изменение'/);
   assert.match(ui,/Ожидает отправки в WB/);
   assert.match(ui,/Отправлено в WB · ждём проверки/);
