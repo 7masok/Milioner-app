@@ -4,12 +4,13 @@
 const PRICE_UI_KEY=(typeof KEY==='string'?KEY:'sklad_mvp_v2')+'_prices_ui_v1';
 const PRICE_MARKETS=['Kaspi','WB','WB2','Ozon'];
 const PRICE_CLIENT_TTL_MS=2*60*1000;
-let priceUi={market:'Kaspi',q:'',sort:'asc'};
+let priceUi={market:'Kaspi',q:'',sort:'asc',hidden:{}};
 try{
   const saved=JSON.parse(localStorage.getItem(PRICE_UI_KEY)||'{}')||{};
   if(PRICE_MARKETS.includes(saved.market))priceUi.market=saved.market;
   priceUi.q=String(saved.q||'');
   if(saved.sort==='desc'||saved.sort==='asc')priceUi.sort=saved.sort;
+  if(saved.hidden&&typeof saved.hidden==='object')priceUi.hidden=saved.hidden;
 }catch{}
 const priceCache=new Map();
 const priceFetchInFlight=new Map();
@@ -44,6 +45,25 @@ function marketLabel(market){
 function activeRows(){
   return Array.isArray(priceCache.get(priceUi.market)?.rows)?priceCache.get(priceUi.market).rows:[];
 }
+function priceHiddenKeys(market=priceUi.market){
+  const rows=priceUi.hidden?.[market];return Array.isArray(rows)?rows.map(String):[];
+}
+function priceRowKey(row){
+  if(!row)return'';
+  const market=String(row.market||priceUi.market||'');
+  if(market==='WB'||market==='WB2')return market+'|nm:'+String(row.remoteId||row.nmID||row.sku||row.name||'');
+  if(market==='Ozon')return market+'|'+String(row.accountId||row.account||'')+'|'+String(row.sku||row.remoteId||row.productId||row.name||'');
+  return market+'|'+String(row.productId||row.sku||row.remoteId||row.name||'');
+}
+function priceIsHidden(row,market=priceUi.market){
+  const key=priceRowKey(row);return Boolean(key&&priceHiddenKeys(market).includes(key));
+}
+function priceRememberHidden(market,keys){
+  priceUi.hidden={...(priceUi.hidden||{}),[market]:[...new Set((keys||[]).map(String).filter(Boolean))]};rememberPriceUi();
+}
+function priceHideAction(){
+  return '<button type="button" class="btn full price-hide-action" onclick="hidePriceRow()">Скрыть из списка</button>';
+}
 function priceSnapshotFresh(data){
   const when=Number(data?.fetchedAt)||0;
   return Boolean(data&&!data.stale&&when>0&&Date.now()-when<PRICE_CLIENT_TTL_MS);
@@ -76,6 +96,8 @@ function setPriceTabs(){
   if(q&&q.value!==priceUi.q)q.value=priceUi.q;
   const sort=document.getElementById('priceSortButton');
   if(sort){const desc=priceUi.sort==='desc';sort.textContent=desc?'Цена ↓':'Цена ↑';sort.setAttribute('aria-label',desc?'Сортировка по цене: сначала дорогие':'Сортировка по цене: сначала дешёвые');sort.title=desc?'Сначала дорогие':'Сначала дешёвые';}
+  const hidden=document.getElementById('priceHiddenButton'),hiddenCount=priceHiddenKeys().length;
+  if(hidden){hidden.hidden=!hiddenCount;hidden.textContent='Скрытые · '+hiddenCount;hidden.setAttribute('aria-label','Показать скрытые товары: '+hiddenCount);}
 }
 function priceRetryLabel(retryAt){
   const ts=Number(retryAt)||0;
@@ -129,8 +151,9 @@ function priceCard(row,index){
 }
 function paintPrices(){
   setPriceTabs();
-  const rows=activeRows(),q=priceUi.q.trim().toLocaleLowerCase('ru-RU');
+  const rows=activeRows(),visibleRows=rows.filter(row=>!priceIsHidden(row)),q=priceUi.q.trim().toLocaleLowerCase('ru-RU');
   const indexed=rows.map((row,index)=>({row,index})).filter(({row})=>{
+    if(priceIsHidden(row))return false;
     if(!q)return true;
     return [row.name,row.sku,row.remoteId,row.account].some(value=>String(value||'').toLocaleLowerCase('ru-RU').includes(q));
   }).sort((a,b)=>{
@@ -140,7 +163,7 @@ function paintPrices(){
     const byName=String(a.row?.name||a.row?.sku||'').localeCompare(String(b.row?.name||b.row?.sku||''),'ru',{sensitivity:'base'});
     return byName||a.index-b.index;
   });
-  const valid=rows.filter(row=>!row.error),withDiscount=valid.filter(row=>priceDiscountValue(row)>0).length,noPrice=valid.filter(row=>!(pNum(row.price)>0||pNum(row.finalPrice)>0)).length;
+  const valid=visibleRows.filter(row=>!row.error),withDiscount=valid.filter(row=>priceDiscountValue(row)>0).length,noPrice=valid.filter(row=>!(pNum(row.price)>0||pNum(row.finalPrice)>0)).length;
   const count=document.getElementById('pricePositionCount'),discount=document.getElementById('priceDiscountCount'),missing=document.getElementById('priceMissingCount');
   if(count)count.textContent=valid.length.toLocaleString('ru-RU');
   if(discount)discount.textContent=withDiscount.toLocaleString('ru-RU');
@@ -151,6 +174,7 @@ function paintPrices(){
     if(failure){priceRenderError(failure.message);return;}
     list.innerHTML='<div class="empty">Нет позиций для этого магазина</div>';return;
   }
+  if(!visibleRows.length&&rows.length){list.innerHTML='<div class="empty">Все позиции этого магазина скрыты.<br><span class="muted">Вернуть их можно через «Скрытые».</span></div>';return;}
   if(!indexed.length){list.innerHTML='<div class="empty">Поиск ничего не нашёл</div>';return;}
   list.innerHTML=indexed.map(({row,index})=>priceCard(row,index)).join('');
 }
@@ -229,6 +253,25 @@ window.priceSearch=function(value){
 window.priceToggleSort=function(){
   priceUi.sort=priceUi.sort==='desc'?'asc':'desc';rememberPriceUi();setPriceTabs();paintPrices();
 };
+window.hidePriceRow=function(){
+  const row=window.__priceEditRow,key=priceRowKey(row);if(!row||!key)return;
+  const market=String(row.market||priceUi.market),keys=priceHiddenKeys(market);if(!keys.includes(key))keys.push(key);
+  priceRememberHidden(market,keys);closeModal();paintPrices();
+  setPriceStatus('Товар скрыт из списка цен.','ok');
+};
+window.openHiddenPrices=function(){
+  const market=priceUi.market,keys=priceHiddenKeys(market),rows=activeRows().filter(row=>priceIsHidden(row,market));
+  window.__priceHiddenRows=rows;
+  const body=rows.length?rows.map((row,index)=>'<div class="item price-hidden-row"><div class="grow"><div class="name">'+pEsc(row.name||row.sku||'Товар')+'</div><div class="muted">'+pEsc(row.sku?('Арт. '+row.sku):row.remoteId||'')+'</div></div><button type="button" class="btn" onclick="restorePriceRow('+index+')">Вернуть</button></div>').join(''):'<div class="empty">Скрытых товаров в текущей загрузке нет.</div>';
+  showSheet('<h3>Скрытые · '+pEsc(marketLabel(market))+'</h3>'+body+(keys.length?'<button type="button" class="btn full" onclick="restoreAllPriceRows()">Вернуть все</button>':''));
+};
+window.restorePriceRow=function(index){
+  const row=window.__priceHiddenRows?.[Number(index)],market=priceUi.market,key=priceRowKey(row);if(!key)return;
+  priceRememberHidden(market,priceHiddenKeys(market).filter(x=>x!==key));paintPrices();openHiddenPrices();
+};
+window.restoreAllPriceRows=function(){
+  priceRememberHidden(priceUi.market,[]);closeModal();paintPrices();setPriceStatus('Все скрытые товары возвращены.','ok');
+};
 window.priceRefresh=function(){
   return window.renderPrices(true);
 };
@@ -244,7 +287,7 @@ window.openPriceEditor=function(index){
     showSheet('<h3>Цена · Kaspi</h3><div class="item"><b>'+pEsc(row.name)+'</b><div class="muted">Арт. '+pEsc(row.sku)+'</div></div>'+
       '<div class="field"><label>Цена, ₸</label><input id="priceEditCurrent" type="number" min="1" step="1" inputmode="decimal" value="'+pEsc(pNum(row.price)||'')+'"></div>'+
       '<div class="link-note">Цена сохраняется в складе и попадает в XML-прайс Kaspi. Отдельной процентной скидки в нашем прайс-листе Kaspi нет.</div>'+
-      '<button class="btn dark full" onclick="submitPriceEdit()">Сохранить цену</button>');
+      '<button class="btn dark full" onclick="submitPriceEdit()">Сохранить цену</button>'+priceHideAction());
     return;
   }
   if(row.market==='WB'||row.market==='WB2'){
@@ -254,7 +297,7 @@ window.openPriceEditor=function(index){
       (priceDisabled?'<div class="link-note">У товара разные цены по размерам. Чтобы не перезаписать их одной суммой, здесь можно менять только общую скидку.</div>':'')+
       '<div class="field"><label>Скидка, %</label><input id="priceEditDiscount" type="number" min="0" max="99" step="1" inputmode="numeric" value="'+pEsc(Math.round(pNum(row.discount)))+'"></div>'+
       '<div class="link-note">Изменение отправляется напрямую в WB после подтверждения. WB может применить его не мгновенно; резкое снижение цены может попасть на дополнительную проверку.</div>'+
-      '<button class="btn dark full" onclick="submitPriceEdit()">Отправить в WB</button>');
+      '<button class="btn dark full" onclick="submitPriceEdit()">Отправить в WB</button>'+priceHideAction());
     return;
   }
   if(row.market==='Ozon'){
@@ -262,7 +305,7 @@ window.openPriceEditor=function(index){
       '<div class="field"><label>Текущая цена, '+pEsc(row.currency||'RUB')+'</label><input id="priceEditCurrent" type="number" min="1" step="1" inputmode="decimal" value="'+pEsc(pNum(row.price)||'')+'"></div>'+
       '<div class="field"><label>Цена до скидки</label><input id="priceEditOld" type="number" min="0" step="1" inputmode="decimal" value="'+pEsc(pNum(row.oldPrice)||'')+'"></div>'+
       '<div class="link-note">Скидка Ozon здесь рассчитывается из «цены до скидки» и текущей цены. Минимальная цена товара сохраняется без изменения.</div>'+
-      '<button class="btn dark full" onclick="submitPriceEdit()">Отправить в Ozon</button>');
+      '<button class="btn dark full" onclick="submitPriceEdit()">Отправить в Ozon</button>'+priceHideAction());
   }
 };
 async function remotePriceUpdate(body){
