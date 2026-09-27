@@ -55,7 +55,7 @@ test('Remote price changes require confirmation and write guards',()=>{
 test('WB size-specific prices cannot be flattened by the generic editor or server',()=>{
   assert.match(api,/canEditPrice: uniquePrices\.length <= 1/);
   assert.match(ui,/row\.canEditPrice===false/);
-  assert.match(ui,/разные цены по размерам/);
+  assert.match(ui,/[Рр]азные цены по размерам/);
   assert.match(ui,/здесь можно менять только общую скидку/);
   assert.match(api,/wbSnapshotRowForWrite\(market, nmID\)/);
   assert.match(api,/разные цены по размерам\. Общую цену менять нельзя/);
@@ -199,7 +199,7 @@ test('WB queued writes batch changes and verify them only on a later read slot',
   assert.match(api,/last_error='WB ещё не подтвердил изменение'/);
   assert.match(ui,/Ожидает отправки в WB/);
   assert.match(ui,/Отправлено в WB · ждём проверки/);
-  assert.match(ui,/Сохранить изменение/);
+  assert.match(ui,/>Сохранить<\/button>/);
 });
 
 
