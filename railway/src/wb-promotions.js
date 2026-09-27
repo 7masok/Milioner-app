@@ -680,7 +680,7 @@ async function syncWbPromotionsMarket(market) {
     const token = await wbToken(market);
     if (!token) {
       await markPromoMarketState(market, {
-        nextSyncAt: now + WB_PROMO_SLOT_MS, lastSyncAt: now, lastError: 'Токен WB не настроен'
+        nextSyncAt: now + WB_PROMO_RESCAN_MS, lastSyncAt: now, lastError: 'Токен WB не настроен'
       });
       return { ok: false, reason: 'not-configured' };
     }
