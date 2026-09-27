@@ -340,6 +340,11 @@ test('WB bulk promotion controls can select all visible rows and enable or disab
 });
 
 
+test('WB night schedule accepts normal HH:MM time values',()=>{
+  assert.match(api,/const match = \/\^\(\\d\{2\}\):\(\\d\{2\}\)\$\//);
+  assert.doesNotMatch(api,/const match = \/\^\(\\\\d\{2\}\):\(\\\\d\{2\}\)\$\//);
+});
+
 test('WB night price schedule is persisted, bulk-configurable and reuses the 15-minute price queue',()=>{
   assert.match(wbNightMigration,/CREATE TABLE IF NOT EXISTS wb_price_schedules/);
   assert.match(wbNightMigration,/status IN \('pending','sent','held'\)/);
