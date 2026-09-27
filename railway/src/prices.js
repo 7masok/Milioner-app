@@ -658,18 +658,14 @@ async function saveWbPriceRead(market, state, batch, now) {
 }
 
 async function syncWbPriceMarket(market) {
-  const client = await pool.connect();
+  const lockClient = await pool.connect();
   const lockName = 'millioner:wb-prices:' + market;
   let locked = false;
   try {
-    const lock = await client.query('SELECT pg_try_advisory_lock(hashtext($1)) AS locked', [lockName]);
+    const lock = await lockClient.query('SELECT pg_try_advisory_lock(hashtext($1)) AS locked', [lockName]);
     locked = Boolean(lock.rows[0]?.locked);
     if (!locked) return { ok: true, market, skipped: true, reason: 'already-running' };
-  } finally {
-    client.release();
-  }
 
-  try {
     const state = await wbPriceState(market);
     const now = Date.now();
     if (Number(state.nextAllowedAt || 0) > now) {
@@ -707,9 +703,8 @@ async function syncWbPriceMarket(market) {
       return { ok: false, market, error: cleanText(error?.message || error), retryAt };
     }
   } finally {
-    const unlock = await pool.connect();
-    try { await unlock.query('SELECT pg_advisory_unlock(hashtext($1))', [lockName]).catch(() => {}); }
-    finally { unlock.release(); }
+    if (locked) await lockClient.query('SELECT pg_advisory_unlock(hashtext($1))', [lockName]).catch(() => {});
+    lockClient.release();
   }
 }
 
