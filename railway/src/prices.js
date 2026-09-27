@@ -16,7 +16,7 @@ const priceLoads = new Map();
 const cacheGeneration = new Map();
 let wbPriceLane = Promise.resolve();
 let wbNextAllowedAt = 0;
-let wbCooldownUntil = 0;
+const wbCooldowns = new Map();
 
 export const pricesRouter = express.Router();
 pricesRouter.use(requireTrustedOrigin);
@@ -61,10 +61,12 @@ function remember(key, market, generation, value) {
   return value;
 }
 
-function invalidateMarket(market) {
+function invalidateMarket(market, dropStale = false) {
   cacheGeneration.set(market, generationFor(market) + 1);
   for (const [key, hit] of cache) {
-    if (key === market || key.startsWith(market + ':')) cache.set(key, { ...hit, at: 0 });
+    if (key !== market && !key.startsWith(market + ':')) continue;
+    if (dropStale) cache.delete(key);
+    else cache.set(key, { ...hit, at: 0 });
   }
 }
 
@@ -88,7 +90,7 @@ function retryAtFromHeaders(headers, now = Date.now()) {
   );
 }
 
-function wbRateLimitError(retryAt = wbCooldownUntil) {
+function wbRateLimitError(retryAt = 0) {
   const error = new Error('WB временно ограничил частоту обновления цен');
   error.status = 429;
   error.retryAt = Math.max(Date.now() + 1000, Number(retryAt) || 0);
@@ -121,10 +123,11 @@ function withPriceLoad(key, task) {
   });
 }
 
-function withWbPriceLane(task) {
+function withWbPriceLane(scope, task) {
   const run = wbPriceLane.then(async () => {
     const now = Date.now();
-    if (wbCooldownUntil > now) throw wbRateLimitError(wbCooldownUntil);
+    const cooldown = Number(wbCooldowns.get(scope) || 0);
+    if (cooldown > now) throw wbRateLimitError(cooldown);
     const wait = Math.max(0, wbNextAllowedAt - now);
     if (wait) await sleep(wait);
     wbNextAllowedAt = Date.now() + WB_MIN_INTERVAL_MS;
@@ -219,7 +222,8 @@ async function listKaspiPrices() {
 }
 
 async function requestWb(token, path, options = {}, meta = {}) {
-  return withWbPriceLane(async () => {
+  const scope = tokenFingerprint(token);
+  return withWbPriceLane(scope, async () => {
     const started = Date.now();
     let response;
     try {
@@ -255,7 +259,7 @@ async function requestWb(token, path, options = {}, meta = {}) {
     const retryAt = response.status === 429
       ? (retryAtFromHeaders(response.headers) || Date.now() + WB_FALLBACK_COOLDOWN_MS)
       : 0;
-    if (retryAt) wbCooldownUntil = Math.max(wbCooldownUntil, retryAt);
+    if (retryAt) wbCooldowns.set(scope, Math.max(Number(wbCooldowns.get(scope) || 0), retryAt));
     console.info('WB prices request', JSON.stringify({
       market: meta.market || '', endpoint: path.split('?')[0],
       method: cleanText(options.method || 'GET').toUpperCase(),
@@ -298,8 +302,9 @@ async function listWbPrices(market, force = false) {
     console.info('WB prices cache', JSON.stringify({ market, force: false, result: 'hit' }));
     return hit;
   }
-  if (wbCooldownUntil > Date.now()) {
-    const limited = wbRateLimitError(wbCooldownUntil);
+  const cooldown = Number(wbCooldowns.get(tokenFingerprint(token)) || 0);
+  if (cooldown > Date.now()) {
+    const limited = wbRateLimitError(cooldown);
     const fallback = staleSnapshot(key, limited);
     if (fallback) return fallback;
     throw limited;
@@ -608,7 +613,7 @@ async function setWbPrice(market, input) {
     error.status = 502;
     throw error;
   }
-  invalidateMarket(market);
+  invalidateMarket(market, true);
   return {
     ok: true,
     market,
@@ -678,7 +683,7 @@ async function setOzonPrice(input) {
     failure.status = 400;
     throw failure;
   }
-  invalidateMarket('Ozon');
+  invalidateMarket('Ozon', true);
   return { ok: true, market: 'Ozon', updated: true, result };
 }
 
