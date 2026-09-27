@@ -59,7 +59,7 @@ test('all finance mutation entrypoints are local-first',()=>{
     'saveFinanceCategory','financeDeleteCategory','financeSetCategoryIncludedInTotal',
     'saveFinanceTransaction','saveFinanceTransfer','saveFinanceAdjustmentTransaction',
     'financeDeleteTransaction','financeStatementRememberAccount',
-    'financeStatementCreateAccountFromStatement','financeImportStatementDraft'
+    'financeStatementCreateAccountFromStatement','financeStatementCreateTransferAccount','financeImportStatementDraft'
   ];
   for(const name of localFirst){
     const src=extractFunction(name);
