@@ -7,7 +7,7 @@
   },
   "scripts": {
     "start": "npm --prefix railway start",
-    "test": "node --test railway/test/*.test.mjs"
+    "test": "node --test --test-reporter=dot railway/test/*.test.mjs"
   },
   "dependencies": {
     "express": "^5.1.0",
