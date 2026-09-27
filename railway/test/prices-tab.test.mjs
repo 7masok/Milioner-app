@@ -12,6 +12,7 @@ const wbPriceMigration=readFileSync(new URL('../migrations/131_wb_price_sync_que
 const wbPromo=readFileSync(new URL('../src/wb-promotions.js',import.meta.url),'utf8');
 const wbPromoMigration=readFileSync(new URL('../migrations/132_wb_promo_preferences.sql',import.meta.url),'utf8');
 const wbPromoPhaseMigration=readFileSync(new URL('../migrations/133_wb_promo_sync_phase.sql',import.meta.url),'utf8');
+const wbNightMigration=readFileSync(new URL('../migrations/134_wb_price_schedules.sql',import.meta.url),'utf8');
 
 test('Prices is a real ninth tab and survives reload navigation',()=>{
   assert.match(html,/<section id="prices" class="view">/);
@@ -22,7 +23,7 @@ test('Prices is a real ninth tab and survives reload navigation',()=>{
 });
 
 test('Prices UI is static before auth but does not fetch prices on startup',()=>{
-  const scriptAt=html.indexOf('./prices-v1.js?v=20260927-promo-bulk');
+  const scriptAt=html.indexOf('./prices-v1.js?v=20260928-night-price');
   const authAt=html.lastIndexOf('<script>initOwnerAuth();</script>');
   assert.ok(scriptAt>0&&scriptAt<authAt);
   const runtime=html.slice(html.indexOf('function startAppRuntime(){'),html.indexOf('// Wait for the server-sync module'));
@@ -286,7 +287,8 @@ test('WB promotion preferences persist and promo changes cannot overwrite a manu
   assert.match(wbPromoMigration,/CREATE TABLE IF NOT EXISTS wb_promo_sync_state/);
   assert.match(wbPromoMigration,/ADD COLUMN IF NOT EXISTS source TEXT NOT NULL DEFAULT 'manual'/);
   assert.match(wbPromoMigration,/source IN \('manual','promo'\)/);
-  assert.match(wbPromo,/WHERE wb_price_update_queue\.source<>'manual'/);
+  assert.match(wbNightMigration,/source IN \('manual','promo','schedule'\)/);
+  assert.match(wbPromo,/WHERE wb_price_update_queue\.source='promo'/);
   assert.match(api,/source='manual',promotion_id=0/);
   assert.match(api,/UPDATE wb_promo_preferences SET base_discount=/);
   assert.match(wbPromo,/\/market-prices\/promo\/bulk/);
@@ -335,6 +337,27 @@ test('WB bulk promotion controls can select all visible rows and enable or disab
   assert.match(ui,/window\.priceBulkPromo=async function\(enabled\)/);
   assert.match(ui,/\/api\/market-prices\/promo\/bulk/);
   assert.match(ui,/class="price-row-select"/);
+});
+
+
+test('WB night price schedule is persisted, bulk-configurable and reuses the 15-minute price queue',()=>{
+  assert.match(wbNightMigration,/CREATE TABLE IF NOT EXISTS wb_price_schedules/);
+  assert.match(wbNightMigration,/status IN \('pending','sent','held'\)/);
+  assert.match(api,/ALMATY_OFFSET_MS = 5 \* 60 \* 60 \* 1000/);
+  assert.match(api,/export function wbNightWindowState\(startMinute, endMinute, now = Date\.now\(\)\)/);
+  assert.match(api,/async function syncWbNightSchedules\(market, now = Date\.now\(\)\)/);
+  assert.match(api,/await syncWbNightSchedules\(market, now\)/);
+  assert.match(api,/source='schedule'/);
+  assert.match(api,/status='held'/);
+  assert.match(api,/markManualScheduleOverride/);
+  assert.match(api,/pricesRouter\.post\('\/market-prices\/night-schedule', requireWritesEnabled/);
+  assert.match(html,/id="priceBulkNight"/);
+  assert.match(ui,/window\.openPriceNightSchedule=function\(\)/);
+  assert.match(ui,/window\.savePriceNightSchedule=async function\(enabled\)/);
+  assert.match(ui,/\/api\/market-prices\/night-schedule/);
+  assert.match(ui,/price-night-badge/);
+  assert.match(passport,/PRICE-18/);
+  assert.match(agents,/действие «Ночь»/);
 });
 
 test('Saving an unchanged WB price after toggling promotions closes quietly',()=>{
