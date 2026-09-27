@@ -82,7 +82,7 @@ test('WB price reads are serialized, deduplicated and preserve 429 retry timing'
   assert.match(api,/withPriceLoad\(key/);
   assert.match(api,/x-ratelimit-retry/);
   assert.match(api,/retry-after/);
-  assert.match(api,/wbCooldownUntil/);
+  assert.match(api,/wbCooldowns/);
   assert.match(api,/error\.status = 429/);
   assert.match(api,/retryAt: Number\(error\?\.retryAt\) \|\| 0/);
 });
