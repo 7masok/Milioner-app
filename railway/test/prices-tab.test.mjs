@@ -35,7 +35,7 @@ test('Prices server keeps marketplace credentials server-side and normalizes all
   assert.match(api,/\/api\/v2\/list\/goods\/filter\?limit=1000&offset=/);
   assert.match(api,/\/v5\/product\/info\/prices/);
   assert.match(api,/kaspi_price_template/);
-  assert.match(api,/product\.kaspiPrice/);
+  assert.match(api,/product\?\.kaspiPrice/);
   assert.doesNotMatch(ui,/Api-Key|Authorization:\s*token|X-Auth-Token/);
 });
 
