@@ -180,7 +180,7 @@ function priceInlineEditor(row,index){
 }
 function priceCard(row,index){
   if(row?.error){
-    return '<div class="item price-item"><div class="name">'+pEsc(row.account||'Ozon')+'</div><div class="muted price-error">'+pEsc(row.error)+'</div></div>';
+    return '<div class="item price-item price-item-error"><div class="name">'+pEsc(row.account||'Ozon')+'</div><div class="muted price-error">'+pEsc(row.error)+'</div></div>';
   }
   const discount=priceDiscountValue(row),linked=row.linked!==false;
   const account=row.account&&row.account!==marketLabel(row.market)?'<span>'+pEsc(row.account)+'</span>':'';
