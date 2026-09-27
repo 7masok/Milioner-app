@@ -7,9 +7,11 @@ import { asyncRoute, requireTrustedOrigin, requireWritesEnabled } from './http.j
 
 const WB_PROMO_API = 'https://dp-calendar-api.wildberries.ru';
 const WB_PROMO_MIN_INTERVAL_MS = 650;
-const WB_PROMO_SLOT_MS = 60 * 60 * 1000 + 5_000;
-const WB_PROMO_LOOP_MS = 60 * 1000;
+const WB_PROMO_STEP_MS = 5_000;
+const WB_PROMO_LOOP_MS = 5_000;
 const WB_PROMO_FIRST_DELAY_MS = 15_000;
+const WB_PROMO_RESCAN_MS = 10 * 60 * 1000;
+const WB_PROMO_PRICE_WAIT_MS = 60 * 1000;
 const WB_PROMO_LOOKAHEAD_MS = 14 * 24 * 60 * 60 * 1000;
 const WB_PROMO_MAX_CAMPAIGNS = 10;
 const WB_PROMO_FALLBACK_COOLDOWN_MS = 10_000;
@@ -248,7 +250,7 @@ function requiredDiscount(row, candidate) {
   return Math.max(0, Math.min(99, Math.ceil((1 - planPrice / basePrice) * 100)));
 }
 
-function chooseRegularPromotion(rawPromotions, now) {
+function regularPromotions(rawPromotions, now) {
   return (Array.isArray(rawPromotions) ? rawPromotions : [])
     .filter(item => cleanText(item?.type).toLowerCase() === 'regular')
     .filter(item => {
@@ -263,8 +265,30 @@ function chooseRegularPromotion(rawPromotions, now) {
       const aActive = aStart <= now && aEnd >= now;
       const bActive = bStart <= now && bEnd >= now;
       if (aActive !== bActive) return aActive ? -1 : 1;
-      return aStart - bStart;
-    })[0] || null;
+      return aStart - bStart || aEnd - bEnd;
+    })
+    .slice(0, WB_PROMO_MAX_CAMPAIGNS)
+    .map(promotionPayload)
+    .filter(item => item.promotionId > 0);
+}
+
+function promotionIsActive(promotion, now) {
+  const start = Date.parse(promotion?.startDateTime || '') || 0;
+  const end = Date.parse(promotion?.endDateTime || '') || 0;
+  return (!start || start <= now) && (!end || end >= now);
+}
+
+function betterPromoCandidate(current, candidate, now) {
+  if (!current) return candidate;
+  const currentActive = promotionIsActive(current, now);
+  const candidateActive = promotionIsActive(candidate, now);
+  if (currentActive !== candidateActive) return candidateActive ? candidate : current;
+  const currentPrice = number(current.planPrice);
+  const candidatePrice = number(candidate.planPrice);
+  if (candidatePrice !== currentPrice) return candidatePrice > currentPrice ? candidate : current;
+  const currentStart = Date.parse(current.startDateTime || '') || Number.MAX_SAFE_INTEGER;
+  const candidateStart = Date.parse(candidate.startDateTime || '') || Number.MAX_SAFE_INTEGER;
+  return candidateStart < currentStart ? candidate : current;
 }
 
 function promotionPayload(promotion) {
@@ -324,132 +348,271 @@ async function promoListStep(market, token, prefs, byNm, now) {
     '/api/v1/calendar/promotions?startDateTime=' + encodeURIComponent(startDateTime) +
     '&endDateTime=' + encodeURIComponent(endDateTime) + '&allPromo=true&limit=1000&offset=0',
     {}, { market });
-  const promotion = chooseRegularPromotion(data?.data?.promotions, now);
-  if (!promotion) {
-    for (const pref of prefs) await restorePromoDiscountIfNeeded(market, pref, byNm.get(pref.nmId));
+  const rawPromotions = Array.isArray(data?.data?.promotions) ? data.data.promotions : [];
+  const promotions = regularPromotions(rawPromotions, now);
+  const autoCount = rawPromotions.filter(item => cleanText(item?.type).toLowerCase() === 'auto').length;
+
+  if (!promotions.length) {
+    for (const pref of prefs) {
+      await restorePromoDiscountIfNeeded(market, pref, byNm.get(pref.nmId));
+      if (autoCount > 0) {
+        await updatePreference(market, pref.nmId, {
+          status: 'auto_only', promotion_id: 0, promotion_name: '',
+          plan_price: null, plan_discount: null,
+          last_error: 'WB API не поддерживает управление автоакциями'
+        });
+      }
+    }
     await markPromoMarketState(market, {
-      nextSyncAt: now + WB_PROMO_SLOT_MS, lastSyncAt: now, lastError: '', phase: 'list', payload: {}
+      nextSyncAt: now + WB_PROMO_RESCAN_MS, lastSyncAt: now, lastError: '', phase: 'list',
+      payload: { autoCount }
     });
-    return { ok: true, market, action: 'list', promotion: 0 };
+    return { ok: true, market, action: 'list', promotions: 0, autoCount };
   }
-  const payload = promotionPayload(promotion);
+
+  const currentPromotionIds = new Set(promotions.map(item => item.promotionId));
   for (const pref of prefs) {
-    await updatePreference(market, pref.nmId, {
-      status: pref.status === 'participating' && pref.promotionId === payload.promotionId ? 'participating' : 'checking',
-      promotion_id: payload.promotionId, promotion_name: payload.promotionName, last_error: ''
-    });
+    const keepParticipation = pref.status === 'participating' && currentPromotionIds.has(pref.promotionId);
+    await updatePreference(market, pref.nmId, keepParticipation
+      ? { status: 'participating', last_error: '' }
+      : {
+          status: 'checking', promotion_id: 0, promotion_name: '',
+          plan_price: null, plan_discount: null, last_error: ''
+        });
   }
   await markPromoMarketState(market, {
-    nextSyncAt: now + WB_PROMO_SLOT_MS, lastSyncAt: now, lastError: '', phase: 'eligible', payload
+    nextSyncAt: now + WB_PROMO_STEP_MS, lastSyncAt: now, lastError: '', phase: 'eligible',
+    payload: { promotions, eligibleIndex: 0, candidates: [], autoCount }
   });
-  return { ok: true, market, action: 'list', promotion: payload.promotionId };
+  return { ok: true, market, action: 'list', promotions: promotions.length, autoCount };
 }
 
 async function promoEligibleStep(market, token, prefs, byNm, state, now) {
-  const promotion = promotionPayload(state.payload);
-  if (!(promotion.promotionId > 0)) {
+  const promotions = (Array.isArray(state.payload?.promotions) ? state.payload.promotions : [])
+    .map(promotionPayload).filter(item => item.promotionId > 0);
+  if (!promotions.length) {
     await markPromoMarketState(market, { nextSyncAt: 0, phase: 'list', payload: {}, lastError: '' });
-    return { ok: true, market, skipped: true, reason: 'missing-promotion' };
+    return { ok: true, market, skipped: true, reason: 'missing-promotions' };
   }
+
+  const index = Math.max(0, Math.floor(number(state.payload?.eligibleIndex)));
+  if (index >= promotions.length) {
+    await markPromoMarketState(market, { nextSyncAt: 0, phase: 'list', payload: {}, lastError: '' });
+    return { ok: true, market, skipped: true, reason: 'eligible-index-finished' };
+  }
+
+  const promotion = promotions[index];
   const data = await requestPromo(token,
     '/api/v1/calendar/promotions/nomenclatures?promotionID=' + promotion.promotionId +
     '&inAction=false&limit=1000&offset=0', {}, { market });
-  const enabled = new Set(prefs.map(pref => pref.nmId));
-  const candidates = (Array.isArray(data?.data?.nomenclatures) ? data.data.nomenclatures : [])
-    .map(raw => candidateFromRaw(raw, promotion))
-    .filter(candidate => enabled.has(candidate.nmId) && candidate.nmId);
-  const byCandidate = new Map(candidates.map(candidate => [candidate.nmId, candidate]));
 
+  const enabled = new Set(prefs.map(pref => pref.nmId));
+  const best = new Map(
+    (Array.isArray(state.payload?.candidates) ? state.payload.candidates : [])
+      .filter(candidate => candidate?.nmId)
+      .map(candidate => [String(candidate.nmId), candidate])
+  );
+  for (const raw of (Array.isArray(data?.data?.nomenclatures) ? data.data.nomenclatures : [])) {
+    const candidate = candidateFromRaw(raw, promotion);
+    if (!candidate.nmId || !enabled.has(candidate.nmId) || !(candidate.planPrice > 0)) continue;
+    best.set(candidate.nmId, betterPromoCandidate(best.get(candidate.nmId), candidate, now));
+  }
+
+  const candidates = [...best.values()];
+  const nextIndex = index + 1;
+  if (nextIndex < promotions.length) {
+    await markPromoMarketState(market, {
+      nextSyncAt: now + WB_PROMO_STEP_MS, lastSyncAt: now, lastError: '', phase: 'eligible',
+      payload: { ...state.payload, promotions, eligibleIndex: nextIndex, candidates }
+    });
+    return {
+      ok: true, market, action: 'eligible-scan', promotion: promotion.promotionId,
+      scanned: nextIndex, total: promotions.length, candidates: candidates.length
+    };
+  }
+
+  const byCandidate = new Map(candidates.map(candidate => [candidate.nmId, candidate]));
+  const currentPromotionIds = new Set(promotions.map(item => item.promotionId));
   for (const pref of prefs) {
     const row = byNm.get(pref.nmId);
-    const candidate = byCandidate.get(pref.nmId);
     if (!row) continue;
+    if (pref.status === 'participating' && currentPromotionIds.has(pref.promotionId)) continue;
+
+    const candidate = byCandidate.get(pref.nmId);
     if (!candidate) {
-      await updatePreference(market, pref.nmId, {
-        status: 'checking', promotion_id: promotion.promotionId, promotion_name: promotion.promotionName, last_error: ''
-      });
+      await restorePromoDiscountIfNeeded(market, pref, row);
+      if (number(state.payload?.autoCount) > 0) {
+        await updatePreference(market, pref.nmId, {
+          status: 'auto_only', promotion_id: 0, promotion_name: '',
+          plan_price: null, plan_discount: null,
+          last_error: 'Для доступных автоакций WB API не отдаёт цену товара и не умеет добавлять товар'
+        });
+      }
       continue;
     }
+
     const currentFinal = number(row.finalPrice) || (number(row.price) * (1 - clampDiscount(row.discount) / 100));
     if (currentFinal <= candidate.planPrice + 0.01) {
       await updatePreference(market, pref.nmId, {
-        status: 'ready', promotion_id: promotion.promotionId, promotion_name: promotion.promotionName,
+        status: 'ready', promotion_id: candidate.promotionId, promotion_name: candidate.promotionName,
         plan_price: candidate.planPrice, plan_discount: candidate.planDiscount, last_error: ''
       });
       continue;
     }
+
     const discount = requiredDiscount(row, candidate);
     if (discount === null) continue;
-    const queued = await queuePromoDiscount(market, pref.nmId, discount, promotion.promotionId);
+    const queued = await queuePromoDiscount(market, pref.nmId, discount, candidate.promotionId);
     await updatePreference(market, pref.nmId, {
       status: queued ? 'price_pending' : 'manual_pending',
-      promotion_id: promotion.promotionId, promotion_name: promotion.promotionName,
+      promotion_id: candidate.promotionId, promotion_name: candidate.promotionName,
       plan_price: candidate.planPrice, plan_discount: discount, last_error: ''
     });
   }
 
+  const assignments = candidates.filter(candidate => byNm.has(candidate.nmId));
+  if (!assignments.length) {
+    await markPromoMarketState(market, {
+      nextSyncAt: now + WB_PROMO_RESCAN_MS, lastSyncAt: now, lastError: '', phase: 'list',
+      payload: { autoCount: number(state.payload?.autoCount) }
+    });
+    return { ok: true, market, action: 'eligible', candidates: 0, reason: 'no-regular-candidates' };
+  }
+
   await markPromoMarketState(market, {
-    nextSyncAt: now + WB_PROMO_SLOT_MS, lastSyncAt: now, lastError: '', phase: 'upload',
-    payload: { ...promotion, candidates }
+    nextSyncAt: now + WB_PROMO_STEP_MS, lastSyncAt: now, lastError: '', phase: 'upload',
+    payload: { promotions, assignments, uploadedNmIds: [], autoCount: number(state.payload?.autoCount) }
   });
-  return { ok: true, market, action: 'eligible', promotion: promotion.promotionId, candidates: candidates.length };
+  return { ok: true, market, action: 'eligible', candidates: assignments.length };
 }
 
 async function promoUploadStep(market, token, prefs, byNm, state, now) {
-  const promotion = promotionPayload(state.payload);
-  const candidates = Array.isArray(state.payload?.candidates) ? state.payload.candidates : [];
-  if (!(promotion.promotionId > 0)) {
-    await markPromoMarketState(market, { nextSyncAt: 0, phase: 'list', payload: {}, lastError: '' });
-    return { ok: true, market, skipped: true, reason: 'missing-promotion' };
-  }
-  const byCandidate = new Map(candidates.map(candidate => [String(candidate?.nmId || ''), candidate]));
-  const ready = [];
-  for (const pref of prefs) {
-    const row = byNm.get(pref.nmId);
-    const candidate = byCandidate.get(pref.nmId);
-    if (!row || !candidate) continue;
-    const queue = await currentQueueRow(market, pref.nmId);
-    if (queue && ['pending','sent'].includes(cleanText(queue.status))) continue;
-    const currentFinal = number(row.finalPrice) || (number(row.price) * (1 - clampDiscount(row.discount) / 100));
-    if (currentFinal <= number(candidate.planPrice) + 0.01) ready.push(Number(pref.nmId));
-  }
-  if (!ready.length) {
+  const assignments = (Array.isArray(state.payload?.assignments) ? state.payload.assignments : [])
+    .filter(candidate => candidate?.nmId && number(candidate?.promotionId) > 0);
+  if (!assignments.length) {
     await markPromoMarketState(market, {
-      nextSyncAt: now + 15 * 60 * 1000, lastSyncAt: state.lastSyncAt, lastError: '', phase: 'upload', payload: state.payload
+      nextSyncAt: now + WB_PROMO_RESCAN_MS, lastSyncAt: now, lastError: '', phase: 'list', payload: {}
     });
-    return { ok: true, market, skipped: true, reason: 'waiting-price', promotion: promotion.promotionId };
+    return { ok: true, market, skipped: true, reason: 'missing-assignments' };
   }
-  const data = await requestPromo(token, '/api/v1/calendar/promotions/upload', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ data: { promotionID: promotion.promotionId, uploadNow: true, nomenclatures: ready } })
-  }, { market });
-  const uploadId = number(data?.data?.uploadID);
-  for (const nmId of ready) await updatePreference(market, String(nmId), { status: 'joining', last_error: '' });
+
+  const enabled = new Set(prefs.map(pref => pref.nmId));
+  const activeAssignments = assignments.filter(candidate => enabled.has(String(candidate.nmId)) && byNm.has(String(candidate.nmId)));
+  const uploaded = new Set((Array.isArray(state.payload?.uploadedNmIds) ? state.payload.uploadedNmIds : []).map(String));
+
+  if (!activeAssignments.length) {
+    await markPromoMarketState(market, {
+      nextSyncAt: now + WB_PROMO_RESCAN_MS, lastSyncAt: now, lastError: '', phase: 'list', payload: {}
+    });
+    return { ok: true, market, skipped: true, reason: 'no-enabled-assignments' };
+  }
+
+  const readyByPromotion = new Map();
+  let waitingForPrice = false;
+  for (const candidate of activeAssignments) {
+    const nmId = String(candidate.nmId);
+    if (uploaded.has(nmId)) continue;
+    const row = byNm.get(nmId);
+    const queue = await currentQueueRow(market, nmId);
+    if (queue && ['pending','sent'].includes(cleanText(queue.status))) {
+      waitingForPrice = true;
+      continue;
+    }
+
+    const currentFinal = number(row?.finalPrice) || (number(row?.price) * (1 - clampDiscount(row?.discount) / 100));
+    if (currentFinal <= number(candidate.planPrice) + 0.01) {
+      const promotionId = number(candidate.promotionId);
+      if (!readyByPromotion.has(promotionId)) readyByPromotion.set(promotionId, []);
+      readyByPromotion.get(promotionId).push(candidate);
+      continue;
+    }
+
+    const discount = requiredDiscount(row, candidate);
+    if (discount !== null) {
+      const queued = await queuePromoDiscount(market, nmId, discount, candidate.promotionId);
+      await updatePreference(market, nmId, {
+        status: queued ? 'price_pending' : 'manual_pending',
+        promotion_id: candidate.promotionId, promotion_name: candidate.promotionName,
+        plan_price: candidate.planPrice, plan_discount: discount, last_error: ''
+      });
+      waitingForPrice = true;
+    }
+  }
+
+  const firstReady = readyByPromotion.entries().next();
+  if (!firstReady.done) {
+    const [promotionId, readyCandidates] = firstReady.value;
+    const readyIds = readyCandidates.map(candidate => Number(candidate.nmId)).filter(Number.isInteger);
+    const data = await requestPromo(token, '/api/v1/calendar/promotions/upload', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ data: { promotionID: promotionId, uploadNow: true, nomenclatures: readyIds } })
+    }, { market });
+    const uploadId = number(data?.data?.uploadID);
+    for (const candidate of readyCandidates) {
+      uploaded.add(String(candidate.nmId));
+      await updatePreference(market, String(candidate.nmId), { status: 'joining', last_error: '' });
+    }
+    await markPromoMarketState(market, {
+      nextSyncAt: now + WB_PROMO_STEP_MS, lastSyncAt: now, lastError: '', phase: 'upload',
+      payload: { ...state.payload, assignments: activeAssignments, uploadedNmIds: [...uploaded] }
+    });
+    console.info('WB promo join queued', JSON.stringify({
+      market, promotionId, products: readyIds.length, uploadId
+    }));
+    return { ok: true, market, action: 'upload', promotion: promotionId, products: readyIds.length, uploadId };
+  }
+
+  const remaining = activeAssignments.filter(candidate => !uploaded.has(String(candidate.nmId)));
+  if (!remaining.length) {
+    const verifyPromotionIds = [...new Set(
+      activeAssignments.filter(candidate => uploaded.has(String(candidate.nmId))).map(candidate => number(candidate.promotionId))
+    )].filter(value => value > 0);
+    await markPromoMarketState(market, {
+      nextSyncAt: now + WB_PROMO_STEP_MS, lastSyncAt: now, lastError: '', phase: 'verify',
+      payload: { ...state.payload, assignments: activeAssignments, uploadedNmIds: [...uploaded], verifyPromotionIds, verifyIndex: 0 }
+    });
+    return { ok: true, market, action: 'upload-complete', promotions: verifyPromotionIds.length };
+  }
+
   await markPromoMarketState(market, {
-    nextSyncAt: now + WB_PROMO_SLOT_MS, lastSyncAt: now, lastError: '', phase: 'verify', payload: state.payload
+    nextSyncAt: now + WB_PROMO_PRICE_WAIT_MS, lastSyncAt: state.lastSyncAt, lastError: '', phase: 'upload',
+    payload: { ...state.payload, assignments: activeAssignments, uploadedNmIds: [...uploaded] }
   });
-  console.info('WB promo join queued', JSON.stringify({ market, promotionId: promotion.promotionId, products: ready.length, uploadId }));
-  return { ok: true, market, action: 'upload', promotion: promotion.promotionId, products: ready.length, uploadId };
+  return { ok: true, market, skipped: true, reason: waitingForPrice ? 'waiting-price' : 'not-ready' };
 }
 
 async function promoVerifyStep(market, token, prefs, byNm, state, now) {
-  const promotion = promotionPayload(state.payload);
-  if (!(promotion.promotionId > 0)) {
-    await markPromoMarketState(market, { nextSyncAt: 0, phase: 'list', payload: {}, lastError: '' });
-    return { ok: true, market, skipped: true, reason: 'missing-promotion' };
+  const assignments = (Array.isArray(state.payload?.assignments) ? state.payload.assignments : [])
+    .filter(candidate => candidate?.nmId && number(candidate?.promotionId) > 0);
+  const uploaded = new Set((Array.isArray(state.payload?.uploadedNmIds) ? state.payload.uploadedNmIds : []).map(String));
+  const promotionIds = (Array.isArray(state.payload?.verifyPromotionIds) ? state.payload.verifyPromotionIds : [])
+    .map(number).filter(value => value > 0);
+  if (!promotionIds.length) {
+    await markPromoMarketState(market, {
+      nextSyncAt: now + WB_PROMO_RESCAN_MS, lastSyncAt: now, lastError: '', phase: 'list', payload: {}
+    });
+    return { ok: true, market, skipped: true, reason: 'nothing-to-verify' };
   }
+
+  const index = Math.max(0, Math.floor(number(state.payload?.verifyIndex)));
+  if (index >= promotionIds.length) {
+    await markPromoMarketState(market, {
+      nextSyncAt: now + WB_PROMO_RESCAN_MS, lastSyncAt: now, lastError: '', phase: 'list', payload: {}
+    });
+    return { ok: true, market, skipped: true, reason: 'verify-finished' };
+  }
+
+  const promotionId = promotionIds[index];
+  const promotion = assignments.find(candidate => number(candidate.promotionId) === promotionId) || { promotionId };
   const data = await requestPromo(token,
-    '/api/v1/calendar/promotions/nomenclatures?promotionID=' + promotion.promotionId +
+    '/api/v1/calendar/promotions/nomenclatures?promotionID=' + promotionId +
     '&inAction=true&limit=1000&offset=0', {}, { market });
   const participants = (Array.isArray(data?.data?.nomenclatures) ? data.data.nomenclatures : [])
     .map(raw => candidateFromRaw(raw, promotion))
     .filter(candidate => candidate.nmId);
   const participantIds = new Set(participants.map(item => item.nmId));
 
-  await pool.query(`UPDATE wb_promo_preferences SET status='off',promotion_id=0,promotion_name='',
-    plan_price=NULL,plan_discount=NULL,updated_at=$2
-    WHERE market=$1 AND enabled=false AND promotion_id=$3`, [market, now, promotion.promotionId]);
   for (const participant of participants) {
     const row = byNm.get(participant.nmId);
     const baseDiscount = row ? clampDiscount(row.discount) : null;
@@ -459,22 +622,39 @@ async function promoVerifyStep(market, token, prefs, byNm, state, now) {
       ON CONFLICT(market,nm_id) DO UPDATE SET promotion_id=excluded.promotion_id,
         promotion_name=excluded.promotion_name,plan_price=excluded.plan_price,plan_discount=excluded.plan_discount,
         status='participating',last_error='',updated_at=excluded.updated_at`,
-      [market, Number(participant.nmId), baseDiscount, promotion.promotionId, promotion.promotionName,
+      [market, Number(participant.nmId), baseDiscount, promotionId, cleanText(promotion.promotionName),
         participant.planPrice || null, participant.planDiscount, now]);
   }
 
   for (const pref of prefs) {
+    const expected = assignments.some(candidate =>
+      String(candidate.nmId) === pref.nmId &&
+      number(candidate.promotionId) === promotionId &&
+      uploaded.has(pref.nmId)
+    );
+    if (!expected) continue;
     if (participantIds.has(pref.nmId)) {
       await updatePreference(market, pref.nmId, { status: 'participating', last_error: '' });
-    } else if (['joining','ready','checking'].includes(pref.status)) {
-      await updatePreference(market, pref.nmId, { status: 'checking', last_error: '' });
+    } else {
+      await updatePreference(market, pref.nmId, { status: 'joining', last_error: '' });
     }
   }
 
-  await markPromoMarketState(market, {
-    nextSyncAt: now + WB_PROMO_SLOT_MS, lastSyncAt: now, lastError: '', phase: 'list', payload: {}
-  });
-  return { ok: true, market, action: 'verify', promotion: promotion.promotionId, participants: participants.length };
+  const nextIndex = index + 1;
+  if (nextIndex < promotionIds.length) {
+    await markPromoMarketState(market, {
+      nextSyncAt: now + WB_PROMO_STEP_MS, lastSyncAt: now, lastError: '', phase: 'verify',
+      payload: { ...state.payload, verifyIndex: nextIndex }
+    });
+  } else {
+    await markPromoMarketState(market, {
+      nextSyncAt: now + WB_PROMO_PRICE_WAIT_MS, lastSyncAt: now, lastError: '', phase: 'list', payload: {}
+    });
+  }
+  return {
+    ok: true, market, action: 'verify', promotion: promotionId,
+    participants: participantIds.size, checked: nextIndex, total: promotionIds.length
+  };
 }
 
 async function syncWbPromotionsMarket(market) {
@@ -500,7 +680,7 @@ async function syncWbPromotionsMarket(market) {
     const token = await wbToken(market);
     if (!token) {
       await markPromoMarketState(market, {
-        nextSyncAt: now + WB_PROMO_SLOT_MS, lastSyncAt: now, lastError: 'Токен WB не настроен'
+        nextSyncAt: now + WB_PROMO_RESCAN_MS, lastSyncAt: now, lastError: 'Токен WB не настроен'
       });
       return { ok: false, reason: 'not-configured' };
     }
@@ -516,7 +696,7 @@ async function syncWbPromotionsMarket(market) {
       console.info('WB promo sync step', JSON.stringify({ market, phase: state.phase, result }));
       return result;
     } catch (error) {
-      const retryAt = Math.max(now + WB_PROMO_SLOT_MS, Number(error?.retryAt || 0));
+      const retryAt = Math.max(now + WB_PROMO_FALLBACK_COOLDOWN_MS, Number(error?.retryAt || 0));
       await markPromoMarketState(market, {
         nextSyncAt: retryAt, lastSyncAt: now, lastError: cleanText(error?.message || error)
       }).catch(() => {});
