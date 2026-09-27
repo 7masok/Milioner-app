@@ -275,6 +275,15 @@ test('WB promotion automation scans regular promotions in persisted safe steps a
   assert.match(wbPromoPhaseMigration,/ADD COLUMN IF NOT EXISTS payload JSONB/);
 });
 
+test('WB promotion scan never restores seller discount just because no regular candidate was found',()=>{
+  const list=wbPromo.slice(wbPromo.indexOf('async function promoListStep'),wbPromo.indexOf('async function promoEligibleStep'));
+  const eligible=wbPromo.slice(wbPromo.indexOf('async function promoEligibleStep'),wbPromo.indexOf('async function promoUploadStep'));
+  assert.doesNotMatch(list,/restorePromoDiscountIfNeeded/);
+  assert.doesNotMatch(eligible,/restorePromoDiscountIfNeeded/);
+  assert.doesNotMatch(wbPromo,/async function restorePromoDiscountIfNeeded/);
+  assert.match(wbPromo,/!enabled && effectiveDiscount !== baseDiscount/);
+});
+
 test('WB promotion automation does not pretend that public API can manage auto promotions',()=>{
   assert.match(wbPromo,/type\)\.toLowerCase\(\) === 'auto'/);
   assert.match(wbPromo,/status: 'auto_only'/);
@@ -303,7 +312,6 @@ test('WB promotions lower the effective price with discount and restore the prev
   assert.match(wbPromo,/status: queued \? 'price_pending' : 'manual_pending'/);
   assert.match(wbPromo,/uploadNow: true/);
   assert.match(wbPromo,/status: 'participating'/);
-  assert.match(wbPromo,/queuePromoDiscount\(market, pref\.nmId, baseDiscount, 0\)/);
   assert.match(wbPromo,/!enabled && effectiveDiscount !== baseDiscount/);
   assert.match(wbPromo,/queuePromoDiscount\(market, String\(nmId\), baseDiscount, 0, client\)/);
 });
