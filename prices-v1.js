@@ -5,6 +5,7 @@ const PRICE_UI_KEY=(typeof KEY==='string'?KEY:'sklad_mvp_v2')+'_prices_ui_v1';
 const PRICE_MARKETS=['Kaspi','WB','WB2','Ozon'];
 const PRICE_CLIENT_TTL_MS=2*60*1000;
 let priceUi={market:'Kaspi',q:'',sort:'asc',hidden:{}};
+let priceExpanded=null;
 try{
   const saved=JSON.parse(localStorage.getItem(PRICE_UI_KEY)||'{}')||{};
   if(PRICE_MARKETS.includes(saved.market))priceUi.market=saved.market;
@@ -64,8 +65,8 @@ function priceIsHidden(row,market=priceUi.market){
 function priceRememberHidden(market,keys){
   priceUi.hidden={...(priceUi.hidden||{}),[market]:[...new Set((keys||[]).map(String).filter(Boolean))]};rememberPriceUi();
 }
-function priceHideAction(){
-  return '<button type="button" class="btn full price-hide-action" onclick="hidePriceRow()">Скрыть из списка</button>';
+function priceHideAction(index){
+  return '<button type="button" class="btn full price-hide-action" onclick="hidePriceRow('+Number(index)+')">Скрыть из списка</button>';
 }
 function priceSnapshotFresh(data){
   const when=Number(data?.fetchedAt)||0;
@@ -142,9 +143,44 @@ function priceRenderError(message){
   const list=document.getElementById('priceList');if(!list)return;
   list.innerHTML='<div class="empty">'+pEsc(message)+'</div><button type="button" class="btn full" onclick="priceRefresh()">Повторить</button>';
 }
+function priceInlineEditor(row,index){
+  if(!priceExpanded||priceExpanded.market!==priceUi.market||priceExpanded.index!==Number(index))return '';
+  if(row.market==='Kaspi'){
+    return '<div class="price-inline-editor" onclick="event.stopPropagation()">'+
+      '<div class="field"><label>Цена, ₸</label><input id="priceEditCurrent" type="number" min="1" step="1" inputmode="decimal" value="'+pEsc(pNum(row.price)||'')+'"></div>'+
+      '<div class="link-note">Цена сохранится в складе и попадёт в XML-прайс Kaspi.</div>'+
+      '<button type="button" class="btn dark full" onclick="submitPriceEdit('+Number(index)+')">Сохранить цену</button>'+
+      priceHideAction(index)+
+      '<button type="button" class="price-inline-collapse" onclick="collapsePriceEditor()">Свернуть</button>'+
+      '</div>';
+  }
+  if(row.market==='WB'||row.market==='WB2'){
+    const priceDisabled=row.canEditPrice===false;
+    return '<div class="price-inline-editor" onclick="event.stopPropagation()">'+
+      '<div class="field"><label>Цена до скидки, '+pEsc(row.currency||'RUB')+'</label><input id="priceEditCurrent" type="number" min="1" step="1" inputmode="decimal" value="'+pEsc(pNum(row.price)||'')+'" '+(priceDisabled?'disabled':'')+'></div>'+
+      (priceDisabled?'<div class="link-note">У товара разные цены по размерам. Чтобы не перезаписать их одной суммой, здесь можно менять только общую скидку.</div>':'')+
+      '<div class="field"><label>Скидка, %</label><input id="priceEditDiscount" type="number" min="0" max="99" step="1" inputmode="numeric" value="'+pEsc(Math.round(pNum(row.discount)))+'"></div>'+
+      '<div class="link-note">Изменение сохранится на нашем сервере и уйдёт в WB в ближайший разрешённый сеанс связи.</div>'+
+      '<button type="button" class="btn dark full" onclick="submitPriceEdit('+Number(index)+')">Сохранить изменение</button>'+
+      priceHideAction(index)+
+      '<button type="button" class="price-inline-collapse" onclick="collapsePriceEditor()">Свернуть</button>'+
+      '</div>';
+  }
+  if(row.market==='Ozon'){
+    return '<div class="price-inline-editor" onclick="event.stopPropagation()">'+
+      '<div class="field"><label>Текущая цена, '+pEsc(row.currency||'RUB')+'</label><input id="priceEditCurrent" type="number" min="1" step="1" inputmode="decimal" value="'+pEsc(pNum(row.price)||'')+'"></div>'+
+      '<div class="field"><label>Цена до скидки</label><input id="priceEditOld" type="number" min="0" step="1" inputmode="decimal" value="'+pEsc(pNum(row.oldPrice)||'')+'"></div>'+
+      '<div class="link-note">Скидка Ozon рассчитывается из «цены до скидки» и текущей цены.</div>'+
+      '<button type="button" class="btn dark full" onclick="submitPriceEdit('+Number(index)+')">Отправить в Ozon</button>'+
+      priceHideAction(index)+
+      '<button type="button" class="price-inline-collapse" onclick="collapsePriceEditor()">Свернуть</button>'+
+      '</div>';
+  }
+  return '';
+}
 function priceCard(row,index){
   if(row?.error){
-    return '<div class="item price-item"><div class="name">'+pEsc(row.account||'Ozon')+'</div><div class="muted price-error">'+pEsc(row.error)+'</div></div>';
+    return '<div class="item price-item price-item-error"><div class="name">'+pEsc(row.account||'Ozon')+'</div><div class="muted price-error">'+pEsc(row.error)+'</div></div>';
   }
   const discount=priceDiscountValue(row),linked=row.linked!==false;
   const account=row.account&&row.account!==marketLabel(row.market)?'<span>'+pEsc(row.account)+'</span>':'';
@@ -168,10 +204,13 @@ function priceCard(row,index){
     :row.syncState==='sent'
       ?'<div class="price-sync-state sent">Отправлено в WB · ждём проверки</div>'
       :'';
-  return '<button type="button" class="item price-item '+(!linked?'unlinked':'')+'" data-price-row="'+index+'" onclick="openPriceEditor('+index+')">'+
-    '<div class="price-item-head"><div class="grow"><div class="name">'+pEsc(row.name||row.sku||'Товар')+'</div>'+
-    '<div class="muted">'+pEsc(account?(row.account+' · '):'')+pEsc(row.sku?('Арт. '+row.sku):row.remoteId||'')+(linked?'':' · не привязан к товару склада')+'</div>'+sync+'</div><span class="price-chevron">›</span></div>'+
-    '<div class="price-values">'+lines+'</div></button>';
+  const expanded=Boolean(priceExpanded&&priceExpanded.market===priceUi.market&&priceExpanded.index===Number(index));
+  return '<div class="item price-item '+(!linked?'unlinked':'')+(expanded?' expanded':'')+'" data-price-row="'+index+'">'+
+    '<button type="button" class="price-card-toggle" onclick="openPriceEditor('+index+')" aria-expanded="'+(expanded?'true':'false')+'">'+
+      '<div class="price-item-head"><div class="grow"><div class="name">'+pEsc(row.name||row.sku||'Товар')+'</div>'+
+      '<div class="muted">'+pEsc(account?(row.account+' · '):'')+pEsc(row.sku?('Арт. '+row.sku):row.remoteId||'')+(linked?'':' · не привязан к товару склада')+'</div>'+sync+'</div><span class="price-chevron">'+(expanded?'⌄':'›')+'</span></div>'+
+      '<div class="price-values">'+lines+'</div>'+
+    '</button>'+priceInlineEditor(row,index)+'</div>';
 }
 function paintPrices(){
   setPriceTabs();
@@ -279,7 +318,7 @@ window.renderPrices=async function(force=false){
 
 window.priceSetMarket=function(market){
   if(!PRICE_MARKETS.includes(market)||market===priceUi.market)return;
-  priceUi.market=market;rememberPriceUi();setPriceTabs();window.renderPrices(false);
+  priceExpanded=null;priceUi.market=market;rememberPriceUi();setPriceTabs();window.renderPrices(false);
 };
 window.priceSearch=function(value){
   priceUi.q=String(value||'');rememberPriceUi();paintPrices();
@@ -287,10 +326,10 @@ window.priceSearch=function(value){
 window.priceToggleSort=function(){
   priceUi.sort=priceUi.sort==='desc'?'asc':'desc';rememberPriceUi();setPriceTabs();paintPrices();
 };
-window.hidePriceRow=function(){
-  const row=window.__priceEditRow,key=priceRowKey(row);if(!row||!key)return;
+window.hidePriceRow=function(index){
+  const row=activeRows()[Number(index)],key=priceRowKey(row);if(!row||!key)return;
   const market=String(row.market||priceUi.market),keys=priceHiddenKeys(market);if(!keys.includes(key))keys.push(key);
-  priceRememberHidden(market,keys);closeModal();paintPrices();
+  priceRememberHidden(market,keys);priceExpanded=null;paintPrices();
   setPriceStatus('Товар скрыт из списка цен.','ok');
 };
 window.openHiddenPrices=function(){
@@ -316,32 +355,16 @@ function inputNumber(id){
 }
 window.openPriceEditor=function(index){
   const row=activeRows()[Number(index)];if(!row||row.error)return;
-  window.__priceEditRow=row;
-  if(row.market==='Kaspi'){
-    showSheet('<h3>Цена · Kaspi</h3><div class="item"><b>'+pEsc(row.name)+'</b><div class="muted">Арт. '+pEsc(row.sku)+'</div></div>'+
-      '<div class="field"><label>Цена, ₸</label><input id="priceEditCurrent" type="number" min="1" step="1" inputmode="decimal" value="'+pEsc(pNum(row.price)||'')+'"></div>'+
-      '<div class="link-note">Цена сохраняется в складе и попадает в XML-прайс Kaspi. Отдельной процентной скидки в нашем прайс-листе Kaspi нет.</div>'+
-      '<button class="btn dark full" onclick="submitPriceEdit()">Сохранить цену</button>'+priceHideAction());
-    return;
-  }
-  if(row.market==='WB'||row.market==='WB2'){
-    const priceDisabled=row.canEditPrice===false;
-    showSheet('<h3>Цена и скидка · '+pEsc(marketLabel(row.market))+'</h3><div class="item"><b>'+pEsc(row.name)+'</b><div class="muted">Арт. '+pEsc(row.sku)+' · nmID '+pEsc(row.remoteId)+'</div></div>'+
-      '<div class="field"><label>Цена до скидки, '+pEsc(row.currency||'RUB')+'</label><input id="priceEditCurrent" type="number" min="1" step="1" inputmode="decimal" value="'+pEsc(pNum(row.price)||'')+'" '+(priceDisabled?'disabled':'')+'></div>'+
-      (priceDisabled?'<div class="link-note">У товара разные цены по размерам. Чтобы не перезаписать их одной суммой, здесь можно менять только общую скидку.</div>':'')+
-      '<div class="field"><label>Скидка, %</label><input id="priceEditDiscount" type="number" min="0" max="99" step="1" inputmode="numeric" value="'+pEsc(Math.round(pNum(row.discount)))+'"></div>'+
-      '<div class="link-note">Изменение сохранится на нашем сервере и уйдёт в WB во время ближайшего разрешённого сеанса связи. До подтверждения WB карточка будет помечена как ожидающая.</div>'+
-      '<button class="btn dark full" onclick="submitPriceEdit()">Сохранить изменение</button>'+priceHideAction());
-    return;
-  }
-  if(row.market==='Ozon'){
-    showSheet('<h3>Цена и скидка · Ozon</h3><div class="item"><b>'+pEsc(row.name)+'</b><div class="muted">'+pEsc(row.account||'Ozon')+' · '+pEsc(row.sku)+'</div></div>'+
-      '<div class="field"><label>Текущая цена, '+pEsc(row.currency||'RUB')+'</label><input id="priceEditCurrent" type="number" min="1" step="1" inputmode="decimal" value="'+pEsc(pNum(row.price)||'')+'"></div>'+
-      '<div class="field"><label>Цена до скидки</label><input id="priceEditOld" type="number" min="0" step="1" inputmode="decimal" value="'+pEsc(pNum(row.oldPrice)||'')+'"></div>'+
-      '<div class="link-note">Скидка Ozon здесь рассчитывается из «цены до скидки» и текущей цены. Минимальная цена товара сохраняется без изменения.</div>'+
-      '<button class="btn dark full" onclick="submitPriceEdit()">Отправить в Ozon</button>'+priceHideAction());
-  }
+  const same=priceExpanded&&priceExpanded.market===priceUi.market&&priceExpanded.index===Number(index);
+  priceExpanded=same?null:{market:priceUi.market,index:Number(index)};
+  paintPrices();
+  if(!same)setTimeout(()=>document.querySelector('[data-price-row="'+Number(index)+'"] .price-inline-editor input:not([disabled])')?.focus(),0);
 };
+window.collapsePriceEditor=function(){
+  if(!priceExpanded)return;
+  priceExpanded=null;paintPrices();
+};
+
 async function remotePriceUpdate(body){
   const response=await fetch(MILLIONER_API+'/api/market-prices/update',{
     method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({...body,confirm:true})
@@ -352,9 +375,9 @@ async function remotePriceUpdate(body){
   if(!data||typeof data!=='object')throw new Error('Сервер цен вернул пустой ответ');
   return data;
 }
-window.submitPriceEdit=async function(){
-  const row=window.__priceEditRow;if(!row)return;
-  const button=document.querySelector('#sheet .btn.dark.full');if(button){button.disabled=true;button.textContent='Сохраняю…';}
+window.submitPriceEdit=async function(index){
+  const row=activeRows()[Number(index)];if(!row)return;
+  const button=document.querySelector('[data-price-row="'+Number(index)+'"] .price-inline-editor .btn.dark.full');if(button){button.disabled=true;button.textContent='Сохраняю…';}
   try{
     if(row.market==='Kaspi'){
       const price=inputNumber('priceEditCurrent');
@@ -368,7 +391,7 @@ window.submitPriceEdit=async function(){
       let pushed=true;
       if(typeof pushWarehouseToServer==='function')pushed=(await pushWarehouseToServer())===true;
       row.price=price;row.finalPrice=price;row.source='warehouse';
-      closeModal();paintPrices();
+      priceExpanded=null;paintPrices();
       setPriceStatus(pushed?'Цена Kaspi сохранена · XML обновлён':'Цена Kaspi сохранена локально · сервер ещё синхронизируется',pushed?'ok':'warn');
       return;
     }
@@ -398,7 +421,7 @@ window.submitPriceEdit=async function(){
         cached.sentCount=(cached.rows||[]).filter(item=>item.syncState==='sent').length;
         cached.nextSyncAt=Number(result.nextSyncAt)||Number(cached.nextSyncAt)||0;
       }
-      closeModal();paintPrices();
+      priceExpanded=null;paintPrices();
       setPriceStatus('Изменение сохранено · ожидает сеанса WB'+(Number(result.nextSyncAt)>Date.now()?' в '+priceTimeLabel(result.nextSyncAt):''),'ok');
       return;
     }
@@ -411,12 +434,12 @@ window.submitPriceEdit=async function(){
       row.price=price;row.finalPrice=price;row.oldPrice=Number.isFinite(oldPrice)?Math.max(0,oldPrice):0;
       bumpPriceEpoch('Ozon');
       const cached=priceCache.get('Ozon');if(cached){cached.stale=true;cached.fetchedAt=Number(cached.fetchedAt)||Date.now()}
-      closeModal();paintPrices();setPriceStatus('Ozon подтвердил обновление цены. Нажмите ↻ для проверки.','ok');
+      priceExpanded=null;paintPrices();setPriceStatus('Ozon подтвердил обновление цены. Нажмите ↻ для проверки.','ok');
     }
   }catch(error){
     alert(priceErrorText(error));
   }finally{
-    if(button){button.disabled=false;button.textContent=row.market==='Kaspi'?'Сохранить цену':row.market==='Ozon'?'Отправить в Ozon':'Сохранить изменение';}
+    if(button&&document.body.contains(button)){button.disabled=false;button.textContent=row.market==='Kaspi'?'Сохранить цену':row.market==='Ozon'?'Отправить в Ozon':'Сохранить изменение';}
   }
 };
 

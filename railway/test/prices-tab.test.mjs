@@ -19,7 +19,7 @@ test('Prices is a real ninth tab and survives reload navigation',()=>{
 });
 
 test('Prices UI is static before auth but does not fetch prices on startup',()=>{
-  const scriptAt=html.indexOf('./prices-v1.js?v=20260927-wb-sync-queue');
+  const scriptAt=html.indexOf('./prices-v1.js?v=20260927-inline-price-editor');
   const authAt=html.lastIndexOf('<script>initOwnerAuth();</script>');
   assert.ok(scriptAt>0&&scriptAt<authAt);
   const runtime=html.slice(html.indexOf('function startAppRuntime(){'),html.indexOf('// Wait for the server-sync module'));
@@ -159,7 +159,7 @@ test('Prices can hide unwanted products without deleting marketplace or warehous
   assert.match(ui,/hidden:\{\}/);
   assert.match(ui,/function priceRowKey\(row\)/);
   assert.match(ui,/function priceIsHidden\(row/);
-  assert.match(ui,/window\.hidePriceRow=function\(\)/);
+  assert.match(ui,/window\.hidePriceRow=function\(index\)/);
   assert.match(ui,/window\.openHiddenPrices=function\(\)/);
   assert.match(ui,/window\.restorePriceRow=function\(index\)/);
   assert.match(ui,/window\.restoreAllPriceRows=function\(\)/);
@@ -200,4 +200,21 @@ test('WB queued writes batch changes and verify them only on a later read slot',
   assert.match(ui,/Ожидает отправки в WB/);
   assert.match(ui,/Отправлено в WB · ждём проверки/);
   assert.match(ui,/Сохранить изменение/);
+});
+
+
+test('Price cards expand inline instead of opening the shared sheet editor',()=>{
+  assert.match(ui,/let priceExpanded=null/);
+  assert.match(ui,/function priceInlineEditor\(row,index\)/);
+  assert.match(ui,/class="price-card-toggle"/);
+  assert.match(ui,/aria-expanded=/);
+  assert.match(ui,/window\.openPriceEditor=function\(index\)/);
+  assert.match(ui,/window\.collapsePriceEditor=function\(\)/);
+  assert.match(ui,/window\.submitPriceEdit=async function\(index\)/);
+  assert.match(html,/\.price-inline-editor\{/);
+  assert.match(html,/\.price-card-toggle\{/);
+  const open=ui.slice(ui.indexOf('window.openPriceEditor=function(index)'),ui.indexOf('async function remotePriceUpdate'));
+  assert.doesNotMatch(open,/showSheet\(/);
+  assert.doesNotMatch(open,/closeModal\(/);
+  assert.match(open,/priceExpanded=same\?null:/);
 });
