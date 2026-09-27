@@ -289,6 +289,49 @@ async function wbToken(market) {
   return credentialFor(market, fallback);
 }
 
+async function normalizeWbPriceRows(market, rows) {
+  const links = await productLinks(market);
+  return rows.map(row => {
+    const vendorCode = cleanText(row?.vendorCode);
+    const nmId = cleanText(row?.nmID);
+    const link = links.get(vendorCode) || links.get(nmId) || null;
+    const sizes = Array.isArray(row?.sizes) ? row.sizes : [];
+    const prices = sizes.map(size => number(size?.price)).filter(value => value > 0);
+    const discounted = sizes.map(size => number(size?.discountedPrice)).filter(value => value > 0);
+    const club = sizes.map(size => number(size?.clubDiscountedPrice)).filter(value => value > 0);
+    const uniquePrices = [...new Set(prices.map(value => String(value)))].map(Number);
+    const price = prices.length ? Math.min(...prices) : 0;
+    const priceMax = prices.length ? Math.max(...prices) : price;
+    const finalPrice = discounted.length ? Math.min(...discounted) : price > 0 ? price * (1 - clampDiscount(row?.discount) / 100) : 0;
+    const finalPriceMax = discounted.length ? Math.max(...discounted) : priceMax > 0 ? priceMax * (1 - clampDiscount(row?.discount) / 100) : 0;
+    return {
+      id: market + ':' + nmId,
+      market,
+      account: market === 'WB' ? 'WB 1' : market === 'WB2' ? 'WB 2' : market,
+      productId: cleanText(link?.productId),
+      name: cleanText(link?.name) || vendorCode || ('WB ' + nmId),
+      sku: vendorCode,
+      remoteId: nmId,
+      linked: Boolean(link),
+      price,
+      priceMax,
+      finalPrice,
+      finalPriceMax,
+      oldPrice: 0,
+      minPrice: 0,
+      discount: clampDiscount(row?.discount),
+      clubDiscount: clampDiscount(row?.clubDiscount),
+      clubFinalPrice: club.length ? Math.min(...club) : 0,
+      currency: cleanText(row?.currencyIsoCode4217) || 'RUB',
+      source: 'wb-api',
+      editableSizePrice: Boolean(row?.editableSizePrice),
+      canEditPrice: uniquePrices.length <= 1,
+      canEditDiscount: true,
+      sizes: sizes.length
+    };
+  }).sort((x, y) => x.name.localeCompare(y.name, 'ru'));
+}
+
 async function listWbPrices(market, force = false) {
   const token = await wbToken(market);
   if (!token) {
@@ -313,9 +356,9 @@ async function listWbPrices(market, force = false) {
     const secondHit = cached(key, force);
     if (secondHit) return secondHit;
     const generation = generationFor(market);
+    const rows = [];
     console.info('WB prices cache', JSON.stringify({ market, force: Boolean(force), result: 'miss' }));
     try {
-      const rows = [];
       let complete = false;
       for (let offset = 0, page = 0; page < 100; page++, offset += 1000) {
         const data = await requestWb(
@@ -336,46 +379,7 @@ async function listWbPrices(market, force = false) {
         error.status = 502;
         throw error;
       }
-      const links = await productLinks(market);
-      const normalized = rows.map(row => {
-        const vendorCode = cleanText(row?.vendorCode);
-        const nmId = cleanText(row?.nmID);
-        const link = links.get(vendorCode) || links.get(nmId) || null;
-        const sizes = Array.isArray(row?.sizes) ? row.sizes : [];
-        const prices = sizes.map(size => number(size?.price)).filter(value => value > 0);
-        const discounted = sizes.map(size => number(size?.discountedPrice)).filter(value => value > 0);
-        const club = sizes.map(size => number(size?.clubDiscountedPrice)).filter(value => value > 0);
-        const uniquePrices = [...new Set(prices.map(value => String(value)))].map(Number);
-        const price = prices.length ? Math.min(...prices) : 0;
-        const priceMax = prices.length ? Math.max(...prices) : price;
-        const finalPrice = discounted.length ? Math.min(...discounted) : price > 0 ? price * (1 - clampDiscount(row?.discount) / 100) : 0;
-        const finalPriceMax = discounted.length ? Math.max(...discounted) : priceMax > 0 ? priceMax * (1 - clampDiscount(row?.discount) / 100) : 0;
-        return {
-          id: market + ':' + nmId,
-          market,
-          account: market === 'WB' ? 'WB 1' : market === 'WB2' ? 'WB 2' : market,
-          productId: cleanText(link?.productId),
-          name: cleanText(link?.name) || vendorCode || ('WB ' + nmId),
-          sku: vendorCode,
-          remoteId: nmId,
-          linked: Boolean(link),
-          price,
-          priceMax,
-          finalPrice,
-          finalPriceMax,
-          oldPrice: 0,
-          minPrice: 0,
-          discount: clampDiscount(row?.discount),
-          clubDiscount: clampDiscount(row?.clubDiscount),
-          clubFinalPrice: club.length ? Math.min(...club) : 0,
-          currency: cleanText(row?.currencyIsoCode4217) || 'RUB',
-          source: 'wb-api',
-          editableSizePrice: Boolean(row?.editableSizePrice),
-          canEditPrice: uniquePrices.length <= 1,
-          canEditDiscount: true,
-          sizes: sizes.length
-        };
-      }).sort((x, y) => x.name.localeCompare(y.name, 'ru'));
+      const normalized = await normalizeWbPriceRows(market, rows);
       return remember(key, market, generation, {
         ok: true,
         market,
@@ -384,6 +388,21 @@ async function listWbPrices(market, force = false) {
         rows: normalized
       });
     } catch (error) {
+      if (Number(error?.status) === 429 && rows.length) {
+        const partial = {
+          ok: true,
+          market,
+          source: 'Wildberries Prices & Discounts API',
+          fetchedAt: Date.now(),
+          rows: await normalizeWbPriceRows(market, rows),
+          stale: true,
+          partial: true,
+          warning: 'WB ограничил проверку следующей страницы',
+          retryAt: Number(error?.retryAt) || 0
+        };
+        if (generationFor(market) === generation) cache.set(key, { at: 0, value: partial });
+        return partial;
+      }
       const fallback = canServeStale(error) ? staleSnapshot(key, error) : null;
       if (fallback) return fallback;
       throw error;
