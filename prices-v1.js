@@ -6,6 +6,7 @@ const PRICE_MARKETS=['Kaspi','WB','WB2','Ozon'];
 const PRICE_CLIENT_TTL_MS=2*60*1000;
 let priceUi={market:'Kaspi',q:'',sort:'asc',hidden:{}};
 let priceExpanded=null;
+const priceSelected={WB:new Set(),WB2:new Set()};
 try{
   const saved=JSON.parse(localStorage.getItem(PRICE_UI_KEY)||'{}')||{};
   if(PRICE_MARKETS.includes(saved.market))priceUi.market=saved.market;
@@ -65,6 +66,35 @@ function priceIsHidden(row,market=priceUi.market){
 function priceRememberHidden(market,keys){
   priceUi.hidden={...(priceUi.hidden||{}),[market]:[...new Set((keys||[]).map(String).filter(Boolean))]};rememberPriceUi();
 }
+function priceSelection(market=priceUi.market){
+  return priceSelected[market]||new Set();
+}
+function priceIsWbMarket(market=priceUi.market){
+  return market==='WB'||market==='WB2';
+}
+function priceVisibleRows(){
+  const q=priceUi.q.trim().toLocaleLowerCase('ru-RU');
+  return activeRows().map((row,index)=>({row,index})).filter(({row})=>{
+    if(row?.error||priceIsHidden(row))return false;
+    if(!q)return true;
+    return [row.name,row.sku,row.remoteId,row.account].some(value=>String(value||'').toLocaleLowerCase('ru-RU').includes(q));
+  });
+}
+function updatePriceBulkTools(indexed=priceVisibleRows()){
+  const tools=document.getElementById('priceBulkTools'),all=document.getElementById('priceSelectAll'),count=document.getElementById('priceSelectedCount'),
+    enable=document.getElementById('priceBulkEnablePromo'),disable=document.getElementById('priceBulkDisablePromo');
+  const isWb=priceIsWbMarket(),selection=priceSelection(),visibleIds=indexed.map(({row})=>String(row.remoteId||'')).filter(Boolean),
+    selectedVisible=visibleIds.filter(id=>selection.has(id)).length;
+  if(tools)tools.hidden=!isWb;
+  if(all){
+    all.checked=Boolean(visibleIds.length)&&selectedVisible===visibleIds.length;
+    all.indeterminate=selectedVisible>0&&selectedVisible<visibleIds.length;
+  }
+  if(count)count.textContent=selection.size?'Выбрано '+selection.size:'';
+  if(enable)enable.disabled=!selection.size;
+  if(disable)disable.disabled=!selection.size;
+}
+
 function priceHideAction(index){
   return '<button type="button" class="btn full price-hide-action" onclick="hidePriceRow('+Number(index)+')">Скрыть из списка</button>';
 }
@@ -103,6 +133,7 @@ function setPriceTabs(){
   const hidden=document.getElementById('priceHiddenButton'),hiddenTools=document.getElementById('priceHiddenTools'),hiddenCount=priceHiddenKeys().length;
   if(hiddenTools)hiddenTools.hidden=!hiddenCount;
   if(hidden){hidden.hidden=!hiddenCount;hidden.textContent='Скрытые · '+hiddenCount;hidden.setAttribute('aria-label','Показать скрытые товары: '+hiddenCount);}
+  updatePriceBulkTools();
 }
 function priceRetryLabel(retryAt){
   const ts=Number(retryAt)||0;
@@ -195,11 +226,13 @@ function priceCard(row,index){
     :row.syncState==='sent'
       ?'<div class="price-sync-state sent">Отправлено в WB · ждём проверки</div>'
       :'';
-  const promo=row.promoEnabled
-    ?'<span class="price-promo-badge '+(row.promoStatus==='participating'?'active':'')+'"> · Акции '+(row.promoStatus==='participating'?'✓':'')+'</span>'
+  const promo=row.market==='WB'||row.market==='WB2'
+    ?'<span class="price-promo-badge '+(row.promoEnabled&&row.promoStatus==='participating'?'active':row.promoEnabled?'waiting':'off')+'"> · '+(row.promoEnabled&&row.promoStatus==='participating'?'В акции':row.promoEnabled?'Ждёт акцию':'Без акции')+'</span>'
     :'';
   const expanded=Boolean(priceExpanded&&priceExpanded.market===priceUi.market&&priceExpanded.index===Number(index));
-  return '<div class="item price-item '+(!linked?'unlinked':'')+(expanded?' expanded':'')+'" data-price-row="'+index+'">'+
+  const selected=priceIsWbMarket(row.market)&&priceSelection(row.market).has(String(row.remoteId||''));
+  const selectBox=priceIsWbMarket(row.market)?'<label class="price-row-select" onclick="event.stopPropagation()"><input type="checkbox" '+(selected?'checked':'')+' onchange="priceSelectRow('+Number(index)+',this.checked)" aria-label="Выбрать товар"></label>':'';
+  return '<div class="item price-item '+(!linked?'unlinked':'')+(expanded?' expanded':'')+(selected?' selected':'')+'" data-price-row="'+index+'">'+selectBox+
     '<button type="button" class="price-card-toggle" onclick="openPriceEditor('+index+')" aria-expanded="'+(expanded?'true':'false')+'">'+
       '<div class="price-item-head"><div class="grow"><div class="name">'+pEsc(row.name||row.sku||'Товар')+'</div>'+
       '<div class="muted">'+pEsc(account?(row.account+' · '):'')+pEsc(row.sku?('Арт. '+row.sku):row.remoteId||'')+(linked?'':' · не привязан к товару склада')+promo+'</div>'+sync+'</div><span class="price-chevron">'+(expanded?'⌄':'›')+'</span></div>'+
@@ -235,7 +268,8 @@ function paintPrices(){
     list.innerHTML='<div class="empty">Нет позиций для этого магазина</div>';return;
   }
   if(!visibleRows.length&&rows.length){list.innerHTML='<div class="empty">Все позиции этого магазина скрыты.<br><span class="muted">Вернуть их можно через «Скрытые».</span></div>';return;}
-  if(!indexed.length){list.innerHTML='<div class="empty">Поиск ничего не нашёл</div>';return;}
+  if(!indexed.length){updatePriceBulkTools(indexed);list.innerHTML='<div class="empty">Поиск ничего не нашёл</div>';return;}
+  updatePriceBulkTools(indexed);
   list.innerHTML=indexed.map(({row,index})=>priceCard(row,index)).join('');
 }
 
@@ -320,6 +354,56 @@ window.priceSearch=function(value){
 window.priceToggleSort=function(){
   priceUi.sort=priceUi.sort==='desc'?'asc':'desc';rememberPriceUi();setPriceTabs();paintPrices();
 };
+window.priceSelectRow=function(index,checked){
+  const row=activeRows()[Number(index)];if(!row||!priceIsWbMarket(row.market))return;
+  const set=priceSelection(row.market),id=String(row.remoteId||'');if(!id)return;
+  if(checked)set.add(id);else set.delete(id);
+  paintPrices();
+};
+window.priceSelectAllVisible=function(checked){
+  if(!priceIsWbMarket())return;
+  const set=priceSelection();
+  for(const {row} of priceVisibleRows()){
+    const id=String(row.remoteId||'');if(!id)continue;
+    if(checked)set.add(id);else set.delete(id);
+  }
+  paintPrices();
+};
+async function remotePromoBulk(remoteIds,enabled){
+  const response=await fetch(MILLIONER_API+'/api/market-prices/promo/bulk',{
+    method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({market:priceUi.market,remoteIds,enabled:Boolean(enabled),confirm:true})
+  });
+  const text=await response.text();
+  let data=null;if(text){try{data=JSON.parse(text)}catch{throw new Error('Сервер акций вернул некорректный ответ')}}
+  if(!response.ok||data?.ok===false)throw new Error(data?.error||('HTTP '+response.status));
+  return data;
+}
+window.priceBulkPromo=async function(enabled){
+  if(!priceIsWbMarket())return;
+  const ids=[...priceSelection()].filter(Boolean);if(!ids.length)return;
+  const action=enabled?'добавить в акции':'убрать из акций';
+  if(!confirm((enabled?'Добавить в акции ':'Убрать из акций ')+ids.length+' товаров?'))return;
+  const enableButton=document.getElementById('priceBulkEnablePromo'),disableButton=document.getElementById('priceBulkDisablePromo');
+  if(enableButton)enableButton.disabled=true;if(disableButton)disableButton.disabled=true;
+  try{
+    const result=await remotePromoBulk(ids,enabled),applied=new Set((result.remoteIds||ids).map(String));
+    for(const row of activeRows()){
+      if(!applied.has(String(row.remoteId||'')))continue;
+      row.promoEnabled=Boolean(enabled);
+      if(enabled){
+        if(row.promoStatus!=='participating')row.promoStatus='idle';
+      }else if(row.promoStatus!=='participating'){
+        row.promoStatus='off';row.promoName='';row.promoPlanPrice=null;row.promoPlanDiscount=null;
+      }
+    }
+    priceSelection().clear();
+    paintPrices();
+    setPriceStatus((enabled?'Акции включены для ':'Акции выключены для ')+Number(result.count||applied.size)+' товаров','ok');
+  }catch(error){
+    alert(priceErrorText(error));updatePriceBulkTools();
+  }
+};
 window.hidePriceRow=function(index){
   const row=activeRows()[Number(index)],key=priceRowKey(row);if(!row||!key)return;
   const market=String(row.market||priceUi.market),keys=priceHiddenKeys(market);if(!keys.includes(key))keys.push(key);
@@ -374,8 +458,9 @@ window.togglePricePromo=async function(index,enabled){
   if(checkbox)checkbox.disabled=true;
   try{
     const result=await remotePromoToggle({market:row.market,remoteId:row.remoteId,enabled:Boolean(enabled)});
-    row.promoEnabled=Boolean(result.enabled);row.promoStatus=row.promoEnabled?'idle':'off';
-    if(!row.promoEnabled){row.promoName='';row.promoPlanPrice=null;row.promoPlanDiscount=null}
+    row.promoEnabled=Boolean(result.enabled);
+    if(row.promoStatus!=='participating')row.promoStatus=row.promoEnabled?'idle':'off';
+    if(!row.promoEnabled&&row.promoStatus!=='participating'){row.promoName='';row.promoPlanPrice=null;row.promoPlanDiscount=null}
     paintPrices();setPriceStatus(row.promoEnabled?'Акции включены':'Акции выключены','ok');
   }catch(error){
     if(checkbox){checkbox.checked=!enabled;checkbox.disabled=false}
@@ -419,7 +504,7 @@ window.submitPriceEdit=async function(index){
       if(!Number.isInteger(enteredDiscount)||enteredDiscount<0||enteredDiscount>99)throw new Error('Скидка должна быть целым числом от 0 до 99');
       const priceChanged=row.canEditPrice!==false&&Math.abs(enteredPrice-pNum(row.price))>0.000001;
       const discountChanged=enteredDiscount!==Math.round(pNum(row.discount));
-      if(!priceChanged&&!discountChanged)throw new Error('Цена и скидка не изменились');
+      if(!priceChanged&&!discountChanged){priceExpanded=null;paintPrices();return;}
       const changes=[];
       if(priceChanged)changes.push('цену на '+pMoney(enteredPrice,row.currency));
       if(discountChanged)changes.push('скидку на '+enteredDiscount+'%');

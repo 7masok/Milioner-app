@@ -7,7 +7,7 @@ import { asyncRoute, requireTrustedOrigin, requireWritesEnabled } from './http.j
 
 const WB_PROMO_API = 'https://dp-calendar-api.wildberries.ru';
 const WB_PROMO_MIN_INTERVAL_MS = 650;
-const WB_PROMO_SLOT_MS = 10 * 60 * 1000;
+const WB_PROMO_SLOT_MS = 60 * 60 * 1000 + 5_000;
 const WB_PROMO_LOOP_MS = 60 * 1000;
 const WB_PROMO_FIRST_DELAY_MS = 15_000;
 const WB_PROMO_LOOKAHEAD_MS = 14 * 24 * 60 * 60 * 1000;
@@ -25,6 +25,11 @@ wbPromotionsRouter.use(requireTrustedOrigin);
 
 function cleanText(value) {
   return String(value ?? '').trim();
+}
+
+function jsonValue(value, fallback = {}) {
+  if (value && typeof value === 'object') return value;
+  try { return JSON.parse(String(value || '')); } catch { return fallback; }
 }
 
 function number(value) {
@@ -166,14 +171,17 @@ async function promoPreferences(market, client = pool, onlyEnabled = false) {
 
 async function promoMarketState(market, client = pool) {
   const result = await client.query(`SELECT next_sync_at AS "nextSyncAt",last_sync_at AS "lastSyncAt",
-    last_error AS "lastError",updated_at AS "updatedAt" FROM wb_promo_sync_state WHERE market=$1`, [market]);
+    last_error AS "lastError",updated_at AS "updatedAt",phase,payload
+    FROM wb_promo_sync_state WHERE market=$1`, [market]);
   const row = result.rows[0];
   return row ? {
     nextSyncAt: Number(row.nextSyncAt || 0),
     lastSyncAt: Number(row.lastSyncAt || 0),
     lastError: cleanText(row.lastError),
-    updatedAt: Number(row.updatedAt || 0)
-  } : { nextSyncAt: 0, lastSyncAt: 0, lastError: '', updatedAt: 0 };
+    updatedAt: Number(row.updatedAt || 0),
+    phase: ['list','eligible','verify','upload'].includes(cleanText(row.phase)) ? cleanText(row.phase) : 'list',
+    payload: jsonValue(row.payload, {})
+  } : { nextSyncAt: 0, lastSyncAt: 0, lastError: '', updatedAt: 0, phase: 'list', payload: {} };
 }
 
 async function markPromoMarketState(market, values, client = pool) {
@@ -182,11 +190,23 @@ async function markPromoMarketState(market, values, client = pool) {
   const nextSyncAt = values.nextSyncAt ?? current.nextSyncAt;
   const lastSyncAt = values.lastSyncAt ?? current.lastSyncAt;
   const lastError = values.lastError ?? current.lastError;
-  await client.query(`INSERT INTO wb_promo_sync_state(market,next_sync_at,last_sync_at,last_error,updated_at)
-    VALUES($1,$2,$3,$4,$5)
+  const phase = ['list','eligible','verify','upload'].includes(cleanText(values.phase)) ? cleanText(values.phase) : current.phase;
+  const payload = values.payload === undefined ? current.payload : jsonValue(values.payload, {});
+  await client.query(`INSERT INTO wb_promo_sync_state
+    (market,next_sync_at,last_sync_at,last_error,updated_at,phase,payload)
+    VALUES($1,$2,$3,$4,$5,$6,$7::jsonb)
     ON CONFLICT(market) DO UPDATE SET next_sync_at=excluded.next_sync_at,last_sync_at=excluded.last_sync_at,
-      last_error=excluded.last_error,updated_at=excluded.updated_at`,
-    [market, nextSyncAt, lastSyncAt, cleanText(lastError), now]);
+      last_error=excluded.last_error,updated_at=excluded.updated_at,phase=excluded.phase,payload=excluded.payload`,
+    [market, nextSyncAt, lastSyncAt, cleanText(lastError), now, phase, JSON.stringify(payload || {})]);
+}
+
+async function wakePromoSync(market, now = Date.now()) {
+  await pool.query(`INSERT INTO wb_promo_sync_state
+    (market,next_sync_at,last_sync_at,last_error,updated_at,phase,payload)
+    VALUES($1,0,0,'',$2,'list','{}'::jsonb)
+    ON CONFLICT(market) DO UPDATE SET
+      next_sync_at=CASE WHEN wb_promo_sync_state.next_sync_at>$2 THEN wb_promo_sync_state.next_sync_at ELSE 0 END,
+      updated_at=excluded.updated_at`, [market, now]);
 }
 
 async function priceSnapshotRows(market, client = pool) {
@@ -216,27 +236,6 @@ async function queuePromoDiscount(market, nmId, discount, promotionId = 0, clien
   return Number(result.rowCount || 0) > 0;
 }
 
-function candidatePriority(candidate, now) {
-  if (candidate.inAction) return 3;
-  const start = Date.parse(candidate.startDateTime || '') || 0;
-  const end = Date.parse(candidate.endDateTime || '') || 0;
-  if (start <= now && (!end || end >= now)) return 2;
-  return 1;
-}
-
-function chooseCandidate(current, next, now) {
-  if (!current) return next;
-  const currentPriority = candidatePriority(current, now);
-  const nextPriority = candidatePriority(next, now);
-  if (nextPriority !== currentPriority) return nextPriority > currentPriority ? next : current;
-  const currentPrice = number(current.planPrice);
-  const nextPrice = number(next.planPrice);
-  if (Math.abs(nextPrice - currentPrice) > 0.000001) return nextPrice > currentPrice ? next : current;
-  const currentStart = Date.parse(current.startDateTime || '') || Number.MAX_SAFE_INTEGER;
-  const nextStart = Date.parse(next.startDateTime || '') || Number.MAX_SAFE_INTEGER;
-  return nextStart < currentStart ? next : current;
-}
-
 function requiredDiscount(row, candidate) {
   const basePrice = number(row?.price);
   const planPrice = number(candidate?.planPrice);
@@ -249,55 +248,44 @@ function requiredDiscount(row, candidate) {
   return Math.max(0, Math.min(99, Math.ceil((1 - planPrice / basePrice) * 100)));
 }
 
-async function promotionCandidates(market, token, enabledIds, now) {
-  if (!enabledIds.size) return { candidates: new Map(), promotions: [] };
-  const startDateTime = isoSeconds(now - 24 * 60 * 60 * 1000);
-  const endDateTime = isoSeconds(now + WB_PROMO_LOOKAHEAD_MS);
-  const list = await requestPromo(token,
-    '/api/v1/calendar/promotions?startDateTime=' + encodeURIComponent(startDateTime) +
-    '&endDateTime=' + encodeURIComponent(endDateTime) + '&allPromo=true&limit=1000&offset=0',
-    {}, { market });
-  const promotions = (Array.isArray(list?.data?.promotions) ? list.data.promotions : [])
+function chooseRegularPromotion(rawPromotions, now) {
+  return (Array.isArray(rawPromotions) ? rawPromotions : [])
     .filter(item => cleanText(item?.type).toLowerCase() === 'regular')
     .filter(item => {
       const end = Date.parse(item?.endDateTime || '') || 0;
       return !end || end >= now;
     })
     .sort((a, b) => {
-      const aActive = (Date.parse(a?.startDateTime || '') || 0) <= now && (Date.parse(a?.endDateTime || '') || Number.MAX_SAFE_INTEGER) >= now;
-      const bActive = (Date.parse(b?.startDateTime || '') || 0) <= now && (Date.parse(b?.endDateTime || '') || Number.MAX_SAFE_INTEGER) >= now;
+      const aStart = Date.parse(a?.startDateTime || '') || Number.MAX_SAFE_INTEGER;
+      const bStart = Date.parse(b?.startDateTime || '') || Number.MAX_SAFE_INTEGER;
+      const aEnd = Date.parse(a?.endDateTime || '') || Number.MAX_SAFE_INTEGER;
+      const bEnd = Date.parse(b?.endDateTime || '') || Number.MAX_SAFE_INTEGER;
+      const aActive = aStart <= now && aEnd >= now;
+      const bActive = bStart <= now && bEnd >= now;
       if (aActive !== bActive) return aActive ? -1 : 1;
-      return (Date.parse(a?.startDateTime || '') || 0) - (Date.parse(b?.startDateTime || '') || 0);
-    })
-    .slice(0, WB_PROMO_MAX_CAMPAIGNS);
+      return aStart - bStart;
+    })[0] || null;
+}
 
-  const candidates = new Map();
-  for (const promotion of promotions) {
-    const promotionId = Number(promotion?.id || 0);
-    if (!(promotionId > 0)) continue;
-    for (const inAction of [false, true]) {
-      const data = await requestPromo(token,
-        '/api/v1/calendar/promotions/nomenclatures?promotionID=' + promotionId +
-        '&inAction=' + (inAction ? 'true' : 'false') + '&limit=1000&offset=0',
-        {}, { market });
-      for (const raw of Array.isArray(data?.data?.nomenclatures) ? data.data.nomenclatures : []) {
-        const nmId = String(raw?.id || '');
-        if (!enabledIds.has(nmId)) continue;
-        const candidate = {
-          nmId,
-          promotionId,
-          promotionName: cleanText(promotion?.name),
-          startDateTime: cleanText(promotion?.startDateTime),
-          endDateTime: cleanText(promotion?.endDateTime),
-          inAction: Boolean(raw?.inAction ?? inAction),
-          planPrice: number(raw?.planPrice),
-          planDiscount: Number.isFinite(Number(raw?.planDiscount)) ? Math.round(Number(raw.planDiscount)) : null
-        };
-        candidates.set(nmId, chooseCandidate(candidates.get(nmId), candidate, now));
-      }
-    }
-  }
-  return { candidates, promotions };
+function promotionPayload(promotion) {
+  return {
+    promotionId: Number(promotion?.id || promotion?.promotionId || 0),
+    promotionName: cleanText(promotion?.name || promotion?.promotionName),
+    startDateTime: cleanText(promotion?.startDateTime),
+    endDateTime: cleanText(promotion?.endDateTime)
+  };
+}
+
+function candidateFromRaw(raw, promotion) {
+  return {
+    nmId: String(raw?.id || ''),
+    promotionId: Number(promotion?.promotionId || 0),
+    promotionName: cleanText(promotion?.promotionName),
+    startDateTime: cleanText(promotion?.startDateTime),
+    endDateTime: cleanText(promotion?.endDateTime),
+    planPrice: number(raw?.planPrice),
+    planDiscount: Number.isFinite(Number(raw?.planDiscount)) ? Math.round(Number(raw.planDiscount)) : null
+  };
 }
 
 async function updatePreference(market, nmId, values, client = pool) {
@@ -310,6 +298,183 @@ async function updatePreference(market, nmId, values, client = pool) {
   if (!fields.length) return;
   await client.query('UPDATE wb_promo_preferences SET ' + fields.join(',') + ',updated_at=$' + (params.length + 1) + ' WHERE market=$1 AND nm_id=$2',
     [...params, Date.now()]);
+}
+
+async function restorePromoDiscountIfNeeded(market, pref, row) {
+  if (!row) return;
+  const baseDiscount = pref.baseDiscount === null ? clampDiscount(row.discount) : clampDiscount(pref.baseDiscount);
+  const queue = await currentQueueRow(market, pref.nmId);
+  if (cleanText(queue?.source) === 'manual') return;
+  if (clampDiscount(row.discount) !== baseDiscount) {
+    await queuePromoDiscount(market, pref.nmId, baseDiscount, 0);
+    await updatePreference(market, pref.nmId, {
+      status: 'restoring', promotion_id: 0, promotion_name: '', plan_price: null, plan_discount: null, last_error: ''
+    });
+  } else {
+    await updatePreference(market, pref.nmId, {
+      status: 'idle', promotion_id: 0, promotion_name: '', plan_price: null, plan_discount: null, last_error: ''
+    });
+  }
+}
+
+async function promoListStep(market, token, prefs, byNm, now) {
+  const startDateTime = isoSeconds(now - 24 * 60 * 60 * 1000);
+  const endDateTime = isoSeconds(now + WB_PROMO_LOOKAHEAD_MS);
+  const data = await requestPromo(token,
+    '/api/v1/calendar/promotions?startDateTime=' + encodeURIComponent(startDateTime) +
+    '&endDateTime=' + encodeURIComponent(endDateTime) + '&allPromo=true&limit=1000&offset=0',
+    {}, { market });
+  const promotion = chooseRegularPromotion(data?.data?.promotions, now);
+  if (!promotion) {
+    for (const pref of prefs) await restorePromoDiscountIfNeeded(market, pref, byNm.get(pref.nmId));
+    await markPromoMarketState(market, {
+      nextSyncAt: now + WB_PROMO_SLOT_MS, lastSyncAt: now, lastError: '', phase: 'list', payload: {}
+    });
+    return { ok: true, market, action: 'list', promotion: 0 };
+  }
+  const payload = promotionPayload(promotion);
+  for (const pref of prefs) {
+    await updatePreference(market, pref.nmId, {
+      status: pref.status === 'participating' && pref.promotionId === payload.promotionId ? 'participating' : 'checking',
+      promotion_id: payload.promotionId, promotion_name: payload.promotionName, last_error: ''
+    });
+  }
+  await markPromoMarketState(market, {
+    nextSyncAt: now + WB_PROMO_SLOT_MS, lastSyncAt: now, lastError: '', phase: 'eligible', payload
+  });
+  return { ok: true, market, action: 'list', promotion: payload.promotionId };
+}
+
+async function promoEligibleStep(market, token, prefs, byNm, state, now) {
+  const promotion = promotionPayload(state.payload);
+  if (!(promotion.promotionId > 0)) {
+    await markPromoMarketState(market, { nextSyncAt: 0, phase: 'list', payload: {}, lastError: '' });
+    return { ok: true, market, skipped: true, reason: 'missing-promotion' };
+  }
+  const data = await requestPromo(token,
+    '/api/v1/calendar/promotions/nomenclatures?promotionID=' + promotion.promotionId +
+    '&inAction=false&limit=1000&offset=0', {}, { market });
+  const enabled = new Set(prefs.map(pref => pref.nmId));
+  const candidates = (Array.isArray(data?.data?.nomenclatures) ? data.data.nomenclatures : [])
+    .map(raw => candidateFromRaw(raw, promotion))
+    .filter(candidate => enabled.has(candidate.nmId) && candidate.nmId);
+  const byCandidate = new Map(candidates.map(candidate => [candidate.nmId, candidate]));
+
+  for (const pref of prefs) {
+    const row = byNm.get(pref.nmId);
+    const candidate = byCandidate.get(pref.nmId);
+    if (!row) continue;
+    if (!candidate) {
+      await updatePreference(market, pref.nmId, {
+        status: 'checking', promotion_id: promotion.promotionId, promotion_name: promotion.promotionName, last_error: ''
+      });
+      continue;
+    }
+    const currentFinal = number(row.finalPrice) || (number(row.price) * (1 - clampDiscount(row.discount) / 100));
+    if (currentFinal <= candidate.planPrice + 0.01) {
+      await updatePreference(market, pref.nmId, {
+        status: 'ready', promotion_id: promotion.promotionId, promotion_name: promotion.promotionName,
+        plan_price: candidate.planPrice, plan_discount: candidate.planDiscount, last_error: ''
+      });
+      continue;
+    }
+    const discount = requiredDiscount(row, candidate);
+    if (discount === null) continue;
+    const queued = await queuePromoDiscount(market, pref.nmId, discount, promotion.promotionId);
+    await updatePreference(market, pref.nmId, {
+      status: queued ? 'price_pending' : 'manual_pending',
+      promotion_id: promotion.promotionId, promotion_name: promotion.promotionName,
+      plan_price: candidate.planPrice, plan_discount: discount, last_error: ''
+    });
+  }
+
+  await markPromoMarketState(market, {
+    nextSyncAt: now + WB_PROMO_SLOT_MS, lastSyncAt: now, lastError: '', phase: 'upload',
+    payload: { ...promotion, candidates }
+  });
+  return { ok: true, market, action: 'eligible', promotion: promotion.promotionId, candidates: candidates.length };
+}
+
+async function promoUploadStep(market, token, prefs, byNm, state, now) {
+  const promotion = promotionPayload(state.payload);
+  const candidates = Array.isArray(state.payload?.candidates) ? state.payload.candidates : [];
+  if (!(promotion.promotionId > 0)) {
+    await markPromoMarketState(market, { nextSyncAt: 0, phase: 'list', payload: {}, lastError: '' });
+    return { ok: true, market, skipped: true, reason: 'missing-promotion' };
+  }
+  const byCandidate = new Map(candidates.map(candidate => [String(candidate?.nmId || ''), candidate]));
+  const ready = [];
+  for (const pref of prefs) {
+    const row = byNm.get(pref.nmId);
+    const candidate = byCandidate.get(pref.nmId);
+    if (!row || !candidate) continue;
+    const queue = await currentQueueRow(market, pref.nmId);
+    if (queue && ['pending','sent'].includes(cleanText(queue.status))) continue;
+    const currentFinal = number(row.finalPrice) || (number(row.price) * (1 - clampDiscount(row.discount) / 100));
+    if (currentFinal <= number(candidate.planPrice) + 0.01) ready.push(Number(pref.nmId));
+  }
+  if (!ready.length) {
+    await markPromoMarketState(market, {
+      nextSyncAt: now + 15 * 60 * 1000, lastSyncAt: state.lastSyncAt, lastError: '', phase: 'upload', payload: state.payload
+    });
+    return { ok: true, market, skipped: true, reason: 'waiting-price', promotion: promotion.promotionId };
+  }
+  const data = await requestPromo(token, '/api/v1/calendar/promotions/upload', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ data: { promotionID: promotion.promotionId, uploadNow: true, nomenclatures: ready } })
+  }, { market });
+  const uploadId = number(data?.data?.uploadID);
+  for (const nmId of ready) await updatePreference(market, String(nmId), { status: 'joining', last_error: '' });
+  await markPromoMarketState(market, {
+    nextSyncAt: now + WB_PROMO_SLOT_MS, lastSyncAt: now, lastError: '', phase: 'verify', payload: state.payload
+  });
+  console.info('WB promo join queued', JSON.stringify({ market, promotionId: promotion.promotionId, products: ready.length, uploadId }));
+  return { ok: true, market, action: 'upload', promotion: promotion.promotionId, products: ready.length, uploadId };
+}
+
+async function promoVerifyStep(market, token, prefs, byNm, state, now) {
+  const promotion = promotionPayload(state.payload);
+  if (!(promotion.promotionId > 0)) {
+    await markPromoMarketState(market, { nextSyncAt: 0, phase: 'list', payload: {}, lastError: '' });
+    return { ok: true, market, skipped: true, reason: 'missing-promotion' };
+  }
+  const data = await requestPromo(token,
+    '/api/v1/calendar/promotions/nomenclatures?promotionID=' + promotion.promotionId +
+    '&inAction=true&limit=1000&offset=0', {}, { market });
+  const participants = (Array.isArray(data?.data?.nomenclatures) ? data.data.nomenclatures : [])
+    .map(raw => candidateFromRaw(raw, promotion))
+    .filter(candidate => candidate.nmId);
+  const participantIds = new Set(participants.map(item => item.nmId));
+
+  await pool.query(`UPDATE wb_promo_preferences SET status='off',promotion_id=0,promotion_name='',
+    plan_price=NULL,plan_discount=NULL,updated_at=$2
+    WHERE market=$1 AND enabled=false AND promotion_id=$3`, [market, now, promotion.promotionId]);
+  for (const participant of participants) {
+    const row = byNm.get(participant.nmId);
+    const baseDiscount = row ? clampDiscount(row.discount) : null;
+    await pool.query(`INSERT INTO wb_promo_preferences
+      (market,nm_id,enabled,base_discount,promotion_id,promotion_name,plan_price,plan_discount,status,last_error,updated_at)
+      VALUES($1,$2,false,$3,$4,$5,$6,$7,'participating','',$8)
+      ON CONFLICT(market,nm_id) DO UPDATE SET promotion_id=excluded.promotion_id,
+        promotion_name=excluded.promotion_name,plan_price=excluded.plan_price,plan_discount=excluded.plan_discount,
+        status='participating',last_error='',updated_at=excluded.updated_at`,
+      [market, Number(participant.nmId), baseDiscount, promotion.promotionId, promotion.promotionName,
+        participant.planPrice || null, participant.planDiscount, now]);
+  }
+
+  for (const pref of prefs) {
+    if (participantIds.has(pref.nmId)) {
+      await updatePreference(market, pref.nmId, { status: 'participating', last_error: '' });
+    } else if (['joining','ready','checking'].includes(pref.status)) {
+      await updatePreference(market, pref.nmId, { status: 'checking', last_error: '' });
+    }
+  }
+
+  await markPromoMarketState(market, {
+    nextSyncAt: now + WB_PROMO_SLOT_MS, lastSyncAt: now, lastError: '', phase: 'list', payload: {}
+  });
+  return { ok: true, market, action: 'verify', promotion: promotion.promotionId, participants: participants.length };
 }
 
 async function syncWbPromotionsMarket(market) {
@@ -327,98 +492,36 @@ async function syncWbPromotionsMarket(market) {
 
     const prefs = await promoPreferences(market, pool, true);
     if (!prefs.length) {
-      await markPromoMarketState(market, { nextSyncAt: now + WB_PROMO_SLOT_MS, lastSyncAt: now, lastError: '' });
+      await markPromoMarketState(market, {
+        nextSyncAt: 0, lastSyncAt: state.lastSyncAt, lastError: '', phase: 'list', payload: {}
+      });
       return { ok: true, skipped: true, reason: 'no-enabled-products' };
     }
     const token = await wbToken(market);
     if (!token) {
-      await markPromoMarketState(market, { nextSyncAt: now + WB_PROMO_SLOT_MS, lastSyncAt: now, lastError: 'Токен WB не настроен' });
+      await markPromoMarketState(market, {
+        nextSyncAt: now + WB_PROMO_SLOT_MS, lastSyncAt: now, lastError: 'Токен WB не настроен'
+      });
       return { ok: false, reason: 'not-configured' };
     }
 
     try {
       const rows = await priceSnapshotRows(market);
       const byNm = new Map(rows.map(row => [String(row?.remoteId || ''), row]));
-      const enabledIds = new Set(prefs.map(row => row.nmId));
-      const { candidates } = await promotionCandidates(market, token, enabledIds, now);
-      const joins = new Map();
-
-      for (const pref of prefs) {
-        const row = byNm.get(pref.nmId);
-        if (!row) continue;
-        const candidate = candidates.get(pref.nmId);
-        const baseDiscount = pref.baseDiscount === null ? clampDiscount(row.discount) : clampDiscount(pref.baseDiscount);
-
-        if (!candidate) {
-          if (pref.promotionId > 0 || ['price_pending','joining','participating','restoring'].includes(pref.status)) {
-            const queue = await currentQueueRow(market, pref.nmId);
-            if (!queue || cleanText(queue.source) !== 'manual') {
-              if (clampDiscount(row.discount) !== baseDiscount) {
-                await queuePromoDiscount(market, pref.nmId, baseDiscount, 0);
-                await updatePreference(market, pref.nmId, {
-                  status: 'restoring', promotion_id: 0, promotion_name: '', plan_price: null, plan_discount: null, last_error: ''
-                });
-              } else {
-                await updatePreference(market, pref.nmId, {
-                  status: 'idle', promotion_id: 0, promotion_name: '', plan_price: null, plan_discount: null, last_error: ''
-                });
-              }
-            }
-          } else if (pref.status !== 'idle') {
-            await updatePreference(market, pref.nmId, { status: 'idle', last_error: '' });
-          }
-          continue;
-        }
-
-        const planPrice = number(candidate.planPrice);
-        if (!(planPrice > 0)) continue;
-        const currentFinal = number(row.finalPrice) || (number(row.price) * (1 - clampDiscount(row.discount) / 100));
-        if (candidate.inAction) {
-          await updatePreference(market, pref.nmId, {
-            status: 'participating', promotion_id: candidate.promotionId, promotion_name: candidate.promotionName,
-            plan_price: planPrice, plan_discount: candidate.planDiscount, last_error: ''
-          });
-          continue;
-        }
-
-        if (currentFinal <= planPrice + 0.01) {
-          if (!joins.has(candidate.promotionId)) joins.set(candidate.promotionId, { promotion: candidate, ids: [] });
-          joins.get(candidate.promotionId).ids.push(Number(pref.nmId));
-          await updatePreference(market, pref.nmId, {
-            status: 'joining', promotion_id: candidate.promotionId, promotion_name: candidate.promotionName,
-            plan_price: planPrice, plan_discount: candidate.planDiscount, last_error: ''
-          });
-          continue;
-        }
-
-        const discount = requiredDiscount(row, candidate);
-        if (discount === null) continue;
-        const queued = await queuePromoDiscount(market, pref.nmId, discount, candidate.promotionId);
-        await updatePreference(market, pref.nmId, {
-          status: queued ? 'price_pending' : 'manual_pending',
-          promotion_id: candidate.promotionId, promotion_name: candidate.promotionName,
-          plan_price: planPrice, plan_discount: discount, last_error: ''
-        });
-      }
-
-      for (const { promotion, ids } of joins.values()) {
-        if (!ids.length) continue;
-        const data = await requestPromo(token, '/api/v1/calendar/promotions/upload', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ data: { promotionID: promotion.promotionId, uploadNow: true, nomenclatures: ids } })
-        }, { market });
-        const uploadId = number(data?.data?.uploadID);
-        console.info('WB promo join queued', JSON.stringify({ market, promotionId: promotion.promotionId, products: ids.length, uploadId }));
-      }
-
-      await markPromoMarketState(market, { nextSyncAt: now + WB_PROMO_SLOT_MS, lastSyncAt: now, lastError: '' });
-      return { ok: true, market, enabled: prefs.length, candidates: candidates.size };
+      let result;
+      if (state.phase === 'eligible') result = await promoEligibleStep(market, token, prefs, byNm, state, now);
+      else if (state.phase === 'upload') result = await promoUploadStep(market, token, prefs, byNm, state, now);
+      else if (state.phase === 'verify') result = await promoVerifyStep(market, token, prefs, byNm, state, now);
+      else result = await promoListStep(market, token, prefs, byNm, now);
+      console.info('WB promo sync step', JSON.stringify({ market, phase: state.phase, result }));
+      return result;
     } catch (error) {
       const retryAt = Math.max(now + WB_PROMO_SLOT_MS, Number(error?.retryAt || 0));
-      await markPromoMarketState(market, { nextSyncAt: retryAt, lastSyncAt: now, lastError: cleanText(error?.message || error) }).catch(() => {});
+      await markPromoMarketState(market, {
+        nextSyncAt: retryAt, lastSyncAt: now, lastError: cleanText(error?.message || error)
+      }).catch(() => {});
       console.warn('WB promo sync failed', JSON.stringify({
-        market, status: Number(error?.status || 0), retryAt, error: cleanText(error?.message || error)
+        market, phase: state.phase, status: Number(error?.status || 0), retryAt, error: cleanText(error?.message || error)
       }));
       return { ok: false, market, error: cleanText(error?.message || error), retryAt };
     }
@@ -449,44 +552,103 @@ export async function decorateWbPromotionRows(market, rows) {
   };
 }
 
+async function applyPromoPreferenceChange(market, rawIds, enabled) {
+  const ids = [...new Set((Array.isArray(rawIds) ? rawIds : [rawIds])
+    .map(Number).filter(value => Number.isInteger(value) && value > 0))].slice(0, 1000);
+  if (!ids.length) {
+    const error = new Error('Не выбраны товары WB');
+    error.status = 400;
+    throw error;
+  }
+  const client = await pool.connect();
+  const now = Date.now();
+  try {
+    await client.query('BEGIN');
+    const rows = await priceSnapshotRows(market, client);
+    const byNm = new Map(rows.map(row => [Number(row?.remoteId), row]));
+    const prefs = await promoPreferences(market, client);
+    const prefByNm = new Map(prefs.map(pref => [Number(pref.nmId), pref]));
+    const queueResult = await client.query(`SELECT nm_id AS "nmId",desired_discount AS "desiredDiscount",source,status
+      FROM wb_price_update_queue WHERE market=$1`, [market]);
+    const queueByNm = new Map(queueResult.rows.map(row => [Number(row.nmId), row]));
+    const applied = [];
+
+    for (const nmId of ids) {
+      const row = byNm.get(nmId);
+      if (!row) continue;
+      const existing = prefByNm.get(nmId);
+      const queue = queueByNm.get(nmId);
+      const effectiveDiscount = queue?.desiredDiscount !== null && queue?.desiredDiscount !== undefined
+        ? clampDiscount(queue.desiredDiscount)
+        : clampDiscount(row.discount);
+      const baseDiscount = existing?.baseDiscount === null || existing?.baseDiscount === undefined
+        ? effectiveDiscount
+        : clampDiscount(existing.baseDiscount);
+      const initialStatus = enabled ? 'idle' : 'off';
+
+      await client.query(`INSERT INTO wb_promo_preferences
+        (market,nm_id,enabled,base_discount,promotion_id,promotion_name,plan_price,plan_discount,status,last_error,updated_at)
+        VALUES($1,$2,$3,$4,0,'',NULL,NULL,$5,'',$6)
+        ON CONFLICT(market,nm_id) DO UPDATE SET enabled=excluded.enabled,
+          base_discount=CASE WHEN excluded.enabled AND NOT wb_promo_preferences.enabled
+            THEN excluded.base_discount ELSE wb_promo_preferences.base_discount END,
+          status=CASE WHEN wb_promo_preferences.status='participating'
+            THEN 'participating' ELSE excluded.status END,
+          last_error='',updated_at=excluded.updated_at`,
+        [market, nmId, enabled, enabled ? effectiveDiscount : baseDiscount, initialStatus, now]);
+
+      if (!enabled && effectiveDiscount !== baseDiscount && cleanText(queue?.source) !== 'manual') {
+        await queuePromoDiscount(market, String(nmId), baseDiscount, 0, client);
+      }
+      applied.push(String(nmId));
+    }
+
+    if (!applied.length) {
+      const error = new Error('Выбранные товары не найдены в последнем снимке цен WB');
+      error.status = 409;
+      throw error;
+    }
+
+    await client.query(`INSERT INTO wb_promo_sync_state
+      (market,next_sync_at,last_sync_at,last_error,updated_at,phase,payload)
+      VALUES($1,0,0,'',$2,'list','{}'::jsonb)
+      ON CONFLICT(market) DO UPDATE SET
+        next_sync_at=CASE WHEN wb_promo_sync_state.next_sync_at>$2
+          THEN wb_promo_sync_state.next_sync_at ELSE 0 END,
+        updated_at=excluded.updated_at`, [market, now]);
+
+    await client.query('COMMIT');
+    return { applied, enabled };
+  } catch (error) {
+    await client.query('ROLLBACK').catch(() => {});
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+function promoMarketFromRequest(req) {
+  const market = cleanText(req.body?.market);
+  if (market !== 'WB' && market !== 'WB2') {
+    const error = new Error('Акции доступны только для WB');
+    error.status = 400;
+    throw error;
+  }
+  return market;
+}
+
 wbPromotionsRouter.post('/market-prices/promo', requireWritesEnabled, asyncRoute(async (req, res) => {
   if (req.body?.confirm !== true) return res.status(400).json({ ok: false, error: 'Нужно подтверждение изменения режима акций' });
-  const market = cleanText(req.body?.market);
-  if (market !== 'WB' && market !== 'WB2') return res.status(400).json({ ok: false, error: 'Акции доступны только для WB' });
-  const nmId = Number(req.body?.remoteId);
-  if (!Number.isInteger(nmId) || nmId <= 0) return res.status(400).json({ ok: false, error: 'Некорректный nmID WB' });
-  const enabled = req.body?.enabled === true;
+  const market = promoMarketFromRequest(req);
+  const result = await applyPromoPreferenceChange(market, [req.body?.remoteId], req.body?.enabled === true);
+  return res.json({ ok: true, market, remoteId: result.applied[0], enabled: result.enabled });
+}));
 
-  const rows = await priceSnapshotRows(market);
-  const row = rows.find(item => Number(item?.remoteId) === nmId);
-  if (!row) return res.status(409).json({ ok: false, error: 'Товар не найден в последнем снимке цен WB' });
-
-  const existing = (await promoPreferences(market)).find(item => Number(item.nmId) === nmId);
-  const queue = await currentQueueRow(market, nmId);
-  const effectiveDiscount = queue?.desiredDiscount !== null && queue?.desiredDiscount !== undefined
-    ? clampDiscount(queue.desiredDiscount)
-    : clampDiscount(row.discount);
-  const baseDiscount = existing?.baseDiscount === null || existing?.baseDiscount === undefined
-    ? effectiveDiscount
-    : clampDiscount(existing.baseDiscount);
-  const now = Date.now();
-
-  await pool.query(`INSERT INTO wb_promo_preferences
-    (market,nm_id,enabled,base_discount,promotion_id,promotion_name,plan_price,plan_discount,status,last_error,updated_at)
-    VALUES($1,$2,$3,$4,0,'',NULL,NULL,$5,'',$6)
-    ON CONFLICT(market,nm_id) DO UPDATE SET enabled=excluded.enabled,
-      base_discount=CASE WHEN excluded.enabled AND NOT wb_promo_preferences.enabled THEN excluded.base_discount ELSE wb_promo_preferences.base_discount END,
-      status=excluded.status,last_error='',updated_at=excluded.updated_at`,
-    [market, nmId, enabled, enabled ? effectiveDiscount : baseDiscount, enabled ? 'idle' : 'off', now]);
-
-  if (!enabled && effectiveDiscount !== baseDiscount && cleanText(queue?.source) !== 'manual') {
-    await queuePromoDiscount(market, nmId, baseDiscount, 0);
-  }
-  await pool.query(`INSERT INTO wb_promo_sync_state(market,next_sync_at,last_sync_at,last_error,updated_at)
-    VALUES($1,0,0,'',$2)
-    ON CONFLICT(market) DO UPDATE SET next_sync_at=0,last_error='',updated_at=excluded.updated_at`, [market, now]);
-
-  return res.json({ ok: true, market, remoteId: String(nmId), enabled, baseDiscount, queuedRestore: !enabled && effectiveDiscount !== baseDiscount });
+wbPromotionsRouter.post('/market-prices/promo/bulk', requireWritesEnabled, asyncRoute(async (req, res) => {
+  if (req.body?.confirm !== true) return res.status(400).json({ ok: false, error: 'Нужно подтверждение массового изменения акций' });
+  const market = promoMarketFromRequest(req);
+  const result = await applyPromoPreferenceChange(market, req.body?.remoteIds, req.body?.enabled === true);
+  return res.json({ ok: true, market, remoteIds: result.applied, count: result.applied.length, enabled: result.enabled });
 }));
 
 export function startWbPromotionLoop() {
