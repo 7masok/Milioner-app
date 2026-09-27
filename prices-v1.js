@@ -42,8 +42,11 @@ function pRange(min,max,currency){
 function marketLabel(market){
   return market==='WB'?'WB 1':market==='WB2'?'WB 2':market;
 }
+function activeSnapshot(){
+  return priceCache.get(priceUi.market)||null;
+}
 function activeRows(){
-  return Array.isArray(priceCache.get(priceUi.market)?.rows)?priceCache.get(priceUi.market).rows:[];
+  return Array.isArray(activeSnapshot()?.rows)?activeSnapshot().rows:[];
 }
 function priceHiddenKeys(market=priceUi.market){
   const rows=priceUi.hidden?.[market];return Array.isArray(rows)?rows.map(String):[];
@@ -104,6 +107,21 @@ function priceRetryLabel(retryAt){
   const ts=Number(retryAt)||0;
   return ts>Date.now()?new Date(ts).toLocaleTimeString('ru-RU',{hour:'2-digit',minute:'2-digit'}):'через несколько секунд';
 }
+function priceTimeLabel(value){
+  const ts=Number(value)||0;return ts>0?new Date(ts).toLocaleTimeString('ru-RU',{hour:'2-digit',minute:'2-digit'}):'';
+}
+function wbServerStatus(data){
+  const next=priceTimeLabel(data?.nextSyncAt),stamp=priceTimeLabel(data?.fetchedAt);
+  const pending=Math.max(0,Number(data?.pendingCount)||0),sent=Math.max(0,Number(data?.sentCount)||0),queued=pending+sent;
+  if(data?.waiting){
+    return 'Ждём первый серверный сеанс с WB'+(next?' · следующая попытка '+next:'');
+  }
+  let text='Данные WB на '+(stamp||'—');
+  if(queued)text+=' · изменений в очереди: '+queued;
+  if(next)text+=' · следующий сеанс '+next;
+  if(data?.syncError)text+=' · последняя связь с WB не удалась';
+  return text;
+}
 function priceErrorText(error){
   const text=String(error?.message||error||'Не удалось загрузить цены');
   if((priceUi.market==='WB'||priceUi.market==='WB2')&&Number(error?.status)===429){
@@ -145,9 +163,14 @@ function priceCard(row,index){
     lines='<span>Цена: <b>'+pMoney(row.price,row.currency)+'</b></span>'+
       '<span>Скидка: <b>—</b></span>';
   }
+  const sync=row.syncState==='pending'
+    ?'<div class="price-sync-state pending">Ожидает отправки в WB</div>'
+    :row.syncState==='sent'
+      ?'<div class="price-sync-state sent">Отправлено в WB · ждём проверки</div>'
+      :'';
   return '<button type="button" class="item price-item '+(!linked?'unlinked':'')+'" data-price-row="'+index+'" onclick="openPriceEditor('+index+')">'+
     '<div class="price-item-head"><div class="grow"><div class="name">'+pEsc(row.name||row.sku||'Товар')+'</div>'+
-    '<div class="muted">'+pEsc(account?(row.account+' · '):'')+pEsc(row.sku?('Арт. '+row.sku):row.remoteId||'')+(linked?'':' · не привязан к товару склада')+'</div></div><span class="price-chevron">›</span></div>'+
+    '<div class="muted">'+pEsc(account?(row.account+' · '):'')+pEsc(row.sku?('Арт. '+row.sku):row.remoteId||'')+(linked?'':' · не привязан к товару склада')+'</div>'+sync+'</div><span class="price-chevron">›</span></div>'+
     '<div class="price-values">'+lines+'</div></button>';
 }
 function paintPrices(){
@@ -171,8 +194,11 @@ function paintPrices(){
   if(missing)missing.textContent=noPrice.toLocaleString('ru-RU');
   const list=document.getElementById('priceList');if(!list)return;
   if(!rows.length){
-    const failure=priceErrors.get(priceUi.market);
+    const failure=priceErrors.get(priceUi.market),snapshot=activeSnapshot();
     if(failure){priceRenderError(failure.message);return;}
+    if(snapshot?.serverSnapshot&&snapshot?.waiting){
+      list.innerHTML='<div class="empty">Цены WB ещё не загружены сервером.<br><span class="muted">Склад получит их в ближайший разрешённый сеанс связи.</span></div>';return;
+    }
     list.innerHTML='<div class="empty">Нет позиций для этого магазина</div>';return;
   }
   if(!visibleRows.length&&rows.length){list.innerHTML='<div class="empty">Все позиции этого магазина скрыты.<br><span class="muted">Вернуть их можно через «Скрытые».</span></div>';return;}
@@ -184,7 +210,8 @@ async function priceFetch(market,force=false){
   const epoch=priceEpochValue(market),key=market+':'+epoch;
   const running=priceFetchInFlight.get(key);if(running)return running;
   const task=(async()=>{
-    const url=MILLIONER_API+'/api/market-prices?market='+encodeURIComponent(market)+(force?'&force=1':'');
+    const remoteForce=force&&market!=='WB'&&market!=='WB2';
+    const url=MILLIONER_API+'/api/market-prices?market='+encodeURIComponent(market)+(remoteForce?'&force=1':'');
     const response=await fetch(url,{cache:'no-store'});
     const text=await response.text();
     let data=null;
@@ -206,10 +233,12 @@ window.renderPrices=async function(force=false){
   const market=priceUi.market,seq=++priceLoadSeq,existing=priceCache.get(market);
   if(existing&&!force&&priceSnapshotFresh(existing)){
     priceErrors.delete(market);paintPrices();
-    setPriceStatus('Обновлено '+new Date(existing.fetchedAt||Date.now()).toLocaleTimeString('ru-RU',{hour:'2-digit',minute:'2-digit'}),'ok');
+    if(existing.serverSnapshot)setPriceStatus(wbServerStatus(existing),existing.syncError?'warn':'ok');
+    else setPriceStatus('Обновлено '+new Date(existing.fetchedAt||Date.now()).toLocaleTimeString('ru-RU',{hour:'2-digit',minute:'2-digit'}),'ok');
     return;
   }
-  const cooldown=Number(priceCooldowns.get(market)||0);
+  const managedWb=market==='WB'||market==='WB2';
+  const cooldown=managedWb?0:Number(priceCooldowns.get(market)||0);
   if(cooldown>Date.now()){
     const message='WB временно ограничил обновление цен. Следующая попытка '+priceRetryLabel(cooldown)+'.';
     priceErrors.set(market,{message,retryAt:cooldown});
@@ -229,11 +258,15 @@ window.renderPrices=async function(force=false){
     priceErrors.delete(market);
     if(Number(data.retryAt)>Date.now())priceCooldowns.set(market,Number(data.retryAt));else priceCooldowns.delete(market);
     paintPrices();
-    const when=Number(data.fetchedAt||Date.now()),stamp=new Date(when).toLocaleTimeString('ru-RU',{hour:'2-digit',minute:'2-digit'});
-    if(data.stale){
-      const message='Не удалось обновить. Показаны данные на '+stamp+(Number(data.retryAt)>Date.now()?'. Следующая попытка '+priceRetryLabel(data.retryAt):'.');
-      setPriceStatus(message,'warn');
-    }else setPriceStatus('Обновлено '+stamp,'ok');
+    if(data.serverSnapshot){
+      setPriceStatus(wbServerStatus(data),data.syncError?'warn':data.waiting?'loading':'ok');
+    }else{
+      const when=Number(data.fetchedAt||Date.now()),stamp=new Date(when).toLocaleTimeString('ru-RU',{hour:'2-digit',minute:'2-digit'});
+      if(data.stale){
+        const message='Не удалось обновить. Показаны данные на '+stamp+(Number(data.retryAt)>Date.now()?'. Следующая попытка '+priceRetryLabel(data.retryAt):'.');
+        setPriceStatus(message,'warn');
+      }else setPriceStatus('Обновлено '+stamp,'ok');
+    }
   }catch(error){
     if(seq!==priceLoadSeq||market!==priceUi.market)return;
     if(Number(error?.retryAt)>Date.now())priceCooldowns.set(market,Number(error.retryAt));
@@ -297,8 +330,8 @@ window.openPriceEditor=function(index){
       '<div class="field"><label>Цена до скидки, '+pEsc(row.currency||'RUB')+'</label><input id="priceEditCurrent" type="number" min="1" step="1" inputmode="decimal" value="'+pEsc(pNum(row.price)||'')+'" '+(priceDisabled?'disabled':'')+'></div>'+
       (priceDisabled?'<div class="link-note">У товара разные цены по размерам. Чтобы не перезаписать их одной суммой, здесь можно менять только общую скидку.</div>':'')+
       '<div class="field"><label>Скидка, %</label><input id="priceEditDiscount" type="number" min="0" max="99" step="1" inputmode="numeric" value="'+pEsc(Math.round(pNum(row.discount)))+'"></div>'+
-      '<div class="link-note">Изменение отправляется напрямую в WB после подтверждения. WB может применить его не мгновенно; резкое снижение цены может попасть на дополнительную проверку.</div>'+
-      '<button class="btn dark full" onclick="submitPriceEdit()">Отправить в WB</button>'+priceHideAction());
+      '<div class="link-note">Изменение сохранится на нашем сервере и уйдёт в WB во время ближайшего разрешённого сеанса связи. До подтверждения WB карточка будет помечена как ожидающая.</div>'+
+      '<button class="btn dark full" onclick="submitPriceEdit()">Сохранить изменение</button>'+priceHideAction());
     return;
   }
   if(row.market==='Ozon'){
@@ -350,18 +383,23 @@ window.submitPriceEdit=async function(){
       const changes=[];
       if(priceChanged)changes.push('цену на '+pMoney(enteredPrice,row.currency));
       if(discountChanged)changes.push('скидку на '+enteredDiscount+'%');
-      const question='Отправить в '+marketLabel(row.market)+' '+changes.join(' и ')+'?';
+      const question='Сохранить для '+marketLabel(row.market)+' '+changes.join(' и ')+'?';
       if(!confirm(question))return;
       const body={market:row.market,remoteId:row.remoteId};
       if(priceChanged)body.price=enteredPrice;
       if(discountChanged)body.discount=enteredDiscount;
       const result=await remotePriceUpdate(body);
-      if(priceChanged){row.price=enteredPrice;row.finalPrice=enteredPrice*(1-enteredDiscount/100)}
-      if(discountChanged){row.discount=enteredDiscount;if(!priceChanged&&pNum(row.price)>0)row.finalPrice=pNum(row.price)*(1-enteredDiscount/100)}
-      bumpPriceEpoch(row.market);
-      const cached=priceCache.get(row.market);if(cached){cached.stale=true;cached.fetchedAt=Number(cached.fetchedAt)||Date.now()}
+      if(priceChanged){row.price=enteredPrice;row.priceMax=enteredPrice;row.finalPrice=enteredPrice*(1-enteredDiscount/100);row.finalPriceMax=row.finalPrice}
+      if(discountChanged){row.discount=enteredDiscount;if(!priceChanged&&pNum(row.price)>0){row.finalPrice=pNum(row.price)*(1-enteredDiscount/100);row.finalPriceMax=pNum(row.priceMax||row.price)*(1-enteredDiscount/100)}}
+      row.syncState='pending';row.syncQueuedAt=Number(result.queuedAt)||Date.now();row.syncSentAt=0;row.syncError='';
+      const cached=priceCache.get(row.market);
+      if(cached){
+        cached.pendingCount=(cached.rows||[]).filter(item=>item.syncState==='pending').length;
+        cached.sentCount=(cached.rows||[]).filter(item=>item.syncState==='sent').length;
+        cached.nextSyncAt=Number(result.nextSyncAt)||Number(cached.nextSyncAt)||0;
+      }
       closeModal();paintPrices();
-      setPriceStatus('WB принял изменение'+(result.uploadId?' · операция '+result.uploadId:'')+'. Применение может занять несколько минут.','ok');
+      setPriceStatus('Изменение сохранено · ожидает сеанса WB'+(Number(result.nextSyncAt)>Date.now()?' в '+priceTimeLabel(result.nextSyncAt):''),'ok');
       return;
     }
     if(row.market==='Ozon'){
@@ -378,7 +416,7 @@ window.submitPriceEdit=async function(){
   }catch(error){
     alert(priceErrorText(error));
   }finally{
-    if(button){button.disabled=false;button.textContent=row.market==='Kaspi'?'Сохранить цену':row.market==='Ozon'?'Отправить в Ozon':'Отправить в WB';}
+    if(button){button.disabled=false;button.textContent=row.market==='Kaspi'?'Сохранить цену':row.market==='Ozon'?'Отправить в Ozon':'Сохранить изменение';}
   }
 };
 

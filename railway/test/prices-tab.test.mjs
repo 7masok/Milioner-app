@@ -8,6 +8,7 @@ const server=readFileSync(new URL('../src/server.js',import.meta.url),'utf8');
 const api=readFileSync(new URL('../src/prices.js',import.meta.url),'utf8');
 const passport=readFileSync(new URL('../../docs/SITE-PASSPORT.md',import.meta.url),'utf8');
 const agents=readFileSync(new URL('../../AGENTS.md',import.meta.url),'utf8');
+const wbPriceMigration=readFileSync(new URL('../migrations/131_wb_price_sync_queue.sql',import.meta.url),'utf8');
 
 test('Prices is a real ninth tab and survives reload navigation',()=>{
   assert.match(html,/<section id="prices" class="view">/);
@@ -18,7 +19,7 @@ test('Prices is a real ninth tab and survives reload navigation',()=>{
 });
 
 test('Prices UI is static before auth but does not fetch prices on startup',()=>{
-  const scriptAt=html.indexOf('./prices-v1.js?v=20260927-hide-prices');
+  const scriptAt=html.indexOf('./prices-v1.js?v=20260927-wb-sync-queue');
   const authAt=html.lastIndexOf('<script>initOwnerAuth();</script>');
   assert.ok(scriptAt>0&&scriptAt<authAt);
   const runtime=html.slice(html.indexOf('function startAppRuntime(){'),html.indexOf('// Wait for the server-sync module'));
@@ -28,11 +29,12 @@ test('Prices UI is static before auth but does not fetch prices on startup',()=>
 });
 
 test('Prices server keeps marketplace credentials server-side and normalizes all four markets',()=>{
-  assert.match(server,/import \{ pricesRouter \} from '\.\/prices\.js'/);
+  assert.match(server,/import \{ pricesRouter, startWbPriceSyncLoop \} from '\.\/prices\.js'/);
   assert.match(server,/'prices-v1\.js'/);
   assert.match(server,/app\.use\('\/api', pricesRouter\)/);
   assert.match(api,/credentialFor\(market, fallback\)/);
-  assert.match(api,/\/api\/v2\/list\/goods\/filter\?limit=1000&offset=/);
+  assert.match(api,/\/api\/v2\/list\/goods\/filter\?limit=/);
+  assert.match(api,/WB_PRICE_PAGE_LIMIT = 1000/);
   assert.match(api,/\/v5\/product\/info\/prices/);
   assert.match(api,/kaspi_price_template/);
   assert.match(api,/product\?\.kaspiPrice/);
@@ -55,7 +57,7 @@ test('WB size-specific prices cannot be flattened by the generic editor or serve
   assert.match(ui,/row\.canEditPrice===false/);
   assert.match(ui,/разные цены по размерам/);
   assert.match(ui,/здесь можно менять только общую скидку/);
-  assert.match(api,/freshWbRowForWrite\(market, token, nmID\)/);
+  assert.match(api,/wbSnapshotRowForWrite\(market, nmID\)/);
   assert.match(api,/разные цены по размерам\. Общую цену менять нельзя/);
 });
 
@@ -72,28 +74,33 @@ test('Passport and AGENTS define the Prices contract',()=>{
   assert.match(passport,/Нижняя навигация содержит девять разделов/);
   for(const rule of ['PRICE-01','PRICE-02','PRICE-03','PRICE-04','PRICE-05','PRICE-06','PRICE-07','PRICE-08'])assert.match(passport,new RegExp(rule));
   assert.match(agents,/Во вкладке «Цены»/);
-  assert.match(agents,/явного подтверждения/);
+  assert.match(agents,/фоновый цикл/);
+  assert.match(agents,/не отправляются немедленно/);
 });
 
 
-test('WB price reads are serialized, deduplicated and preserve 429 retry timing',()=>{
-  assert.match(api,/WB_MIN_INTERVAL_MS = 650/);
-  assert.match(api,/withWbPriceLane/);
-  assert.match(api,/withPriceLoad\(key/);
+test('WB prices use a persistent 15-minute server sync instead of browser-driven upstream reads',()=>{
+  assert.match(api,/WB_PRICE_SLOT_MS = 15 \* 60 \* 1000 \+ 5_000/);
+  assert.match(api,/export function startWbPriceSyncLoop\(\)/);
+  assert.match(server,/startWbPriceSyncLoop\(\)/);
+  assert.match(api,/wb_price_sync_state/);
+  assert.match(api,/wb_price_snapshots/);
+  assert.match(api,/wb_price_update_queue/);
   assert.match(api,/x-ratelimit-retry/);
   assert.match(api,/retry-after/);
-  assert.match(api,/wbCooldowns/);
-  assert.match(api,/error\.status = 429/);
-  assert.match(api,/retryAt: Number\(error\?\.retryAt\) \|\| 0/);
+  assert.match(api,/Math\.max\(now \+ WB_PRICE_SLOT_MS, Number\(error\?\.retryAt \|\| 0\)\)/);
+  assert.match(api,/if \(market === 'WB' \|\| market === 'WB2'\) return res\.json\(await listWbPrices\(market\)\)/);
 });
 
-test('Force refresh keeps the last good price snapshot instead of clearing the screen',()=>{
+test('Refreshing WB prices reloads only the Railway snapshot and never forces a WB API call',()=>{
   assert.doesNotMatch(ui,/priceCache\.delete\(priceUi\.market\)/);
   assert.match(ui,/PRICE_CLIENT_TTL_MS/);
-  assert.match(ui,/priceCooldowns/);
-  assert.match(ui,/if\(existing\)\{paintPrices\(\);setPriceStatus\(message\+/);
-  assert.match(ui,/data\.stale/);
-  assert.match(api,/staleSnapshot/);
+  assert.match(ui,/remoteForce=force&&market!=='WB'&&market!=='WB2'/);
+  assert.match(ui,/serverSnapshot/);
+  assert.match(ui,/wbServerStatus\(data\)/);
+  const route=api.slice(api.indexOf("pricesRouter.get('/market-prices'"),api.indexOf("pricesRouter.post('/market-prices/update'"));
+  assert.doesNotMatch(route,/requestWb\(/);
+  assert.match(route,/listWbPrices\(market\)/);
 });
 
 test('WB editor sends only the fields that actually changed',()=>{
@@ -112,19 +119,24 @@ test('Marketplace price APIs reject malformed success payloads',()=>{
   assert.match(api,/result\.updated !== true/);
 });
 
-test('A write invalidates stale reads without breaking the visible editor rows',()=>{
-  assert.match(api,/cacheGeneration/);
-  assert.match(api,/generationFor\(market\) === generation/);
-  assert.match(ui,/bumpPriceEpoch\(row\.market\)/);
-  assert.doesNotMatch(ui,/priceCache\.delete\(row\.market\)/);
+test('WB edits are queued locally while Ozon keeps its immediate write invalidation',()=>{
+  const submitStart=ui.indexOf("window.submitPriceEdit");
+  const wbSubmit=ui.slice(ui.indexOf("if(row.market==='WB'||row.market==='WB2'){",submitStart),ui.indexOf("if(row.market==='Ozon'){",submitStart));
+  assert.match(wbSubmit,/row\.syncState='pending'/);
+  assert.doesNotMatch(wbSubmit,/bumpPriceEpoch\(/);
+  assert.match(api,/return queueWbPrice\(market, input\)/);
+  assert.match(api,/status='pending'/);
+  assert.match(ui,/bumpPriceEpoch\('Ozon'\)/);
 });
 
 
-test('WB pagination can return fetched rows when the next page is rate-limited',()=>{
-  assert.match(api,/Number\(error\?\.status\) === 429 && rows\.length/);
-  assert.match(api,/partial: true/);
-  assert.match(api,/WB ограничил проверку следующей страницы/);
-  assert.match(api,/cache\.set\(key, \{ at: 0, value: partial \}\)/);
+test('WB pagination spends at most one upstream request per sync slot',()=>{
+  assert.match(api,/async function fetchWbPricePage\(market, token, offset\)/);
+  assert.match(api,/const batch = await fetchWbPricePage\(market, token, Number\(state\.readOffset \|\| 0\)\)/);
+  assert.match(api,/if \(batch\.length >= WB_PRICE_PAGE_LIMIT\)/);
+  assert.match(api,/readOffset: offset \+ WB_PRICE_PAGE_LIMIT/);
+  assert.match(api,/readBuffer: combined/);
+  assert.match(api,/nextAllowedAt: now \+ WB_PRICE_SLOT_MS/);
 });
 
 
@@ -158,6 +170,34 @@ test('Prices can hide unwanted products without deleting marketplace or warehous
 });
 
 
-test('WB price pagination stops after a short page instead of spending another rate-limit slot',()=>{
-  assert.match(api,/rows\.push\(\.\.\.batch\);\s*if \(batch\.length < 1000\) \{\s*complete = true;\s*break;/);
+test('A short WB price page completes and persists the snapshot in the same slot',()=>{
+  assert.match(api,/const normalized = await normalizeWbPriceRows\(market, combined\)/);
+  assert.match(api,/INSERT INTO wb_price_snapshots/);
+  assert.match(api,/lastAction: 'read'/);
+  assert.match(api,/readOffset: 0/);
+  assert.match(api,/readBuffer: \[\]/);
+});
+
+
+test('WB price queue is durable, last-value-wins and survives deploys',()=>{
+  assert.match(wbPriceMigration,/CREATE TABLE IF NOT EXISTS wb_price_snapshots/);
+  assert.match(wbPriceMigration,/CREATE TABLE IF NOT EXISTS wb_price_sync_state/);
+  assert.match(wbPriceMigration,/CREATE TABLE IF NOT EXISTS wb_price_update_queue/);
+  assert.match(wbPriceMigration,/PRIMARY KEY \(market,nm_id\)/);
+  assert.match(api,/ON CONFLICT\(market,nm_id\) DO UPDATE SET/);
+  assert.match(api,/desired_price=COALESCE\(excluded\.desired_price,wb_price_update_queue\.desired_price\)/);
+  assert.match(api,/desired_discount=COALESCE\(excluded\.desired_discount,wb_price_update_queue\.desired_discount\)/);
+  assert.match(api,/status='pending',queued_at=excluded\.queued_at/);
+});
+
+test('WB queued writes batch changes and verify them only on a later read slot',()=>{
+  assert.match(api,/body: JSON\.stringify\(\{ data: selected\.map/);
+  assert.match(api,/SET status='sent'/);
+  assert.match(api,/lastAction: 'write'/);
+  assert.match(api,/row\.status === 'sent'/);
+  assert.match(api,/DELETE FROM wb_price_update_queue WHERE market=\$1 AND nm_id=\$2/);
+  assert.match(api,/last_error='WB ещё не подтвердил изменение'/);
+  assert.match(ui,/Ожидает отправки в WB/);
+  assert.match(ui,/Отправлено в WB · ждём проверки/);
+  assert.match(ui,/Сохранить изменение/);
 });
