@@ -75,9 +75,10 @@ function priceCard(row,index){
       '<span>После скидки: <b>'+pRange(row.finalPrice,row.finalPriceMax,row.currency)+'</b></span>'+
       (pNum(row.clubFinalPrice)>0?'<span>WB Клуб: <b>'+pMoney(row.clubFinalPrice,row.currency)+'</b></span>':'');
   }else if(row.market==='Ozon'){
-    lines='<span>Цена: <b>'+pMoney(row.finalPrice||row.price,row.currency)+'</b></span>'+
-      '<span>До скидки: <b>'+pMoney(row.oldPrice,row.currency)+'</b></span>'+
-      '<span>Скидка: <b>'+(discount?discount+'%':'0%')+'</b></span>';
+    lines='<span>Цена: <b>'+pMoney(row.price,row.currency)+'</b></span>'+
+      '<span>Скидка: <b>'+(discount?discount+'%':'0%')+'</b></span>'+
+      '<span>Со скидкой: <b>'+pMoney(row.finalPrice||row.price,row.currency)+'</b></span>'+
+      (pNum(row.oldPrice)>0?'<span>Старая цена: <b>'+pMoney(row.oldPrice,row.currency)+'</b></span>':'');
   }else{
     lines='<span>Цена: <b>'+pMoney(row.price,row.currency)+'</b></span>'+
       '<span>Скидка: <b>—</b></span>';
@@ -171,7 +172,7 @@ window.openPriceEditor=function(index){
   }
   if(row.market==='Ozon'){
     showSheet('<h3>Цена и скидка · Ozon</h3><div class="item"><b>'+pEsc(row.name)+'</b><div class="muted">'+pEsc(row.account||'Ozon')+' · '+pEsc(row.sku)+'</div></div>'+
-      '<div class="field"><label>Текущая цена, '+pEsc(row.currency||'RUB')+'</label><input id="priceEditCurrent" type="number" min="1" step="1" inputmode="decimal" value="'+pEsc(pNum(row.finalPrice||row.price)||'')+'"></div>'+
+      '<div class="field"><label>Текущая цена, '+pEsc(row.currency||'RUB')+'</label><input id="priceEditCurrent" type="number" min="1" step="1" inputmode="decimal" value="'+pEsc(pNum(row.price)||'')+'"></div>'+
       '<div class="field"><label>Цена до скидки</label><input id="priceEditOld" type="number" min="0" step="1" inputmode="decimal" value="'+pEsc(pNum(row.oldPrice)||'')+'"></div>'+
       '<div class="link-note">Скидка Ozon здесь рассчитывается из «цены до скидки» и текущей цены. Минимальная цена товара сохраняется без изменения.</div>'+
       '<button class="btn dark full" onclick="submitPriceEdit()">Отправить в Ozon</button>');
