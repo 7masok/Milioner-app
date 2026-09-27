@@ -91,7 +91,8 @@ test('Force refresh keeps the last good price snapshot instead of clearing the s
   assert.doesNotMatch(ui,/priceCache\.delete\(priceUi\.market\)/);
   assert.match(ui,/PRICE_CLIENT_TTL_MS/);
   assert.match(ui,/priceCooldowns/);
-  assert.match(ui,/Pоказаны последние данные/);
+  assert.match(ui,/if\(existing\)\{paintPrices\(\);setPriceStatus\(message\+/);
+  assert.match(ui,/data\.stale/);
   assert.match(api,/staleSnapshot/);
 });
 
