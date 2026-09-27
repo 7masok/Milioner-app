@@ -259,7 +259,7 @@ test('WB promotion automation uses official regular-promotion calendar endpoints
   assert.match(wbPromo,/\/api\/v1\/calendar\/promotions\/nomenclatures\?/);
   assert.match(wbPromo,/\/api\/v1\/calendar\/promotions\/upload/);
   assert.match(wbPromo,/cleanText\(item\?\.type\)\.toLowerCase\(\) === 'regular'/);
-  assert.match(wbPromo,/WB_PROMO_MAX_CAMPAIGNS = 3/);
+  assert.match(wbPromo,/WB_PROMO_MAX_CAMPAIGNS = 10/);
   assert.match(wbPromo,/WB_PROMO_SLOT_MS = 10 \* 60 \* 1000/);
 });
 
