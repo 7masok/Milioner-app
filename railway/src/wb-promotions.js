@@ -493,7 +493,7 @@ async function syncWbPromotionsMarket(market) {
     const prefs = await promoPreferences(market, pool, true);
     if (!prefs.length) {
       await markPromoMarketState(market, {
-        nextSyncAt: now + WB_PROMO_SLOT_MS, lastSyncAt: now, lastError: '', phase: 'list', payload: {}
+        nextSyncAt: 0, lastSyncAt: state.lastSyncAt, lastError: '', phase: 'list', payload: {}
       });
       return { ok: true, skipped: true, reason: 'no-enabled-products' };
     }
