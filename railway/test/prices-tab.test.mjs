@@ -11,6 +11,7 @@ const agents=readFileSync(new URL('../../AGENTS.md',import.meta.url),'utf8');
 const wbPriceMigration=readFileSync(new URL('../migrations/131_wb_price_sync_queue.sql',import.meta.url),'utf8');
 const wbPromo=readFileSync(new URL('../src/wb-promotions.js',import.meta.url),'utf8');
 const wbPromoMigration=readFileSync(new URL('../migrations/132_wb_promo_preferences.sql',import.meta.url),'utf8');
+const wbPromoPhaseMigration=readFileSync(new URL('../migrations/133_wb_promo_sync_phase.sql',import.meta.url),'utf8');
 
 test('Prices is a real ninth tab and survives reload navigation',()=>{
   assert.match(html,/<section id="prices" class="view">/);
@@ -21,7 +22,7 @@ test('Prices is a real ninth tab and survives reload navigation',()=>{
 });
 
 test('Prices UI is static before auth but does not fetch prices on startup',()=>{
-  const scriptAt=html.indexOf('./prices-v1.js?v=20260927-promo-toggle');
+  const scriptAt=html.indexOf('./prices-v1.js?v=20260927-promo-bulk');
   const authAt=html.lastIndexOf('<script>initOwnerAuth();</script>');
   assert.ok(scriptAt>0&&scriptAt<authAt);
   const runtime=html.slice(html.indexOf('function startAppRuntime(){'),html.indexOf('// Wait for the server-sync module'));
@@ -250,7 +251,7 @@ test('WB promotion checkbox is compact and only exists in WB editor',()=>{
   assert.match(ui,/\/api\/market-prices\/promo/);
 });
 
-test('WB promotion automation uses official regular-promotion calendar endpoints',()=>{
+test('WB promotion automation uses one persisted calendar step per safe hourly slot',()=>{
   assert.match(server,/wbPromotionsRouter, startWbPromotionLoop/);
   assert.match(server,/app\.use\('\/api', wbPromotionsRouter\)/);
   assert.match(server,/startWbPromotionLoop\(\)/);
@@ -259,8 +260,12 @@ test('WB promotion automation uses official regular-promotion calendar endpoints
   assert.match(wbPromo,/\/api\/v1\/calendar\/promotions\/nomenclatures\?/);
   assert.match(wbPromo,/\/api\/v1\/calendar\/promotions\/upload/);
   assert.match(wbPromo,/cleanText\(item\?\.type\)\.toLowerCase\(\) === 'regular'/);
-  assert.match(wbPromo,/WB_PROMO_MAX_CAMPAIGNS = 10/);
-  assert.match(wbPromo,/WB_PROMO_SLOT_MS = 10 \* 60 \* 1000/);
+  assert.match(wbPromo,/WB_PROMO_SLOT_MS = 60 \* 60 \* 1000 \+ 5_000/);
+  assert.match(wbPromo,/state\.phase === 'eligible'/);
+  assert.match(wbPromo,/state\.phase === 'upload'/);
+  assert.match(wbPromo,/state\.phase === 'verify'/);
+  assert.match(wbPromoPhaseMigration,/ADD COLUMN IF NOT EXISTS phase/);
+  assert.match(wbPromoPhaseMigration,/ADD COLUMN IF NOT EXISTS payload JSONB/);
 });
 
 test('WB promotion preferences persist and promo changes cannot overwrite a manual queue item',()=>{
@@ -271,6 +276,9 @@ test('WB promotion preferences persist and promo changes cannot overwrite a manu
   assert.match(wbPromo,/WHERE wb_price_update_queue\.source<>'manual'/);
   assert.match(api,/source='manual',promotion_id=0/);
   assert.match(api,/UPDATE wb_promo_preferences SET base_discount=/);
+  assert.match(wbPromo,/\/market-prices\/promo\/bulk/);
+  assert.match(wbPromo,/applyPromoPreferenceChange/);
+  assert.match(wbPromo,/next_sync_at=CASE WHEN wb_promo_sync_state\.next_sync_at>\$2/);
 });
 
 test('WB promotions lower the effective price with discount and restore the previous discount when automation stops',()=>{
@@ -281,7 +289,8 @@ test('WB promotions lower the effective price with discount and restore the prev
   assert.match(wbPromo,/uploadNow: true/);
   assert.match(wbPromo,/status: 'participating'/);
   assert.match(wbPromo,/queuePromoDiscount\(market, pref\.nmId, baseDiscount, 0\)/);
-  assert.match(wbPromo,/queuedRestore: !enabled && effectiveDiscount !== baseDiscount/);
+  assert.match(wbPromo,/!enabled && effectiveDiscount !== baseDiscount/);
+  assert.match(wbPromo,/queuePromoDiscount\(market, String\(nmId\), baseDiscount, 0, client\)/);
 });
 
 test('WB price rows expose persisted promotion state without browser calls to WB',()=>{
@@ -290,4 +299,32 @@ test('WB price rows expose persisted promotion state without browser calls to WB
   assert.match(wbPromo,/row\.promoStatus = cleanText\(pref\?\.status\)/);
   assert.match(ui,/price-promo-badge/);
   assert.doesNotMatch(ui,/dp-calendar-api\.wildberries\.ru/);
+});
+
+
+test('WB promotion state is visible on every collapsed card',()=>{
+  assert.match(ui,/В акции/);
+  assert.match(ui,/Ждёт акцию/);
+  assert.match(ui,/Без акции/);
+  assert.match(ui,/price-promo-badge/);
+  assert.match(html,/\.price-promo-badge\.off/);
+  assert.match(html,/\.price-promo-badge\.waiting/);
+});
+
+test('WB bulk promotion controls can select all visible rows and enable or disable them together',()=>{
+  assert.match(html,/id="priceBulkTools"/);
+  assert.match(html,/id="priceSelectAll"/);
+  assert.match(html,/id="priceBulkEnablePromo"/);
+  assert.match(html,/id="priceBulkDisablePromo"/);
+  assert.match(ui,/const priceSelected=\{WB:new Set\(\),WB2:new Set\(\)\}/);
+  assert.match(ui,/window\.priceSelectAllVisible=function\(checked\)/);
+  assert.match(ui,/window\.priceSelectRow=function\(index,checked\)/);
+  assert.match(ui,/window\.priceBulkPromo=async function\(enabled\)/);
+  assert.match(ui,/\/api\/market-prices\/promo\/bulk/);
+  assert.match(ui,/class="price-row-select"/);
+});
+
+test('Saving an unchanged WB price after toggling promotions closes quietly',()=>{
+  assert.match(ui,/if\(!priceChanged&&!discountChanged\)\{priceExpanded=null;paintPrices\(\);return;\}/);
+  assert.doesNotMatch(ui,/throw new Error\('Цена и скидка не изменились'\)/);
 });
