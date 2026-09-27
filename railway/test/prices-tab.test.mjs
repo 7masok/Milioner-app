@@ -56,7 +56,7 @@ test('WB size-specific prices cannot be flattened by the generic editor or serve
   assert.match(api,/canEditPrice: uniquePrices\.length <= 1/);
   assert.match(ui,/row\.canEditPrice===false/);
   assert.match(ui,/[Рр]азные цены по размерам/);
-  assert.match(ui,/здесь можно менять только общую скидку/);
+  assert.match(ui,/меняется только скидка/);
   assert.match(api,/wbSnapshotRowForWrite\(market, nmID\)/);
   assert.match(api,/разные цены по размерам\. Общую цену менять нельзя/);
 });
