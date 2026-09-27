@@ -96,7 +96,8 @@ function setPriceTabs(){
   if(q&&q.value!==priceUi.q)q.value=priceUi.q;
   const sort=document.getElementById('priceSortButton');
   if(sort){const desc=priceUi.sort==='desc';sort.textContent=desc?'Цена ↓':'Цена ↑';sort.setAttribute('aria-label',desc?'Сортировка по цене: сначала дорогие':'Сортировка по цене: сначала дешёвые');sort.title=desc?'Сначала дорогие':'Сначала дешёвые';}
-  const hidden=document.getElementById('priceHiddenButton'),hiddenCount=priceHiddenKeys().length;
+  const hidden=document.getElementById('priceHiddenButton'),hiddenTools=document.getElementById('priceHiddenTools'),hiddenCount=priceHiddenKeys().length;
+  if(hiddenTools)hiddenTools.hidden=!hiddenCount;
   if(hidden){hidden.hidden=!hiddenCount;hidden.textContent='Скрытые · '+hiddenCount;hidden.setAttribute('aria-label','Показать скрытые товары: '+hiddenCount);}
 }
 function priceRetryLabel(retryAt){
