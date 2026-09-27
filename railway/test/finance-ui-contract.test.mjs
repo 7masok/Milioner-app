@@ -347,3 +347,19 @@ test('finance categories can be merged by moving operations and deleting the sou
   assert.ok(del.includes("if(used){financeMoveCategoryOperations(categoryId);return}"));
   assert.ok(html.includes('Объединить / перенести операции'));
 });
+
+
+test('statement import can create and select a missing transfer account without closing the draft',()=>{
+  const options=extractFunction('financeStatementTransferOptions');
+  const changed=extractFunction('financeStatementTransferChanged');
+  const create=extractFunction('financeStatementCreateTransferAccount');
+  const refresh=extractFunction('financeStatementRefreshTransferAccounts');
+  assert.match(options,/__create__/);
+  assert.match(options,/Создать новый счёт/);
+  assert.match(changed,/financeStatementOpenTransferAccountCreator\(index\)/);
+  assert.match(create,/financeRunLocalMutation\(/);
+  assert.match(create,/currency=String\(current\.currency/);
+  assert.match(create,/balanceDefault:balance/);
+  assert.match(create,/financeStatementRefreshTransferAccounts\(index,account\.id\)/);
+  assert.match(refresh,/select\.innerHTML=financeStatementTransferOptions/);
+});
