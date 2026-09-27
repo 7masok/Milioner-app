@@ -9,6 +9,8 @@ const api=readFileSync(new URL('../src/prices.js',import.meta.url),'utf8');
 const passport=readFileSync(new URL('../../docs/SITE-PASSPORT.md',import.meta.url),'utf8');
 const agents=readFileSync(new URL('../../AGENTS.md',import.meta.url),'utf8');
 const wbPriceMigration=readFileSync(new URL('../migrations/131_wb_price_sync_queue.sql',import.meta.url),'utf8');
+const wbPromo=readFileSync(new URL('../src/wb-promotions.js',import.meta.url),'utf8');
+const wbPromoMigration=readFileSync(new URL('../migrations/132_wb_promo_preferences.sql',import.meta.url),'utf8');
 
 test('Prices is a real ninth tab and survives reload navigation',()=>{
   assert.match(html,/<section id="prices" class="view">/);
@@ -19,7 +21,7 @@ test('Prices is a real ninth tab and survives reload navigation',()=>{
 });
 
 test('Prices UI is static before auth but does not fetch prices on startup',()=>{
-  const scriptAt=html.indexOf('./prices-v1.js?v=20260927-compact-price-editor');
+  const scriptAt=html.indexOf('./prices-v1.js?v=20260927-promo-toggle');
   const authAt=html.lastIndexOf('<script>initOwnerAuth();</script>');
   assert.ok(scriptAt>0&&scriptAt<authAt);
   const runtime=html.slice(html.indexOf('function startAppRuntime(){'),html.indexOf('// Wait for the server-sync module'));
@@ -232,4 +234,60 @@ test('Inline price editor stays compact and avoids explanatory blocks',()=>{
   assert.match(html,/\.price-inline-editor\{[^}]*padding:7px 10px 9px/);
   assert.match(html,/\.price-inline-fields\{display:grid;grid-template-columns:1fr 1fr/);
   assert.match(html,/height:36px/);
+});
+
+
+test('WB promotion checkbox is compact and only exists in WB editor',()=>{
+  const inline=ui.slice(ui.indexOf('function priceInlineEditor'),ui.indexOf('function priceCard'));
+  const wb=inline.slice(inline.indexOf("if(row.market==='WB'||row.market==='WB2')"),inline.indexOf("if(row.market==='Ozon')"));
+  const kaspi=inline.slice(inline.indexOf("if(row.market==='Kaspi')"),inline.indexOf("if(row.market==='WB'"));
+  assert.match(wb,/price-promo-toggle/);
+  assert.match(wb,/togglePricePromo\(/);
+  assert.match(wb,/>Акции<\/label>/);
+  assert.doesNotMatch(kaspi,/price-promo-toggle/);
+  assert.match(html,/\.price-inline-actions\.wb\{grid-template-columns:auto 1fr auto\}/);
+  assert.match(ui,/window\.togglePricePromo=async function\(index,enabled\)/);
+  assert.match(ui,/\/api\/market-prices\/promo/);
+});
+
+test('WB promotion automation uses official regular-promotion calendar endpoints',()=>{
+  assert.match(server,/wbPromotionsRouter, startWbPromotionLoop/);
+  assert.match(server,/app\.use\('\/api', wbPromotionsRouter\)/);
+  assert.match(server,/startWbPromotionLoop\(\)/);
+  assert.match(wbPromo,/https:\/\/dp-calendar-api\.wildberries\.ru/);
+  assert.match(wbPromo,/\/api\/v1\/calendar\/promotions\?/);
+  assert.match(wbPromo,/\/api\/v1\/calendar\/promotions\/nomenclatures\?/);
+  assert.match(wbPromo,/\/api\/v1\/calendar\/promotions\/upload/);
+  assert.match(wbPromo,/cleanText\(item\?\.type\)\.toLowerCase\(\) === 'regular'/);
+  assert.match(wbPromo,/WB_PROMO_MAX_CAMPAIGNS = 3/);
+  assert.match(wbPromo,/WB_PROMO_SLOT_MS = 10 \* 60 \* 1000/);
+});
+
+test('WB promotion preferences persist and promo changes cannot overwrite a manual queue item',()=>{
+  assert.match(wbPromoMigration,/CREATE TABLE IF NOT EXISTS wb_promo_preferences/);
+  assert.match(wbPromoMigration,/CREATE TABLE IF NOT EXISTS wb_promo_sync_state/);
+  assert.match(wbPromoMigration,/ADD COLUMN IF NOT EXISTS source TEXT NOT NULL DEFAULT 'manual'/);
+  assert.match(wbPromoMigration,/source IN \('manual','promo'\)/);
+  assert.match(wbPromo,/WHERE wb_price_update_queue\.source<>'manual'/);
+  assert.match(api,/source='manual',promotion_id=0/);
+  assert.match(api,/UPDATE wb_promo_preferences SET base_discount=/);
+});
+
+test('WB promotions lower the effective price with discount and restore the previous discount when automation stops',()=>{
+  assert.match(wbPromo,/function requiredDiscount\(row, candidate\)/);
+  assert.match(wbPromo,/planDiscount/);
+  assert.match(wbPromo,/currentFinal <= planPrice \+ 0\.01/);
+  assert.match(wbPromo,/status: queued \? 'price_pending' : 'manual_pending'/);
+  assert.match(wbPromo,/uploadNow: true/);
+  assert.match(wbPromo,/status: 'participating'/);
+  assert.match(wbPromo,/queuePromoDiscount\(market, pref\.nmId, baseDiscount, 0\)/);
+  assert.match(wbPromo,/queuedRestore: !enabled && effectiveDiscount !== baseDiscount/);
+});
+
+test('WB price rows expose persisted promotion state without browser calls to WB',()=>{
+  assert.match(api,/decorateWbPromotionRows\(market, queuedRows\)/);
+  assert.match(wbPromo,/row\.promoEnabled = Boolean\(pref\?\.enabled\)/);
+  assert.match(wbPromo,/row\.promoStatus = cleanText\(pref\?\.status\)/);
+  assert.match(ui,/price-promo-badge/);
+  assert.doesNotMatch(ui,/dp-calendar-api\.wildberries\.ru/);
 });
