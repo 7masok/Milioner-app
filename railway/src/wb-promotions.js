@@ -552,44 +552,103 @@ export async function decorateWbPromotionRows(market, rows) {
   };
 }
 
+async function applyPromoPreferenceChange(market, rawIds, enabled) {
+  const ids = [...new Set((Array.isArray(rawIds) ? rawIds : [rawIds])
+    .map(Number).filter(value => Number.isInteger(value) && value > 0))].slice(0, 1000);
+  if (!ids.length) {
+    const error = new Error('Не выбраны товары WB');
+    error.status = 400;
+    throw error;
+  }
+  const client = await pool.connect();
+  const now = Date.now();
+  try {
+    await client.query('BEGIN');
+    const rows = await priceSnapshotRows(market, client);
+    const byNm = new Map(rows.map(row => [Number(row?.remoteId), row]));
+    const prefs = await promoPreferences(market, client);
+    const prefByNm = new Map(prefs.map(pref => [Number(pref.nmId), pref]));
+    const queueResult = await client.query(`SELECT nm_id AS "nmId",desired_discount AS "desiredDiscount",source,status
+      FROM wb_price_update_queue WHERE market=$1`, [market]);
+    const queueByNm = new Map(queueResult.rows.map(row => [Number(row.nmId), row]));
+    const applied = [];
+
+    for (const nmId of ids) {
+      const row = byNm.get(nmId);
+      if (!row) continue;
+      const existing = prefByNm.get(nmId);
+      const queue = queueByNm.get(nmId);
+      const effectiveDiscount = queue?.desiredDiscount !== null && queue?.desiredDiscount !== undefined
+        ? clampDiscount(queue.desiredDiscount)
+        : clampDiscount(row.discount);
+      const baseDiscount = existing?.baseDiscount === null || existing?.baseDiscount === undefined
+        ? effectiveDiscount
+        : clampDiscount(existing.baseDiscount);
+      const initialStatus = enabled ? 'idle' : 'off';
+
+      await client.query(`INSERT INTO wb_promo_preferences
+        (market,nm_id,enabled,base_discount,promotion_id,promotion_name,plan_price,plan_discount,status,last_error,updated_at)
+        VALUES($1,$2,$3,$4,0,'',NULL,NULL,$5,'',$6)
+        ON CONFLICT(market,nm_id) DO UPDATE SET enabled=excluded.enabled,
+          base_discount=CASE WHEN excluded.enabled AND NOT wb_promo_preferences.enabled
+            THEN excluded.base_discount ELSE wb_promo_preferences.base_discount END,
+          status=CASE WHEN wb_promo_preferences.status='participating'
+            THEN 'participating' ELSE excluded.status END,
+          last_error='',updated_at=excluded.updated_at`,
+        [market, nmId, enabled, enabled ? effectiveDiscount : baseDiscount, initialStatus, now]);
+
+      if (!enabled && effectiveDiscount !== baseDiscount && cleanText(queue?.source) !== 'manual') {
+        await queuePromoDiscount(market, String(nmId), baseDiscount, 0, client);
+      }
+      applied.push(String(nmId));
+    }
+
+    if (!applied.length) {
+      const error = new Error('Выбранные товары не найдены в последнем снимке цен WB');
+      error.status = 409;
+      throw error;
+    }
+
+    await client.query(`INSERT INTO wb_promo_sync_state
+      (market,next_sync_at,last_sync_at,last_error,updated_at,phase,payload)
+      VALUES($1,0,0,'',$2,'list','{}'::jsonb)
+      ON CONFLICT(market) DO UPDATE SET
+        next_sync_at=CASE WHEN wb_promo_sync_state.next_sync_at>$2
+          THEN wb_promo_sync_state.next_sync_at ELSE 0 END,
+        updated_at=excluded.updated_at`, [market, now]);
+
+    await client.query('COMMIT');
+    return { applied, enabled };
+  } catch (error) {
+    await client.query('ROLLBACK').catch(() => {});
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+function promoMarketFromRequest(req) {
+  const market = cleanText(req.body?.market);
+  if (market !== 'WB' && market !== 'WB2') {
+    const error = new Error('Акции доступны только для WB');
+    error.status = 400;
+    throw error;
+  }
+  return market;
+}
+
 wbPromotionsRouter.post('/market-prices/promo', requireWritesEnabled, asyncRoute(async (req, res) => {
   if (req.body?.confirm !== true) return res.status(400).json({ ok: false, error: 'Нужно подтверждение изменения режима акций' });
-  const market = cleanText(req.body?.market);
-  if (market !== 'WB' && market !== 'WB2') return res.status(400).json({ ok: false, error: 'Акции доступны только для WB' });
-  const nmId = Number(req.body?.remoteId);
-  if (!Number.isInteger(nmId) || nmId <= 0) return res.status(400).json({ ok: false, error: 'Некорректный nmID WB' });
-  const enabled = req.body?.enabled === true;
+  const market = promoMarketFromRequest(req);
+  const result = await applyPromoPreferenceChange(market, [req.body?.remoteId], req.body?.enabled === true);
+  return res.json({ ok: true, market, remoteId: result.applied[0], enabled: result.enabled });
+}));
 
-  const rows = await priceSnapshotRows(market);
-  const row = rows.find(item => Number(item?.remoteId) === nmId);
-  if (!row) return res.status(409).json({ ok: false, error: 'Товар не найден в последнем снимке цен WB' });
-
-  const existing = (await promoPreferences(market)).find(item => Number(item.nmId) === nmId);
-  const queue = await currentQueueRow(market, nmId);
-  const effectiveDiscount = queue?.desiredDiscount !== null && queue?.desiredDiscount !== undefined
-    ? clampDiscount(queue.desiredDiscount)
-    : clampDiscount(row.discount);
-  const baseDiscount = existing?.baseDiscount === null || existing?.baseDiscount === undefined
-    ? effectiveDiscount
-    : clampDiscount(existing.baseDiscount);
-  const now = Date.now();
-
-  await pool.query(`INSERT INTO wb_promo_preferences
-    (market,nm_id,enabled,base_discount,promotion_id,promotion_name,plan_price,plan_discount,status,last_error,updated_at)
-    VALUES($1,$2,$3,$4,0,'',NULL,NULL,$5,'',$6)
-    ON CONFLICT(market,nm_id) DO UPDATE SET enabled=excluded.enabled,
-      base_discount=CASE WHEN excluded.enabled AND NOT wb_promo_preferences.enabled THEN excluded.base_discount ELSE wb_promo_preferences.base_discount END,
-      status=excluded.status,last_error='',updated_at=excluded.updated_at`,
-    [market, nmId, enabled, enabled ? effectiveDiscount : baseDiscount, enabled ? 'idle' : 'off', now]);
-
-  if (!enabled && effectiveDiscount !== baseDiscount && cleanText(queue?.source) !== 'manual') {
-    await queuePromoDiscount(market, nmId, baseDiscount, 0);
-  }
-  await pool.query(`INSERT INTO wb_promo_sync_state(market,next_sync_at,last_sync_at,last_error,updated_at)
-    VALUES($1,0,0,'',$2)
-    ON CONFLICT(market) DO UPDATE SET next_sync_at=0,last_error='',updated_at=excluded.updated_at`, [market, now]);
-
-  return res.json({ ok: true, market, remoteId: String(nmId), enabled, baseDiscount, queuedRestore: !enabled && effectiveDiscount !== baseDiscount });
+wbPromotionsRouter.post('/market-prices/promo/bulk', requireWritesEnabled, asyncRoute(async (req, res) => {
+  if (req.body?.confirm !== true) return res.status(400).json({ ok: false, error: 'Нужно подтверждение массового изменения акций' });
+  const market = promoMarketFromRequest(req);
+  const result = await applyPromoPreferenceChange(market, req.body?.remoteIds, req.body?.enabled === true);
+  return res.json({ ok: true, market, remoteIds: result.applied, count: result.applied.length, enabled: result.enabled });
 }));
 
 export function startWbPromotionLoop() {
