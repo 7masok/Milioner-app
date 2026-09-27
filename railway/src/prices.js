@@ -230,10 +230,11 @@ async function requestOzon(credentials, path, body) {
   });
   const data = await response.json().catch(() => ({}));
   if (!response.ok) {
-    const detail = cleanText(data?.message || data?.error?.message || data?.error || data?.detail)
-      .replaceAll(cleanText(credentials.apiKey), '[hidden]')
-      .replaceAll(cleanText(credentials.clientId), '[hidden]')
-      .slice(0, 400);
+    let detail = cleanText(data?.message || data?.error?.message || data?.error || data?.detail);
+    for (const secret of [cleanText(credentials.apiKey), cleanText(credentials.clientId)]) {
+      if (secret) detail = detail.replaceAll(secret, '[hidden]');
+    }
+    detail = detail.slice(0, 400);
     const error = new Error('Ozon цены: HTTP ' + response.status + (detail ? ' · ' + detail : ''));
     error.status = response.status === 401 || response.status === 403 ? 403 : 502;
     throw error;
