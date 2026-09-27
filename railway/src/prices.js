@@ -11,6 +11,10 @@ const OZON_API = 'https://api-seller.ozon.ru';
 const CACHE_TTL_MS = 2 * 60 * 1000;
 const WB_MIN_INTERVAL_MS = 650;
 const WB_FALLBACK_COOLDOWN_MS = 6_000;
+const WB_PRICE_SLOT_MS = 15 * 60 * 1000 + 5_000;
+const WB_PRICE_LOOP_MS = 60 * 1000;
+const WB_PRICE_FIRST_DELAY_MS = 5_000;
+const WB_PRICE_PAGE_LIMIT = 1000;
 const cache = new Map();
 const priceLoads = new Map();
 const cacheGeneration = new Map();
@@ -332,105 +336,403 @@ async function normalizeWbPriceRows(market, rows) {
   }).sort((x, y) => x.name.localeCompare(y.name, 'ru'));
 }
 
-async function listWbPrices(market, force = false) {
+function jsonValue(value, fallback) {
+  if (value && typeof value === 'object') return value;
+  try { return JSON.parse(String(value || '')); } catch { return fallback; }
+}
+
+async function wbPriceState(market, client = pool) {
+  const result = await client.query(`SELECT market,next_allowed_at AS "nextAllowedAt",last_attempt_at AS "lastAttemptAt",
+    last_success_at AS "lastSuccessAt",last_action AS "lastAction",last_error AS "lastError",
+    read_offset AS "readOffset",read_buffer AS "readBuffer",updated_at AS "updatedAt"
+    FROM wb_price_sync_state WHERE market=$1`, [market]);
+  return result.rows[0] || {
+    market, nextAllowedAt: 0, lastAttemptAt: 0, lastSuccessAt: 0,
+    lastAction: '', lastError: '', readOffset: 0, readBuffer: []
+  };
+}
+
+async function wbPriceSnapshot(market, client = pool) {
+  const result = await client.query(`SELECT payload,fetched_at AS "fetchedAt",updated_at AS "updatedAt"
+    FROM wb_price_snapshots WHERE market=$1`, [market]);
+  const row = result.rows[0];
+  if (!row) return null;
+  const payload = jsonValue(row.payload, {});
+  return { ...payload, fetchedAt: Number(row.fetchedAt || payload?.fetchedAt || 0), updatedAt: Number(row.updatedAt || 0) };
+}
+
+async function wbPriceQueueRows(market, client = pool) {
+  const result = await client.query(`SELECT nm_id AS "nmId",desired_price AS "desiredPrice",
+    desired_discount AS "desiredDiscount",status,queued_at AS "queuedAt",sent_at AS "sentAt",
+    upload_id AS "uploadId",last_error AS "lastError",updated_at AS "updatedAt"
+    FROM wb_price_update_queue WHERE market=$1 ORDER BY queued_at,nm_id`, [market]);
+  return result.rows.map(row => ({
+    ...row,
+    nmId: String(row.nmId || ''),
+    desiredPrice: row.desiredPrice === null || row.desiredPrice === undefined ? null : Number(row.desiredPrice),
+    desiredDiscount: row.desiredDiscount === null || row.desiredDiscount === undefined ? null : Number(row.desiredDiscount),
+    queuedAt: Number(row.queuedAt || 0),
+    sentAt: Number(row.sentAt || 0),
+    uploadId: Number(row.uploadId || 0),
+    updatedAt: Number(row.updatedAt || 0)
+  }));
+}
+
+function overlayWbQueuedRows(rows, queue) {
+  const byNm = new Map(queue.map(item => [String(item.nmId), item]));
+  return rows.map(raw => {
+    const row = { ...raw };
+    const pending = byNm.get(String(row.remoteId || ''));
+    if (!pending) return row;
+    row.confirmedPrice = number(row.price);
+    row.confirmedPriceMax = number(row.priceMax);
+    row.confirmedDiscount = clampDiscount(row.discount);
+    if (pending.desiredPrice !== null && pending.desiredPrice > 0) {
+      row.price = pending.desiredPrice;
+      if (row.canEditPrice !== false) row.priceMax = pending.desiredPrice;
+    }
+    if (pending.desiredDiscount !== null) row.discount = clampDiscount(pending.desiredDiscount);
+    const discount = clampDiscount(row.discount);
+    if (number(row.price) > 0) row.finalPrice = number(row.price) * (1 - discount / 100);
+    if (number(row.priceMax) > 0) row.finalPriceMax = number(row.priceMax) * (1 - discount / 100);
+    row.syncState = pending.status === 'sent' ? 'sent' : 'pending';
+    row.syncQueuedAt = pending.queuedAt;
+    row.syncSentAt = pending.sentAt;
+    row.syncUploadId = pending.uploadId;
+    row.syncError = cleanText(pending.lastError);
+    return row;
+  });
+}
+
+async function listWbPrices(market) {
+  const [snapshot, state, queue] = await Promise.all([
+    wbPriceSnapshot(market),
+    wbPriceState(market),
+    wbPriceQueueRows(market)
+  ]);
+  const rows = overlayWbQueuedRows(Array.isArray(snapshot?.rows) ? snapshot.rows : [], queue);
+  return {
+    ok: true,
+    market,
+    source: 'Снимок Railway · Wildberries Prices & Discounts API',
+    fetchedAt: Number(snapshot?.fetchedAt || 0),
+    rows,
+    serverSnapshot: true,
+    waiting: !snapshot,
+    nextSyncAt: Number(state.nextAllowedAt || 0),
+    lastAttemptAt: Number(state.lastAttemptAt || 0),
+    lastSuccessAt: Number(state.lastSuccessAt || 0),
+    lastAction: cleanText(state.lastAction),
+    syncError: cleanText(state.lastError),
+    pendingCount: queue.filter(row => row.status === 'pending').length,
+    sentCount: queue.filter(row => row.status === 'sent').length
+  };
+}
+
+async function wbSnapshotRowForWrite(market, nmID) {
+  const snapshot = await wbPriceSnapshot(market);
+  if (!snapshot) {
+    const error = new Error('Цены WB ещё не синхронизированы. Дождитесь первого серверного сеанса.');
+    error.status = 409;
+    throw error;
+  }
+  const row = (snapshot.rows || []).find(item => Number(item?.remoteId) === nmID);
+  if (!row) {
+    const error = new Error('Товар WB не найден в последнем серверном снимке цен');
+    error.status = 409;
+    throw error;
+  }
+  return row;
+}
+
+async function markWbPriceState(market, values, client = pool) {
+  const now = Date.now();
+  const current = await wbPriceState(market, client);
+  const next = {
+    nextAllowedAt: values.nextAllowedAt ?? Number(current.nextAllowedAt || 0),
+    lastAttemptAt: values.lastAttemptAt ?? Number(current.lastAttemptAt || 0),
+    lastSuccessAt: values.lastSuccessAt ?? Number(current.lastSuccessAt || 0),
+    lastAction: values.lastAction ?? cleanText(current.lastAction),
+    lastError: values.lastError ?? cleanText(current.lastError),
+    readOffset: values.readOffset ?? Number(current.readOffset || 0),
+    readBuffer: values.readBuffer ?? (Array.isArray(current.readBuffer) ? current.readBuffer : jsonValue(current.readBuffer, []))
+  };
+  await client.query(`INSERT INTO wb_price_sync_state
+    (market,next_allowed_at,last_attempt_at,last_success_at,last_action,last_error,read_offset,read_buffer,updated_at)
+    VALUES($1,$2,$3,$4,$5,$6,$7,$8::jsonb,$9)
+    ON CONFLICT(market) DO UPDATE SET
+      next_allowed_at=excluded.next_allowed_at,last_attempt_at=excluded.last_attempt_at,
+      last_success_at=excluded.last_success_at,last_action=excluded.last_action,last_error=excluded.last_error,
+      read_offset=excluded.read_offset,read_buffer=excluded.read_buffer,updated_at=excluded.updated_at`,
+    [market, next.nextAllowedAt, next.lastAttemptAt, next.lastSuccessAt, next.lastAction, next.lastError,
+      next.readOffset, JSON.stringify(next.readBuffer || []), now]);
+  return next;
+}
+
+async function queueWbPrice(market, input) {
   const token = await wbToken(market);
   if (!token) {
     const error = new Error(market + ': токен не настроен');
     error.status = 400;
     throw error;
   }
-  const key = market + ':' + tokenFingerprint(token);
-  const hit = cached(key, force);
-  if (hit) {
-    console.info('WB prices cache', JSON.stringify({ market, force: false, result: 'hit' }));
-    return hit;
+  const nmID = Number(input?.remoteId);
+  if (!Number.isInteger(nmID) || nmID <= 0) {
+    const error = new Error('Не найден корректный nmID WB');
+    error.status = 400;
+    throw error;
   }
-  const cooldown = Number(wbCooldowns.get(tokenFingerprint(token)) || 0);
-  if (cooldown > Date.now()) {
-    const limited = wbRateLimitError(cooldown);
-    const fallback = staleSnapshot(key, limited);
-    if (fallback) return fallback;
-    throw limited;
-  }
-  return withPriceLoad(key, async () => {
-    const secondHit = cached(key, force);
-    if (secondHit) return secondHit;
-    const generation = generationFor(market);
-    const rows = [];
-    console.info('WB prices cache', JSON.stringify({ market, force: Boolean(force), result: 'miss' }));
-    try {
-      let complete = false;
-      for (let offset = 0, page = 0; page < 100; page++, offset += 1000) {
-        const data = await requestWb(
-          token,
-          '/api/v2/list/goods/filter?limit=1000&offset=' + offset,
-          {},
-          { market, offset, force }
-        );
-        const batch = Array.isArray(data?.data?.listGoods) ? data.data.listGoods : [];
-        if (!batch.length) {
-          complete = true;
-          break;
-        }
-        rows.push(...batch);
-        if (batch.length < 1000) {
-          complete = true;
-          break;
-        }
-      }
-      if (!complete) {
-        const error = new Error('WB цены: выгрузка превысила безопасный предел 100 страниц');
-        error.status = 502;
-        throw error;
-      }
-      const normalized = await normalizeWbPriceRows(market, rows);
-      return remember(key, market, generation, {
-        ok: true,
-        market,
-        source: 'Wildberries Prices & Discounts API',
-        fetchedAt: Date.now(),
-        rows: normalized
-      });
-    } catch (error) {
-      if (Number(error?.status) === 429 && rows.length) {
-        const partial = {
-          ok: true,
-          market,
-          source: 'Wildberries Prices & Discounts API',
-          fetchedAt: Date.now(),
-          rows: await normalizeWbPriceRows(market, rows),
-          stale: true,
-          partial: true,
-          warning: 'WB ограничил проверку следующей страницы',
-          retryAt: Number(error?.retryAt) || 0
-        };
-        if (generationFor(market) === generation) cache.set(key, { at: 0, value: partial });
-        return partial;
-      }
-      const fallback = canServeStale(error) ? staleSnapshot(key, error) : null;
-      if (fallback) return fallback;
+  const current = await wbSnapshotRowForWrite(market, nmID);
+  let desiredPrice = null, desiredDiscount = null;
+  if (input?.price !== null && input?.price !== undefined && input?.price !== '') {
+    const price = number(input.price);
+    if (!(price > 0)) {
+      const error = new Error('Цена WB должна быть больше 0');
+      error.status = 400;
       throw error;
     }
-  });
+    if (current.canEditPrice === false) {
+      const error = new Error('У товара WB разные цены по размерам. Общую цену менять нельзя; измените только скидку.');
+      error.status = 409;
+      throw error;
+    }
+    desiredPrice = price;
+  }
+  if (input?.discount !== null && input?.discount !== undefined && input?.discount !== '') {
+    const discount = Number(input.discount);
+    if (!Number.isInteger(discount) || discount < 0 || discount > 99) {
+      const error = new Error('Скидка WB должна быть целым числом от 0 до 99');
+      error.status = 400;
+      throw error;
+    }
+    desiredDiscount = discount;
+  }
+  if (desiredPrice === null && desiredDiscount === null) {
+    const error = new Error('Цена и скидка не изменились');
+    error.status = 400;
+    throw error;
+  }
+  const now = Date.now();
+  await pool.query(`INSERT INTO wb_price_update_queue
+    (market,nm_id,desired_price,desired_discount,status,queued_at,sent_at,upload_id,last_error,updated_at)
+    VALUES($1,$2,$3,$4,'pending',$5,0,0,'',$5)
+    ON CONFLICT(market,nm_id) DO UPDATE SET
+      desired_price=COALESCE(excluded.desired_price,wb_price_update_queue.desired_price),
+      desired_discount=COALESCE(excluded.desired_discount,wb_price_update_queue.desired_discount),
+      status='pending',queued_at=excluded.queued_at,sent_at=0,upload_id=0,last_error='',updated_at=excluded.updated_at`,
+    [market, nmID, desiredPrice, desiredDiscount, now]);
+  const state = await wbPriceState(market);
+  return {
+    ok: true,
+    market,
+    queued: true,
+    accepted: false,
+    applied: false,
+    queuedAt: now,
+    nextSyncAt: Number(state.nextAllowedAt || 0)
+  };
 }
 
-function freshWbRowForWrite(market, token, nmID) {
-  const key = market + ':' + tokenFingerprint(token);
-  const hit = cache.get(key);
-  const fetchedAt = Number(hit?.value?.fetchedAt || 0);
-  if (!hit?.value || !fetchedAt || Date.now() - fetchedAt >= CACHE_TTL_MS) {
-    const error = new Error('Перед изменением общей цены обновите цены WB');
-    error.status = 409;
-    throw error;
-  }
-  const row = (hit.value.rows || []).find(item => Number(item?.remoteId) === nmID);
-  if (!row) {
-    const error = new Error('Товар WB не найден в актуальном снимке цен');
-    error.status = 409;
-    throw error;
-  }
-  return row;
+async function fetchWbPricePage(market, token, offset) {
+  const data = await requestWb(
+    token,
+    '/api/v2/list/goods/filter?limit=' + WB_PRICE_PAGE_LIMIT + '&offset=' + Math.max(0, Number(offset) || 0),
+    {},
+    { market, offset: Math.max(0, Number(offset) || 0), force: false }
+  );
+  return Array.isArray(data?.data?.listGoods) ? data.data.listGoods : [];
 }
+
+async function sendWbPriceQueue(market, token, pending, now) {
+  const selected = pending.map(row => ({
+    nmID: Number(row.nmId),
+    updatedAt: Number(row.updatedAt || 0),
+    ...(row.desiredPrice !== null ? { price: Number(row.desiredPrice) } : {}),
+    ...(row.desiredDiscount !== null ? { discount: Number(row.desiredDiscount) } : {})
+  })).filter(row => Number.isInteger(row.nmID) && row.nmID > 0 && (row.price !== undefined || row.discount !== undefined));
+  if (!selected.length) return { sent: 0, uploadId: 0, alreadyExists: false };
+  const data = await requestWb(token, '/api/v2/upload/task', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ data: selected.map(({ updatedAt, ...row }) => row) })
+  }, { market, force: false });
+  const uploadId = number(data?.data?.id || data?.data?.uploadID);
+  const alreadyExists = Boolean(data?.data?.alreadyExists);
+  if (!(uploadId > 0) && !alreadyExists) {
+    const error = new Error('WB не вернул корректное подтверждение операции');
+    error.status = 502;
+    throw error;
+  }
+  const client = await pool.connect();
+  let sent = 0;
+  try {
+    await client.query('BEGIN');
+    for (const row of selected) {
+      const updated = await client.query(`UPDATE wb_price_update_queue
+        SET status='sent',sent_at=$4,upload_id=$5,last_error='',updated_at=$4
+        WHERE market=$1 AND nm_id=$2 AND status='pending' AND updated_at=$3`,
+        [market, row.nmID, row.updatedAt, now, uploadId]);
+      sent += Number(updated.rowCount || 0);
+    }
+    await markWbPriceState(market, {
+      nextAllowedAt: now + WB_PRICE_SLOT_MS,
+      lastAttemptAt: now,
+      lastSuccessAt: now,
+      lastAction: 'write',
+      lastError: '',
+      readOffset: 0,
+      readBuffer: []
+    }, client);
+    await client.query('COMMIT');
+  } catch (error) {
+    await client.query('ROLLBACK').catch(() => {});
+    throw error;
+  } finally {
+    client.release();
+  }
+  return { sent, uploadId, alreadyExists };
+}
+
+async function saveWbPriceRead(market, state, batch, now) {
+  const offset = Math.max(0, Number(state.readOffset || 0));
+  const previous = offset > 0
+    ? (Array.isArray(state.readBuffer) ? state.readBuffer : jsonValue(state.readBuffer, []))
+    : [];
+  const combined = previous.concat(batch);
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    if (batch.length >= WB_PRICE_PAGE_LIMIT) {
+      await markWbPriceState(market, {
+        nextAllowedAt: now + WB_PRICE_SLOT_MS,
+        lastAttemptAt: now,
+        lastSuccessAt: now,
+        lastAction: 'read-partial',
+        lastError: '',
+        readOffset: offset + WB_PRICE_PAGE_LIMIT,
+        readBuffer: combined
+      }, client);
+      await client.query('COMMIT');
+      return { complete: false, rows: combined.length };
+    }
+
+    const normalized = await normalizeWbPriceRows(market, combined);
+    await client.query(`INSERT INTO wb_price_snapshots(market,payload,fetched_at,updated_at)
+      VALUES($1,$2::jsonb,$3,$3)
+      ON CONFLICT(market) DO UPDATE SET payload=excluded.payload,fetched_at=excluded.fetched_at,updated_at=excluded.updated_at`,
+      [market, JSON.stringify({ rows: normalized }), now]);
+
+    const sent = await wbPriceQueueRows(market, client);
+    const byNm = new Map(normalized.map(row => [String(row.remoteId || ''), row]));
+    for (const queued of sent.filter(row => row.status === 'sent')) {
+      const row = byNm.get(String(queued.nmId));
+      if (!row) continue;
+      const priceOk = queued.desiredPrice === null || Math.abs(number(row.price) - queued.desiredPrice) < 0.000001;
+      const discountOk = queued.desiredDiscount === null || clampDiscount(row.discount) === queued.desiredDiscount;
+      if (priceOk && discountOk) {
+        await client.query('DELETE FROM wb_price_update_queue WHERE market=$1 AND nm_id=$2 AND status=\'sent\'', [market, queued.nmId]);
+      } else {
+        await client.query(`UPDATE wb_price_update_queue SET status='pending',sent_at=0,upload_id=0,
+          last_error='WB ещё не подтвердил изменение',updated_at=$3
+          WHERE market=$1 AND nm_id=$2 AND status='sent'`, [market, queued.nmId, now]);
+      }
+    }
+
+    await markWbPriceState(market, {
+      nextAllowedAt: now + WB_PRICE_SLOT_MS,
+      lastAttemptAt: now,
+      lastSuccessAt: now,
+      lastAction: 'read',
+      lastError: '',
+      readOffset: 0,
+      readBuffer: []
+    }, client);
+    await client.query('COMMIT');
+    return { complete: true, rows: normalized.length };
+  } catch (error) {
+    await client.query('ROLLBACK').catch(() => {});
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+async function syncWbPriceMarket(market) {
+  const client = await pool.connect();
+  const lockName = 'millioner:wb-prices:' + market;
+  let locked = false;
+  try {
+    const lock = await client.query('SELECT pg_try_advisory_lock(hashtext($1)) AS locked', [lockName]);
+    locked = Boolean(lock.rows[0]?.locked);
+    if (!locked) return { ok: true, market, skipped: true, reason: 'already-running' };
+  } finally {
+    client.release();
+  }
+
+  try {
+    const state = await wbPriceState(market);
+    const now = Date.now();
+    if (Number(state.nextAllowedAt || 0) > now) {
+      return { ok: true, market, skipped: true, reason: 'slot-cooldown', nextSyncAt: Number(state.nextAllowedAt) };
+    }
+    const token = await wbToken(market);
+    if (!token) return { ok: true, market, skipped: true, reason: 'not-configured' };
+    const pending = (await wbPriceQueueRows(market)).filter(row => row.status === 'pending');
+    try {
+      if (pending.length) {
+        const result = await sendWbPriceQueue(market, token, pending, now);
+        console.info('WB price sync write', JSON.stringify({ market, queued: pending.length, sent: result.sent, uploadId: result.uploadId }));
+        return { ok: true, market, action: 'write', ...result, nextSyncAt: now + WB_PRICE_SLOT_MS };
+      }
+      const batch = await fetchWbPricePage(market, token, Number(state.readOffset || 0));
+      const result = await saveWbPriceRead(market, state, batch, now);
+      console.info('WB price sync read', JSON.stringify({ market, offset: Number(state.readOffset || 0), batch: batch.length, complete: result.complete, rows: result.rows }));
+      return { ok: true, market, action: result.complete ? 'read' : 'read-partial', ...result, nextSyncAt: now + WB_PRICE_SLOT_MS };
+    } catch (error) {
+      const retryAt = Math.max(now + WB_PRICE_SLOT_MS, Number(error?.retryAt || 0));
+      await markWbPriceState(market, {
+        nextAllowedAt: retryAt,
+        lastAttemptAt: now,
+        lastAction: pending.length ? 'write-error' : 'read-error',
+        lastError: cleanText(error?.message || error)
+      }).catch(() => {});
+      if (pending.length) {
+        await pool.query(`UPDATE wb_price_update_queue SET last_error=$2 WHERE market=$1 AND status='pending'`,
+          [market, cleanText(error?.message || error)]).catch(() => {});
+      }
+      console.warn('WB price sync failed', JSON.stringify({
+        market, action: pending.length ? 'write' : 'read', status: Number(error?.status || 0),
+        retryAt, error: cleanText(error?.message || error)
+      }));
+      return { ok: false, market, error: cleanText(error?.message || error), retryAt };
+    }
+  } finally {
+    const unlock = await pool.connect();
+    try { await unlock.query('SELECT pg_advisory_unlock(hashtext($1))', [lockName]).catch(() => {}); }
+    finally { unlock.release(); }
+  }
+}
+
+let wbPriceSyncTimer = null;
+let wbPriceSyncRunning = false;
+export function startWbPriceSyncLoop() {
+  if (wbPriceSyncTimer) return;
+  const run = async () => {
+    if (wbPriceSyncRunning) return;
+    wbPriceSyncRunning = true;
+    try {
+      for (const market of ['WB', 'WB2']) await syncWbPriceMarket(market);
+    } catch (error) {
+      console.error('WB price sync loop failed', error);
+    } finally {
+      wbPriceSyncRunning = false;
+    }
+  };
+  setTimeout(run, WB_PRICE_FIRST_DELAY_MS).unref();
+  wbPriceSyncTimer = setInterval(run, WB_PRICE_LOOP_MS);
+  wbPriceSyncTimer.unref();
+}
+
 
 async function requestOzon(credentials, path, body) {
   const response = await fetch(OZON_API + path, {
@@ -583,69 +885,7 @@ async function listOzonPrices(force = false) {
 }
 
 async function setWbPrice(market, input) {
-  const token = await wbToken(market);
-  if (!token) {
-    const error = new Error(market + ': токен не настроен');
-    error.status = 400;
-    throw error;
-  }
-  const nmID = Number(input?.remoteId);
-  if (!Number.isInteger(nmID) || nmID <= 0) {
-    const error = new Error('Не найден корректный nmID WB');
-    error.status = 400;
-    throw error;
-  }
-  const item = { nmID };
-  if (input?.price !== null && input?.price !== undefined && input?.price !== '') {
-    const price = number(input.price);
-    if (!(price > 0)) {
-      const error = new Error('Цена WB должна быть больше 0');
-      error.status = 400;
-      throw error;
-    }
-    const current = freshWbRowForWrite(market, token, nmID);
-    if (current.canEditPrice === false) {
-      const error = new Error('У товара WB разные цены по размерам. Общую цену менять нельзя; измените только скидку.');
-      error.status = 409;
-      throw error;
-    }
-    item.price = price;
-  }
-  if (input?.discount !== null && input?.discount !== undefined && input?.discount !== '') {
-    const discount = Number(input.discount);
-    if (!Number.isInteger(discount) || discount < 0 || discount > 99) {
-      const error = new Error('Скидка WB должна быть целым числом от 0 до 99');
-      error.status = 400;
-      throw error;
-    }
-    item.discount = discount;
-  }
-  if (item.price === undefined && item.discount === undefined) {
-    const error = new Error('Цена и скидка не изменились');
-    error.status = 400;
-    throw error;
-  }
-  const data = await requestWb(token, '/api/v2/upload/task', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ data: [item] })
-  }, { market, force: true });
-  const uploadId = number(data?.data?.id || data?.data?.uploadID);
-  const alreadyExists = Boolean(data?.data?.alreadyExists);
-  if (!(uploadId > 0) && !alreadyExists) {
-    const error = new Error('WB не вернул корректное подтверждение операции');
-    error.status = 502;
-    throw error;
-  }
-  invalidateMarket(market, true);
-  return {
-    ok: true,
-    market,
-    accepted: true,
-    applied: false,
-    uploadId,
-    alreadyExists
-  };
+  return queueWbPrice(market, input);
 }
 
 async function setOzonPrice(input) {
@@ -726,7 +966,7 @@ pricesRouter.get('/market-prices', asyncRoute(async (req, res) => {
   const force = req.query.force === '1';
   try {
     if (market === 'Kaspi') return res.json(await listKaspiPrices());
-    if (market === 'WB' || market === 'WB2') return res.json(await listWbPrices(market, force));
+    if (market === 'WB' || market === 'WB2') return res.json(await listWbPrices(market));
     if (market === 'Ozon') return res.json(await listOzonPrices(force));
     return res.status(400).json({ ok: false, error: 'Неизвестный магазин цен' });
   } catch (error) {
