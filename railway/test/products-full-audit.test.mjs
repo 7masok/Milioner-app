@@ -78,7 +78,7 @@ test('Products inventory snapshot is one-pass and drives all stock filters',()=>
   assert.ok(ids('sale').includes('sale'),'reserved units remain part of the physical stock location');
 });
 
-test('Products label only free-to-sell units as «В продаже» and keep physical stock explicit',()=>{
+test('Products label only free-to-sell units as «В продаже» without a redundant physical-stock label',()=>{
   const render=between('function renderProducts(','function wbRelinkNotice(');
   assert.match(render,/productInventoryRow\(stats,p\)/);
   assert.doesNotMatch(render,/productMatchesStockFilter\(/);
@@ -86,7 +86,7 @@ test('Products label only free-to-sell units as «В продаже» and keep p
   assert.match(metric,/if\(sort==='stock'\)return inventory\.physical/);
   const card=html.split('\n').find(row=>row.startsWith('function productCard('))||'';
   assert.match(card,/В продаже: \$\{forSale\} шт\./);
-  assert.match(card,/Физически: \$\{physical\} шт\./);
+  assert.doesNotMatch(card,/Физически:/);
   assert.doesNotMatch(card,/В продаже: \$\{physical\} шт\./);
 });
 
@@ -243,7 +243,7 @@ test('Product stock card keeps logical stock groups on separate visual rows',()=
   assert.match(card,/stockSecondaryBits=/);
   assert.match(card,/product-stock-primary/);
   assert.match(card,/product-stock-secondary/);
-  assert.match(card,/product-stock-physical/);
+  assert.doesNotMatch(card,/product-stock-physical/);
   assert.match(ozon,/replace\('<div class="product-stock-secondary">','<div class="product-stock-secondary">'\+line\)/);
   assert.match(ozon,/FBO Ozon:/);
   assert.match(html,/#productList \.product-stock-secondary:not\(:empty\)\{margin-top:1px\}/);
