@@ -153,5 +153,6 @@ test('Prices can hide unwanted products without deleting marketplace or warehous
   assert.match(ui,/window\.restoreAllPriceRows=function\(\)/);
   assert.match(ui,/Скрыть из списка/);
   assert.match(ui,/Все позиции этого магазина скрыты/);
-  assert.doesNotMatch(ui,/delete.*priceRowKey/s);
+  const hide=ui.slice(ui.indexOf('window.hidePriceRow=function()'),ui.indexOf('window.openHiddenPrices=function()'));
+  assert.doesNotMatch(hide,/fetch\(|remotePriceUpdate|state\.products/);
 });
