@@ -147,33 +147,24 @@ function priceInlineEditor(row,index){
   if(!priceExpanded||priceExpanded.market!==priceUi.market||priceExpanded.index!==Number(index))return '';
   if(row.market==='Kaspi'){
     return '<div class="price-inline-editor" onclick="event.stopPropagation()">'+
-      '<div class="field"><label>Цена, ₸</label><input id="priceEditCurrent" type="number" min="1" step="1" inputmode="decimal" value="'+pEsc(pNum(row.price)||'')+'"></div>'+
-      '<div class="link-note">Цена сохранится в складе и попадёт в XML-прайс Kaspi.</div>'+
-      '<button type="button" class="btn dark full" onclick="submitPriceEdit('+Number(index)+')">Сохранить цену</button>'+
-      priceHideAction(index)+
-      '<button type="button" class="price-inline-collapse" onclick="collapsePriceEditor()">Свернуть</button>'+
+      '<div class="price-inline-fields one"><div class="field"><label>Цена, ₸</label><input id="priceEditCurrent" type="number" min="1" step="1" inputmode="decimal" value="'+pEsc(pNum(row.price)||'')+'"></div></div>'+
+      '<div class="price-inline-actions"><button type="button" class="btn dark" onclick="submitPriceEdit('+Number(index)+')">Сохранить</button><button type="button" class="btn price-hide-action" onclick="hidePriceRow('+Number(index)+')">Скрыть</button></div>'+
       '</div>';
   }
   if(row.market==='WB'||row.market==='WB2'){
     const priceDisabled=row.canEditPrice===false;
     return '<div class="price-inline-editor" onclick="event.stopPropagation()">'+
-      '<div class="field"><label>Цена до скидки, '+pEsc(row.currency||'RUB')+'</label><input id="priceEditCurrent" type="number" min="1" step="1" inputmode="decimal" value="'+pEsc(pNum(row.price)||'')+'" '+(priceDisabled?'disabled':'')+'></div>'+
-      (priceDisabled?'<div class="link-note">У товара разные цены по размерам. Чтобы не перезаписать их одной суммой, здесь можно менять только общую скидку.</div>':'')+
-      '<div class="field"><label>Скидка, %</label><input id="priceEditDiscount" type="number" min="0" max="99" step="1" inputmode="numeric" value="'+pEsc(Math.round(pNum(row.discount)))+'"></div>'+
-      '<div class="link-note">Изменение сохранится на нашем сервере и уйдёт в WB в ближайший разрешённый сеанс связи.</div>'+
-      '<button type="button" class="btn dark full" onclick="submitPriceEdit('+Number(index)+')">Сохранить изменение</button>'+
-      priceHideAction(index)+
-      '<button type="button" class="price-inline-collapse" onclick="collapsePriceEditor()">Свернуть</button>'+
+      '<div class="price-inline-fields"><div class="field"><label>Цена, '+pEsc(row.currency||'RUB')+'</label><input id="priceEditCurrent" type="number" min="1" step="1" inputmode="decimal" value="'+pEsc(pNum(row.price)||'')+'" '+(priceDisabled?'disabled':'')+'></div>'+
+      '<div class="field"><label>Скидка, %</label><input id="priceEditDiscount" type="number" min="0" max="99" step="1" inputmode="numeric" value="'+pEsc(Math.round(pNum(row.discount)))+'"></div></div>'+
+      (priceDisabled?'<div class="price-inline-warning">Разные цены по размерам · меняется только скидка</div>':'')+
+      '<div class="price-inline-actions"><button type="button" class="btn dark" onclick="submitPriceEdit('+Number(index)+')">Сохранить</button><button type="button" class="btn price-hide-action" onclick="hidePriceRow('+Number(index)+')">Скрыть</button></div>'+
       '</div>';
   }
   if(row.market==='Ozon'){
     return '<div class="price-inline-editor" onclick="event.stopPropagation()">'+
-      '<div class="field"><label>Текущая цена, '+pEsc(row.currency||'RUB')+'</label><input id="priceEditCurrent" type="number" min="1" step="1" inputmode="decimal" value="'+pEsc(pNum(row.price)||'')+'"></div>'+
-      '<div class="field"><label>Цена до скидки</label><input id="priceEditOld" type="number" min="0" step="1" inputmode="decimal" value="'+pEsc(pNum(row.oldPrice)||'')+'"></div>'+
-      '<div class="link-note">Скидка Ozon рассчитывается из «цены до скидки» и текущей цены.</div>'+
-      '<button type="button" class="btn dark full" onclick="submitPriceEdit('+Number(index)+')">Отправить в Ozon</button>'+
-      priceHideAction(index)+
-      '<button type="button" class="price-inline-collapse" onclick="collapsePriceEditor()">Свернуть</button>'+
+      '<div class="price-inline-fields"><div class="field"><label>Цена, '+pEsc(row.currency||'RUB')+'</label><input id="priceEditCurrent" type="number" min="1" step="1" inputmode="decimal" value="'+pEsc(pNum(row.price)||'')+'"></div>'+
+      '<div class="field"><label>До скидки</label><input id="priceEditOld" type="number" min="0" step="1" inputmode="decimal" value="'+pEsc(pNum(row.oldPrice)||'')+'"></div></div>'+
+      '<div class="price-inline-actions"><button type="button" class="btn dark" onclick="submitPriceEdit('+Number(index)+')">Сохранить</button><button type="button" class="btn price-hide-action" onclick="hidePriceRow('+Number(index)+')">Скрыть</button></div>'+
       '</div>';
   }
   return '';
@@ -439,7 +430,7 @@ window.submitPriceEdit=async function(index){
   }catch(error){
     alert(priceErrorText(error));
   }finally{
-    if(button&&document.body.contains(button)){button.disabled=false;button.textContent=row.market==='Kaspi'?'Сохранить цену':row.market==='Ozon'?'Отправить в Ozon':'Сохранить изменение';}
+    if(button&&document.body.contains(button)){button.disabled=false;button.textContent='Сохранить';}
   }
 };
 
