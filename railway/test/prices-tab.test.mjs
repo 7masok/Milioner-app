@@ -18,7 +18,7 @@ test('Prices is a real ninth tab and survives reload navigation',()=>{
 });
 
 test('Prices UI is static before auth but does not fetch prices on startup',()=>{
-  const scriptAt=html.indexOf('./prices-v1.js?v=20260927-price-sort');
+  const scriptAt=html.indexOf('./prices-v1.js?v=20260927-hide-prices');
   const authAt=html.lastIndexOf('<script>initOwnerAuth();</script>');
   assert.ok(scriptAt>0&&scriptAt<authAt);
   const runtime=html.slice(html.indexOf('function startAppRuntime(){'),html.indexOf('// Wait for the server-sync module'));
@@ -138,4 +138,20 @@ test('Prices can sort by price in both directions and remember the choice',()=>{
   assert.match(ui,/window\.priceToggleSort=function\(\)/);
   assert.match(ui,/Цена ↓/);
   assert.match(ui,/Цена ↑/);
+});
+
+
+test('Prices can hide unwanted products without deleting marketplace or warehouse cards',()=>{
+  assert.match(html,/id="priceHiddenButton"/);
+  assert.match(html,/onclick="openHiddenPrices\(\)"/);
+  assert.match(ui,/hidden:\{\}/);
+  assert.match(ui,/function priceRowKey\(row\)/);
+  assert.match(ui,/function priceIsHidden\(row/);
+  assert.match(ui,/window\.hidePriceRow=function\(\)/);
+  assert.match(ui,/window\.openHiddenPrices=function\(\)/);
+  assert.match(ui,/window\.restorePriceRow=function\(index\)/);
+  assert.match(ui,/window\.restoreAllPriceRows=function\(\)/);
+  assert.match(ui,/Скрыть из списка/);
+  assert.match(ui,/Все позиции этого магазина скрыты/);
+  assert.doesNotMatch(ui,/delete.*priceRowKey/s);
 });
