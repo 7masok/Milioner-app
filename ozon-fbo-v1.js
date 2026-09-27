@@ -207,8 +207,8 @@ renderMarketplaceOrders=function(){
 applyMarketplaceTransitions=function(market,feed){if(String(market).startsWith('Ozon'))return {reservedCount:0,soldCount:0,cancelledCount:0};return baseTransition(market,feed);};
 productCard=function(...args){
  const p=args[0],inventory=args[5]||null;let html=baseProductCard(...args),keys=productOzonKeys(p);if(!keys.length)return html;
- const qty=data?Math.max(0,Number(inventory?.fbo??ozonFboQtyForProduct(p))||0):null,line='<div class="muted" style="color:#1c62bb;font-weight:700">FBO Ozon: '+(qty===null?'—':qty+' шт.')+'</div>';
- return html.replace('</div><div class="right" style="min-width:112px">',line+'</div><div class="right" style="min-width:112px">');
+ const qty=data?Math.max(0,Number(inventory?.fbo??ozonFboQtyForProduct(p))||0):null,line='<span style="color:#1c62bb;font-weight:700">FBO Ozon: '+(qty===null?'—':qty+' шт.')+'</span>';
+ return html.replace('<div class="product-stock-secondary">','<div class="product-stock-secondary">'+line);
 };
 renderProducts=function(rebuildStats=false){
  baseRenderProducts(rebuildStats);updateFboMetric();
