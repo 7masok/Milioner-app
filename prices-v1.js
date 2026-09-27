@@ -233,7 +233,7 @@ function priceCard(row,index){
       row.promoEnabled&&row.promoStatus==='auto_only'?'Автоакции вручную':
       row.promoEnabled?'Ждёт акцию':'Без акции')+'</span>'
     :'';
-  const night=row.market==='WB'||row.market==='WB2'&&row.nightPriceEnabled
+  const night=(row.market==='WB'||row.market==='WB2')&&row.nightPriceEnabled
     ?'<span class="price-night-badge"> · 🌙 '+pEsc(row.nightPriceStart||'04:00')+'–'+pEsc(row.nightPriceEnd||'06:00')+' · '+pMoney(row.nightPriceTarget,row.currency)+'</span>'
     :'';
   const expanded=Boolean(priceExpanded&&priceExpanded.market===priceUi.market&&priceExpanded.index===Number(index));
