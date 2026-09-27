@@ -25,7 +25,8 @@ import { wbReturnsRouter } from './wb-returns.js';
 import { wbAdsRouter, startWbAdsLimitLoop } from './wb-ads.js';
 import { aiAssistantRouter } from './ai-assistant.js';
 import { pricesRouter, startWbPriceSyncLoop } from './prices.js';
-import { wbPromotionsRouter, startWbPromotionLoop } from './wb-promotions.js';\nimport { wbHourlyOrdersRouter, logWbHourlyOrders } from './wb-hourly-orders.js';
+import { wbPromotionsRouter, startWbPromotionLoop } from './wb-promotions.js';
+import { wbHourlyOrdersRouter, logWbHourlyOrders } from './wb-hourly-orders.js';
 import { registerDeveloperGuideRoutes } from './developer-guide.js';
 
 assertRuntimeConfig();
@@ -242,7 +243,8 @@ app.use('/api', ordersRouter);
 app.use('/api', reportsRouter);
 app.use('/api', stockRouter);
 app.use('/api', pricesRouter);
-app.use('/api', wbPromotionsRouter);\napp.use('/api', wbHourlyOrdersRouter);
+app.use('/api', wbPromotionsRouter);
+app.use('/api', wbHourlyOrdersRouter);
 app.use('/api', aiAssistantRouter);
 // Keep every legacy path used by Kaspi automatic feeds, but serve the XML
 // from the live Railway warehouse source instead of a stale migration snapshot.
@@ -317,7 +319,8 @@ async function verifyBackupRestoreReadiness() {
 
 const server = app.listen(config.port, '0.0.0.0', () => {
   console.log(`millioner Railway API listening on ${config.port}`);
-  setTimeout(()=>verifyBackupRestoreReadiness(),4000).unref();\n  setTimeout(()=>logWbHourlyOrders(30),7000).unref();
+  setTimeout(()=>verifyBackupRestoreReadiness(),4000).unref();
+  setTimeout(()=>logWbHourlyOrders(30),7000).unref();
   startOzonSyncLoop();
   startKaspiSyncLoop();
   startWbSyncLoop();
