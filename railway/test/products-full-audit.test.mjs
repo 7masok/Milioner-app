@@ -75,18 +75,19 @@ test('Products inventory snapshot is one-pass and drives all stock filters',()=>
   assert.deepEqual(ids('zero'),['zero']);
   assert.equal(stats.physicalMap.get('sale'),5);
   assert.equal(stats.stockMap.get('sale'),2);
-  assert.ok(ids('sale').includes('sale'),'reserved stock still belongs to the physical «В продаже» location');
+  assert.ok(ids('sale').includes('sale'),'reserved units remain part of the physical stock location');
 });
 
-test('Products distinguish physical «В продаже» from free-to-sell stock',()=>{
+test('Products label only free-to-sell units as «В продаже» and keep physical stock explicit',()=>{
   const render=between('function renderProducts(','function wbRelinkNotice(');
   assert.match(render,/productInventoryRow\(stats,p\)/);
   assert.doesNotMatch(render,/productMatchesStockFilter\(/);
   const metric=between('function productMetricForSort(','function compareProductsForList(');
   assert.match(metric,/if\(sort==='stock'\)return inventory\.physical/);
   const card=html.split('\n').find(row=>row.startsWith('function productCard('))||'';
-  assert.match(card,/В продаже: \$\{physical\} шт\./);
-  assert.match(card,/Свободно: \$\{forSale\} шт\./);
+  assert.match(card,/В продаже: \$\{forSale\} шт\./);
+  assert.match(card,/Физически: \$\{physical\} шт\./);
+  assert.doesNotMatch(card,/В продаже: \$\{physical\} шт\./);
 });
 
 test('Products critical render stays lightweight with search FBO snapshot and cached ranking data',()=>{
