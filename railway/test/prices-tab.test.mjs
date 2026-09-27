@@ -50,11 +50,13 @@ test('Remote price changes require confirmation and write guards',()=>{
   assert.match(ui,/confirm:true/);
 });
 
-test('WB size-specific prices cannot be flattened by the generic editor',()=>{
+test('WB size-specific prices cannot be flattened by the generic editor or server',()=>{
   assert.match(api,/canEditPrice: uniquePrices\.length <= 1/);
   assert.match(ui,/row\.canEditPrice===false/);
   assert.match(ui,/разные цены по размерам/);
   assert.match(ui,/здесь можно менять только общую скидку/);
+  assert.match(api,/freshWbRowForWrite\(market, token, nmID\)/);
+  assert.match(api,/разные цены по размерам\. Общую цену менять нельзя/);
 });
 
 test('Prices UI preserves selected market and search but not price truth',()=>{
@@ -71,4 +73,47 @@ test('Passport and AGENTS define the Prices contract',()=>{
   for(const rule of ['PRICE-01','PRICE-02','PRICE-03','PRICE-04','PRICE-05','PRICE-06','PRICE-07','PRICE-08'])assert.match(passport,new RegExp(rule));
   assert.match(agents,/Во вкладке «Цены»/);
   assert.match(agents,/явного подтверждения/);
+});
+
+
+test('WB price reads are serialized, deduplicated and preserve 429 retry timing',()=>{
+  assert.match(api,/WB_MIN_INTERVAL_MS = 650/);
+  assert.match(api,/withWbPriceLane/);
+  assert.match(api,/withPriceLoad\(key/);
+  assert.match(api,/x-ratelimit-retry/);
+  assert.match(api,/retry-after/);
+  assert.match(api,/wbCooldownUntil/);
+  assert.match(api,/error\.status = 429/);
+  assert.match(api,/retryAt: Number\(error\?\.retryAt\) \|\| 0/);
+});
+
+test('Force refresh keeps the last good price snapshot instead of clearing the screen',()=>{
+  assert.doesNotMatch(ui,/priceCache\.delete\(priceUi\.market\)/);
+  assert.match(ui,/PRICE_CLIENT_TTL_MS/);
+  assert.match(ui,/priceCooldowns/);
+  assert.match(ui,/Pоказаны последние данные/);
+  assert.match(api,/staleSnapshot/);
+});
+
+test('WB editor sends only the fields that actually changed',()=>{
+  assert.match(ui,/const priceChanged=/);
+  assert.match(ui,/const discountChanged=/);
+  assert.match(ui,/if\(priceChanged\)body\.price=enteredPrice/);
+  assert.match(ui,/if\(discountChanged\)body\.discount=enteredDiscount/);
+  assert.doesNotMatch(ui,/remotePriceUpdate\(\{market:row\.market,remoteId:row\.remoteId,price,discount\}\)/);
+});
+
+test('Marketplace price APIs reject malformed success payloads',()=>{
+  assert.match(api,/WB цены: некорректный ответ API/);
+  assert.match(api,/Ozon цены: некорректный ответ API/);
+  assert.match(api,/WB не вернул корректное подтверждение операции/);
+  assert.match(api,/Ozon не вернул результат обновления цены/);
+  assert.match(api,/result\.updated !== true/);
+});
+
+test('A write invalidates stale reads without breaking the visible editor rows',()=>{
+  assert.match(api,/cacheGeneration/);
+  assert.match(api,/generationFor\(market\) === generation/);
+  assert.match(ui,/bumpPriceEpoch\(row\.market\)/);
+  assert.doesNotMatch(ui,/priceCache\.delete\(row\.market\)/);
 });
