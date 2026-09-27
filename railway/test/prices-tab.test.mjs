@@ -29,11 +29,12 @@ test('Prices UI is static before auth but does not fetch prices on startup',()=>
 });
 
 test('Prices server keeps marketplace credentials server-side and normalizes all four markets',()=>{
-  assert.match(server,/import \{ pricesRouter \} from '\.\/prices\.js'/);
+  assert.match(server,/import \{ pricesRouter, startWbPriceSyncLoop \} from '\.\/prices\.js'/);
   assert.match(server,/'prices-v1\.js'/);
   assert.match(server,/app\.use\('\/api', pricesRouter\)/);
   assert.match(api,/credentialFor\(market, fallback\)/);
-  assert.match(api,/\/api\/v2\/list\/goods\/filter\?limit=1000&offset=/);
+  assert.match(api,/\/api\/v2\/list\/goods\/filter\?limit=/);
+  assert.match(api,/WB_PRICE_PAGE_LIMIT = 1000/);
   assert.match(api,/\/v5\/product\/info\/prices/);
   assert.match(api,/kaspi_price_template/);
   assert.match(api,/product\?\.kaspiPrice/);
@@ -119,7 +120,8 @@ test('Marketplace price APIs reject malformed success payloads',()=>{
 });
 
 test('WB edits are queued locally while Ozon keeps its immediate write invalidation',()=>{
-  const wbSubmit=ui.slice(ui.indexOf("if(row.market==='WB'||row.market==='WB2'){",ui.indexOf("if(row.market==='Ozon'){",ui.indexOf("window.submitPriceEdit")));
+  const submitStart=ui.indexOf("window.submitPriceEdit");
+  const wbSubmit=ui.slice(ui.indexOf("if(row.market==='WB'||row.market==='WB2'){",submitStart),ui.indexOf("if(row.market==='Ozon'){",submitStart));
   assert.match(wbSubmit,/row\.syncState='pending'/);
   assert.doesNotMatch(wbSubmit,/bumpPriceEpoch\(/);
   assert.match(api,/return queueWbPrice\(market, input\)/);
