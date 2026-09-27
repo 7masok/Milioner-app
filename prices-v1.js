@@ -158,7 +158,7 @@ function priceInlineEditor(row,index){
     const priceDisabled=row.canEditPrice===false;
     return '<div class="price-inline-editor" onclick="event.stopPropagation()">'+
       '<div class="field"><label>Цена до скидки, '+pEsc(row.currency||'RUB')+'</label><input id="priceEditCurrent" type="number" min="1" step="1" inputmode="decimal" value="'+pEsc(pNum(row.price)||'')+'" '+(priceDisabled?'disabled':'')+'></div>'+
-      (priceDisabled?'<div class="link-note">У товара разные цены по размерам. Здесь можно менять только общую скидку.</div>':'')+
+      (priceDisabled?'<div class="link-note">У товара разные цены по размерам. Чтобы не перезаписать их одной суммой, здесь можно менять только общую скидку.</div>':'')+
       '<div class="field"><label>Скидка, %</label><input id="priceEditDiscount" type="number" min="0" max="99" step="1" inputmode="numeric" value="'+pEsc(Math.round(pNum(row.discount)))+'"></div>'+
       '<div class="link-note">Изменение сохранится на нашем сервере и уйдёт в WB в ближайший разрешённый сеанс связи.</div>'+
       '<button type="button" class="btn dark full" onclick="submitPriceEdit('+Number(index)+')">Сохранить изменение</button>'+
