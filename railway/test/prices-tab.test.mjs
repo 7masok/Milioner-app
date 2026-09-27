@@ -284,7 +284,7 @@ test('WB promotion preferences persist and promo changes cannot overwrite a manu
 test('WB promotions lower the effective price with discount and restore the previous discount when automation stops',()=>{
   assert.match(wbPromo,/function requiredDiscount\(row, candidate\)/);
   assert.match(wbPromo,/planDiscount/);
-  assert.match(wbPromo,/currentFinal <= planPrice \+ 0\.01/);
+  assert.match(wbPromo,/currentFinal <= (?:candidate\.)?planPrice \+ 0\.01/);
   assert.match(wbPromo,/status: queued \? 'price_pending' : 'manual_pending'/);
   assert.match(wbPromo,/uploadNow: true/);
   assert.match(wbPromo,/status: 'participating'/);
