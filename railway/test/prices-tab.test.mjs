@@ -117,3 +117,11 @@ test('A write invalidates stale reads without breaking the visible editor rows',
   assert.match(ui,/bumpPriceEpoch\(row\.market\)/);
   assert.doesNotMatch(ui,/priceCache\.delete\(row\.market\)/);
 });
+
+
+test('WB pagination can return fetched rows when the next page is rate-limited',()=>{
+  assert.match(api,/Number\(error\?\.status\) === 429 && rows\.length/);
+  assert.match(api,/partial: true/);
+  assert.match(api,/WB ограничил проверку следующей страницы/);
+  assert.match(api,/cache\.set\(key, \{ at: 0, value: partial \}\)/);
+});
