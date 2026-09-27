@@ -413,7 +413,8 @@ async function listWbPrices(market, force = false) {
 function freshWbRowForWrite(market, token, nmID) {
   const key = market + ':' + tokenFingerprint(token);
   const hit = cache.get(key);
-  if (!hit?.value || Date.now() - Number(hit.at || 0) >= CACHE_TTL_MS) {
+  const fetchedAt = Number(hit?.value?.fetchedAt || 0);
+  if (!hit?.value || !fetchedAt || Date.now() - fetchedAt >= CACHE_TTL_MS) {
     const error = new Error('Перед изменением общей цены обновите цены WB');
     error.status = 409;
     throw error;
