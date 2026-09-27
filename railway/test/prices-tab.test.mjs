@@ -19,7 +19,7 @@ test('Prices is a real ninth tab and survives reload navigation',()=>{
 });
 
 test('Prices UI is static before auth but does not fetch prices on startup',()=>{
-  const scriptAt=html.indexOf('./prices-v1.js?v=20260927-inline-price-editor');
+  const scriptAt=html.indexOf('./prices-v1.js?v=20260927-compact-price-editor');
   const authAt=html.lastIndexOf('<script>initOwnerAuth();</script>');
   assert.ok(scriptAt>0&&scriptAt<authAt);
   const runtime=html.slice(html.indexOf('function startAppRuntime(){'),html.indexOf('// Wait for the server-sync module'));
@@ -217,4 +217,19 @@ test('Price cards expand inline instead of opening the shared sheet editor',()=>
   assert.doesNotMatch(open,/showSheet\(/);
   assert.doesNotMatch(open,/closeModal\(/);
   assert.match(open,/priceExpanded=same\?null:/);
+});
+
+
+test('Inline price editor stays compact and avoids explanatory blocks',()=>{
+  assert.match(ui,/price-inline-fields/);
+  assert.match(ui,/price-inline-actions/);
+  assert.match(ui,/>Сохранить<\/button>/);
+  assert.match(ui,/>Скрыть<\/button>/);
+  const inline=ui.slice(ui.indexOf('function priceInlineEditor'),ui.indexOf('function priceCard'));
+  assert.doesNotMatch(inline,/price-inline-collapse/);
+  assert.doesNotMatch(inline,/link-note/);
+  assert.doesNotMatch(inline,/Изменение сохранится/);
+  assert.match(html,/\.price-inline-editor\{[^}]*padding:7px 10px 9px/);
+  assert.match(html,/\.price-inline-fields\{display:grid;grid-template-columns:1fr 1fr/);
+  assert.match(html,/height:36px/);
 });
