@@ -82,7 +82,7 @@ function priceVisibleRows(){
 }
 function updatePriceBulkTools(indexed=priceVisibleRows()){
   const tools=document.getElementById('priceBulkTools'),all=document.getElementById('priceSelectAll'),count=document.getElementById('priceSelectedCount'),
-    enable=document.getElementById('priceBulkEnablePromo'),disable=document.getElementById('priceBulkDisablePromo');
+    enable=document.getElementById('priceBulkEnablePromo'),disable=document.getElementById('priceBulkDisablePromo'),night=document.getElementById('priceBulkNight');
   const isWb=priceIsWbMarket(),selection=priceSelection(),visibleIds=indexed.map(({row})=>String(row.remoteId||'')).filter(Boolean),
     selectedVisible=visibleIds.filter(id=>selection.has(id)).length;
   if(tools)tools.hidden=!isWb;
@@ -93,6 +93,7 @@ function updatePriceBulkTools(indexed=priceVisibleRows()){
   if(count)count.textContent=selection.size?'Выбрано '+selection.size:'';
   if(enable)enable.disabled=!selection.size;
   if(disable)disable.disabled=!selection.size;
+  if(night)night.disabled=!selection.size;
 }
 
 function priceHideAction(index){
@@ -232,13 +233,16 @@ function priceCard(row,index){
       row.promoEnabled&&row.promoStatus==='auto_only'?'Автоакции вручную':
       row.promoEnabled?'Ждёт акцию':'Без акции')+'</span>'
     :'';
+  const night=(row.market==='WB'||row.market==='WB2')&&row.nightPriceEnabled
+    ?'<span class="price-night-badge"> · 🌙 '+pEsc(row.nightPriceStart||'04:00')+'–'+pEsc(row.nightPriceEnd||'06:00')+' · '+pMoney(row.nightPriceTarget,row.currency)+'</span>'
+    :'';
   const expanded=Boolean(priceExpanded&&priceExpanded.market===priceUi.market&&priceExpanded.index===Number(index));
   const selected=priceIsWbMarket(row.market)&&priceSelection(row.market).has(String(row.remoteId||''));
   const selectBox=priceIsWbMarket(row.market)?'<label class="price-row-select" onclick="event.stopPropagation()"><input type="checkbox" '+(selected?'checked':'')+' onchange="priceSelectRow('+Number(index)+',this.checked)" aria-label="Выбрать товар"></label>':'';
   return '<div class="item price-item '+(!linked?'unlinked':'')+(expanded?' expanded':'')+(selected?' selected':'')+'" data-price-row="'+index+'">'+selectBox+
     '<button type="button" class="price-card-toggle" onclick="openPriceEditor('+index+')" aria-expanded="'+(expanded?'true':'false')+'">'+
       '<div class="price-item-head"><div class="grow"><div class="name">'+pEsc(row.name||row.sku||'Товар')+'</div>'+
-      '<div class="muted">'+pEsc(account?(row.account+' · '):'')+pEsc(row.sku?('Арт. '+row.sku):row.remoteId||'')+(linked?'':' · не привязан к товару склада')+promo+'</div>'+sync+'</div><span class="price-chevron">'+(expanded?'⌄':'›')+'</span></div>'+
+      '<div class="muted">'+pEsc(account?(row.account+' · '):'')+pEsc(row.sku?('Арт. '+row.sku):row.remoteId||'')+(linked?'':' · не привязан к товару склада')+promo+night+'</div>'+sync+'</div><span class="price-chevron">'+(expanded?'⌄':'›')+'</span></div>'+
       '<div class="price-values">'+lines+'</div>'+
     '</button>'+priceInlineEditor(row,index)+'</div>';
 }
@@ -407,6 +411,63 @@ window.priceBulkPromo=async function(enabled){
     alert(priceErrorText(error));updatePriceBulkTools();
   }
 };
+function priceMinuteTime(value){
+  const minute=Math.max(0,Math.min(1439,Math.trunc(Number(value)||0)));
+  return String(Math.floor(minute/60)).padStart(2,'0')+':'+String(minute%60).padStart(2,'0');
+}
+async function remoteNightSchedule(body){
+  const response=await fetch(MILLIONER_API+'/api/market-prices/night-schedule',{
+    method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({...body,confirm:true})
+  });
+  const text=await response.text();
+  let data=null;if(text){try{data=JSON.parse(text)}catch{throw new Error('Сервер ночных цен вернул некорректный ответ')}}
+  if(!response.ok||data?.ok===false)throw new Error(data?.error||('HTTP '+response.status));
+  return data;
+}
+window.openPriceNightSchedule=function(){
+  if(!priceIsWbMarket())return;
+  const ids=[...priceSelection()].filter(Boolean);if(!ids.length)return;
+  const selectedRows=activeRows().filter(row=>ids.includes(String(row.remoteId||'')));
+  const configured=selectedRows.filter(row=>row.nightPriceEnabled);
+  const first=configured[0]||selectedRows[0]||{};
+  const start=String(first.nightPriceStart||'04:00'),end=String(first.nightPriceEnd||'06:00'),price=pNum(first.nightPriceTarget)||5000;
+  const activeCount=configured.length;
+  showSheet('<div class="price-night-sheet"><h3>Ночная цена · '+ids.length+'</h3>'+
+    '<div class="two"><div class="field"><label>С</label><input id="priceNightStart" type="time" value="'+pEsc(start)+'"></div>'+
+    '<div class="field"><label>До</label><input id="priceNightEnd" type="time" value="'+pEsc(end)+'"></div></div>'+
+    '<div class="field"><label>Цена, ₽</label><input id="priceNightValue" type="number" min="1" step="1" inputmode="decimal" value="'+pEsc(price)+'"></div>'+
+    '<div class="actions"><button type="button" class="btn" onclick="savePriceNightSchedule(false)" '+(activeCount?'':'disabled')+'>Выключить</button>'+
+    '<button type="button" class="btn dark" onclick="savePriceNightSchedule(true)">Сохранить</button></div></div>');
+};
+window.savePriceNightSchedule=async function(enabled){
+  if(!priceIsWbMarket())return;
+  const ids=[...priceSelection()].filter(Boolean);if(!ids.length)return;
+  const start=String(document.getElementById('priceNightStart')?.value||'04:00');
+  const end=String(document.getElementById('priceNightEnd')?.value||'06:00');
+  const price=Number(document.getElementById('priceNightValue')?.value);
+  if(enabled&&(!/^\d{2}:\d{2}$/.test(start)||!/^\d{2}:\d{2}$/.test(end)||start===end))return alert('Укажите корректное время.');
+  if(enabled&&!(price>0))return alert('Укажите цену больше 0.');
+  try{
+    const result=await remoteNightSchedule({market:priceUi.market,remoteIds:ids,enabled:Boolean(enabled),start,end,price});
+    const scheduleByNm=new Map((result.schedules||[]).map(row=>[String(row.nmId||''),row]));
+    for(const row of activeRows()){
+      if(!ids.includes(String(row.remoteId||'')))continue;
+      const schedule=scheduleByNm.get(String(row.remoteId||''));
+      row.nightPriceEnabled=Boolean(enabled);
+      if(schedule){
+        row.nightPriceStart=priceMinuteTime(schedule.startMinute);
+        row.nightPriceEnd=priceMinuteTime(schedule.endMinute);
+        row.nightPriceTarget=Number(schedule.targetPrice)||null;
+        row.nightPricePhase=String(schedule.phase||'');
+      }else if(enabled){
+        row.nightPriceStart=start;row.nightPriceEnd=end;row.nightPriceTarget=price;
+      }
+    }
+    priceSelection().clear();closeModal();paintPrices();
+    setPriceStatus(enabled?'Ночная цена сохранена для '+Number(result.count||ids.length)+' товаров':'Ночная цена выключена','ok');
+  }catch(error){alert(priceErrorText(error))}
+};
+
 window.hidePriceRow=function(index){
   const row=activeRows()[Number(index)],key=priceRowKey(row);if(!row||!key)return;
   const market=String(row.market||priceUi.market),keys=priceHiddenKeys(market);if(!keys.includes(key))keys.push(key);

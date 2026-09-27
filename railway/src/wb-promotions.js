@@ -233,7 +233,7 @@ async function queuePromoDiscount(market, nmId, discount, promotionId = 0, clien
     ON CONFLICT(market,nm_id) DO UPDATE SET desired_price=NULL,desired_discount=excluded.desired_discount,
       status='pending',queued_at=excluded.queued_at,sent_at=0,upload_id=0,last_error='',
       updated_at=excluded.updated_at,source='promo',promotion_id=excluded.promotion_id
-    WHERE wb_price_update_queue.source<>'manual'`,
+    WHERE wb_price_update_queue.source='promo'`,
     [market, nmId, normalized, now, Number(promotionId) || 0]);
   return Number(result.rowCount || 0) > 0;
 }
@@ -328,7 +328,7 @@ async function restorePromoDiscountIfNeeded(market, pref, row) {
   if (!row) return;
   const baseDiscount = pref.baseDiscount === null ? clampDiscount(row.discount) : clampDiscount(pref.baseDiscount);
   const queue = await currentQueueRow(market, pref.nmId);
-  if (cleanText(queue?.source) === 'manual') return;
+  if (['manual','schedule'].includes(cleanText(queue?.source))) return;
   if (clampDiscount(row.discount) !== baseDiscount) {
     await queuePromoDiscount(market, pref.nmId, baseDiscount, 0);
     await updatePreference(market, pref.nmId, {
@@ -514,7 +514,7 @@ async function promoUploadStep(market, token, prefs, byNm, state, now) {
     if (uploaded.has(nmId)) continue;
     const row = byNm.get(nmId);
     const queue = await currentQueueRow(market, nmId);
-    if (queue && ['pending','sent'].includes(cleanText(queue.status))) {
+    if (queue) {
       waitingForPrice = true;
       continue;
     }
@@ -788,7 +788,7 @@ async function applyPromoPreferenceChange(market, rawIds, enabled) {
           last_error='',updated_at=excluded.updated_at`,
         [market, nmId, enabled, enabled ? effectiveDiscount : baseDiscount, initialStatus, now]);
 
-      if (!enabled && effectiveDiscount !== baseDiscount && cleanText(queue?.source) !== 'manual') {
+      if (!enabled && effectiveDiscount !== baseDiscount && !['manual','schedule'].includes(cleanText(queue?.source))) {
         await queuePromoDiscount(market, String(nmId), baseDiscount, 0, client);
       }
       applied.push(String(nmId));
