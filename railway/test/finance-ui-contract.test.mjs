@@ -64,7 +64,7 @@ test('fresh login opens Home Today while browser reload preserves the current ta
   const fn=html.slice(start,start+8000);
   assert.ok(fn.includes("freshLogin=sessionStorage.getItem(APP_FRESH_LOGIN_KEY)==='1'"));
   assert.ok(fn.includes("savedView=localStorage.getItem(ACTIVE_VIEW_KEY)||''"));
-  assert.ok(fn.includes("startupView=!freshLogin&&['home','products','movement','purchases','reports','ads','settings','finance'].includes(savedView)?savedView:'home'"));
+  assert.ok(fn.includes("startupView=!freshLogin&&['home','products','prices','movement','purchases','reports','ads','settings','finance'].includes(savedView)?savedView:'home'"));
   assert.ok(fn.includes("if(freshLogin){localStorage.setItem(ACTIVE_VIEW_KEY,'home');orderPeriodMode='today'"));
   assert.match(cloudSync,/orderPeriodMode=savedOrderPeriodUi\.mode/);
   assert.doesNotMatch(cloudSync,/Every fresh app start opens/);
