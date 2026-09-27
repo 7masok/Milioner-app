@@ -24,7 +24,7 @@ import { wbVariantsRouter } from './wb-variants.js';
 import { wbReturnsRouter } from './wb-returns.js';
 import { wbAdsRouter, startWbAdsLimitLoop } from './wb-ads.js';
 import { aiAssistantRouter } from './ai-assistant.js';
-import { pricesRouter } from './prices.js';
+import { pricesRouter, startWbPriceSyncLoop } from './prices.js';
 import { registerDeveloperGuideRoutes } from './developer-guide.js';
 
 assertRuntimeConfig();
@@ -319,6 +319,7 @@ const server = app.listen(config.port, '0.0.0.0', () => {
   startOzonSyncLoop();
   startKaspiSyncLoop();
   startWbSyncLoop();
+  startWbPriceSyncLoop();
   startWbAdsLimitLoop();
   let checkingLinks=false;
   const checkLinks=async()=>{
