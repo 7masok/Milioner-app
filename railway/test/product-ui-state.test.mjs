@@ -19,8 +19,9 @@ test('Products reload preserves search page and the approved ranking filter whil
   assert.match(html,/let productRankSort=savedRankSort,productRankDays=savedRankDays,productRankDirection=savedRankDirection/);
 });
 
-test('bottom nav allocates one column per eight visible tabs',()=>{
-  assert.match(html,/grid-template-columns:repeat\(8,minmax\(0,1fr\)\)/);
+test('bottom nav allocates one column per nine visible tabs',()=>{
+  assert.match(html,/grid-template-columns:repeat\(9,minmax\(0,1fr\)\)/);
+  assert.match(html,/data-view="prices"/);
 });
 
 test('Products reject invalid quantities and remove the ignored duplicate minimum field',()=>{
