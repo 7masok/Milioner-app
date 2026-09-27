@@ -11,7 +11,7 @@ const WB_PROMO_SLOT_MS = 10 * 60 * 1000;
 const WB_PROMO_LOOP_MS = 60 * 1000;
 const WB_PROMO_FIRST_DELAY_MS = 15_000;
 const WB_PROMO_LOOKAHEAD_MS = 14 * 24 * 60 * 60 * 1000;
-const WB_PROMO_MAX_CAMPAIGNS = 3;
+const WB_PROMO_MAX_CAMPAIGNS = 10;
 const WB_PROMO_FALLBACK_COOLDOWN_MS = 10_000;
 
 let promoLane = Promise.resolve();
