@@ -227,7 +227,7 @@ function priceCard(row,index){
       ?'<div class="price-sync-state sent">Отправлено в WB · ждём проверки</div>'
       :'';
   const promo=row.market==='WB'||row.market==='WB2'
-    ?'<span class="price-promo-badge '+(row.promoStatus==='participating'?'active':row.promoEnabled?'waiting':'off')+'"> · '+(row.promoStatus==='participating'?'В акции':row.promoEnabled?'Ждёт акцию':'Без акции')+'</span>'
+    ?'<span class="price-promo-badge '+(row.promoEnabled&&row.promoStatus==='participating'?'active':row.promoEnabled?'waiting':'off')+'"> · '+(row.promoEnabled&&row.promoStatus==='participating'?'В акции':row.promoEnabled?'Ждёт акцию':'Без акции')+'</span>'
     :'';
   const expanded=Boolean(priceExpanded&&priceExpanded.market===priceUi.market&&priceExpanded.index===Number(index));
   const selected=priceIsWbMarket(row.market)&&priceSelection(row.market).has(String(row.remoteId||''));
