@@ -373,6 +373,10 @@ async function listWbPrices(market, force = false) {
           break;
         }
         rows.push(...batch);
+        if (batch.length < 1000) {
+          complete = true;
+          break;
+        }
       }
       if (!complete) {
         const error = new Error('WB цены: выгрузка превысила безопасный предел 100 страниц');

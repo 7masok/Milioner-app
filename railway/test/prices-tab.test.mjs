@@ -156,3 +156,8 @@ test('Prices can hide unwanted products without deleting marketplace or warehous
   const hide=ui.slice(ui.indexOf('window.hidePriceRow=function()'),ui.indexOf('window.openHiddenPrices=function()'));
   assert.doesNotMatch(hide,/fetch\(|remotePriceUpdate|state\.products/);
 });
+
+
+test('WB price pagination stops after a short page instead of spending another rate-limit slot',()=>{
+  assert.match(api,/rows\.push\(\.\.\.batch\);\s*if \(batch\.length < 1000\) \{\s*complete = true;\s*break;/);
+});
