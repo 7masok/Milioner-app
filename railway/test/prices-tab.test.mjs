@@ -18,7 +18,7 @@ test('Prices is a real ninth tab and survives reload navigation',()=>{
 });
 
 test('Prices UI is static before auth but does not fetch prices on startup',()=>{
-  const scriptAt=html.indexOf('./prices-v1.js?v=20260927-prices-tab');
+  const scriptAt=html.indexOf('./prices-v1.js?v=20260927-price-sort');
   const authAt=html.lastIndexOf('<script>initOwnerAuth();</script>');
   assert.ok(scriptAt>0&&scriptAt<authAt);
   const runtime=html.slice(html.indexOf('function startAppRuntime(){'),html.indexOf('// Wait for the server-sync module'));
@@ -125,4 +125,17 @@ test('WB pagination can return fetched rows when the next page is rate-limited',
   assert.match(api,/partial: true/);
   assert.match(api,/WB ограничил проверку следующей страницы/);
   assert.match(api,/cache\.set\(key, \{ at: 0, value: partial \}\)/);
+});
+
+
+test('Prices can sort by price in both directions and remember the choice',()=>{
+  assert.match(html,/id="priceSortButton"/);
+  assert.match(html,/onclick="priceToggleSort\(\)"/);
+  assert.match(ui,/priceUi=\{market:'Kaspi',q:'',sort:'asc'\}/);
+  assert.match(ui,/saved\.sort==='desc'\|\|saved\.sort==='asc'/);
+  assert.match(ui,/function priceSortValue\(row\)/);
+  assert.match(ui,/priceUi\.sort==='desc'\?bv-av:av-bv/);
+  assert.match(ui,/window\.priceToggleSort=function\(\)/);
+  assert.match(ui,/Цена ↓/);
+  assert.match(ui,/Цена ↑/);
 });

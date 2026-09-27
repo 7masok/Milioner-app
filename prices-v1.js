@@ -4,11 +4,12 @@
 const PRICE_UI_KEY=(typeof KEY==='string'?KEY:'sklad_mvp_v2')+'_prices_ui_v1';
 const PRICE_MARKETS=['Kaspi','WB','WB2','Ozon'];
 const PRICE_CLIENT_TTL_MS=2*60*1000;
-let priceUi={market:'Kaspi',q:''};
+let priceUi={market:'Kaspi',q:'',sort:'asc'};
 try{
   const saved=JSON.parse(localStorage.getItem(PRICE_UI_KEY)||'{}')||{};
   if(PRICE_MARKETS.includes(saved.market))priceUi.market=saved.market;
   priceUi.q=String(saved.q||'');
+  if(saved.sort==='desc'||saved.sort==='asc')priceUi.sort=saved.sort;
 }catch{}
 const priceCache=new Map();
 const priceFetchInFlight=new Map();
@@ -53,6 +54,10 @@ function priceEpochValue(market){
 function bumpPriceEpoch(market){
   priceEpoch.set(market,priceEpochValue(market)+1);
 }
+function priceSortValue(row){
+  const price=pNum(row?.price);if(price>0)return price;
+  const final=pNum(row?.finalPrice);return final>0?final:NaN;
+}
 function priceDiscountValue(row){
   if(Number.isFinite(Number(row?.discount)))return Math.max(0,Number(row.discount)||0);
   const old=pNum(row?.oldPrice),current=pNum(row?.finalPrice||row?.price);
@@ -69,6 +74,8 @@ function setPriceTabs(){
   });
   const q=document.getElementById('priceSearch');
   if(q&&q.value!==priceUi.q)q.value=priceUi.q;
+  const sort=document.getElementById('priceSortButton');
+  if(sort){const desc=priceUi.sort==='desc';sort.textContent=desc?'Цена ↓':'Цена ↑';sort.setAttribute('aria-label',desc?'Сортировка по цене: сначала дорогие':'Сортировка по цене: сначала дешёвые');sort.title=desc?'Сначала дорогие':'Сначала дешёвые';}
 }
 function priceRetryLabel(retryAt){
   const ts=Number(retryAt)||0;
@@ -126,6 +133,12 @@ function paintPrices(){
   const indexed=rows.map((row,index)=>({row,index})).filter(({row})=>{
     if(!q)return true;
     return [row.name,row.sku,row.remoteId,row.account].some(value=>String(value||'').toLocaleLowerCase('ru-RU').includes(q));
+  }).sort((a,b)=>{
+    const av=priceSortValue(a.row),bv=priceSortValue(b.row),aMissing=!(av>0),bMissing=!(bv>0);
+    if(aMissing!==bMissing)return aMissing?1:-1;
+    if(!aMissing&&Math.abs(av-bv)>.000001)return priceUi.sort==='desc'?bv-av:av-bv;
+    const byName=String(a.row?.name||a.row?.sku||'').localeCompare(String(b.row?.name||b.row?.sku||''),'ru',{sensitivity:'base'});
+    return byName||a.index-b.index;
   });
   const valid=rows.filter(row=>!row.error),withDiscount=valid.filter(row=>priceDiscountValue(row)>0).length,noPrice=valid.filter(row=>!(pNum(row.price)>0||pNum(row.finalPrice)>0)).length;
   const count=document.getElementById('pricePositionCount'),discount=document.getElementById('priceDiscountCount'),missing=document.getElementById('priceMissingCount');
@@ -212,6 +225,9 @@ window.priceSetMarket=function(market){
 };
 window.priceSearch=function(value){
   priceUi.q=String(value||'');rememberPriceUi();paintPrices();
+};
+window.priceToggleSort=function(){
+  priceUi.sort=priceUi.sort==='desc'?'asc':'desc';rememberPriceUi();setPriceTabs();paintPrices();
 };
 window.priceRefresh=function(){
   return window.renderPrices(true);
