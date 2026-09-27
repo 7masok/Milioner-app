@@ -235,3 +235,16 @@ test('Products audit contract is recorded for future AI changes',()=>{
   assert.match(passport,/PRODUCT-32/);
   assert.match(passport,/PRODUCT-33/);
 });
+
+
+test('Product stock card keeps logical stock groups on separate visual rows',()=>{
+  const card=html.split('\n').find(row=>row.startsWith('function productCard('))||'';
+  assert.match(card,/stockPrimaryBits=/);
+  assert.match(card,/stockSecondaryBits=/);
+  assert.match(card,/product-stock-primary/);
+  assert.match(card,/product-stock-secondary/);
+  assert.match(card,/product-stock-physical/);
+  assert.match(ozon,/replace\('<div class="product-stock-secondary">','<div class="product-stock-secondary">'\+line\)/);
+  assert.match(ozon,/FBO Ozon:/);
+  assert.match(html,/#productList \.product-stock-secondary:not\(:empty\)\{margin-top:1px\}/);
+});
