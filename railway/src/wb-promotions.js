@@ -6,15 +6,15 @@ import { credentialFor } from './connections.js';
 import { asyncRoute, requireTrustedOrigin, requireWritesEnabled } from './http.js';
 
 const WB_PROMO_API = 'https://dp-calendar-api.wildberries.ru';
-const WB_PROMO_MIN_INTERVAL_MS = 650;
-const WB_PROMO_STEP_MS = 5_000;
-const WB_PROMO_LOOP_MS = 5_000;
+const WB_PROMO_SLOT_MS = 60 * 60 * 1000 + 5_000;
+const WB_PROMO_MIN_INTERVAL_MS = WB_PROMO_SLOT_MS;
+const WB_PROMO_LOOP_MS = 60 * 1000;
 const WB_PROMO_FIRST_DELAY_MS = 15_000;
-const WB_PROMO_RESCAN_MS = 10 * 60 * 1000;
+const WB_PROMO_RESCAN_MS = WB_PROMO_SLOT_MS;
 const WB_PROMO_PRICE_WAIT_MS = 60 * 1000;
 const WB_PROMO_LOOKAHEAD_MS = 14 * 24 * 60 * 60 * 1000;
 const WB_PROMO_MAX_CAMPAIGNS = 10;
-const WB_PROMO_FALLBACK_COOLDOWN_MS = 10_000;
+const WB_PROMO_FALLBACK_COOLDOWN_MS = WB_PROMO_SLOT_MS;
 
 let promoLane = Promise.resolve();
 let promoNextAllowedAt = 0;
@@ -381,7 +381,7 @@ async function promoListStep(market, token, prefs, byNm, now) {
         });
   }
   await markPromoMarketState(market, {
-    nextSyncAt: now + WB_PROMO_STEP_MS, lastSyncAt: now, lastError: '', phase: 'eligible',
+    nextSyncAt: now + WB_PROMO_SLOT_MS, lastSyncAt: now, lastError: '', phase: 'eligible',
     payload: { promotions, eligibleIndex: 0, candidates: [], autoCount }
   });
   return { ok: true, market, action: 'list', promotions: promotions.length, autoCount };
@@ -422,7 +422,7 @@ async function promoEligibleStep(market, token, prefs, byNm, state, now) {
   const nextIndex = index + 1;
   if (nextIndex < promotions.length) {
     await markPromoMarketState(market, {
-      nextSyncAt: now + WB_PROMO_STEP_MS, lastSyncAt: now, lastError: '', phase: 'eligible',
+      nextSyncAt: now + WB_PROMO_SLOT_MS, lastSyncAt: now, lastError: '', phase: 'eligible',
       payload: { ...state.payload, promotions, eligibleIndex: nextIndex, candidates }
     });
     return {
@@ -480,7 +480,7 @@ async function promoEligibleStep(market, token, prefs, byNm, state, now) {
   }
 
   await markPromoMarketState(market, {
-    nextSyncAt: now + WB_PROMO_STEP_MS, lastSyncAt: now, lastError: '', phase: 'upload',
+    nextSyncAt: now + WB_PROMO_SLOT_MS, lastSyncAt: now, lastError: '', phase: 'upload',
     payload: { promotions, assignments, uploadedNmIds: [], autoCount: number(state.payload?.autoCount) }
   });
   return { ok: true, market, action: 'eligible', candidates: assignments.length };
@@ -553,10 +553,21 @@ async function promoUploadStep(market, token, prefs, byNm, state, now) {
       uploaded.add(String(candidate.nmId));
       await updatePreference(market, String(candidate.nmId), { status: 'joining', last_error: '' });
     }
-    await markPromoMarketState(market, {
-      nextSyncAt: now + WB_PROMO_STEP_MS, lastSyncAt: now, lastError: '', phase: 'upload',
-      payload: { ...state.payload, assignments: activeAssignments, uploadedNmIds: [...uploaded] }
-    });
+    const remainingAfterUpload = activeAssignments.filter(candidate => !uploaded.has(String(candidate.nmId)));
+    if (!remainingAfterUpload.length) {
+      const verifyPromotionIds = [...new Set(
+        activeAssignments.filter(candidate => uploaded.has(String(candidate.nmId))).map(candidate => number(candidate.promotionId))
+      )].filter(value => value > 0);
+      await markPromoMarketState(market, {
+        nextSyncAt: now + WB_PROMO_SLOT_MS, lastSyncAt: now, lastError: '', phase: 'verify',
+        payload: { ...state.payload, assignments: activeAssignments, uploadedNmIds: [...uploaded], verifyPromotionIds, verifyIndex: 0 }
+      });
+    } else {
+      await markPromoMarketState(market, {
+        nextSyncAt: now + WB_PROMO_SLOT_MS, lastSyncAt: now, lastError: '', phase: 'upload',
+        payload: { ...state.payload, assignments: activeAssignments, uploadedNmIds: [...uploaded] }
+      });
+    }
     console.info('WB promo join queued', JSON.stringify({
       market, promotionId, products: readyIds.length, uploadId
     }));
@@ -569,7 +580,7 @@ async function promoUploadStep(market, token, prefs, byNm, state, now) {
       activeAssignments.filter(candidate => uploaded.has(String(candidate.nmId))).map(candidate => number(candidate.promotionId))
     )].filter(value => value > 0);
     await markPromoMarketState(market, {
-      nextSyncAt: now + WB_PROMO_STEP_MS, lastSyncAt: now, lastError: '', phase: 'verify',
+      nextSyncAt: now + WB_PROMO_SLOT_MS, lastSyncAt: now, lastError: '', phase: 'verify',
       payload: { ...state.payload, assignments: activeAssignments, uploadedNmIds: [...uploaded], verifyPromotionIds, verifyIndex: 0 }
     });
     return { ok: true, market, action: 'upload-complete', promotions: verifyPromotionIds.length };
@@ -643,12 +654,12 @@ async function promoVerifyStep(market, token, prefs, byNm, state, now) {
   const nextIndex = index + 1;
   if (nextIndex < promotionIds.length) {
     await markPromoMarketState(market, {
-      nextSyncAt: now + WB_PROMO_STEP_MS, lastSyncAt: now, lastError: '', phase: 'verify',
+      nextSyncAt: now + WB_PROMO_SLOT_MS, lastSyncAt: now, lastError: '', phase: 'verify',
       payload: { ...state.payload, verifyIndex: nextIndex }
     });
   } else {
     await markPromoMarketState(market, {
-      nextSyncAt: now + WB_PROMO_PRICE_WAIT_MS, lastSyncAt: now, lastError: '', phase: 'list', payload: {}
+      nextSyncAt: now + WB_PROMO_SLOT_MS, lastSyncAt: now, lastError: '', phase: 'list', payload: {}
     });
   }
   return {
