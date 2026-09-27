@@ -251,7 +251,7 @@ test('WB promotion checkbox is compact and only exists in WB editor',()=>{
   assert.match(ui,/\/api\/market-prices\/promo/);
 });
 
-test('WB promotion automation uses one persisted calendar step per safe hourly slot',()=>{
+test('WB promotion automation scans regular promotions in persisted safe steps and respects WB retry headers',()=>{
   assert.match(server,/wbPromotionsRouter, startWbPromotionLoop/);
   assert.match(server,/app\.use\('\/api', wbPromotionsRouter\)/);
   assert.match(server,/startWbPromotionLoop\(\)/);
@@ -260,12 +260,24 @@ test('WB promotion automation uses one persisted calendar step per safe hourly s
   assert.match(wbPromo,/\/api\/v1\/calendar\/promotions\/nomenclatures\?/);
   assert.match(wbPromo,/\/api\/v1\/calendar\/promotions\/upload/);
   assert.match(wbPromo,/cleanText\(item\?\.type\)\.toLowerCase\(\) === 'regular'/);
-  assert.match(wbPromo,/WB_PROMO_SLOT_MS = 60 \* 60 \* 1000 \+ 5_000/);
+  assert.match(wbPromo,/WB_PROMO_MIN_INTERVAL_MS = 650/);
+  assert.match(wbPromo,/WB_PROMO_STEP_MS = 5_000/);
+  assert.match(wbPromo,/WB_PROMO_MAX_CAMPAIGNS = 10/);
+  assert.match(wbPromo,/eligibleIndex/);
+  assert.match(wbPromo,/betterPromoCandidate/);
   assert.match(wbPromo,/state\.phase === 'eligible'/);
   assert.match(wbPromo,/state\.phase === 'upload'/);
   assert.match(wbPromo,/state\.phase === 'verify'/);
+  assert.match(wbPromo,/Math\.max\(now \+ WB_PROMO_FALLBACK_COOLDOWN_MS, Number\(error\?\.retryAt \|\| 0\)\)/);
   assert.match(wbPromoPhaseMigration,/ADD COLUMN IF NOT EXISTS phase/);
   assert.match(wbPromoPhaseMigration,/ADD COLUMN IF NOT EXISTS payload JSONB/);
+});
+
+test('WB promotion automation does not pretend that public API can manage auto promotions',()=>{
+  assert.match(wbPromo,/type\)\.toLowerCase\(\) === 'auto'/);
+  assert.match(wbPromo,/status: 'auto_only'/);
+  assert.match(wbPromo,/WB API не поддерживает управление автоакциями/);
+  assert.match(ui,/Автоакции вручную/);
 });
 
 test('WB promotion preferences persist and promo changes cannot overwrite a manual queue item',()=>{
