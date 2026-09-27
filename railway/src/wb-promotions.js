@@ -255,7 +255,7 @@ async function promotionCandidates(market, token, enabledIds, now) {
   const endDateTime = isoSeconds(now + WB_PROMO_LOOKAHEAD_MS);
   const list = await requestPromo(token,
     '/api/v1/calendar/promotions?startDateTime=' + encodeURIComponent(startDateTime) +
-    '&endDateTime=' + encodeURIComponent(endDateTime) + '&allPromo=false&limit=1000&offset=0',
+    '&endDateTime=' + encodeURIComponent(endDateTime) + '&allPromo=true&limit=1000&offset=0',
     {}, { market });
   const promotions = (Array.isArray(list?.data?.promotions) ? list.data.promotions : [])
     .filter(item => cleanText(item?.type).toLowerCase() === 'regular')
