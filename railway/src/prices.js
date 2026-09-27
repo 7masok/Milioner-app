@@ -5,6 +5,7 @@ import { pool } from './db.js';
 import { credentialFor } from './connections.js';
 import { asyncRoute, requireTrustedOrigin, requireWritesEnabled } from './http.js';
 import { readWarehouseProducts } from './warehouse-products.js';
+import { decorateWbPromotionRows } from './wb-promotions.js';
 
 const WB_PRICE_API = 'https://discounts-prices-api.wildberries.ru';
 const OZON_API = 'https://api-seller.ozon.ru';
@@ -364,7 +365,8 @@ async function wbPriceSnapshot(market, client = pool) {
 async function wbPriceQueueRows(market, client = pool) {
   const result = await client.query(`SELECT nm_id AS "nmId",desired_price AS "desiredPrice",
     desired_discount AS "desiredDiscount",status,queued_at AS "queuedAt",sent_at AS "sentAt",
-    upload_id AS "uploadId",last_error AS "lastError",updated_at AS "updatedAt"
+    upload_id AS "uploadId",last_error AS "lastError",updated_at AS "updatedAt",
+    source,promotion_id AS "promotionId"
     FROM wb_price_update_queue WHERE market=$1 ORDER BY queued_at,nm_id`, [market]);
   return result.rows.map(row => ({
     ...row,
@@ -374,7 +376,9 @@ async function wbPriceQueueRows(market, client = pool) {
     queuedAt: Number(row.queuedAt || 0),
     sentAt: Number(row.sentAt || 0),
     uploadId: Number(row.uploadId || 0),
-    updatedAt: Number(row.updatedAt || 0)
+    updatedAt: Number(row.updatedAt || 0),
+    source: cleanText(row.source || 'manual'),
+    promotionId: Number(row.promotionId || 0)
   }));
 }
 
@@ -410,13 +414,14 @@ async function listWbPrices(market) {
     wbPriceState(market),
     wbPriceQueueRows(market)
   ]);
-  const rows = overlayWbQueuedRows(Array.isArray(snapshot?.rows) ? snapshot.rows : [], queue);
+  const queuedRows = overlayWbQueuedRows(Array.isArray(snapshot?.rows) ? snapshot.rows : [], queue);
+  const promo = await decorateWbPromotionRows(market, queuedRows);
   return {
     ok: true,
     market,
     source: 'Снимок Railway · Wildberries Prices & Discounts API',
     fetchedAt: Number(snapshot?.fetchedAt || 0),
-    rows,
+    rows: promo.rows,
     serverSnapshot: true,
     waiting: !snapshot,
     nextSyncAt: Number(state.nextAllowedAt || 0),
@@ -425,7 +430,10 @@ async function listWbPrices(market) {
     lastAction: cleanText(state.lastAction),
     syncError: cleanText(state.lastError),
     pendingCount: queue.filter(row => row.status === 'pending').length,
-    sentCount: queue.filter(row => row.status === 'sent').length
+    sentCount: queue.filter(row => row.status === 'sent').length,
+    promoNextSyncAt: Number(promo.promoNextSyncAt || 0),
+    promoLastSyncAt: Number(promo.promoLastSyncAt || 0),
+    promoSyncError: cleanText(promo.promoSyncError)
   };
 }
 
@@ -514,13 +522,18 @@ async function queueWbPrice(market, input) {
   }
   const now = Date.now();
   await pool.query(`INSERT INTO wb_price_update_queue
-    (market,nm_id,desired_price,desired_discount,status,queued_at,sent_at,upload_id,last_error,updated_at)
-    VALUES($1,$2,$3,$4,'pending',$5,0,0,'',$5)
+    (market,nm_id,desired_price,desired_discount,status,queued_at,sent_at,upload_id,last_error,updated_at,source,promotion_id)
+    VALUES($1,$2,$3,$4,'pending',$5,0,0,'',$5,'manual',0)
     ON CONFLICT(market,nm_id) DO UPDATE SET
       desired_price=COALESCE(excluded.desired_price,wb_price_update_queue.desired_price),
       desired_discount=COALESCE(excluded.desired_discount,wb_price_update_queue.desired_discount),
-      status='pending',queued_at=excluded.queued_at,sent_at=0,upload_id=0,last_error='',updated_at=excluded.updated_at`,
+      status='pending',queued_at=excluded.queued_at,sent_at=0,upload_id=0,last_error='',updated_at=excluded.updated_at,
+      source='manual',promotion_id=0`,
     [market, nmID, desiredPrice, desiredDiscount, now]);
+  if (desiredDiscount !== null) {
+    await pool.query(`UPDATE wb_promo_preferences SET base_discount=$3,updated_at=$4
+      WHERE market=$1 AND nm_id=$2 AND enabled=true`, [market, nmID, desiredDiscount, now]).catch(() => {});
+  }
   const state = await wbPriceState(market);
   return {
     ok: true,

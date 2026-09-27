@@ -25,6 +25,7 @@ import { wbReturnsRouter } from './wb-returns.js';
 import { wbAdsRouter, startWbAdsLimitLoop } from './wb-ads.js';
 import { aiAssistantRouter } from './ai-assistant.js';
 import { pricesRouter, startWbPriceSyncLoop } from './prices.js';
+import { wbPromotionsRouter, startWbPromotionLoop } from './wb-promotions.js';
 import { registerDeveloperGuideRoutes } from './developer-guide.js';
 
 assertRuntimeConfig();
@@ -241,6 +242,7 @@ app.use('/api', ordersRouter);
 app.use('/api', reportsRouter);
 app.use('/api', stockRouter);
 app.use('/api', pricesRouter);
+app.use('/api', wbPromotionsRouter);
 app.use('/api', aiAssistantRouter);
 // Keep every legacy path used by Kaspi automatic feeds, but serve the XML
 // from the live Railway warehouse source instead of a stale migration snapshot.
@@ -320,6 +322,7 @@ const server = app.listen(config.port, '0.0.0.0', () => {
   startKaspiSyncLoop();
   startWbSyncLoop();
   startWbPriceSyncLoop();
+  startWbPromotionLoop();
   startWbAdsLimitLoop();
   let checkingLinks=false;
   const checkLinks=async()=>{
