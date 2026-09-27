@@ -3,6 +3,7 @@
 
 const PRICE_UI_KEY=(typeof KEY==='string'?KEY:'sklad_mvp_v2')+'_prices_ui_v1';
 const PRICE_MARKETS=['Kaspi','WB','WB2','Ozon'];
+const PRICE_CLIENT_TTL_MS=2*60*1000;
 let priceUi={market:'Kaspi',q:''};
 try{
   const saved=JSON.parse(localStorage.getItem(PRICE_UI_KEY)||'{}')||{};
@@ -10,6 +11,10 @@ try{
   priceUi.q=String(saved.q||'');
 }catch{}
 const priceCache=new Map();
+const priceFetchInFlight=new Map();
+const priceErrors=new Map();
+const priceCooldowns=new Map();
+const priceEpoch=new Map();
 let priceLoadSeq=0;
 
 function rememberPriceUi(){
@@ -38,6 +43,16 @@ function marketLabel(market){
 function activeRows(){
   return Array.isArray(priceCache.get(priceUi.market)?.rows)?priceCache.get(priceUi.market).rows:[];
 }
+function priceSnapshotFresh(data){
+  const when=Number(data?.fetchedAt)||0;
+  return Boolean(data&&!data.stale&&when>0&&Date.now()-when<PRICE_CLIENT_TTL_MS);
+}
+function priceEpochValue(market){
+  return Number(priceEpoch.get(market)||0);
+}
+function bumpPriceEpoch(market){
+  priceEpoch.set(market,priceEpochValue(market)+1);
+}
 function priceDiscountValue(row){
   if(Number.isFinite(Number(row?.discount)))return Math.max(0,Number(row.discount)||0);
   const old=pNum(row?.oldPrice),current=pNum(row?.finalPrice||row?.price);
@@ -55,12 +70,29 @@ function setPriceTabs(){
   const q=document.getElementById('priceSearch');
   if(q&&q.value!==priceUi.q)q.value=priceUi.q;
 }
+function priceRetryLabel(retryAt){
+  const ts=Number(retryAt)||0;
+  return ts>Date.now()?new Date(ts).toLocaleTimeString('ru-RU',{hour:'2-digit',minute:'2-digit'}):'через несколько секунд';
+}
 function priceErrorText(error){
   const text=String(error?.message||error||'Не удалось загрузить цены');
+  if((priceUi.market==='WB'||priceUi.market==='WB2')&&Number(error?.status)===429){
+    return 'WB временно ограничил обновление цен. Следующая попытка '+priceRetryLabel(error?.retryAt)+'.';
+  }
   if((priceUi.market==='WB'||priceUi.market==='WB2')&&/403|доступ|forbidden/i.test(text)){
     return 'Токен '+marketLabel(priceUi.market)+' не имеет доступа к категории «Цены и скидки» WB. Добавьте это право у API-ключа и обновите.';
   }
   return text;
+}
+function priceSetSummary(value='—'){
+  for(const id of ['pricePositionCount','priceDiscountCount','priceMissingCount']){
+    const el=document.getElementById(id);if(el)el.textContent=value;
+  }
+}
+function priceRenderError(message){
+  priceSetSummary('—');
+  const list=document.getElementById('priceList');if(!list)return;
+  list.innerHTML='<div class="empty">'+pEsc(message)+'</div><button type="button" class="btn full" onclick="priceRefresh()">Повторить</button>';
 }
 function priceCard(row,index){
   if(row?.error){
@@ -91,7 +123,7 @@ function priceCard(row,index){
 function paintPrices(){
   setPriceTabs();
   const rows=activeRows(),q=priceUi.q.trim().toLocaleLowerCase('ru-RU');
-  const visible=rows.filter(row=>{
+  const indexed=rows.map((row,index)=>({row,index})).filter(({row})=>{
     if(!q)return true;
     return [row.name,row.sku,row.remoteId,row.account].some(value=>String(value||'').toLocaleLowerCase('ru-RU').includes(q));
   });
@@ -101,40 +133,79 @@ function paintPrices(){
   if(discount)discount.textContent=withDiscount.toLocaleString('ru-RU');
   if(missing)missing.textContent=noPrice.toLocaleString('ru-RU');
   const list=document.getElementById('priceList');if(!list)return;
-  if(!rows.length){list.innerHTML='<div class="empty">Нет позиций для этого магазина</div>';return;}
-  if(!visible.length){list.innerHTML='<div class="empty">Поиск ничего не нашёл</div>';return;}
-  list.innerHTML=visible.map(row=>priceCard(row,rows.indexOf(row))).join('');
+  if(!rows.length){
+    const failure=priceErrors.get(priceUi.market);
+    if(failure){priceRenderError(failure.message);return;}
+    list.innerHTML='<div class="empty">Нет позиций для этого магазина</div>';return;
+  }
+  if(!indexed.length){list.innerHTML='<div class="empty">Поиск ничего не нашёл</div>';return;}
+  list.innerHTML=indexed.map(({row,index})=>priceCard(row,index)).join('');
 }
+
 async function priceFetch(market,force=false){
-  const url=MILLIONER_API+'/api/market-prices?market='+encodeURIComponent(market)+(force?'&force=1':'');
-  const response=await fetch(url,{cache:'no-store'});
-  const data=await response.json().catch(()=>({}));
-  if(!response.ok||data?.ok===false)throw new Error(data?.error||('HTTP '+response.status));
-  return data;
+  const epoch=priceEpochValue(market),key=market+':'+epoch;
+  const running=priceFetchInFlight.get(key);if(running)return running;
+  const task=(async()=>{
+    const url=MILLIONER_API+'/api/market-prices?market='+encodeURIComponent(market)+(force?'&force=1':'');
+    const response=await fetch(url,{cache:'no-store'});
+    const text=await response.text();
+    let data=null;
+    if(text){try{data=JSON.parse(text)}catch{const e=new Error('Сервер цен вернул некорректный ответ');e.status=502;throw e}}
+    if(!response.ok||data?.ok===false){
+      const error=new Error(data?.error||('HTTP '+response.status));
+      error.status=response.status;error.retryAt=Number(data?.retryAt)||0;throw error;
+    }
+    if(!data||typeof data!=='object'){const e=new Error('Сервер цен вернул пустой ответ');e.status=502;throw e}
+    return {data,epoch};
+  })();
+  priceFetchInFlight.set(key,task);
+  try{return await task}finally{if(priceFetchInFlight.get(key)===task)priceFetchInFlight.delete(key)}
 }
 
 window.renderPrices=async function(force=false){
   const view=document.getElementById('prices');if(!view||!view.classList.contains('active'))return;
   setPriceTabs();
-  const seq=++priceLoadSeq,existing=priceCache.get(priceUi.market);
-  if(existing&&!force){paintPrices();setPriceStatus('Обновлено '+new Date(existing.fetchedAt||Date.now()).toLocaleTimeString('ru-RU',{hour:'2-digit',minute:'2-digit'}));return;}
+  const market=priceUi.market,seq=++priceLoadSeq,existing=priceCache.get(market);
+  if(existing&&!force&&priceSnapshotFresh(existing)){
+    priceErrors.delete(market);paintPrices();
+    setPriceStatus('Обновлено '+new Date(existing.fetchedAt||Date.now()).toLocaleTimeString('ru-RU',{hour:'2-digit',minute:'2-digit'}),'ok');
+    return;
+  }
+  const cooldown=Number(priceCooldowns.get(market)||0);
+  if(cooldown>Date.now()){
+    const message='WB временно ограничил обновление цен. Следующая попытка '+priceRetryLabel(cooldown)+'.';
+    priceErrors.set(market,{message,retryAt:cooldown});
+    if(existing){paintPrices();setPriceStatus(message+' Показаны последние данные.','warn')}
+    else{setPriceStatus(message,'bad');priceRenderError(message)}
+    return;
+  }
   const list=document.getElementById('priceList');
-  if(list&&!existing)list.innerHTML='<div class="empty">Загружаю цены…</div>';
-  setPriceStatus('обновляю…','loading');
+  if(existing)paintPrices();
+  else{priceSetSummary('—');if(list)list.innerHTML='<div class="empty">Загружаю цены…</div>'}
+  setPriceStatus(existing?'Проверяю обновление…':'обновляю…','loading');
   try{
-    const data=await priceFetch(priceUi.market,force);
-    if(seq!==priceLoadSeq)return;
-    priceCache.set(priceUi.market,data);
+    const loaded=await priceFetch(market,force);
+    if(seq!==priceLoadSeq||market!==priceUi.market||loaded.epoch!==priceEpochValue(market))return;
+    const data=loaded.data;
+    priceCache.set(market,data);
+    priceErrors.delete(market);
+    if(Number(data.retryAt)>Date.now())priceCooldowns.set(market,Number(data.retryAt));else priceCooldowns.delete(market);
     paintPrices();
-    const when=Number(data.fetchedAt||Date.now());
-    setPriceStatus('Обновлено '+new Date(when).toLocaleTimeString('ru-RU',{hour:'2-digit',minute:'2-digit'}),'ok');
+    const when=Number(data.fetchedAt||Date.now()),stamp=new Date(when).toLocaleTimeString('ru-RU',{hour:'2-digit',minute:'2-digit'});
+    if(data.stale){
+      const message='Не удалось обновить. Показаны данные на '+stamp+(Number(data.retryAt)>Date.now()?'. Следующая попытка '+priceRetryLabel(data.retryAt):'.');
+      setPriceStatus(message,'warn');
+    }else setPriceStatus('Обновлено '+stamp,'ok');
   }catch(error){
-    if(seq!==priceLoadSeq)return;
+    if(seq!==priceLoadSeq||market!==priceUi.market)return;
+    if(Number(error?.retryAt)>Date.now())priceCooldowns.set(market,Number(error.retryAt));
     const message=priceErrorText(error);
-    setPriceStatus(message,'bad');
-    if(list&&!existing)list.innerHTML='<div class="empty">'+pEsc(message)+'</div><button type="button" class="btn full" onclick="priceRefresh()">Повторить</button>';
+    priceErrors.set(market,{message,retryAt:Number(error?.retryAt)||0});
+    if(existing){paintPrices();setPriceStatus(message+' Показаны последние данные.','warn')}
+    else{setPriceStatus(message,'bad');priceRenderError(message)}
   }
 };
+
 window.priceSetMarket=function(market){
   if(!PRICE_MARKETS.includes(market)||market===priceUi.market)return;
   priceUi.market=market;rememberPriceUi();setPriceTabs();window.renderPrices(false);
@@ -143,7 +214,7 @@ window.priceSearch=function(value){
   priceUi.q=String(value||'');rememberPriceUi();paintPrices();
 };
 window.priceRefresh=function(){
-  priceCache.delete(priceUi.market);return window.renderPrices(true);
+  return window.renderPrices(true);
 };
 
 function inputNumber(id){
@@ -182,8 +253,10 @@ async function remotePriceUpdate(body){
   const response=await fetch(MILLIONER_API+'/api/market-prices/update',{
     method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({...body,confirm:true})
   });
-  const data=await response.json().catch(()=>({}));
-  if(!response.ok||data?.ok===false)throw new Error(data?.error||('HTTP '+response.status));
+  const text=await response.text();
+  let data=null;if(text){try{data=JSON.parse(text)}catch{const e=new Error('Сервер цен вернул некорректный ответ');e.status=502;throw e}}
+  if(!response.ok||data?.ok===false){const error=new Error(data?.error||('HTTP '+response.status));error.status=response.status;error.retryAt=Number(data?.retryAt)||0;throw error}
+  if(!data||typeof data!=='object')throw new Error('Сервер цен вернул пустой ответ');
   return data;
 }
 window.submitPriceEdit=async function(){
@@ -199,24 +272,36 @@ window.submitPriceEdit=async function(){
       if(!product)throw new Error('Товар склада не найден');
       product.kaspiPrice=price;
       save();
-      if(typeof pushWarehouseToServer==='function')await pushWarehouseToServer();
+      let pushed=true;
+      if(typeof pushWarehouseToServer==='function')pushed=(await pushWarehouseToServer())===true;
       row.price=price;row.finalPrice=price;row.source='warehouse';
-      closeModal();paintPrices();setPriceStatus('Цена Kaspi сохранена · XML обновлён','ok');
+      closeModal();paintPrices();
+      setPriceStatus(pushed?'Цена Kaspi сохранена · XML обновлён':'Цена Kaspi сохранена локально · сервер ещё синхронизируется',pushed?'ok':'warn');
       return;
     }
     if(row.market==='WB'||row.market==='WB2'){
-      const price=row.canEditPrice===false?null:inputNumber('priceEditCurrent');
-      const discount=inputNumber('priceEditDiscount');
-      if(row.canEditPrice!==false&&!(price>0))throw new Error('Введите цену больше 0');
-      if(!Number.isInteger(discount)||discount<0||discount>99)throw new Error('Скидка должна быть целым числом от 0 до 99');
-      const question='Отправить в '+marketLabel(row.market)+' цену '+(row.canEditPrice===false?'без изменения':pMoney(price,row.currency))+' и скидку '+discount+'%?';
+      const enteredPrice=row.canEditPrice===false?null:inputNumber('priceEditCurrent');
+      const enteredDiscount=inputNumber('priceEditDiscount');
+      if(row.canEditPrice!==false&&!(enteredPrice>0))throw new Error('Введите цену больше 0');
+      if(!Number.isInteger(enteredDiscount)||enteredDiscount<0||enteredDiscount>99)throw new Error('Скидка должна быть целым числом от 0 до 99');
+      const priceChanged=row.canEditPrice!==false&&Math.abs(enteredPrice-pNum(row.price))>0.000001;
+      const discountChanged=enteredDiscount!==Math.round(pNum(row.discount));
+      if(!priceChanged&&!discountChanged)throw new Error('Цена и скидка не изменились');
+      const changes=[];
+      if(priceChanged)changes.push('цену на '+pMoney(enteredPrice,row.currency));
+      if(discountChanged)changes.push('скидку на '+enteredDiscount+'%');
+      const question='Отправить в '+marketLabel(row.market)+' '+changes.join(' и ')+'?';
       if(!confirm(question))return;
-      await remotePriceUpdate({market:row.market,remoteId:row.remoteId,price,discount});
-      if(price)row.price=price;
-      row.discount=discount;
-      if(price)row.finalPrice=price*(1-discount/100);
-      priceCache.delete(row.market);
-      closeModal();setPriceStatus('Изменение отправлено в '+marketLabel(row.market)+'. Обновите через несколько минут.','ok');
+      const body={market:row.market,remoteId:row.remoteId};
+      if(priceChanged)body.price=enteredPrice;
+      if(discountChanged)body.discount=enteredDiscount;
+      const result=await remotePriceUpdate(body);
+      if(priceChanged){row.price=enteredPrice;row.finalPrice=enteredPrice*(1-enteredDiscount/100)}
+      if(discountChanged){row.discount=enteredDiscount;if(!priceChanged&&pNum(row.price)>0)row.finalPrice=pNum(row.price)*(1-enteredDiscount/100)}
+      bumpPriceEpoch(row.market);
+      const cached=priceCache.get(row.market);if(cached){cached.stale=true;cached.fetchedAt=Number(cached.fetchedAt)||Date.now()}
+      closeModal();paintPrices();
+      setPriceStatus('WB принял изменение'+(result.uploadId?' · операция '+result.uploadId:'')+'. Применение может занять несколько минут.','ok');
       return;
     }
     if(row.market==='Ozon'){
@@ -226,8 +311,9 @@ window.submitPriceEdit=async function(){
       if(!confirm('Отправить новую цену Ozon для «'+String(row.name||row.sku)+'»?'))return;
       await remotePriceUpdate({market:'Ozon',accountId:row.accountId,sku:row.sku,price,oldPrice:Number.isFinite(oldPrice)?Math.max(0,oldPrice):0,minPrice:row.minPrice,currency:row.currency});
       row.price=price;row.finalPrice=price;row.oldPrice=Number.isFinite(oldPrice)?Math.max(0,oldPrice):0;
-      priceCache.delete('Ozon');
-      closeModal();setPriceStatus('Цена отправлена в Ozon. Нажмите ↻ для проверки.','ok');
+      bumpPriceEpoch('Ozon');
+      const cached=priceCache.get('Ozon');if(cached){cached.stale=true;cached.fetchedAt=Number(cached.fetchedAt)||Date.now()}
+      closeModal();paintPrices();setPriceStatus('Ozon подтвердил обновление цены. Нажмите ↻ для проверки.','ok');
     }
   }catch(error){
     alert(priceErrorText(error));
