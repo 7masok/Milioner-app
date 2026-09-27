@@ -394,7 +394,8 @@ window.submitPriceEdit=async function(){
       row.syncState='pending';row.syncQueuedAt=Number(result.queuedAt)||Date.now();row.syncSentAt=0;row.syncError='';
       const cached=priceCache.get(row.market);
       if(cached){
-        if(!cached.rows?.some(item=>item!==row&&item.syncState==='pending'&&String(item.remoteId)===String(row.remoteId)))cached.pendingCount=Math.max(1,Number(cached.pendingCount)||0);
+        cached.pendingCount=(cached.rows||[]).filter(item=>item.syncState==='pending').length;
+        cached.sentCount=(cached.rows||[]).filter(item=>item.syncState==='sent').length;
         cached.nextSyncAt=Number(result.nextSyncAt)||Number(cached.nextSyncAt)||0;
       }
       closeModal();paintPrices();
