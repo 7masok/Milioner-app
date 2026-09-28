@@ -354,10 +354,12 @@ test('WB night schedule accepts normal HH:MM time values',()=>{
   assert.doesNotMatch(api,/const match = \/\^\(\\\\d\{2\}\):\(\\\\d\{2\}\)\$\//);
 });
 
-test('WB night price restore uses safer adaptive staged reductions',()=> {
-  assert.match(api,/export function wbSafeReturnPrice\(currentPrice, basePrice, cautious = false\)/);
-  assert.match(api,/const divisor = cautious \? 1\.25 : 2/);
-  assert.match(api,/isWbQuarantineError\(schedule\.lastError\)/);
+test('WB night price restore stays below the 1.5x category quarantine threshold',()=> {
+  assert.match(api,/export function wbSafeReturnPrice\(currentPrice, basePrice\)/);
+  assert.match(api,/Math\.ceil\(current \/ 1\.45\)/);
+  assert.match(api,/function isWbGradualReductionError\(value\)/);
+  assert.match(api,/more than\.\*twice/);
+  assert.match(api,/!isWbGradualReductionError\(schedule\.lastError\)/);
   assert.match(api,/queueSchedulePrice\(market, schedule\.nmId, restoreTarget\)/);
 });
 
