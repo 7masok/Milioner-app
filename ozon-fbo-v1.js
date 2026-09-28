@@ -40,6 +40,7 @@ function populateOzonOrderFeed(){
     const offerIdPreferred=String(product.offer_id||'').trim();
     const sku=offerIdPreferred||String(product.sku||'').trim();
     const creationDate=Date.parse(posting.created_at||posting.in_process_at||'')||0;
+    const deliveredDate=Date.parse(posting.delivered_date||'')||0;
     const entryId=postingNumber+'_'+sku+'_'+lineIdx;
     const code=postingNumber;
     const orderId=postingNumber;
@@ -59,6 +60,7 @@ function populateOzonOrderFeed(){
      unitPrice,
      totalPrice,
      creationDate,
+     deliveredDate,
      status,
      productId:null
     };
