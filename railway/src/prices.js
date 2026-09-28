@@ -356,11 +356,16 @@ function minuteToTime(value) {
   return String(Math.floor(minute / 60)).padStart(2, '0') + ':' + String(minute % 60).padStart(2, '0');
 }
 
-export function wbSafeReturnPrice(currentPrice, basePrice) {
+export function wbSafeReturnPrice(currentPrice, basePrice, cautious = false) {
   const current = number(currentPrice);
   const base = number(basePrice);
   if (!(current > 0) || !(base > 0) || base >= current) return base;
-  return Math.max(base, Math.ceil(current / 2.5));
+  const divisor = cautious ? 1.25 : 2;
+  return Math.max(base, Math.ceil(current / divisor));
+}
+
+function isWbQuarantineError(value) {
+  return /quarant|карантин/i.test(cleanText(value));
 }
 
 export function wbNightWindowState(startMinute, endMinute, now = Date.now()) {
@@ -511,6 +516,7 @@ async function syncWbNightSchedules(market, now = Date.now()) {
         [market, schedule.nmId, row ? 'Разные цены по размерам' : 'Товар отсутствует в снимке цен', now]);
       continue;
     }
+    if (schedule.phase === 'error' && schedule.lastError) continue;
     const confirmedPrice = number(row.price);
     const window = wbNightWindowState(schedule.startMinute, schedule.endMinute, now);
     let queueRow = queueByNm.get(schedule.nmId);
@@ -546,7 +552,7 @@ async function syncWbNightSchedules(market, now = Date.now()) {
         }
         continue;
       }
-      if (queueRow?.source === 'schedule' && Number(queueRow.desiredPrice) === schedule.targetPrice && ['pending','sent'].includes(queueRow.status)) continue;
+      if (queueRow?.source === 'schedule' && Number(queueRow.desiredPrice) === schedule.targetPrice && ['pending','sent','checking'].includes(queueRow.status)) continue;
       if (await queueSchedulePrice(market, schedule.nmId, schedule.targetPrice)) {
         await pool.query(`UPDATE wb_price_schedules SET phase='raising',last_error='',updated_at=$3 WHERE market=$1 AND nm_id=$2`,
           [market, schedule.nmId, now]);
@@ -573,8 +579,8 @@ async function syncWbNightSchedules(market, now = Date.now()) {
       changed += 1;
       continue;
     }
-    const restoreTarget = wbSafeReturnPrice(confirmedPrice, basePrice);
-    if (queueRow?.source === 'schedule' && Number(queueRow.desiredPrice) === restoreTarget && ['pending','sent'].includes(queueRow.status)) continue;
+    const restoreTarget = wbSafeReturnPrice(confirmedPrice, basePrice, isWbQuarantineError(schedule.lastError));
+    if (queueRow?.source === 'schedule' && Number(queueRow.desiredPrice) === restoreTarget && ['pending','sent','checking'].includes(queueRow.status)) continue;
     if (await queueSchedulePrice(market, schedule.nmId, restoreTarget)) {
       await pool.query(`UPDATE wb_price_schedules SET phase='restoring',last_error='',updated_at=$3 WHERE market=$1 AND nm_id=$2`,
         [market, schedule.nmId, now]);
@@ -601,7 +607,7 @@ function overlayWbQueuedRows(rows, queue) {
     const discount = clampDiscount(row.discount);
     if (number(row.price) > 0) row.finalPrice = number(row.price) * (1 - discount / 100);
     if (number(row.priceMax) > 0) row.finalPriceMax = number(row.priceMax) * (1 - discount / 100);
-    row.syncState = pending.status === 'held' ? '' : pending.status === 'sent' ? 'sent' : 'pending';
+    row.syncState = pending.status === 'held' ? '' : ['sent','checking'].includes(pending.status) ? 'sent' : 'pending';
     row.syncSource = pending.source;
     row.syncQueuedAt = pending.queuedAt;
     row.syncSentAt = pending.sentAt;
@@ -762,6 +768,75 @@ async function fetchWbPricePage(market, token, offset) {
   return Array.isArray(data?.data?.listGoods) ? data.data.listGoods : [];
 }
 
+async function fetchWbUploadDetails(market, token, uploadId) {
+  const data = await requestWb(
+    token,
+    '/api/v2/history/goods/task?limit=1000&offset=0&uploadID=' + encodeURIComponent(String(uploadId)),
+    {},
+    { market, force: false }
+  );
+  return Array.isArray(data?.data?.historyGoods) ? data.data.historyGoods : [];
+}
+
+async function inspectWbPriceUpload(market, token, sentRows, now) {
+  const candidates = sentRows.filter(row => Number(row.uploadId) > 0)
+    .sort((a, b) => Number(a.sentAt || 0) - Number(b.sentAt || 0));
+  const uploadId = Number(candidates[0]?.uploadId || 0);
+  if (!(uploadId > 0)) return { uploadId: 0, checked: 0, errors: 0, missing: 0 };
+  const targetRows = candidates.filter(row => Number(row.uploadId) === uploadId);
+  const goods = await fetchWbUploadDetails(market, token, uploadId);
+  const byNm = new Map(goods.map(item => [String(item?.nmID || ''), item]));
+  const client = await pool.connect();
+  let checked = 0, errors = 0, missing = 0;
+  const errorSamples = [];
+  try {
+    await client.query('BEGIN');
+    for (const queued of targetRows) {
+      const item = byNm.get(String(queued.nmId));
+      if (!item) {
+        missing += 1;
+        continue;
+      }
+      checked += 1;
+      const errorText = cleanText(item?.errorText);
+      if (errorText) {
+        errors += 1;
+        if (errorSamples.length < 5) errorSamples.push({ nmId: String(queued.nmId), error: errorText.slice(0, 240) });
+        await client.query(`UPDATE wb_price_update_queue
+          SET status='pending',sent_at=0,upload_id=0,last_error=$3,updated_at=$4
+          WHERE market=$1 AND nm_id=$2 AND status='sent'`,
+          [market, queued.nmId, errorText.slice(0, 500), now]);
+        if (queued.source === 'schedule') {
+          await client.query(`UPDATE wb_price_schedules SET phase=$3,last_error=$4,updated_at=$5
+            WHERE market=$1 AND nm_id=$2`,
+            [market, queued.nmId, isWbQuarantineError(errorText) ? 'restoring' : 'error', errorText.slice(0, 500), now]);
+        }
+      } else {
+        await client.query(`UPDATE wb_price_update_queue
+          SET status='checking',last_error='',updated_at=$3
+          WHERE market=$1 AND nm_id=$2 AND status='sent'`,
+          [market, queued.nmId, now]);
+      }
+    }
+    await markWbPriceState(market, {
+      nextAllowedAt: now + WB_PRICE_SLOT_MS,
+      lastAttemptAt: now,
+      lastSuccessAt: now,
+      lastAction: errors ? 'verify-errors' : 'verify-upload',
+      lastError: errors ? ('WB отклонил ' + errors + ' позиций из загрузки ' + uploadId) : '',
+      readOffset: 0,
+      readBuffer: []
+    }, client);
+    await client.query('COMMIT');
+  } catch (error) {
+    await client.query('ROLLBACK').catch(() => {});
+    throw error;
+  } finally {
+    client.release();
+  }
+  return { uploadId, checked, errors, missing, errorSamples };
+}
+
 async function sendWbPriceQueue(market, token, pending, now) {
   const selected = pending.map(row => ({
     nmID: Number(row.nmId),
@@ -844,7 +919,7 @@ async function saveWbPriceRead(market, state, batch, now) {
     const [sent, schedules] = await Promise.all([wbPriceQueueRows(market, client), wbPriceSchedules(market, client)]);
     const scheduleByNm = new Map(schedules.map(row => [String(row.nmId), row]));
     const byNm = new Map(normalized.map(row => [String(row.remoteId || ''), row]));
-    for (const queued of sent.filter(row => row.status === 'sent')) {
+    for (const queued of sent.filter(row => ['checking','sent'].includes(row.status))) {
       const row = byNm.get(String(queued.nmId));
       if (!row) continue;
       const priceOk = queued.desiredPrice === null || Math.abs(number(row.price) - queued.desiredPrice) < 0.000001;
@@ -858,17 +933,18 @@ async function saveWbPriceRead(market, state, batch, now) {
             && Number(queued.desiredPrice) === Number(schedule.targetPrice));
           if (keepHeld) {
             await client.query(`UPDATE wb_price_update_queue SET status='held',last_error='',updated_at=$3
-              WHERE market=$1 AND nm_id=$2 AND status='sent' AND source='schedule'`, [market, queued.nmId, now]);
+              WHERE market=$1 AND nm_id=$2 AND status IN ('checking','sent') AND source='schedule'`, [market, queued.nmId, now]);
           } else {
-            await client.query('DELETE FROM wb_price_update_queue WHERE market=$1 AND nm_id=$2 AND status=\'sent\'', [market, queued.nmId]);
+            await client.query("DELETE FROM wb_price_update_queue WHERE market=$1 AND nm_id=$2 AND status IN ('checking','sent')", [market, queued.nmId]);
+            await client.query(`UPDATE wb_price_schedules SET last_error='',phase=CASE WHEN base_price IS NULL THEN 'idle' ELSE phase END,updated_at=$3
+              WHERE market=$1 AND nm_id=$2`, [market, queued.nmId, now]);
           }
         } else {
-          await client.query('DELETE FROM wb_price_update_queue WHERE market=$1 AND nm_id=$2 AND status=\'sent\'', [market, queued.nmId]);
+          await client.query("DELETE FROM wb_price_update_queue WHERE market=$1 AND nm_id=$2 AND status IN ('checking','sent')", [market, queued.nmId]);
         }
       } else {
-        await client.query(`UPDATE wb_price_update_queue SET status='pending',sent_at=0,upload_id=0,
-          last_error='WB ещё не подтвердил изменение',updated_at=$3
-          WHERE market=$1 AND nm_id=$2 AND status='sent'`, [market, queued.nmId, now]);
+        await client.query(`UPDATE wb_price_update_queue SET last_error='WB обработал загрузку, ждём отражения цены',updated_at=$3
+          WHERE market=$1 AND nm_id=$2 AND status IN ('checking','sent')`, [market, queued.nmId, now]);
       }
     }
 
@@ -908,8 +984,20 @@ async function syncWbPriceMarket(market) {
     }
     const token = await wbToken(market);
     if (!token) return { ok: true, market, skipped: true, reason: 'not-configured' };
-    const pending = (await wbPriceQueueRows(market)).filter(row => row.status === 'pending');
+    const queue = await wbPriceQueueRows(market);
+    const sent = queue.filter(row => row.status === 'sent' && Number(row.uploadId) > 0);
+    const pending = queue.filter(row => row.status === 'pending');
+    const checking = queue.filter(row => row.status === 'checking');
+    let action = sent.length ? 'verify' : pending.length ? 'write' : 'read';
     try {
+      if (sent.length) {
+        const result = await inspectWbPriceUpload(market, token, sent, now);
+        console.info('WB price sync verify', JSON.stringify({
+          market, uploadId: result.uploadId, checked: result.checked, errors: result.errors,
+          missing: result.missing, errorSamples: result.errorSamples
+        }));
+        return { ok: result.errors === 0, market, action: 'verify', ...result, nextSyncAt: now + WB_PRICE_SLOT_MS };
+      }
       if (pending.length) {
         const result = await sendWbPriceQueue(market, token, pending, now);
         console.info('WB price sync write', JSON.stringify({ market, queued: pending.length, sent: result.sent, uploadId: result.uploadId }));
@@ -917,14 +1005,17 @@ async function syncWbPriceMarket(market) {
       }
       const batch = await fetchWbPricePage(market, token, Number(state.readOffset || 0));
       const result = await saveWbPriceRead(market, state, batch, now);
-      console.info('WB price sync read', JSON.stringify({ market, offset: Number(state.readOffset || 0), batch: batch.length, complete: result.complete, rows: result.rows }));
+      console.info('WB price sync read', JSON.stringify({
+        market, offset: Number(state.readOffset || 0), batch: batch.length, complete: result.complete,
+        rows: result.rows, checking: checking.length
+      }));
       return { ok: true, market, action: result.complete ? 'read' : 'read-partial', ...result, nextSyncAt: now + WB_PRICE_SLOT_MS };
     } catch (error) {
       const retryAt = Math.max(now + WB_PRICE_SLOT_MS, Number(error?.retryAt || 0));
       await markWbPriceState(market, {
         nextAllowedAt: retryAt,
         lastAttemptAt: now,
-        lastAction: pending.length ? 'write-error' : 'read-error',
+        lastAction: action + '-error',
         lastError: cleanText(error?.message || error)
       }).catch(() => {});
       if (pending.length) {
@@ -932,7 +1023,7 @@ async function syncWbPriceMarket(market) {
           [market, cleanText(error?.message || error)]).catch(() => {});
       }
       console.warn('WB price sync failed', JSON.stringify({
-        market, action: pending.length ? 'write' : 'read', status: Number(error?.status || 0),
+        market, action, status: Number(error?.status || 0),
         retryAt, error: cleanText(error?.message || error)
       }));
       return { ok: false, market, error: cleanText(error?.message || error), retryAt };
