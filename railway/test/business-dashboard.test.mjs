@@ -87,7 +87,7 @@ test('money formatting removes negative zero and unknown WB fields render as das
 });
 
 test('business dashboard assets are cache-busted and served', () => {
-  assert.match(html, /kaspi-report-v2\.js\?v=20260928-wb-live-report/);
+  assert.match(html, /kaspi-report-v2\.js\?v=20260928-wb-missing-data/);
   assert.match(html, /business-dashboard-v1\.js\?v=20260928-business-ozon/);
   assert.match(html, /ozon-fbo-v1\.js\?v=20260928-business-ozon/);
   assert.match(server, /'business-dashboard-v1\.js'/);
@@ -111,7 +111,8 @@ test('known marketplace values remain visible when another marketplace is unknow
   assert.match(report, /if\(knownCount\[keyName\]===0\)total\[keyName\]=null/);
   assert.match(report, /if\(knownCount\[keyName\]<sourceCount\)partial\[keyName\]=true/);
   assert.match(report, /estimated:total\.estimated\|\|partial\.cost\|\|partial\.fees\|\|partial\.profit/);
-  assert.match(report, /qty===0&&revenue===0&&ads!==0\?-Math\.abs\(ads\):null/);
+  assert.doesNotMatch(report, /qty===0&&revenue===0&&ads!==0\?-Math\.abs\(ads\):null/);
+  assert.match(report, /profit=financeAvailable&&model\?\.profit!==null&&model\?\.profit!==undefined\?Number\(model\.profit\):null/);
 });
 
 
@@ -130,5 +131,5 @@ test('report market selection is local UI state and does not restore stale WB2 f
   assert.match(report, /localStorage\.setItem\(REPORT_MARKET_UI_KEY,market\)/);
   assert.doesNotMatch(report, /reportMarket=\['all','Kaspi','WB','WB2'\]\.includes\(state\.settings\.reportMarket\)/);
   assert.doesNotMatch(report, /state\.settings\.reportMarket=market;try\{save\(\)\}/);
-  assert.match(html, /kaspi-report-v2\.js\?v=20260928-wb-live-report/);
+  assert.match(html, /kaspi-report-v2\.js\?v=20260928-wb-missing-data/);
 });
