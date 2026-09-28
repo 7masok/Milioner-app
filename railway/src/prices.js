@@ -356,6 +356,13 @@ function minuteToTime(value) {
   return String(Math.floor(minute / 60)).padStart(2, '0') + ':' + String(minute % 60).padStart(2, '0');
 }
 
+export function wbSafeReturnPrice(currentPrice, basePrice) {
+  const current = number(currentPrice);
+  const base = number(basePrice);
+  if (!(current > 0) || !(base > 0) || base >= current) return base;
+  return Math.max(base, Math.ceil(current / 2.5));
+}
+
 export function wbNightWindowState(startMinute, endMinute, now = Date.now()) {
   const start = Math.max(0, Math.min(1439, Math.trunc(Number(startMinute) || 0)));
   const end = Math.max(0, Math.min(1439, Math.trunc(Number(endMinute) || 0)));
@@ -566,8 +573,9 @@ async function syncWbNightSchedules(market, now = Date.now()) {
       changed += 1;
       continue;
     }
-    if (queueRow?.source === 'schedule' && Number(queueRow.desiredPrice) === basePrice && ['pending','sent'].includes(queueRow.status)) continue;
-    if (await queueSchedulePrice(market, schedule.nmId, basePrice)) {
+    const restoreTarget = wbSafeReturnPrice(confirmedPrice, basePrice);
+    if (queueRow?.source === 'schedule' && Number(queueRow.desiredPrice) === restoreTarget && ['pending','sent'].includes(queueRow.status)) continue;
+    if (await queueSchedulePrice(market, schedule.nmId, restoreTarget)) {
       await pool.query(`UPDATE wb_price_schedules SET phase='restoring',last_error='',updated_at=$3 WHERE market=$1 AND nm_id=$2`,
         [market, schedule.nmId, now]);
       changed += 1;
