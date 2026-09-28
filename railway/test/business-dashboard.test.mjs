@@ -22,7 +22,7 @@ test('business dashboard includes Ozon orders, delivered buyouts and finance tot
   assert.match(ui, /Kaspi \+ WB1 \+ WB2 \+ Ozon · по часам/);
   assert.match(ui, /state\?\.ozonOrderFeed/);
   assert.match(ui, /line\?\.deliveredDate/);
-  assert.match(ui, /String\(line\?\.status\|\|'')\.toLowerCase\(\)!=='delivered'/);
+  assert.ok(ui.includes("String(line?.status||'').toLowerCase()!=='delivered'"));
   assert.match(ui, /businessSummaryPart\(summary,\['Ozon'\]\)/);
   assert.match(ui, /ozonFboRefreshStatus/);
   assert.match(report, /loadOzonSummary\(n\)/);
