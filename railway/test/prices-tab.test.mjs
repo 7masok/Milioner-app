@@ -201,7 +201,7 @@ test('WB queued writes batch changes and verify them only on a later read slot',
   assert.match(api,/lastAction: 'write'/);
   assert.match(api,/row\.status === 'sent'/);
   assert.match(api,/DELETE FROM wb_price_update_queue WHERE market=\$1 AND nm_id=\$2/);
-  assert.match(api,/last_error='WB ещё не подтвердил изменение'/);
+  assert.match(api,/WB обработал загрузку, ждём отражения цены/);
   assert.match(ui,/Ожидает отправки в WB/);
   assert.match(ui,/Отправлено в WB · ждём проверки/);
   assert.match(ui,/>Сохранить<\/button>/);
