@@ -146,6 +146,13 @@ test('Ozon backend requests at most 100 SKUs per analytics cycle step and persis
   assert.match(backend,/cursor:cycleComplete\?0:nextCursor/);
 });
 
+test('Ozon analytics call is separated from the preceding FBO request burst',()=>{
+  assert.match(backend,/const ANALYTICS_MIN_GAP_MS=1500/);
+  assert.match(backend,/setTimeout\(resolve,ANALYTICS_MIN_GAP_MS\)/);
+  assert.match(backend,/rate limit per second/);
+  assert.match(backend,/previousPerSecondLimit/);
+});
+
 test('Ozon 429 handling retains last analytics rows and stores a retry deadline',()=>{
   assert.match(backend,/response\.status===429/);
   assert.match(backend,/retry-after/);
