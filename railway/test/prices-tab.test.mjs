@@ -13,6 +13,7 @@ const wbPromo=readFileSync(new URL('../src/wb-promotions.js',import.meta.url),'u
 const wbPromoMigration=readFileSync(new URL('../migrations/132_wb_promo_preferences.sql',import.meta.url),'utf8');
 const wbPromoPhaseMigration=readFileSync(new URL('../migrations/133_wb_promo_sync_phase.sql',import.meta.url),'utf8');
 const wbNightMigration=readFileSync(new URL('../migrations/134_wb_price_schedules.sql',import.meta.url),'utf8');
+const wbUploadVerifyMigration=readFileSync(new URL('../migrations/135_wb_price_upload_verification.sql',import.meta.url),'utf8');
 
 test('Prices is a real ninth tab and survives reload navigation',()=>{
   assert.match(html,/<section id="prices" class="view">/);
@@ -353,11 +354,22 @@ test('WB night schedule accepts normal HH:MM time values',()=>{
   assert.doesNotMatch(api,/const match = \/\^\(\\\\d\{2\}\):\(\\\\d\{2\}\)\$\//);
 });
 
-test('WB night price restore avoids WB price quarantine with staged reductions',()=> {
-  assert.match(api,/export function wbSafeReturnPrice\(currentPrice, basePrice\)/);
-  assert.match(api,/Math\.ceil\(current \/ 2\.5\)/);
-  assert.match(api,/const restoreTarget = wbSafeReturnPrice\(confirmedPrice, basePrice\)/);
+test('WB night price restore uses safer adaptive staged reductions',()=> {
+  assert.match(api,/export function wbSafeReturnPrice\(currentPrice, basePrice, cautious = false\)/);
+  assert.match(api,/const divisor = cautious \? 1\.25 : 2/);
+  assert.match(api,/isWbQuarantineError\(schedule\.lastError\)/);
   assert.match(api,/queueSchedulePrice\(market, schedule\.nmId, restoreTarget\)/);
+});
+
+test('WB price sync verifies upload details before retrying a rejected update',()=> {
+  assert.match(wbUploadVerifyMigration,/status IN \('pending','sent','checking','held'\)/);
+  assert.match(api,/\/api\/v2\/history\/goods\/task\?limit=1000&offset=0&uploadID=/);
+  assert.match(api,/async function inspectWbPriceUpload\(market, token, sentRows, now\)/);
+  assert.match(api,/status='checking'/);
+  assert.match(api,/WB price sync verify/);
+  assert.match(api,/sent\.length \? 'verify' : pending\.length \? 'write' : 'read'/);
+  assert.doesNotMatch(api,/SET status='pending',sent_at=0,upload_id=0,\s*last_error='WB ещё не подтвердил изменение'/);
+  assert.match(api,/WB обработал загрузку, ждём отражения цены/);
 });
 
 test('WB night price schedule is persisted, bulk-configurable and reuses the 15-minute price queue',()=>{
