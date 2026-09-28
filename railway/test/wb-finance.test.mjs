@@ -117,16 +117,26 @@ test('WB report excludes WB Promotion deduction because advertising is counted s
 });
 
 
+test('WB live sales keeps persisted 429 cooldown but ignores obsolete long healthy cadence', () => {
+  const source = readFileSync(new URL('../src/wb-sync.js', import.meta.url), 'utf8');
+  assert.match(source, /const cadenceNextAt = lastAttemptAt \? lastAttemptAt \+ cooldown : 0/);
+  assert.match(source, /lastError\s*\?\s*Math\.max\(persistedNextAllowedAt, cadenceNextAt\)/);
+  assert.match(source, /Math\.min\(persistedNextAllowedAt, cadenceNextAt\)/);
+  assert.match(source, /LIVE_SALES_RETRY_MS = 65 \* 60 \* 1000/);
+  assert.match(source, /Math\.max\(now \+ LIVE_SALES_RETRY_MS, Number\(error\?\.retryAt \|\| 0\)\)/);
+});
+
 test('WB live sales cache is populated from the operational sales and returns API', () => {
   const source = readFileSync(new URL('../src/wb-sync.js', import.meta.url), 'utf8');
   assert.match(source, /statistics-api\.wildberries\.ru/);
   assert.match(source, /\/api\/v1\/supplier\/sales/);
-  assert.match(source, /LIVE_SALES_SYNC_MS = 6 \* 60 \* 60 \* 1000 \+ 35 \* 60 \* 1000/);
+  assert.match(source, /LIVE_SALES_SYNC_MS = 35 \* 60 \* 1000/);
   assert.match(source, /INSERT INTO wb_sales_live_rows/);
   assert.match(source, /ON CONFLICT\(market,sale_id\)/);
   assert.match(source, /wb_sales_live_state/);
   assert.match(source, /lastChangeDate/);
-  assert.match(source, /liveSalesDisabled:\s*true/);
+  assert.doesNotMatch(source, /liveSalesDisabled:\s*true/);
+  assert.match(source, /const liveSales = await syncLiveSales\(market, token\)/);
   assert.doesNotMatch(source, /const \[finance, liveSales\] = await Promise\.all/);
   assert.match(source, /void run\(false\)/);
 });
