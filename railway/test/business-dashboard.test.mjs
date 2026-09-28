@@ -13,9 +13,20 @@ test('business dashboard is day-only and keeps all agreed profit layers', () => 
   for (const word of ['Неделя','Месяц','Год']) assert.equal(ui.includes(word),false);
   assert.match(ui, /BUSINESS_PERIODS=new Set\(\['day'\]\)/);
   assert.match(ui, /BUSINESS_METRICS=new Set\(\['orders','buyouts','orderProfit','buyoutProfit'\]\)/);
-  assert.match(ui, /BUSINESS_SUPPORTED_MARKETS=new Set\(\['Kaspi','WB','WB2'\]\)/);
+  assert.match(ui, /BUSINESS_SUPPORTED_MARKETS=new Set\(\['Kaspi','WB','WB2','Ozon'\]\)/);
   assert.match(ui, /allMarketUnitProfit30/);
   assert.match(ui, /loadBusinessMarketplaceSummary/);
+});
+
+test('business dashboard includes Ozon orders, delivered buyouts and finance totals', () => {
+  assert.match(ui, /Kaspi \+ WB1 \+ WB2 \+ Ozon · по часам/);
+  assert.match(ui, /state\?\.ozonOrderFeed/);
+  assert.match(ui, /line\?\.deliveredDate/);
+  assert.match(ui, /String\(line\?\.status\|\|'')\.toLowerCase\(\)!=='delivered'/);
+  assert.match(ui, /businessSummaryPart\(summary,\['Ozon'\]\)/);
+  assert.match(ui, /ozonFboRefreshStatus/);
+  assert.match(report, /loadOzonSummary\(n\)/);
+  assert.match(report, /Ozon:ozonStats/);
 });
 
 test('business day chart uses real overlapping bars and no separate yesterday cap', () => {
@@ -76,8 +87,9 @@ test('money formatting removes negative zero and unknown WB fields render as das
 });
 
 test('business dashboard assets are cache-busted and served', () => {
-  assert.match(html, /kaspi-report-v2\.js\?v=20260924-wb-live-buyouts/);
-  assert.match(html, /business-dashboard-v1\.js\?v=20260924-full-yesterday/);
+  assert.match(html, /kaspi-report-v2\.js\?v=20260928-business-ozon/);
+  assert.match(html, /business-dashboard-v1\.js\?v=20260928-business-ozon/);
+  assert.match(html, /ozon-fbo-v1\.js\?v=20260928-business-ozon/);
   assert.match(server, /'business-dashboard-v1\.js'/);
 });
 
@@ -118,5 +130,5 @@ test('report market selection is local UI state and does not restore stale WB2 f
   assert.match(report, /localStorage\.setItem\(REPORT_MARKET_UI_KEY,market\)/);
   assert.doesNotMatch(report, /reportMarket=\['all','Kaspi','WB','WB2'\]\.includes\(state\.settings\.reportMarket\)/);
   assert.doesNotMatch(report, /state\.settings\.reportMarket=market;try\{save\(\)\}/);
-  assert.match(html, /kaspi-report-v2\.js\?v=20260924-wb-live-buyouts/);
+  assert.match(html, /kaspi-report-v2\.js\?v=20260928-business-ozon/);
 });
