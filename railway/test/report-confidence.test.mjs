@@ -22,6 +22,16 @@ test('all-market profit stays unknown when a WB finance report is missing',async
  assert.ok(document.getElementById('mpReport').innerHTML.includes('<b>—</b>'));
  assert.ok(document.getElementById('mpReport').innerHTML.includes('>Ozon<'));
 });
+test('missing WB sales never turn known ad spend into a fake store loss',()=>{
+ const c={};vm.runInNewContext(line('resolvedWbReportStats'),c);
+ const view=c.resolvedWbReportStats({financeAvailable:false,complete:false,revenue:0,cost:0,expenses:0,ads:8115,profit:null,products:[]},null,'WB2',1);
+ assert.equal(view.revenue,0);
+ assert.equal(view.ads,8115);
+ assert.equal(view.cost,null);
+ assert.equal(view.fees,null);
+ assert.equal(view.profit,null);
+});
+
 test('today all-market report uses live WB buyouts when finance is late',async()=>{
  const elements=new Map();const document={getElementById:id=>{if(!elements.has(id))elements.set(id,{textContent:'',innerHTML:''});return elements.get(id);}};
  const model={financeAvailable:false,complete:false,profit:null,revenue:0,cost:0,expenses:0,ads:0,adjustment:0,products:[]};
