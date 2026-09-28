@@ -150,7 +150,8 @@ export function buildOzonReplenishmentRows(items=[],supplyOrders=[],options={}){
     const available=Math.max(0,num(row.available));
     const incoming=Math.max(0,num(row.incomingKnown));
     const coverageQty=available+incoming;
-    const daysLeft=daily>0?available/daily:null;
+    const ozonIdc=Number(row.idcCluster);
+    const daysLeft=Number.isFinite(ozonIdc)&&ozonIdc>=0?ozonIdc:(daily>0?available/daily:null);
     const daysWithIncoming=daily>0?coverageQty/daily:null;
     const targetQty=daily>0?Math.ceil(daily*targetDays):0;
     const shortageNow=daily>0?Math.max(0,Math.ceil(targetQty-coverageQty)):0;
