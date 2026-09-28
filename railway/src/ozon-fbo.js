@@ -226,6 +226,12 @@ async function run(){
   }
   payload.analytics=await syncClusterAnalytics(credentials,previous.analytics,payload.stocks?.rows||[],payload.supplies?.rows||[],Date.now());
   if(payload.analytics?.lastError)payload.errors.analytics=payload.analytics.lastError;
+  console.info('Ozon cluster analytics',JSON.stringify({
+   account:account.id,rows:payload.analytics?.rows?.length||0,complete:Boolean(payload.analytics?.complete),
+   stale:Boolean(payload.analytics?.stale),cursor:Number(payload.analytics?.cursor||0),
+   totalSkus:Number(payload.analytics?.totalSkus||0),nextAllowedAt:Number(payload.analytics?.nextAllowedAt||0),
+   error:payload.analytics?.lastError||''
+  }));
   await pool.query('INSERT INTO ozon_fbo_cache(account,payload,updated_at) VALUES($1,$2::jsonb,$3) ON CONFLICT(account) DO UPDATE SET payload=EXCLUDED.payload,updated_at=EXCLUDED.updated_at',[account.id,JSON.stringify(payload),Date.now()]);
   const result={account:account.id,postings:payload.postings?.rows?.length||0,stocks:payload.stocks?.rows?.length||0,finance:payload.finance?.rows?.length||0,supplies:payload.supplies?.rows?.length||0,
    analytics:payload.analytics?.rows?.length||0,analyticsComplete:Boolean(payload.analytics?.complete),analyticsStale:Boolean(payload.analytics?.stale),errors:payload.errors};
