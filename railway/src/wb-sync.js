@@ -17,7 +17,7 @@ const LOOKBACK_DAYS = 14;
 const STALE_STATUS_REFRESH_MS = 60 * 60 * 1000;
 const STALE_STATUS_STATES = Object.freeze(['WAITING','SORTED','ACCEPTED_BY_CARRIER','SENT_TO_CARRIER','READY_FOR_PICKUP']);
 const LIVE_SALES_LOOKBACK_DAYS = 45;
-const LIVE_SALES_SYNC_MS = 6 * 60 * 60 * 1000 + 35 * 60 * 1000;
+const LIVE_SALES_SYNC_MS = 35 * 60 * 1000;
 const LIVE_SALES_RETRY_MS = 65 * 60 * 1000;
 // Keep finance on the conservative cadence that was stable before the report work.
 // Orders may still refresh every ten minutes; finance must not.
@@ -271,7 +271,12 @@ async function syncLiveSales(market, token) {
   const lastError = String(state.last_error || '');
   const cooldown = lastError ? LIVE_SALES_RETRY_MS : LIVE_SALES_SYNC_MS;
   const persistedNextAllowedAt = Number(state.next_allowed_at || 0);
-  const nextAllowedAt = Math.max(persistedNextAllowedAt, lastAttemptAt ? lastAttemptAt + cooldown : 0);
+  const cadenceNextAt = lastAttemptAt ? lastAttemptAt + cooldown : 0;
+  // Old builds used a multi-hour diagnostic cadence. When there is no active
+  // error, do not let that obsolete persisted deadline delay today's live sales.
+  const nextAllowedAt = lastError
+    ? Math.max(persistedNextAllowedAt, cadenceNextAt)
+    : (persistedNextAllowedAt > 0 ? Math.min(persistedNextAllowedAt, cadenceNextAt) : cadenceNextAt);
   if (nextAllowedAt && now < nextAllowedAt) {
     return {
       liveSalesSkipped: true,
@@ -608,14 +613,11 @@ export async function syncWbOrders(market, { force = false } = {}) {
       catch (error) { console.warn(`WB sticker cache failed (${market})`, String(error?.message || error)); }
       await upsert(market, rows);
       const finance = await syncFinanceReport(market, token);
-      // Live sales was added only as a diagnostic cross-check. It is not used by
-      // the production report, so do not spend another WB API lane on every sync.
-      const liveSales = {
-        liveSalesSkipped: true,
-        liveSalesItems: 0,
-        liveSalesError: '',
-        liveSalesDisabled: true
-      };
+      // Live sales is the operational source for Today/Yesterday while the
+      // finance report is still incomplete. syncLiveSales persists its own
+      // cooldown, cursor and 429 retry deadline, so the 10-minute order loop
+      // does not turn into a 10-minute Statistics API loop.
+      const liveSales = await syncLiveSales(market, token);
       let reservationReconcile = null;
       try {
         reservationReconcile = await reconcileWbReservations(market, now);
