@@ -353,6 +353,13 @@ test('WB night schedule accepts normal HH:MM time values',()=>{
   assert.doesNotMatch(api,/const match = \/\^\(\\\\d\{2\}\):\(\\\\d\{2\}\)\$\//);
 });
 
+test('WB night price restore avoids WB price quarantine with staged reductions',()=> {
+  assert.match(api,/export function wbSafeReturnPrice\(currentPrice, basePrice\)/);
+  assert.match(api,/Math\.ceil\(current \/ 2\.5\)/);
+  assert.match(api,/const restoreTarget = wbSafeReturnPrice\(confirmedPrice, basePrice\)/);
+  assert.match(api,/queueSchedulePrice\(market, schedule\.nmId, restoreTarget\)/);
+});
+
 test('WB night price schedule is persisted, bulk-configurable and reuses the 15-minute price queue',()=>{
   assert.match(wbNightMigration,/CREATE TABLE IF NOT EXISTS wb_price_schedules/);
   assert.match(wbNightMigration,/status IN \('pending','sent','held'\)/);
