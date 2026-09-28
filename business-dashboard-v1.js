@@ -2,7 +2,7 @@
 'use strict';
 if(typeof window==='undefined')return;
 
-const BUSINESS_SUPPORTED_MARKETS=new Set(['Kaspi','WB','WB2']);
+const BUSINESS_SUPPORTED_MARKETS=new Set(['Kaspi','WB','WB2','Ozon']);
 const BUSINESS_PERIODS=new Set(['day']);
 const BUSINESS_METRICS=new Set(['orders','buyouts','orderProfit','buyoutProfit']);
 const BUSINESS_UI_KEY='milioner_business_dashboard_v1';
@@ -40,7 +40,7 @@ function businessDayBounds(offset=0){
 }
 function businessPeriodBounds(){return businessDayBounds(0)}
 function businessBuckets(_period,bounds){
- const rows=[],push=(start,end,label)=>rows.push({start,end,label,orders:0,orderQty:0,orderProfit:0,buyouts:0,buyoutQty:0,buyoutBaseProfit:0,buyoutProfit:0,netProfit:0});
+ const rows=[],push=(start,end,label)=>rows.push({start,end,label,orders:0,orderQty:0,orderProfit:0,buyouts:0,buyoutQty:0,buyoutBaseProfit:0,buyoutProfit:0,coreBuyouts:0,coreBuyoutQty:0,coreBuyoutBaseProfit:0,coreBuyoutProfit:0,ozonBuyouts:0,ozonBuyoutQty:0,ozonBuyoutBaseProfit:0,ozonBuyoutProfit:0,netProfit:0});
  for(let h=0;h<24;h++){const s=bounds.start+h*3600000;push(s,s+3600000,String(h).padStart(2,'0'))}
  return rows;
 }
@@ -52,11 +52,13 @@ function businessLineAmount(line,qty=Math.max(0,Number(line?.qty)||0)){
 function businessOrderGroups(bounds){
  const feed=[
   ...(state?.kaspiOrderFeed||[]).map(x=>({...x,market:String(x?.market||'Kaspi')})),
-  ...(state?.wbOrderFeed||[]).map(x=>({...x,market:String(x?.market||'WB')}))
+  ...(state?.wbOrderFeed||[]).map(x=>({...x,market:String(x?.market||'WB')})),
+  ...(state?.ozonOrderFeed||[]).map(x=>({...x,market:'Ozon'}))
  ];
  return groupMarketplaceOrders(feed).filter(g=>{
   const market=String(g?.market||'');if(!BUSINESS_SUPPORTED_MARKETS.has(market))return false;
   const ts=Number(g?.creationDate)||0;if(!(ts>=bounds.start&&ts<bounds.end))return false;
+  if(market==='Ozon')return !/cancel/.test(String(g?.status||g?.state||'').toLowerCase());
   return marketplaceLifecycleStage(market,g?.status,g?.state)!=='cancelled';
  });
 }
@@ -80,34 +82,77 @@ function businessEstimateOrders(groups,buckets,unitMap){
  }
  return {amount,qty,profit,coveredAmount,coveredQty,orderCount,coverage:amount>0?coveredAmount/amount:1};
 }
-function businessLocalBuyouts(bounds,buckets){
- const rows=(typeof financialSales==='function'?financialSales():[]).filter(s=>BUSINESS_SUPPORTED_MARKETS.has(String(s?.channel||''))&&Number(s?.date)>=bounds.start&&Number(s?.date)<bounds.end);
- let revenue=0,qty=0,baseProfit=0;
+function businessUnitProfit(unitMap,pid,market){
+ const stats=pid&&unitMap instanceof Map?unitMap.get(String(pid)):null,source=stats?.sources?.[market];
+ if(source&&Number(source.qty)>0)return Number(source.profit)/Number(source.qty);
+ if(stats&&Number(stats.qty)>0)return Number(stats.unitProfit);
+ return NaN;
+}
+function businessLocalBuyouts(bounds,buckets,unitMap){
+ const rows=(typeof financialSales==='function'?financialSales():[]).filter(s=>{
+  const market=String(s?.channel||'');
+  return market!=='Ozon'&&BUSINESS_SUPPORTED_MARKETS.has(market)&&Number(s?.date)>=bounds.start&&Number(s?.date)<bounds.end;
+ });
+ const core={revenue:0,qty:0,baseProfit:0},ozon={revenue:0,qty:0,baseProfit:0};
  for(const sale of rows){
   const q=Math.max(0,Number(sale?.qty)||0);if(!q)continue;
   const r=q*Math.max(0,Number(sale?.price)||0),p=q*((Number(sale?.price)||0)-(Number(sale?.cost)||0)-(Number(sale?.fee)||0)),bucket=businessBucketFor(buckets,Number(sale.date)||0);
-  revenue+=r;qty+=q;baseProfit+=p;
-  if(bucket){bucket.buyouts+=r;bucket.buyoutQty+=q;bucket.buyoutBaseProfit+=p}
+  core.revenue+=r;core.qty+=q;core.baseProfit+=p;
+  if(bucket){bucket.coreBuyouts+=r;bucket.coreBuyoutQty+=q;bucket.coreBuyoutBaseProfit+=p}
  }
- return {revenue,qty,baseProfit};
+ for(const line of state?.ozonOrderFeed||[]){
+  if(String(line?.status||'').toLowerCase()!=='delivered')continue;
+  const ts=Number(line?.deliveredDate)||0;if(!(ts>=bounds.start&&ts<bounds.end))continue;
+  const q=Math.max(0,Number(line?.qty)||0);if(!q)continue;
+  const r=businessLineAmount(line,q),unitProfit=businessUnitProfit(unitMap,line?.productId,'Ozon'),
+    p=Number.isFinite(unitProfit)?q*unitProfit:0,bucket=businessBucketFor(buckets,ts);
+  ozon.revenue+=r;ozon.qty+=q;ozon.baseProfit+=p;
+  if(bucket){bucket.ozonBuyouts+=r;bucket.ozonBuyoutQty+=q;bucket.ozonBuyoutBaseProfit+=p}
+ }
+ return {core,ozon,revenue:core.revenue+ozon.revenue,qty:core.qty+ozon.qty,baseProfit:core.baseProfit+ozon.baseProfit};
+}
+function businessSummaryPart(summary,markets){
+ const sources=summary?.sources||{};let revenue=0,profit=0,profitKnown=true,found=false;
+ for(const market of markets){
+  const source=sources[market];if(!source)continue;found=true;revenue+=Number(source.revenue)||0;
+  if(source.profit===null||source.profit===undefined||!Number.isFinite(Number(source.profit)))profitKnown=false;
+  else profit+=Number(source.profit)||0;
+ }
+ return {revenue,profit:found&&profitKnown?profit:null};
+}
+function businessNormalizeBuyoutPart(buckets,local,exact,revenueField,baseProfitField,profitField,{fallbackToLast=false}={}){
+ const exactRevenue=Number(exact?.revenue)||0,localRevenue=Number(local?.revenue)||0,baseProfit=Number(local?.baseProfit)||0,
+  profitKnown=exact?.profit!==null&&exact?.profit!==undefined&&Number.isFinite(Number(exact.profit)),exactProfit=profitKnown?Number(exact.profit):baseProfit,
+  revenueScale=localRevenue>0?exactRevenue/localRevenue:0,profitAdjustment=exactProfit-baseProfit;
+ if(localRevenue>0){
+  for(const b of buckets){const share=Math.max(0,Number(b[revenueField])||0)/localRevenue;b[revenueField]*=revenueScale;b[profitField]=(Number(b[baseProfitField])||0)+profitAdjustment*share}
+ }else if(fallbackToLast&&buckets.length){
+  buckets[buckets.length-1][revenueField]=exactRevenue;buckets[buckets.length-1][profitField]=exactProfit;
+ }
 }
 function businessNormalizeBuyoutBuckets(buckets,local,summary){
- const exactRevenue=Number(summary?.revenue)||0,localRevenue=Number(local?.revenue)||0,baseProfit=Number(local?.baseProfit)||0,profitKnown=summary?.profit!==null&&summary?.profit!==undefined&&Number.isFinite(Number(summary.profit)),exactProfit=profitKnown?Number(summary.profit):baseProfit;
- const revenueScale=localRevenue>0?exactRevenue/localRevenue:0,profitAdjustment=exactProfit-baseProfit;
- if(localRevenue>0){
-  for(const b of buckets){const share=Math.max(0,Number(b.buyouts)||0)/localRevenue;b.buyouts*=revenueScale;b.buyoutProfit=b.buyoutBaseProfit+profitAdjustment*share}
- }else if(buckets.length){buckets[buckets.length-1].buyouts=exactRevenue;buckets[buckets.length-1].buyoutProfit=exactProfit}
- for(const b of buckets)b.netProfit=b.buyoutProfit;
+ const coreExact=businessSummaryPart(summary,['Kaspi','WB','WB2']),ozonExact=businessSummaryPart(summary,['Ozon']);
+ businessNormalizeBuyoutPart(buckets,local.core,coreExact,'coreBuyouts','coreBuyoutBaseProfit','coreBuyoutProfit',{fallbackToLast:true});
+ businessNormalizeBuyoutPart(buckets,local.ozon,ozonExact,'ozonBuyouts','ozonBuyoutBaseProfit','ozonBuyoutProfit');
+ for(const b of buckets){
+  b.buyouts=(Number(b.coreBuyouts)||0)+(Number(b.ozonBuyouts)||0);
+  b.buyoutQty=(Number(b.coreBuyoutQty)||0)+(Number(b.ozonBuyoutQty)||0);
+  b.buyoutBaseProfit=(Number(b.coreBuyoutBaseProfit)||0)+(Number(b.ozonBuyoutBaseProfit)||0);
+  b.buyoutProfit=(Number(b.coreBuyoutProfit)||0)+(Number(b.ozonBuyoutProfit)||0);
+  b.netProfit=b.buyoutProfit;
+ }
+ return {ozonHourlyComplete:Math.abs(Number(ozonExact.revenue)||0)<0.005||Number(local?.ozon?.revenue)>0};
 }
 function businessMoney(value){const raw=Number(value),n=Number.isFinite(raw)&&Math.abs(raw)>=.005?raw:0;return typeof fmt==='function'?fmt(n):new Intl.NumberFormat('ru-RU',{maximumFractionDigits:0}).format(n)+' ₸'}
 function businessMaybeMoney(value,estimated=false){if(value===null||value===undefined||!Number.isFinite(Number(value)))return '—';return (estimated?'≈ ':'')+businessMoney(value)}
 function businessExpenseMoney(value,estimated=false){if(value===null||value===undefined||!Number.isFinite(Number(value)))return '—';const n=Math.abs(Number(value));return n<.005?businessMoney(0):(estimated?'≈ −':'−')+businessMoney(n)}
 function businessMetricInfo(model){
+ const ozonHourlyNote=model?.hourly?.ozonHourlyComplete===false?' · Ozon без точного часа выкупа':'';
  const map={
   orders:{label:'Заказы',value:model.orders.amount,meta:model.orders.qty.toLocaleString('ru-RU')+' шт. · '+model.orders.orderCount.toLocaleString('ru-RU')+' заказов',field:'orders'},
-  buyouts:{label:'Выкупы',value:model.summary.revenue,meta:model.summary.qty.toLocaleString('ru-RU')+' шт.',field:'buyouts'},
+  buyouts:{label:'Выкупы',value:model.summary.revenue,meta:model.summary.qty.toLocaleString('ru-RU')+' шт.'+ozonHourlyNote,field:'buyouts'},
   orderProfit:{label:'Прибыль с заказов · прогноз',value:model.orders.profit,meta:'покрытие расчётом '+Math.round(model.orders.coverage*100)+'%',field:'orderProfit'},
-  buyoutProfit:{label:'Прибыль с выкупов',value:model.summary.profit,estimated:Boolean(model.summary.estimated),meta:model.summary.estimated?'≈ по данным маркетплейсов':'по данным маркетплейсов',field:'buyoutProfit'}
+  buyoutProfit:{label:'Прибыль с выкупов',value:model.summary.profit,estimated:Boolean(model.summary.estimated),meta:(model.summary.estimated?'≈ по данным маркетплейсов':'по данным маркетплейсов')+ozonHourlyNote,field:'buyoutProfit'}
  };
  return map[businessMetric]||map.orders;
 }
@@ -133,7 +178,7 @@ function businessEnsureStyle(){
 function businessEnsureUi(){
  const reports=document.getElementById('reports');if(!reports)return null;let root=document.getElementById('businessDashboard');
  if(root)return root;businessEnsureStyle();root=document.createElement('div');root.id='businessDashboard';root.className='business-dashboard';
- root.innerHTML=`<div class="business-top"><div><h3>Сегодня</h3><div class="business-sub">Kaspi + WB1 + WB2 · по часам</div></div><button class="business-detail-btn" type="button" onclick="renderBusinessDashboard(true)">↻</button></div>
+ root.innerHTML=`<div class="business-top"><div><h3>Сегодня</h3><div class="business-sub">Kaspi + WB1 + WB2 + Ozon · по часам</div></div><button class="business-detail-btn" type="button" onclick="renderBusinessDashboard(true)">↻</button></div>
  <div class="business-metrics">${[['orders','Заказы'],['buyouts','Выкупы'],['orderProfit','Прибыль заказов'],['buyoutProfit','Прибыль выкупов']].map(([k,v])=>`<button type="button" data-business-metric="${k}" onclick="setBusinessDashboardMetric('${k}')">${v}</button>`).join('')}</div>
  <div class="business-value-card"><div id="businessValueMetric" class="business-value-title">Загрузка…</div><div class="business-value-grid"><div class="business-value-side"><div id="businessValueLabel" class="business-value-label">Сегодня</div><div id="businessValue" class="business-value">—</div><div id="businessValueMeta" class="business-value-meta"></div></div><div class="business-value-side business-yesterday-side"><div id="businessYesterdayLabel" class="business-value-label">Вчера</div><div id="businessYesterdayValue" class="business-value">—</div><div id="businessYesterdayMeta" class="business-value-meta"></div></div></div><div id="businessYesterdayCompare" class="business-compare"></div></div>
  <div id="businessChart" class="business-chart"></div>`;
@@ -191,10 +236,10 @@ async function businessLoadSummary(days,force=false){
  businessSummaryCache.set(key,{at:Date.now(),promise});return promise;
 }
 async function businessBuildDaySnapshot(bounds,summaryDays,force=false){
- const buckets=businessBuckets('day',bounds),groups=businessOrderGroups(bounds),orders=businessEstimateOrders(groups,buckets,window.allMarketUnitProfit30),local=businessLocalBuyouts(bounds,buckets),summary=await businessLoadSummary(summaryDays,force);
- businessNormalizeBuyoutBuckets(buckets,local,summary);
+ const buckets=businessBuckets('day',bounds),groups=businessOrderGroups(bounds),orders=businessEstimateOrders(groups,buckets,window.allMarketUnitProfit30),local=businessLocalBuyouts(bounds,buckets,window.allMarketUnitProfit30),summary=await businessLoadSummary(summaryDays,force),
+  hourly=businessNormalizeBuyoutBuckets(buckets,local,summary);
  const netProfit=summary?.profit===null||summary?.profit===undefined||!Number.isFinite(Number(summary.profit))?null:Number(summary.profit);
- return {period:'day',bounds,buckets,orders,local,summary,netProfit};
+ return {period:'day',bounds,buckets,orders,local,summary,netProfit,hourly};
 }
 function businessElapsedTodayMs(){
  const start=businessDayStart().getTime();
@@ -223,7 +268,10 @@ function businessYesterdaySameTime(fullYesterday){
  return {...fullYesterday,bounds:partialBounds,orders,summary,netProfit,comparisonCutoff:cutoff,comparisonElapsed:elapsed};
 }
 async function businessBuildModel(force=false){
- if(typeof window.refreshAllMarketUnitProfit==='function'&&(!(window.allMarketUnitProfit30 instanceof Map)||force)){try{await window.refreshAllMarketUnitProfit()}catch(_){}}
+ const warm=[];
+ if(typeof window.ozonFboRefreshStatus==='function')warm.push(Promise.resolve().then(()=>window.ozonFboRefreshStatus()));
+ if(typeof window.refreshAllMarketUnitProfit==='function'&&(!(window.allMarketUnitProfit30 instanceof Map)||force))warm.push(Promise.resolve().then(()=>window.refreshAllMarketUnitProfit()));
+ if(warm.length)await Promise.allSettled(warm);
  const [today,yesterday]=await Promise.all([businessBuildDaySnapshot(businessDayBounds(0),1,force),businessBuildDaySnapshot(businessDayBounds(-1),-1,force)]),yesterdayCompare=businessYesterdaySameTime(yesterday);
  return {...today,yesterday,yesterdayCompare};
 }
