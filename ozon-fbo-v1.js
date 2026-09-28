@@ -223,6 +223,59 @@ function financeModel(days){
  return{rows,groups:[...groups.values()]};
 }
 function multiMoney(groups,key){return groups.length?groups.map(g=>g.currency==='—'?Number(g[key]||0).toLocaleString('ru-RU',{maximumFractionDigits:2}):money(g[key],g.currency)).join(' + '):'—';}
+
+function replenishmentRows(){
+ const rows=[];
+ for(const account of data?.accounts||[]){
+  const analytics=account.analytics||{},updatedAt=Number(analytics.updatedAt||0),stale=Boolean(analytics.stale),error=String(analytics.lastError||'');
+  for(const row of analytics.replenishment?.rows||[])rows.push({...row,_account:account.label||account.account||'Ozon',_updatedAt:updatedAt,_stale:stale,_error:error});
+ }
+ return rows.sort((a,b)=>{
+  const aUrgent=a.exact&&Number(a.sendQty)>0?0:Number(a.shortageNow)>0?1:2;
+  const bUrgent=b.exact&&Number(b.sendQty)>0?0:Number(b.shortageNow)>0?1:2;
+  return aUrgent-bUrgent+(Number(a.daysWithIncoming??999999)-Number(b.daysWithIncoming??999999))||String(a.name||'').localeCompare(String(b.name||''),'ru');
+ });
+}
+function shortDays(value){
+ const n=Number(value);if(!Number.isFinite(n))return '—';
+ if(n>=999)return '999+';
+ return n.toLocaleString('ru-RU',{maximumFractionDigits:1});
+}
+function dateLabel(value){
+ const n=Number(value);if(!Number.isFinite(n)||n<=0)return '—';
+ const d=new Date(n),today=new Date();today.setHours(0,0,0,0);const tomorrow=today.getTime()+86400000;
+ if(d.getTime()>=today.getTime()&&d.getTime()<tomorrow)return 'сегодня';
+ return d.toLocaleDateString('ru-RU',{day:'2-digit',month:'2-digit'});
+}
+function renderReplenishmentBlock(){
+ const rows=replenishmentRows();
+ const analytics=(data?.accounts||[]).map(a=>a.analytics).filter(Boolean);
+ const updated=Math.max(0,...analytics.map(a=>Number(a.updatedAt||0)));
+ const stale=analytics.some(a=>a.stale),errors=analytics.map(a=>String(a.lastError||'')).filter(Boolean);
+ if(!rows.length){
+  const note=errors.length?'Кластерная аналитика пока недоступна · '+esc(errors[0]):'Кластерная аналитика Ozon ещё не загружена.';
+  return '<div class="item ozon-replenishment"><div class="row"><b>Пополнение FBO · 14 дней</b></div><div class="muted" style="margin-top:6px">'+note+'</div></div>';
+ }
+ const cards=rows.map(row=>{
+  const incoming=Number(row.incomingKnown||0),parts=[];
+  if(Number(row.transit)>0)parts.push('едет '+Number(row.transit));
+  if(Number(row.valid)>0)parts.push('размещ. '+Number(row.valid));
+  if(Number(row.requested)>0)parts.push('заявка '+Number(row.requested));
+  const send=row.exact?(Number(row.sendQty||0)+' шт.'):'—';
+  const shortage=!row.exact&&Number(row.shortageNow)>0?' · дефицит до 14 дн. ≈ '+Number(row.shortageNow)+' шт.':'';
+  const lead=row.exact&&Number(row.leadDays)>0?' · срок ≈ '+Number(row.leadDays)+' дн.':'';
+  return '<div class="ozon-replenishment-line"><div class="grow"><b>'+esc(row.name||row.offerId||row.sku||'Товар')+'</b><div class="muted">'+esc(row.clusterName||('Кластер '+row.clusterId))+(row._account?' · '+esc(row._account):'')+'</div></div>'+
+   '<div class="ozon-replenishment-metrics"><span><small>Остаток</small><b>'+Number(row.available||0)+'</b></span>'+
+   '<span><small>Дней</small><b>'+shortDays(row.daysLeft)+'</b></span>'+
+   '<span title="'+esc(parts.join(' · '))+'"><small>В пути</small><b>'+incoming+'</b></span>'+
+   '<span><small>Отправить</small><b>'+send+'</b></span>'+
+   '<span><small>Дата</small><b>'+dateLabel(row.sendAt)+'</b></span></div>'+
+   '<div class="muted ozon-replenishment-note">'+(row.exact?'Учтены остаток и известные поставки'+lead:'Точная отправка появится после подтверждения срока поставки')+shortage+'</div></div>';
+ }).join('');
+ const status=(updated?'Данные '+new Date(updated).toLocaleString('ru-RU',{day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit'}):'')+(stale?' · сохранённые':'');
+ return '<div class="item ozon-replenishment"><div class="row"><div class="grow"><b>Пополнение FBO · 14 дней</b><div class="muted">'+esc(status||'По товарам и кластерам')+'</div></div></div>'+cards+
+  '<div class="link-note">Остатки складов одного кластера суммируются, продажи кластера считаются один раз. «В пути» включает едущие, размещаемые и уже заявленные поставки. При неподтверждённом сроке точные «Отправить» и дата не показываются.</div></div>';
+}
 async function renderOzonReport(){
  ozonReportActive=true;state.settings.reportMarket='Ozon';
  document.querySelectorAll('[data-report-market]').forEach(b=>b.classList.toggle('active',b.dataset.reportMarket==='Ozon'));
@@ -234,9 +287,10 @@ async function renderOzonReport(){
  const set=(id,v)=>{const e=document.getElementById(id);if(e)e.textContent=v;};
  set('rRevenue',multiMoney(g,'sales'));set('rCost','—');set('rFees',multiMoney(g,'commission'));set('rAds','—');set('rProfit','не считается');
  if(!box)return;
- if(!model.rows.length){box.innerHTML='<div class="empty">За выбранный период финансовых операций Ozon нет.</div><div class="link-note">Сервер хранит финансовые данные Ozon за последние 30 дней.</div>';return;}
+ const replenishment=renderReplenishmentBlock();
+ if(!model.rows.length){box.innerHTML=replenishment+'<div class="empty">За выбранный период финансовых операций Ozon нет.</div><div class="link-note">Сервер хранит финансовые данные Ozon за последние 30 дней.</div>';return;}
  const cards=g.map(x=>'<div class="item" style="margin-bottom:8px"><div class="row"><div class="grow"><b>'+esc(x.currency==='—'?'Валюта не указана':x.currency)+'</b><div class="muted">Начисления после операций Ozon, до себестоимости и расходов бизнеса</div></div><b>'+ (x.currency==='—'?Number(x.net).toLocaleString('ru-RU',{maximumFractionDigits:2}):money(x.net,x.currency))+'</b></div><div class="row" style="margin-top:8px"><span class="grow muted">Продажи</span><b>'+ (x.currency==='—'?Number(x.sales).toLocaleString('ru-RU',{maximumFractionDigits:2}):money(x.sales,x.currency))+'</b></div><div class="row" style="margin-top:6px"><span class="grow muted">Комиссия Ozon</span><b>'+ (x.currency==='—'?Number(x.commission).toLocaleString('ru-RU',{maximumFractionDigits:2}):money(x.commission,x.currency))+'</b></div><div class="row" style="margin-top:6px"><span class="grow muted">Доставка</span><b>'+ (x.currency==='—'?Number(x.delivery).toLocaleString('ru-RU',{maximumFractionDigits:2}):money(x.delivery,x.currency))+'</b></div><div class="row" style="margin-top:6px"><span class="grow muted">Услуги</span><b>'+ (x.currency==='—'?Number(x.services).toLocaleString('ru-RU',{maximumFractionDigits:2}):money(x.services,x.currency))+'</b></div></div>').join('');
- box.innerHTML=cards+'<button class="btn dark full" onclick="openOzonFinanceDetails()">Все операции Ozon</button><div class="link-note"><b>Это не чистая прибыль.</b> Здесь показаны финансовые начисления Ozon. Себестоимость товара, налоги и прочие расходы бизнеса не вычитаются. Данные Ozon сейчас хранятся за последние 30 дней.</div>';
+ box.innerHTML=replenishment+cards+'<button class="btn dark full" onclick="openOzonFinanceDetails()">Все операции Ozon</button><div class="link-note"><b>Это не чистая прибыль.</b> Здесь показаны финансовые начисления Ozon. Себестоимость товара, налоги и прочие расходы бизнеса не вычитаются. Данные Ozon сейчас хранятся за последние 30 дней.</div>';
 }
 window.openOzonFinanceDetails=async()=>{await load();const model=financeModel(reportPeriod);const rows=model.rows.slice().sort((a,b)=>Date.parse(b.operation_date||'')-Date.parse(a.operation_date||''));const body=rows.length?rows.map(r=>'<div class="item" style="margin-top:8px"><div class="row"><div class="grow"><b>'+esc(r.operation_type_name||'Операция Ozon')+'</b><div class="muted">'+new Date(r.operation_date).toLocaleDateString('ru-RU')+(r.posting?.posting_number?' · заказ '+esc(r.posting.posting_number):'')+(r._account?' · '+esc(r._account):'')+'</div></div><b>'+money(r.amount,r.currency_code||r.currency)+'</b></div></div>').join(''):'<div class="empty">Операций нет</div>';showSheet('<h3>Ozon FBO · финансовые операции</h3>'+body+'<div class="link-note">Суммы показаны в валюте, которую вернул Ozon. Это не расчёт чистой прибыли.</div>');};
 window.setReportMarket=function(market){ozonReportActive=market==='Ozon';return baseSetReportMarket?.(market);};
