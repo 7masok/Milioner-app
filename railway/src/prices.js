@@ -356,16 +356,15 @@ function minuteToTime(value) {
   return String(Math.floor(minute / 60)).padStart(2, '0') + ':' + String(minute % 60).padStart(2, '0');
 }
 
-export function wbSafeReturnPrice(currentPrice, basePrice, cautious = false) {
+export function wbSafeReturnPrice(currentPrice, basePrice) {
   const current = number(currentPrice);
   const base = number(basePrice);
   if (!(current > 0) || !(base > 0) || base >= current) return base;
-  const divisor = cautious ? 1.25 : 2;
-  return Math.max(base, Math.ceil(current / divisor));
+  return Math.max(base, Math.ceil(current / 1.45));
 }
 
-function isWbQuarantineError(value) {
-  return /quarant|карантин/i.test(cleanText(value));
+function isWbGradualReductionError(value) {
+  return /quarant|карантин|more than.*twice|lower.*gradual|gradually|постеп/i.test(cleanText(value));
 }
 
 export function wbNightWindowState(startMinute, endMinute, now = Date.now()) {
@@ -516,7 +515,7 @@ async function syncWbNightSchedules(market, now = Date.now()) {
         [market, schedule.nmId, row ? 'Разные цены по размерам' : 'Товар отсутствует в снимке цен', now]);
       continue;
     }
-    if (schedule.phase === 'error' && schedule.lastError) continue;
+    if (schedule.phase === 'error' && schedule.lastError && !isWbGradualReductionError(schedule.lastError)) continue;
     const confirmedPrice = number(row.price);
     const window = wbNightWindowState(schedule.startMinute, schedule.endMinute, now);
     let queueRow = queueByNm.get(schedule.nmId);
@@ -579,7 +578,7 @@ async function syncWbNightSchedules(market, now = Date.now()) {
       changed += 1;
       continue;
     }
-    const restoreTarget = wbSafeReturnPrice(confirmedPrice, basePrice, isWbQuarantineError(schedule.lastError));
+    const restoreTarget = wbSafeReturnPrice(confirmedPrice, basePrice);
     if (queueRow?.source === 'schedule' && Number(queueRow.desiredPrice) === restoreTarget && ['pending','sent','checking'].includes(queueRow.status)) continue;
     if (await queueSchedulePrice(market, schedule.nmId, restoreTarget)) {
       await pool.query(`UPDATE wb_price_schedules SET phase='restoring',last_error='',updated_at=$3 WHERE market=$1 AND nm_id=$2`,
@@ -809,7 +808,7 @@ async function inspectWbPriceUpload(market, token, sentRows, now) {
         if (queued.source === 'schedule') {
           await client.query(`UPDATE wb_price_schedules SET phase=$3,last_error=$4,updated_at=$5
             WHERE market=$1 AND nm_id=$2`,
-            [market, queued.nmId, isWbQuarantineError(errorText) ? 'restoring' : 'error', errorText.slice(0, 500), now]);
+            [market, queued.nmId, isWbGradualReductionError(errorText) ? 'restoring' : 'error', errorText.slice(0, 500), now]);
         }
       } else {
         await client.query(`UPDATE wb_price_update_queue
