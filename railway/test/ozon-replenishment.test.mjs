@@ -171,7 +171,7 @@ test('Reports Ozon renders compact cluster replenishment even when finance rows 
   assert.match(ui,/Дата/);
   assert.match(ui,/box\.innerHTML=replenishment\+'<div class="empty">/);
   assert.match(html,/\.ozon-replenishment-metrics/);
-  assert.match(html,/ozon-fbo-v1\.js\?v=20260928-cluster-replenishment/);
+  assert.match(html,/ozon-fbo-v1\.js\?v=20260928-business-ozon/);
 });
 
 test('cluster replenishment documentation forbids invented exact timing without history',()=>{
