@@ -360,7 +360,7 @@ export function wbSafeReturnPrice(currentPrice, basePrice) {
   const current = number(currentPrice);
   const base = number(basePrice);
   if (!(current > 0) || !(base > 0) || base >= current) return base;
-  return Math.max(base, Math.ceil(current / 1.45));
+  return Math.max(base, Math.ceil(current / 1.9));
 }
 
 function isWbGradualReductionError(value) {
