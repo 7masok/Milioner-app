@@ -17,6 +17,7 @@ async function request(credentials,path,body){
 }
 
 const ANALYTICS_CHUNK_SIZE=100;
+const ANALYTICS_MIN_GAP_MS=1500;
 const ANALYTICS_RETRY_FALLBACK_MS=15*60*1000;
 
 function retryAtFromHeaders(headers,now=Date.now()){
@@ -75,7 +76,11 @@ export async function syncClusterAnalytics(credentials,previous,stockRows,supply
   return {rows:[],workingRows:[],cursor:0,totalSkus:0,complete:true,updatedAt:now,attemptAt:now,nextAllowedAt:0,lastError:'',stale:false,
     replenishment:{targetDays:14,rows:[],updatedAt:now}};
  }
- if(Number(prev.nextAllowedAt||0)>now){
+ const previousPerSecondLimit=/rate limit per second/i.test(String(prev.lastError||''));
+ const effectiveNextAllowedAt=previousPerSecondLimit
+  ? Math.min(Number(prev.nextAllowedAt||0),Number(prev.attemptAt||0)+5000)
+  : Number(prev.nextAllowedAt||0);
+ if(effectiveNextAllowedAt>now){
   const rows=Array.isArray(prev.rows)?prev.rows:[];
   return {...prev,totalSkus:skus.length,attemptAt:now,stale:true,
     replenishment:{targetDays:14,rows:buildOzonReplenishmentRows(rows,supplyOrders,{targetDays:14,now}),updatedAt:Number(prev.updatedAt||0)}};
@@ -84,6 +89,9 @@ export async function syncClusterAnalytics(credentials,previous,stockRows,supply
  const cursor=(safeCursor>=skus.length?0:safeCursor);
  const chunk=skus.slice(cursor,cursor+ANALYTICS_CHUNK_SIZE);
  try{
+  // Existing Ozon FBO sync makes several API calls first. Keep this analytics
+  // request out of the same per-second bucket instead of retrying it in a burst.
+  await new Promise(resolve=>setTimeout(resolve,ANALYTICS_MIN_GAP_MS));
   const result=await requestAnalyticsStocksChunk(credentials,chunk);
   const working=cursor===0?result.items:mergeAnalyticsCycleRows(prev.workingRows,result.items);
   const nextCursor=cursor+chunk.length;
@@ -106,7 +114,8 @@ export async function syncClusterAnalytics(credentials,previous,stockRows,supply
   next.replenishment={targetDays:14,rows:buildOzonReplenishmentRows(rows,supplyOrders,{targetDays:14,now}),updatedAt};
   return next;
  }catch(error){
-  const retryAt=Math.max(Number(error?.retryAt||0),error?.status===429?now+ANALYTICS_RETRY_FALLBACK_MS:now+10*60*1000);
+  const perSecond=/rate limit per second/i.test(String(error?.message||''));
+  const retryAt=Math.max(Number(error?.retryAt||0),error?.status===429?(now+(perSecond?5000:ANALYTICS_RETRY_FALLBACK_MS)):now+10*60*1000);
   const rows=Array.isArray(prev.rows)?prev.rows:[];
   return {...prev,rows,totalSkus:skus.length,attemptAt:now,nextAllowedAt:retryAt,
    lastError:String(error?.message||error).slice(0,500),stale:true,
