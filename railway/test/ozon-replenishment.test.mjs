@@ -167,16 +167,26 @@ test('Ozon report wrapper routes the Ozon tab through the replenishment renderer
   assert.match(ui,/window\.setReportMarket=function\(market\)\{ozonReportActive=market==='Ozon'/);
 });
 
+test('Ozon replenishment groups repeated cluster rows under one product and previews two clusters',()=> {
+  assert.match(ui,/function replenishmentGroups\(rows\)/);
+  assert.match(ui,/group\.rows\.length-2/);
+  assert.match(ui,/index>=2\?' ozon-cluster-extra'/);
+  assert.match(ui,/Ещё '\+more/);
+  assert.match(ui,/toggleOzonReplenishmentGroup/);
+});
+
 test('Reports Ozon renders compact cluster replenishment even when finance rows are empty',()=>{
   assert.match(ui,/Пополнение FBO · 14 дней/);
-  assert.match(ui,/Остаток/);
-  assert.match(ui,/Дней/);
-  assert.match(ui,/В пути/);
-  assert.match(ui,/Отправить/);
-  assert.match(ui,/Дата/);
+  assert.match(ui,/ost /i);
+  assert.match(ui,/дн\./);
+  assert.match(ui,/в пути/);
+  assert.match(ui,/отправить /);
+  assert.match(ui,/dateLabel\(row\?\.sendAt\)/);
   assert.match(ui,/box\.innerHTML=replenishment\+'<div class="empty">/);
-  assert.match(html,/\.ozon-replenishment-metrics/);
-  assert.match(html,/ozon-fbo-v1\.js\?v=20260929-replenishment-visible/);
+  assert.match(html,/\.ozon-product-group/);
+  assert.match(html,/\.ozon-cluster-row/);
+  assert.match(html,/\.ozon-cluster-extra\{display:none\}/);
+  assert.match(html,/ozon-fbo-v1\.js\?v=20260929-replenishment-compact/);
 });
 
 test('cluster replenishment documentation forbids invented exact timing without history',()=>{
