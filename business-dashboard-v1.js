@@ -260,11 +260,23 @@ async function businessLoadSummary(days,force=false){
  const promise=window.loadBusinessMarketplaceSummary(days,{force}).then(data=>{businessSummaryCache.set(key,{at:Date.now(),data});return data}).catch(e=>{businessSummaryCache.delete(key);throw e});
  businessSummaryCache.set(key,{at:Date.now(),promise});return promise;
 }
+async function businessLoadRangeSummary(range,force=false){
+ const key='range:'+String(range?.from||'')+':'+String(range?.to||''),old=businessSummaryCache.get(key);if(!force&&old?.data&&Date.now()-Number(old.at||0)<60000)return old.data;if(!force&&old?.promise)return old.promise;
+ if(typeof window.loadBusinessMarketplaceRangeSummary!=='function')throw new Error('Финансовый модуль периода ещё не загрузился');
+ const promise=window.loadBusinessMarketplaceRangeSummary(range,{force}).then(data=>{businessSummaryCache.set(key,{at:Date.now(),data});return data}).catch(e=>{businessSummaryCache.delete(key);throw e});
+ businessSummaryCache.set(key,{at:Date.now(),promise});return promise;
+}
 async function businessBuildDaySnapshot(bounds,summaryDays,force=false){
  const buckets=businessBuckets('day',bounds),groups=businessOrderGroups(bounds),orders=businessEstimateOrders(groups,buckets,window.allMarketUnitProfit30),local=businessLocalBuyouts(bounds,buckets,window.allMarketUnitProfit30),summary=await businessLoadSummary(summaryDays,force),
   hourly=businessNormalizeBuyoutBuckets(buckets,local,summary);
  const netProfit=summary?.profit===null||summary?.profit===undefined||!Number.isFinite(Number(summary.profit))?null:Number(summary.profit);
  return {period:'day',bounds,buckets,orders,local,summary,netProfit,hourly};
+}
+async function businessBuildRangeSnapshot(bounds,range,period='week',force=false){
+ const buckets=businessBuckets(period,bounds),groups=businessOrderGroups(bounds),orders=businessEstimateOrders(groups,buckets,window.allMarketUnitProfit30),local=businessLocalBuyouts(bounds,buckets,window.allMarketUnitProfit30),summary=await businessLoadRangeSummary(range,force),
+  hourly=businessNormalizeBuyoutBuckets(buckets,local,summary);
+ const netProfit=summary?.profit===null||summary?.profit===undefined||!Number.isFinite(Number(summary.profit))?null:Number(summary.profit);
+ return {period,bounds,buckets,orders,local,summary,netProfit,hourly,range};
 }
 function businessElapsedTodayMs(){
  const start=businessDayStart().getTime();
@@ -276,6 +288,8 @@ function businessHourMinute(ts){
 function businessShortDate(ts){
  return new Date(ts).toLocaleDateString('ru-RU',{day:'numeric',month:'short'}).replace(/\.$/,'');
 }
+function businessWeekLabel(bounds){return businessShortDate(bounds.start)+' – '+businessShortDate(bounds.end-1)}
+function businessDayName(ts){return new Date(ts).toLocaleDateString('ru-RU',{weekday:'short'}).replace(/\.$/,'')}
 function businessYesterdaySameTime(fullYesterday){
  const elapsed=businessElapsedTodayMs(),cutoff=Math.min(fullYesterday.bounds.end,fullYesterday.bounds.start+elapsed),
    partialBounds={start:fullYesterday.bounds.start,end:cutoff,days:-1,label:'Вчера'},
@@ -292,13 +306,63 @@ function businessYesterdaySameTime(fullYesterday){
    netProfit=profit;
  return {...fullYesterday,bounds:partialBounds,orders,summary,netProfit,comparisonCutoff:cutoff,comparisonElapsed:elapsed};
 }
+function businessWeekSameTime(fullWeek,dayIndex){
+ const dayStart=new Date(fullWeek.bounds.start);dayStart.setDate(dayStart.getDate()+Math.max(0,Math.min(6,Number(dayIndex)||0)));
+ const elapsed=businessElapsedTodayMs(),cutoff=Math.min(fullWeek.bounds.end,dayStart.getTime()+elapsed),
+  partialBounds={start:fullWeek.bounds.start,end:cutoff,days:7,label:'Прошлая неделя'},
+  orderBuckets=businessBuckets('week',fullWeek.bounds),
+  orders=businessEstimateOrders(businessOrderGroups(partialBounds),orderBuckets,window.allMarketUnitProfit30),
+  buckets=fullWeek.buckets.map((row,i)=>{
+   const factor=cutoff<=row.start?0:cutoff>=row.end?1:(cutoff-row.start)/Math.max(1,row.end-row.start),next={...row};
+   for(const key of ['buyouts','buyoutQty','buyoutBaseProfit','buyoutProfit','coreBuyouts','coreBuyoutQty','coreBuyoutBaseProfit','coreBuyoutProfit','ozonBuyouts','ozonBuyoutQty','ozonBuyoutBaseProfit','ozonBuyoutProfit','netProfit'])next[key]=(Number(row[key])||0)*factor;
+   next.orders=Number(orderBuckets[i]?.orders)||0;next.orderQty=Number(orderBuckets[i]?.orderQty)||0;next.orderProfit=Number(orderBuckets[i]?.orderProfit)||0;return next;
+  });
+ const revenue=buckets.reduce((n,x)=>n+(Number(x.buyouts)||0),0),qty=buckets.reduce((n,x)=>n+(Number(x.buyoutQty)||0),0),profit=buckets.reduce((n,x)=>n+(Number(x.buyoutProfit)||0),0),
+  summary={...fullWeek.summary,revenue,qty:Math.round(qty),profit},netProfit=profit;
+ return {...fullWeek,bounds:partialBounds,buckets,orders,summary,netProfit,comparisonCutoff:cutoff,comparisonElapsed:elapsed};
+}
+async function businessWarmSupportingData(force=false){
+ const warm=[];
+ if(typeof window.ozonFboRefreshStatus==='function')warm.push(Promise.resolve().then(()=>window.ozonFboRefreshStatus()));
+ if(typeof window.refreshAllMarketUnitProfit==='function'&&(!(window.allMarketUnitProfit30 instanceof Map)||force))warm.push(Promise.resolve().then(()=>window.refreshAllMarketUnitProfit()));
+ if(warm.length)await Promise.allSettled(warm);
+}
 async function businessBuildModel(force=false){
  const warm=[];
  if(typeof window.ozonFboRefreshStatus==='function')warm.push(Promise.resolve().then(()=>window.ozonFboRefreshStatus()));
  if(typeof window.refreshAllMarketUnitProfit==='function'&&(!(window.allMarketUnitProfit30 instanceof Map)||force))warm.push(Promise.resolve().then(()=>window.refreshAllMarketUnitProfit()));
  if(warm.length)await Promise.allSettled(warm);
  const [today,yesterday]=await Promise.all([businessBuildDaySnapshot(businessDayBounds(0),1,force),businessBuildDaySnapshot(businessDayBounds(-1),-1,force)]),yesterdayCompare=businessYesterdaySameTime(yesterday);
- return {...today,yesterday,yesterdayCompare};
+ return {...today,yesterday,yesterdayCompare,periodKey:'today',chartMode:'day',legendCurrent:'сегодня',legendComparison:'вчера'};
+}
+async function businessBuildYesterdayModel(force=false){
+ await businessWarmSupportingData(force);
+ const currentBounds=businessDayBounds(-1),comparisonBounds=businessDayBounds(-2),comparisonRange=businessRangeForBounds(comparisonBounds);
+ const [current,comparison]=await Promise.all([businessBuildDaySnapshot(currentBounds,-1,force),businessBuildRangeSnapshot(comparisonBounds,comparisonRange,'day',force)]);
+ return {...current,periodKey:'yesterday',chartMode:'day',comparison,comparisonSame:comparison,legendCurrent:'вчера',legendComparison:'позавчера'};
+}
+async function businessBuildWeekModel(force=false){
+ await businessWarmSupportingData(force);
+ const currentBounds=businessWeekBounds(0),comparisonBounds=businessWeekBounds(-1),todayStart=businessDayStart().getTime(),dayIndex=Math.max(0,Math.min(6,Math.round((todayStart-currentBounds.start)/86400000))),
+  currentRange=businessRangeForBounds(currentBounds,Date.now()+1),comparisonDayEnd=new Date(comparisonBounds.start);
+ comparisonDayEnd.setDate(comparisonDayEnd.getDate()+dayIndex+1);
+ const comparisonRange=businessRangeForBounds(comparisonBounds,comparisonDayEnd.getTime()),
+  [current,comparisonFull]=await Promise.all([businessBuildRangeSnapshot(currentBounds,currentRange,'week',force),businessBuildRangeSnapshot(comparisonBounds,comparisonRange,'week',force)]),
+  comparison=businessWeekSameTime(comparisonFull,dayIndex);
+ return {...current,periodKey:'week',chartMode:'week',comparison,comparisonFull,legendCurrent:'эта неделя',legendComparison:'прошлая'};
+}
+async function businessBuildPreviousWeekModel(force=false){
+ await businessWarmSupportingData(force);
+ const currentBounds=businessWeekBounds(-1),comparisonBounds=businessWeekBounds(-2),
+  currentRange=businessRangeForBounds(currentBounds),comparisonRange=businessRangeForBounds(comparisonBounds),
+  [current,comparison]=await Promise.all([businessBuildRangeSnapshot(currentBounds,currentRange,'week',force),businessBuildRangeSnapshot(comparisonBounds,comparisonRange,'week',force)]);
+ return {...current,periodKey:'prevweek',chartMode:'week',comparison,comparisonSame:comparison,legendCurrent:'прошлая',legendComparison:'до неё'};
+}
+async function businessBuildSelectedModel(force=false){
+ if(businessPeriod==='yesterday')return businessBuildYesterdayModel(force);
+ if(businessPeriod==='week')return businessBuildWeekModel(force);
+ if(businessPeriod==='prevweek')return businessBuildPreviousWeekModel(force);
+ return businessBuildModel(force);
 }
 
 window.setBusinessDashboardMetric=function(metric){if(!BUSINESS_METRICS.has(metric))return;businessMetric=metric;businessSaveUi();if(businessLastModel)businessPaint(businessLastModel);else window.renderBusinessDashboard(false)};
