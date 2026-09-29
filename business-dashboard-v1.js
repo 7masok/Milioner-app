@@ -10,13 +10,13 @@ let businessRenderSeq=0,businessSummaryCache=new Map(),businessLastModel=null;
 let businessPeriod='today',businessMetric='orders';
 try{
  const saved=JSON.parse(localStorage.getItem(BUSINESS_UI_KEY)||'{}');
- if(BUSINESS_PERIODS.has(saved.period))businessPeriod=saved.period;
+ businessPeriod='today';
  if(saved.metric==='netProfit')businessMetric='buyoutProfit';
  else if(BUSINESS_METRICS.has(saved.metric))businessMetric=saved.metric;
 }catch(_){}
 
 function businessSaveUi(){
- try{localStorage.setItem(BUSINESS_UI_KEY,JSON.stringify({period:businessPeriod,metric:businessMetric}))}catch(_){}
+ try{localStorage.setItem(BUSINESS_UI_KEY,JSON.stringify({metric:businessMetric}))}catch(_){}
 }
 function businessRemoveLegacyStoreNote(){
  const root=document.getElementById('reports');if(!root)return;
