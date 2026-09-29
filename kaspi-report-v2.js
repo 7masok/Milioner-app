@@ -111,44 +111,6 @@ window.loadBusinessMarketplaceSummary=async function(days=30,{force=false}={}){
  businessMarketplaceSummaryCache.set(key,{at:Date.now(),promise});
  return promise;
 };
-
-window.loadBusinessMarketplaceRangeSummary=async function(range,{force=false}={}){
- const bounds=explicitRangeBounds(range);if(!bounds)throw new Error('Некорректный диапазон отчёта');
- const normalized={from:String(range.from),to:String(range.to)},key='business-range:'+normalized.from+':'+normalized.to,cached=businessMarketplaceSummaryCache.get(key);
- if(!force&&cached?.data&&Date.now()-Number(cached.at||0)<60000)return cached.data;
- if(!force&&cached?.promise)return cached.promise;
- const promise=(async()=>{
-  const [kaspiSnapshot,wb1,wb2,ozon]=await Promise.all([
-    loadKaspiOrders(0,{force,range:normalized}),
-    loadWbModel('WB',0,{range:normalized}),
-    loadWbModel('WB2',0,{range:normalized}),
-    loadOzonSummary(0,{range:normalized})
-  ]),
-  kaspi=buildModel(kaspiSnapshot,0,normalized),kaspiView=reportProfitView(kaspi),
-  kaspiStats={qty:Math.max(0,Number(kaspi.qty)||0),revenue:Number(kaspi.revenue)||0,cost:Number(kaspi.cost)||0,fees:Number(kaspi.fees)||0,ads:Number(kaspi.ads)||0,profit:Number(kaspiView.value)||0,complete:!(Number(kaspi.unknownRevenue)>0),financeAvailable:true,estimated:Boolean(kaspiView.estimated),live:false},
-  wb1Stats=businessWbFinanceStats(wb1),wb2Stats=businessWbFinanceStats(wb2),
-  ozonReady=!ozon?.missing,
-  ozonStats={qty:Math.max(0,Number(ozon?.qty)||0),revenue:Number(ozon?.sales)||0,cost:ozonReady?Number(ozon?.cost)||0:null,fees:ozonReady?Number(ozon?.fees)||0:null,ads:Number(ozon?.ads)||0,profit:ozonReady?Number(ozon?.profit)||0:null,complete:ozonReady,financeAvailable:ozonReady,estimated:!ozonReady,live:false},
-  sources={Kaspi:kaspiStats,WB:wb1Stats,WB2:wb2Stats,Ozon:ozonStats},
-  total={qty:0,revenue:0,cost:0,fees:0,ads:0,profit:0,complete:true,financeAvailable:true,estimated:false},
-  knownCount={cost:0,fees:0,profit:0},sourceCount=Object.keys(sources).length,partial={cost:false,fees:false,profit:false};
-  for(const x of Object.values(sources)){
-   total.qty+=Number(x.qty)||0;total.revenue+=Number(x.revenue)||0;total.ads+=Number(x.ads)||0;
-   for(const keyName of ['cost','fees','profit']){
-    if(x[keyName]===null||x[keyName]===undefined||!Number.isFinite(Number(x[keyName])))partial[keyName]=true;
-    else{total[keyName]+=Number(x[keyName])||0;knownCount[keyName]++}
-   }
-   total.complete=total.complete&&Boolean(x.complete);total.financeAvailable=total.financeAvailable&&Boolean(x.financeAvailable);total.estimated=total.estimated||Boolean(x.estimated);
-  }
-  for(const keyName of ['cost','fees','profit']){
-   if(knownCount[keyName]===0)total[keyName]=null;
-   if(knownCount[keyName]<sourceCount)partial[keyName]=true;
-  }
-  const data={ok:true,days:0,range:normalized,...total,sources,partial,estimated:total.estimated||partial.cost||partial.fees||partial.profit||!total.complete||!total.financeAvailable,generatedAt:Date.now()};
-  businessMarketplaceSummaryCache.set(key,{at:Date.now(),data});return data;
- })().catch(error=>{businessMarketplaceSummaryCache.delete(key);throw error});
- businessMarketplaceSummaryCache.set(key,{at:Date.now(),promise});return promise;
-};
 const productPeriodStatsCache=new Map(),productPeriodStatsJobs=new Map();
 window.refreshProductPeriodStats=function(spec={days:30,key:'30'},{force=false}={}){
  const days=Number(spec?.days)===-1?-1:Math.max(0,Number(spec?.days)||0),range=spec?.range||null,key=String(spec?.key||periodCacheKey(days,range));
