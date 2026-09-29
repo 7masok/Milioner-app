@@ -38,7 +38,9 @@ test('business day chart uses real overlapping bars and no separate yesterday ca
   assert.match(ui, /todayShorter=sameSide&&!equal&&Math\.abs\(v\)<Math\.abs\(yv\)/);
   assert.match(ui, /todayZ=todayShorter\|\|equal\?3:2,yesterdayZ=yesterdayShorter\?3:1/);
   assert.match(ui, /todayHeight=equal/);
-  assert.match(ui, /сегодня .* вчера/);
+  assert.match(ui, /legendCurrent:'сегодня',legendComparison:'вчера'/);
+  assert.match(ui, /business-legend-today/);
+  assert.match(ui, /business-legend-yesterday/);
 });
 
 test('business x-axis labels are 03 through 24 without 00', () => {
