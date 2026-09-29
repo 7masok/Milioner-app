@@ -230,7 +230,10 @@ function businessAxisNumber(value){
 }
 function businessPaintChart(model,field){
  const box=document.getElementById('businessChart');if(!box)return;
- const values=model.buckets.map(x=>Number(x[field])||0),yesterdayValues=(model.yesterday?.buckets||[]).map(x=>Number(x[field])||0),scale=businessChartScale([...values,...yesterdayValues]),range=Math.max(1e-9,scale.max-scale.min),toPct=v=>(v-scale.min)/range*100,zeroPct=toPct(0);
+ const comparison=model.comparison||model.yesterday||null,
+  values=model.buckets.map(x=>Number(x[field])||0),yesterdayValues=(comparison?.buckets||[]).map(x=>Number(x[field])||0),
+  scale=businessChartScale([...values,...yesterdayValues]),range=Math.max(1e-9,scale.max-scale.min),toPct=v=>(v-scale.min)/range*100,zeroPct=toPct(0),
+  isWeek=model.chartMode==='week',currentLegend=model.legendCurrent||(isWeek?'эта неделя':'сегодня'),comparisonLegend=model.legendComparison||(isWeek?'прошлая':'вчера');
  const lines=scale.ticks.map(v=>`<div class="business-grid-line" style="bottom:${toPct(v)}%"></div>`).join('');
  const ticks=scale.ticks.map(v=>`<div class="business-y-tick" style="bottom:${toPct(v)}%">${businessAxisNumber(v)}</div>`).join('');
  const bars=model.buckets.map((b,i)=>{
@@ -243,11 +246,12 @@ function businessPaintChart(model,field){
     todayShorter=sameSide&&!equal&&Math.abs(v)<Math.abs(yv),
     todayZ=todayShorter||equal?3:2,yesterdayZ=yesterdayShorter?3:1,
     todayBottom=equal&&v<0?`calc(${bottom}% + 3px)`:`${bottom}%`,
-    todayHeight=equal?`calc(${Math.max(0,height)}% - 3px)`:`${Math.max(v===0?0:1.2,height)}%`;
-  return `<div class="business-hour" title="${b.label}:00 · сегодня ${businessMoney(v)} · вчера ${businessMoney(yv)}"><div class="business-yesterday-bar ${yv<0?'negative':''}" style="bottom:${yBottom}%;height:${Math.max(yv===0?0:1.2,yHeight)}%;z-index:${yesterdayZ}"></div><div class="business-bar ${v<0?'negative':''}" style="bottom:${todayBottom};height:${todayHeight};z-index:${todayZ}"></div></div>`;
+    todayHeight=equal?`calc(${Math.max(0,height)}% - 3px)`:`${Math.max(v===0?0:1.2,height)}%`,
+    tipLabel=isWeek?b.label:(b.label+':00');
+  return `<div class="business-hour" title="${tipLabel} · ${currentLegend} ${businessMoney(v)} · ${comparisonLegend} ${businessMoney(yv)}"><div class="business-yesterday-bar ${yv<0?'negative':''}" style="bottom:${yBottom}%;height:${Math.max(yv===0?0:1.2,yHeight)}%;z-index:${yesterdayZ}"></div><div class="business-bar ${v<0?'negative':''}" style="bottom:${todayBottom};height:${todayHeight};z-index:${todayZ}"></div></div>`;
  }).join('');
- const labels=[3,6,9,12,15,18,21,24].map(h=>`<div class="business-x-label" style="left:${h===24?100:((h-.5)/24*100)}%">${String(h).padStart(2,'0')}</div>`).join('');
- box.innerHTML=`<div class="business-chart-legend"><span class="business-legend-today">сегодня</span><span class="business-legend-yesterday">вчера</span></div><div class="business-chart-frame"><div class="business-plot">${lines}<div class="business-bars">${bars}</div></div><div class="business-y-axis">${ticks}</div><div class="business-x-axis">${labels}</div><div class="business-axis-caption">₸</div></div>`;
+ const labels=isWeek?model.buckets.map((b,i)=>`<div class="business-x-label" style="left:${((i+.5)/Math.max(1,model.buckets.length))*100}%">${b.label}</div>`).join(''):[3,6,9,12,15,18,21,24].map(h=>`<div class="business-x-label" style="left:${h===24?100:((h-.5)/24*100)}%">${String(h).padStart(2,'0')}</div>`).join('');
+ box.innerHTML=`<div class="business-chart-legend"><span class="business-legend-today">${currentLegend}</span><span class="business-legend-yesterday">${comparisonLegend}</span></div><div class="business-chart-frame"><div class="business-plot">${lines}<div class="business-bars" style="grid-template-columns:repeat(${Math.max(1,model.buckets.length)},minmax(0,1fr))">${bars}</div></div><div class="business-y-axis">${ticks}</div><div class="business-x-axis">${labels}</div><div class="business-axis-caption">₸</div></div>`;
 }
 
 async function businessLoadSummary(days,force=false){
