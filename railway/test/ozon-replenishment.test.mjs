@@ -177,7 +177,7 @@ test('Ozon replenishment groups repeated cluster rows under one product and prev
 
 test('Reports Ozon renders compact cluster replenishment even when finance rows are empty',()=>{
   assert.match(ui,/Пополнение FBO · 14 дней/);
-  assert.match(ui,/ost /i);
+  assert.match(ui,/ост /);
   assert.match(ui,/дн\./);
   assert.match(ui,/в пути/);
   assert.match(ui,/отправить /);
