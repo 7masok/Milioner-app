@@ -162,6 +162,11 @@ test('Ozon 429 handling retains last analytics rows and stores a retry deadline'
   assert.match(backend,/stale:true/);
 });
 
+test('Ozon report wrapper routes the Ozon tab through the replenishment renderer',()=> {
+  assert.match(ui,/window\.renderReports=function\(\)\{if\(ozonReportActive\)return renderOzonReport\(\);return baseRenderReports\?\.\(\);\}/);
+  assert.match(ui,/window\.setReportMarket=function\(market\)\{ozonReportActive=market==='Ozon'/);
+});
+
 test('Reports Ozon renders compact cluster replenishment even when finance rows are empty',()=>{
   assert.match(ui,/Пополнение FBO · 14 дней/);
   assert.match(ui,/Остаток/);
@@ -171,7 +176,7 @@ test('Reports Ozon renders compact cluster replenishment even when finance rows 
   assert.match(ui,/Дата/);
   assert.match(ui,/box\.innerHTML=replenishment\+'<div class="empty">/);
   assert.match(html,/\.ozon-replenishment-metrics/);
-  assert.match(html,/ozon-fbo-v1\.js\?v=20260928-business-ozon/);
+  assert.match(html,/ozon-fbo-v1\.js\?v=20260929-replenishment-visible/);
 });
 
 test('cluster replenishment documentation forbids invented exact timing without history',()=>{
