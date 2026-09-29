@@ -320,7 +320,10 @@ reportsRouter.get('/wb-finance-products', asyncRoute(async (req, res) => {
     SUM(CASE WHEN trim(f.doc_type)='Продажа' THEN ABS(f.retail_amount) * COALESCE(
       NULLIF(f.raw_json::jsonb->>'commissionPercent','')::double precision,
       NULLIF(f.raw_json::jsonb->>'commission_percent','')::double precision,0) ELSE 0 END) AS "commissionPctWeighted",
-    SUM(CASE WHEN trim(f.doc_type)='Продажа' THEN ABS(f.retail_amount) ELSE 0 END) AS "commissionPctWeight",
+    SUM(CASE WHEN trim(f.doc_type)='Продажа' AND COALESCE(
+      NULLIF(f.raw_json::jsonb->>'commissionPercent',''),
+      NULLIF(f.raw_json::jsonb->>'commission_percent','')) IS NOT NULL
+      THEN ABS(f.retail_amount) ELSE 0 END) AS "commissionPctWeight",
     SUM(f.retail_amount) AS "retailAmount",SUM(f.for_pay) AS "forPay",SUM(f.acquiring_fee) AS acquiring,
     SUM(f.delivery_service) AS delivery,SUM(f.paid_storage) AS storage,SUM(f.paid_acceptance) AS acceptance,
     SUM(CASE WHEN lower(COALESCE(NULLIF(f.raw_json::jsonb->>'bonusTypeName',''),NULLIF(f.raw_json::jsonb->>'bonus_type_name',''),'')) LIKE '%wb продвижение%' THEN 0 ELSE f.deduction END) AS deduction,
