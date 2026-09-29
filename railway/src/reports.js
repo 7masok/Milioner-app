@@ -317,6 +317,13 @@ reportsRouter.get('/wb-finance-products', asyncRoute(async (req, res) => {
     SUM(CASE WHEN trim(f.doc_type)='Продажа' THEN f.qty WHEN trim(f.doc_type)='Возврат' THEN -f.qty ELSE 0 END) AS qty,
     SUM(CASE WHEN trim(f.doc_type)='Продажа' THEN ABS(f.qty) ELSE 0 END) AS "saleQty",
     SUM(CASE WHEN trim(f.doc_type)='Возврат' THEN ABS(f.qty) ELSE 0 END) AS "returnQty",
+    SUM(CASE WHEN trim(f.doc_type)='Продажа' THEN ABS(f.retail_amount) * COALESCE(
+      NULLIF(f.raw_json::jsonb->>'commissionPercent','')::double precision,
+      NULLIF(f.raw_json::jsonb->>'commission_percent','')::double precision,0) ELSE 0 END) AS "commissionPctWeighted",
+    SUM(CASE WHEN trim(f.doc_type)='Продажа' AND COALESCE(
+      NULLIF(f.raw_json::jsonb->>'commissionPercent',''),
+      NULLIF(f.raw_json::jsonb->>'commission_percent','')) IS NOT NULL
+      THEN ABS(f.retail_amount) ELSE 0 END) AS "commissionPctWeight",
     SUM(f.retail_amount) AS "retailAmount",SUM(f.for_pay) AS "forPay",SUM(f.acquiring_fee) AS acquiring,
     SUM(f.delivery_service) AS delivery,SUM(f.paid_storage) AS storage,SUM(f.paid_acceptance) AS acceptance,
     SUM(CASE WHEN lower(COALESCE(NULLIF(f.raw_json::jsonb->>'bonusTypeName',''),NULLIF(f.raw_json::jsonb->>'bonus_type_name',''),'')) LIKE '%wb продвижение%' THEN 0 ELSE f.deduction END) AS deduction,
@@ -339,8 +346,9 @@ reportsRouter.get('/wb-finance-products', asyncRoute(async (req, res) => {
     if (rows.some(row => String(row.productId || '') === String(productId))) continue;
     const linkedAd = attribution.rows.find(row => row.productId === String(productId));
     rows.push({ productId: String(productId), nmId: linkedAd?.nmIds?.[0] || '', vendorCode: '', title: linkedAd?.productName || '',
-      qty: 0, saleQty: 0, returnQty: 0, retailAmount: 0, forPay: 0, acquiring: 0, delivery: 0, storage: 0,
-      acceptance: 0, deduction: 0, promotionDeduction: 0, penalty: 0, additionalPayment: 0, rebill: 0 });
+      qty: 0, saleQty: 0, returnQty: 0, commissionPctWeighted: 0, commissionPctWeight: 0, retailAmount: 0, forPay: 0,
+      acquiring: 0, delivery: 0, storage: 0, acceptance: 0, deduction: 0, promotionDeduction: 0, penalty: 0,
+      additionalPayment: 0, rebill: 0 });
   }
   const consumedAdvertising = new Set();
   const products = rows.map(row => {
@@ -349,7 +357,11 @@ reportsRouter.get('/wb-finance-products', asyncRoute(async (req, res) => {
     const productAdvertising = productId && !consumedAdvertising.has(key) ? attribution.byProduct.get(productId) || 0 : 0;
     consumedAdvertising.add(key);
     const wbExpenses = Number(row.retailAmount || 0) - Number(row.forPay || 0) + wbCharges;
-    return { ...row, wbCharges, wbExpenses, advertising: productAdvertising,
+    const saleQty = Math.max(0, Number(row.saleQty || 0));
+    const avgDelivery = saleQty > 0 ? Math.max(0, Number(row.delivery || 0) + Number(row.rebill || 0)) / saleQty : null;
+    const commissionPctWeight = Math.max(0, Number(row.commissionPctWeight || 0));
+    const avgCommissionPct = commissionPctWeight > 0 ? Number(row.commissionPctWeighted || 0) / commissionPctWeight : null;
+    return { ...row, wbCharges, wbExpenses, advertising: productAdvertising, avgDelivery, avgCommissionPct,
       netBeforeCost: Number(row.forPay || 0) - wbCharges + Number(row.additionalPayment || 0) - productAdvertising };
   });
   res.json({ ok: true, market: selected, days, range: { since, until, timezone: 'Asia/Almaty' }, products,
