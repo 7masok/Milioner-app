@@ -60,7 +60,7 @@ test('business card shows yesterday on the right and compares only through the s
 });
 
 test('today keeps the old loader while week ranges stay lazy', () => {
-  const start=ui.indexOf('async function businessBuildModel('),end=ui.indexOf('\nwindow.setBusinessDashboardPeriod',start);
+  const start=ui.indexOf('async function businessBuildModel('),end=ui.indexOf('\nasync function businessBuildYesterdayModel',start);
   const todayPath=ui.slice(start,end);
   assert.match(todayPath, /businessBuildDaySnapshot\(businessDayBounds\(0\),1,force\)/);
   assert.match(todayPath, /businessBuildDaySnapshot\(businessDayBounds\(-1\),-1,force\)/);
