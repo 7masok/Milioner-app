@@ -7,16 +7,15 @@ const report = readFileSync(new URL('../../kaspi-report-v2.js', import.meta.url)
 const html = readFileSync(new URL('../../index.html', import.meta.url), 'utf8');
 const server = readFileSync(new URL('../src/server.js', import.meta.url), 'utf8');
 
-test('business dashboard keeps four profit layers and adds day plus calendar-week periods', () => {
-  for (const word of ['Сегодня','Вчера','Неделя','Прошлая','Заказы','Выкупы','Прибыль заказов','Прибыль выкупов']) assert.match(ui, new RegExp(word));
+test('business dashboard is day-only and keeps all agreed profit layers', () => {
+  for (const word of ['Сегодня','Заказы','Выкупы','Прибыль заказов','Прибыль выкупов']) assert.match(ui, new RegExp(word));
   assert.doesNotMatch(ui, /Чистая прибыль/);
-  for (const word of ['Месяц','Год']) assert.equal(ui.includes(word),false);
-  assert.match(ui, /BUSINESS_PERIODS=new Set\(\['today','yesterday','week','prevweek'\]\)/);
+  for (const word of ['Неделя','Месяц','Год']) assert.equal(ui.includes(word),false);
+  assert.match(ui, /BUSINESS_PERIODS=new Set\(\['day'\]\)/);
   assert.match(ui, /BUSINESS_METRICS=new Set\(\['orders','buyouts','orderProfit','buyoutProfit'\]\)/);
   assert.match(ui, /BUSINESS_SUPPORTED_MARKETS=new Set\(\['Kaspi','WB','WB2','Ozon'\]\)/);
-  assert.match(ui, /\['Пн','Вт','Ср','Чт','Пт','Сб','Вс'\]/);
+  assert.match(ui, /allMarketUnitProfit30/);
   assert.match(ui, /loadBusinessMarketplaceSummary/);
-  assert.match(ui, /loadBusinessMarketplaceRangeSummary/);
 });
 
 test('business dashboard includes Ozon orders, delivered buyouts and finance totals', () => {
@@ -38,9 +37,7 @@ test('business day chart uses real overlapping bars and no separate yesterday ca
   assert.match(ui, /todayShorter=sameSide&&!equal&&Math\.abs\(v\)<Math\.abs\(yv\)/);
   assert.match(ui, /todayZ=todayShorter\|\|equal\?3:2,yesterdayZ=yesterdayShorter\?3:1/);
   assert.match(ui, /todayHeight=equal/);
-  assert.match(ui, /legendCurrent:'сегодня',legendComparison:'вчера'/);
-  assert.match(ui, /business-legend-today/);
-  assert.match(ui, /business-legend-yesterday/);
+  assert.match(ui, /сегодня .* вчера/);
 });
 
 test('business x-axis labels are 03 through 24 without 00', () => {
@@ -59,32 +56,6 @@ test('business card shows yesterday on the right and compares only through the s
   assert.doesNotMatch(ui, /businessFinanceExpenses/);
   assert.match(ui, /netProfit=profit/);
   assert.match(ui, /yesterdayCompare=businessYesterdaySameTime\(yesterday\)/);
-});
-
-test('today keeps the old loader while week ranges stay lazy', () => {
-  assert.match(ui, /businessPeriod='today'/);
-  assert.doesNotMatch(ui, /BUSINESS_PERIODS\.has\(saved\.period\)/);
-  const start=ui.indexOf('async function businessBuildModel('),end=ui.indexOf('\nasync function businessBuildYesterdayModel',start);
-  const todayPath=ui.slice(start,end);
-  assert.match(todayPath, /businessBuildDaySnapshot\(businessDayBounds\(0\),1,force\)/);
-  assert.match(todayPath, /businessBuildDaySnapshot\(businessDayBounds\(-1\),-1,force\)/);
-  assert.doesNotMatch(todayPath, /businessLoadRangeSummary/);
-  assert.match(ui, /if\(businessPeriod==='week'\)return businessBuildWeekModel\(force\)/);
-  assert.match(ui, /if\(businessPeriod==='prevweek'\)return businessBuildPreviousWeekModel\(force\)/);
-  assert.match(report, /window\.loadBusinessMarketplaceRangeSummary=async function/);
-  assert.match(report, /loadKaspiOrders\(0,\{force,range:normalized\}\)/);
-  assert.match(report, /loadWbModel\('WB',0,\{range:normalized\}\)/);
-  assert.match(report, /loadWbModel\('WB2',0,\{range:normalized\}\)/);
-  assert.match(report, /loadOzonSummary\(0,\{range:normalized\}\)/);
-});
-
-test('current week compares Monday through the same weekday and time', () => {
-  assert.match(ui, /function businessMondayStart/);
-  assert.match(ui, /function businessWeekBounds/);
-  assert.match(ui, /businessWeekSameTime\(comparisonFull,dayIndex\)/);
-  assert.match(ui, /comparisonDayEnd\.setDate\(comparisonDayEnd\.getDate\(\)\+dayIndex\+1\)/);
-  assert.match(ui, /businessRangeForBounds\(currentBounds,Date\.now\(\)\+1\)/);
-  assert.match(ui, /chartMode:'week'/);
 });
 
 test('business profit no longer subtracts Finance-tab expenses', () => {
@@ -116,8 +87,8 @@ test('money formatting removes negative zero and unknown WB fields render as das
 });
 
 test('business dashboard assets are cache-busted and served', () => {
-  assert.match(html, /kaspi-report-v2\.js\?v=20260930-business-range/);
-  assert.match(html, /business-dashboard-v1\.js\?v=20260930-week-periods/);
+  assert.match(html, /kaspi-report-v2\.js\?v=20260928-wb-missing-data/);
+  assert.match(html, /business-dashboard-v1\.js\?v=20260928-business-ozon/);
   assert.match(html, /ozon-fbo-v1\.js\?v=20260929-replenishment-removed/);
   assert.match(server, /'business-dashboard-v1\.js'/);
 });
@@ -160,5 +131,5 @@ test('report market selection is local UI state and does not restore stale WB2 f
   assert.match(report, /localStorage\.setItem\(REPORT_MARKET_UI_KEY,market\)/);
   assert.doesNotMatch(report, /reportMarket=\['all','Kaspi','WB','WB2'\]\.includes\(state\.settings\.reportMarket\)/);
   assert.doesNotMatch(report, /state\.settings\.reportMarket=market;try\{save\(\)\}/);
-  assert.match(html, /kaspi-report-v2\.js\?v=20260930-business-range/);
+  assert.match(html, /kaspi-report-v2\.js\?v=20260928-wb-missing-data/);
 });
