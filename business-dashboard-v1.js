@@ -3,20 +3,20 @@
 if(typeof window==='undefined')return;
 
 const BUSINESS_SUPPORTED_MARKETS=new Set(['Kaspi','WB','WB2','Ozon']);
-const BUSINESS_PERIODS=new Set(['day']);
+const BUSINESS_PERIODS=new Set(['today','yesterday','week','prevweek']);
 const BUSINESS_METRICS=new Set(['orders','buyouts','orderProfit','buyoutProfit']);
-const BUSINESS_UI_KEY='milioner_business_dashboard_v1';
+const BUSINESS_UI_KEY='milioner_business_dashboard_v2';
 let businessRenderSeq=0,businessSummaryCache=new Map(),businessLastModel=null;
-let businessPeriod='day',businessMetric='orders';
+let businessPeriod='today',businessMetric='orders';
 try{
  const saved=JSON.parse(localStorage.getItem(BUSINESS_UI_KEY)||'{}');
- businessPeriod='day';
+ if(BUSINESS_PERIODS.has(saved.period))businessPeriod=saved.period;
  if(saved.metric==='netProfit')businessMetric='buyoutProfit';
  else if(BUSINESS_METRICS.has(saved.metric))businessMetric=saved.metric;
 }catch(_){}
 
 function businessSaveUi(){
- try{localStorage.setItem(BUSINESS_UI_KEY,JSON.stringify({period:'day',metric:businessMetric}))}catch(_){}
+ try{localStorage.setItem(BUSINESS_UI_KEY,JSON.stringify({period:businessPeriod,metric:businessMetric}))}catch(_){}
 }
 function businessRemoveLegacyStoreNote(){
  const root=document.getElementById('reports');if(!root)return;
@@ -36,12 +36,30 @@ function businessInstallLegacyNoteCleanup(){
 function businessDayStart(date=new Date()){const d=new Date(date);d.setHours(0,0,0,0);return d}
 function businessDayBounds(offset=0){
  const start=businessDayStart();start.setDate(start.getDate()+Number(offset||0));const end=new Date(start);end.setDate(end.getDate()+1);
- return {start:start.getTime(),end:end.getTime(),days:offset===-1?-1:1,label:offset===-1?'Вчера':'Сегодня'};
+ return {start:start.getTime(),end:end.getTime(),days:offset===-1?-1:1,label:offset===0?'Сегодня':offset===-1?'Вчера':businessShortDate(start.getTime())};
 }
-function businessPeriodBounds(){return businessDayBounds(0)}
-function businessBuckets(_period,bounds){
+function businessMondayStart(date=new Date()){
+ const d=businessDayStart(date),shift=(d.getDay()+6)%7;d.setDate(d.getDate()-shift);return d;
+}
+function businessWeekBounds(offsetWeeks=0){
+ const start=businessMondayStart();start.setDate(start.getDate()+Number(offsetWeeks||0)*7);const end=new Date(start);end.setDate(end.getDate()+7);
+ return {start:start.getTime(),end:end.getTime(),days:7,label:offsetWeeks===0?'Неделя':'Прошлая неделя'};
+}
+function businessLocalDate(ts){
+ const d=new Date(ts),y=d.getFullYear(),m=String(d.getMonth()+1).padStart(2,'0'),day=String(d.getDate()).padStart(2,'0');return y+'-'+m+'-'+day;
+}
+function businessRangeForBounds(bounds,endTs=bounds.end){
+ const last=Math.max(bounds.start,Math.min(bounds.end-1,Number(endTs)-1));return {from:businessLocalDate(bounds.start),to:businessLocalDate(last)};
+}
+function businessPeriodBounds(){return businessPeriod==='week'?businessWeekBounds(0):businessPeriod==='prevweek'?businessWeekBounds(-1):businessPeriod==='yesterday'?businessDayBounds(-1):businessDayBounds(0)}
+function businessBuckets(period,bounds){
  const rows=[],push=(start,end,label)=>rows.push({start,end,label,orders:0,orderQty:0,orderProfit:0,buyouts:0,buyoutQty:0,buyoutBaseProfit:0,buyoutProfit:0,coreBuyouts:0,coreBuyoutQty:0,coreBuyoutBaseProfit:0,coreBuyoutProfit:0,ozonBuyouts:0,ozonBuyoutQty:0,ozonBuyoutBaseProfit:0,ozonBuyoutProfit:0,netProfit:0});
- for(let h=0;h<24;h++){const s=bounds.start+h*3600000;push(s,s+3600000,String(h).padStart(2,'0'))}
+ if(period==='week'){
+  const labels=['Пн','Вт','Ср','Чт','Пт','Сб','Вс'];
+  for(let i=0;i<7;i++){const d=new Date(bounds.start);d.setDate(d.getDate()+i);const next=new Date(d);next.setDate(next.getDate()+1);push(d.getTime(),next.getTime(),labels[i])}
+ }else{
+  for(let h=0;h<24;h++){const s=bounds.start+h*3600000;push(s,s+3600000,String(h).padStart(2,'0'))}
+ }
  return rows;
 }
 function businessBucketFor(rows,ts){return rows.find(x=>ts>=x.start&&ts<x.end)||null}
