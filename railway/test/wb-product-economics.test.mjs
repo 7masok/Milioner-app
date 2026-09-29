@@ -16,8 +16,9 @@ test('WB product finance exposes weighted commission percent and actual logistic
 });
 
 test('WB product economics stay separated by WB1 and WB2 in selected-period product stats',()=>{
-  assert.match(reportUi,/deliveryTotal:0,commissionPctWeighted:0,commissionPctWeight:0/);
-  assert.match(reportUi,/commissionPct:Number\(part\.commissionPctWeight\)>0/);
+  assert.match(reportUi,/function refreshProductPeriodStats|window\.refreshProductPeriodStats=function/);
+  assert.match(reportUi,/addWbEconomics=/);
+  assert.match(reportUi,/part\.commissionPct=Number\(part\.commissionPctWeight\)>0/);
   assert.match(reportUi,/deliveryTotal=Math\.max\(0,Number\(x\.delivery\|\|0\)\+Number\(x\.rebill\|\|0\)\)/);
   assert.match(reportUi,/Логистика \/ шт\.<\/th><th>Комиссия<\/th>/);
 });
