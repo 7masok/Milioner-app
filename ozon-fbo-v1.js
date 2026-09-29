@@ -225,95 +225,6 @@ function financeModel(days){
  return{rows,groups:[...groups.values()]};
 }
 function multiMoney(groups,key){return groups.length?groups.map(g=>g.currency==='—'?Number(g[key]||0).toLocaleString('ru-RU',{maximumFractionDigits:2}):money(g[key],g.currency)).join(' + '):'—';}
-
-function replenishmentRows(){
- const rows=[];
- for(const account of data?.accounts||[]){
-  const analytics=account.analytics||{},updatedAt=Number(analytics.updatedAt||0),stale=Boolean(analytics.stale),error=String(analytics.lastError||'');
-  for(const row of analytics.replenishment?.rows||[])rows.push({...row,_account:account.label||account.account||'Ozon',_updatedAt:updatedAt,_stale:stale,_error:error});
- }
- return rows;
-}
-function replenishmentUrgency(row){
- if(row?.exact&&Number(row?.sendQty)>0)return 0;
- if(Number(row?.shortageNow)>0)return 1;
- return 2;
-}
-function replenishmentGroups(rows){
- const groups=new Map();
- for(const row of rows){
-  const key=[row?._account||'',row?.sku||'',row?.offerId||'',row?.name||''].join('|');
-  if(!groups.has(key))groups.set(key,{key,name:row?.name||row?.offerId||row?.sku||'Товар',account:row?._account||'Ozon',rows:[]});
-  groups.get(key).rows.push(row);
- }
- const result=[...groups.values()].map(group=>{
-  group.rows.sort((a,b)=>replenishmentUrgency(a)-replenishmentUrgency(b)
-   +(Number(a?.sendAt||Number.MAX_SAFE_INTEGER)-Number(b?.sendAt||Number.MAX_SAFE_INTEGER))
-   +(Number(a?.daysWithIncoming??999999)-Number(b?.daysWithIncoming??999999))
-   ||String(a?.clusterName||'').localeCompare(String(b?.clusterName||''),'ru'));
-  group.totalSend=group.rows.reduce((sum,row)=>sum+(row?.exact?Math.max(0,Number(row?.sendQty)||0):0),0);
-  group.needCount=group.rows.filter(row=>replenishmentUrgency(row)<2).length;
-  group.shortage=group.rows.reduce((sum,row)=>sum+(!row?.exact?Math.max(0,Number(row?.shortageNow)||0):0),0);
-  group.earliestSend=Math.min(...group.rows.map(row=>Number(row?.sendAt)||Number.MAX_SAFE_INTEGER));
-  group.urgency=Math.min(...group.rows.map(replenishmentUrgency));
-  return group;
- });
- return result.sort((a,b)=>a.urgency-b.urgency+(a.earliestSend-b.earliestSend)+(b.totalSend-a.totalSend)||a.name.localeCompare(b.name,'ru'));
-}
-function shortDays(value){
- const n=Number(value);if(!Number.isFinite(n))return '—';
- if(n>=999)return '999+';
- return n.toLocaleString('ru-RU',{maximumFractionDigits:1});
-}
-function dateLabel(value){
- const n=Number(value);if(!Number.isFinite(n)||n<=0)return '—';
- const d=new Date(n),today=new Date();today.setHours(0,0,0,0);const tomorrow=today.getTime()+86400000;
- if(d.getTime()>=today.getTime()&&d.getTime()<tomorrow)return 'сегодня';
- return d.toLocaleDateString('ru-RU',{day:'2-digit',month:'2-digit'});
-}
-function renderReplenishmentCluster(row,index){
- const incoming=Math.max(0,Number(row?.incomingKnown)||0);
- const extra=index>=2?' ozon-cluster-extra':'';
- const action=row?.exact
-  ? '<b>'+(Math.max(0,Number(row?.sendQty)||0))+' шт.</b><small>'+dateLabel(row?.sendAt)+'</small>'
-  : Number(row?.shortageNow)>0
-    ? '<b>≈ '+Math.max(0,Number(row.shortageNow)||0)+' шт.</b><small>дефицит</small>'
-    : '<b>0 шт.</b><small>не нужно</small>';
- return '<div class="ozon-cluster-row'+extra+'"><div class="grow"><b>'+esc(row?.clusterName||('Кластер '+(row?.clusterId||'')))+'</b>'+
-  '<div class="muted">ост '+Math.max(0,Number(row?.available)||0)+' · '+shortDays(row?.daysLeft)+' дн. · в пути '+incoming+'</div></div>'+
-  '<div class="ozon-cluster-action">'+action+'</div></div>';
-}
-window.toggleOzonReplenishmentGroup=function(button){
- const group=button?.closest?.('.ozon-product-group');if(!group)return;
- const expanded=group.classList.toggle('expanded'),more=Number(button?.dataset?.more)||0;
- button.textContent=expanded?'Свернуть':'Ещё '+more+' '+(more===1?'кластер':more<5?'кластера':'кластеров');
-};
-function renderReplenishmentBlock(){
- const rows=replenishmentRows(),groups=replenishmentGroups(rows);
- const analytics=(data?.accounts||[]).map(a=>a.analytics).filter(Boolean);
- const updated=Math.max(0,...analytics.map(a=>Number(a.updatedAt||0)));
- const stale=analytics.some(a=>a.stale),errors=analytics.map(a=>String(a.lastError||'')).filter(Boolean);
- if(!rows.length){
-  const note=errors.length?'Кластерная аналитика пока недоступна · '+esc(errors[0]):'Кластерная аналитика Ozon ещё не загружена.';
-  return '<div class="item ozon-replenishment"><div class="row"><b>Пополнение FBO · 14 дней</b></div><div class="muted" style="margin-top:6px">'+note+'</div></div>';
- }
- const cards=groups.map(group=>{
-  const more=Math.max(0,group.rows.length-2);
-  const nearest=Number.isFinite(group.earliestSend)&&group.earliestSend<Number.MAX_SAFE_INTEGER?dateLabel(group.earliestSend):'';
-  const summary=group.totalSend>0
-   ? group.rows.length+' кл. · отправить '+group.totalSend+' шт.'+(nearest?' · '+nearest:'')
-   : group.shortage>0
-    ? group.rows.length+' кл. · дефицит ≈ '+group.shortage+' шт.'
-    : group.rows.length+' кл. · запас достаточный';
-  return '<div class="ozon-product-group"><div class="ozon-product-head"><div class="grow"><b>'+esc(group.name)+'</b><div class="muted">'+esc(summary)+'</div></div></div>'+
-   '<div class="ozon-cluster-list">'+group.rows.map(renderReplenishmentCluster).join('')+'</div>'+
-   (more?'<button class="ozon-cluster-more" data-more="'+more+'" onclick="toggleOzonReplenishmentGroup(this)">Ещё '+more+' '+(more===1?'кластер':more<5?'кластера':'кластеров')+'</button>':'')+
-   '</div>';
- }).join('');
- const status=groups.length+' товаров · '+rows.length+' кластеров'+(updated?' · '+new Date(updated).toLocaleTimeString('ru-RU',{hour:'2-digit',minute:'2-digit'}):'')+(stale?' · сохранённые':'');
- return '<div class="item ozon-replenishment"><div class="row"><div class="grow"><b>Пополнение FBO · 14 дней</b><div class="muted">'+esc(status)+'</div></div></div>'+
-  cards+'<div class="muted ozon-replenishment-foot">Учитываем остаток и уже известный товар в пути.</div></div>';
-}
 async function renderOzonReport(){
  ozonReportActive=true;state.settings.reportMarket='Ozon';
  document.querySelectorAll('[data-report-market]').forEach(b=>b.classList.toggle('active',b.dataset.reportMarket==='Ozon'));
@@ -325,14 +236,13 @@ async function renderOzonReport(){
  const set=(id,v)=>{const e=document.getElementById(id);if(e)e.textContent=v;};
  set('rRevenue',multiMoney(g,'sales'));set('rCost','—');set('rFees',multiMoney(g,'commission'));set('rAds','—');set('rProfit','не считается');
  if(!box)return;
- const replenishment=renderReplenishmentBlock();
- if(!model.rows.length){box.innerHTML=replenishment+'<div class="empty">За выбранный период финансовых операций Ozon нет.</div><div class="link-note">Сервер хранит финансовые данные Ozon за последние 30 дней.</div>';return;}
+ if(!model.rows.length){box.innerHTML='<div class="empty">За выбранный период финансовых операций Ozon нет.</div><div class="link-note">Сервер хранит финансовые данные Ozon за последние 30 дней.</div>';return;}
  const cards=g.map(x=>'<div class="item" style="margin-bottom:8px"><div class="row"><div class="grow"><b>'+esc(x.currency==='—'?'Валюта не указана':x.currency)+'</b><div class="muted">Начисления после операций Ozon, до себестоимости и расходов бизнеса</div></div><b>'+ (x.currency==='—'?Number(x.net).toLocaleString('ru-RU',{maximumFractionDigits:2}):money(x.net,x.currency))+'</b></div><div class="row" style="margin-top:8px"><span class="grow muted">Продажи</span><b>'+ (x.currency==='—'?Number(x.sales).toLocaleString('ru-RU',{maximumFractionDigits:2}):money(x.sales,x.currency))+'</b></div><div class="row" style="margin-top:6px"><span class="grow muted">Комиссия Ozon</span><b>'+ (x.currency==='—'?Number(x.commission).toLocaleString('ru-RU',{maximumFractionDigits:2}):money(x.commission,x.currency))+'</b></div><div class="row" style="margin-top:6px"><span class="grow muted">Доставка</span><b>'+ (x.currency==='—'?Number(x.delivery).toLocaleString('ru-RU',{maximumFractionDigits:2}):money(x.delivery,x.currency))+'</b></div><div class="row" style="margin-top:6px"><span class="grow muted">Услуги</span><b>'+ (x.currency==='—'?Number(x.services).toLocaleString('ru-RU',{maximumFractionDigits:2}):money(x.services,x.currency))+'</b></div></div>').join('');
- box.innerHTML=replenishment+cards+'<button class="btn dark full" onclick="openOzonFinanceDetails()">Все операции Ozon</button><div class="link-note"><b>Это не чистая прибыль.</b> Здесь показаны финансовые начисления Ozon. Себестоимость товара, налоги и прочие расходы бизнеса не вычитаются. Данные Ozon сейчас хранятся за последние 30 дней.</div>';
+ box.innerHTML=cards+'<button class="btn dark full" onclick="openOzonFinanceDetails()">Все операции Ozon</button><div class="link-note"><b>Это не чистая прибыль.</b> Здесь показаны финансовые начисления Ozon. Себестоимость товара, налоги и прочие расходы бизнеса не вычитаются. Данные Ozon сейчас хранятся за последние 30 дней.</div>';
 }
 window.openOzonFinanceDetails=async()=>{await load();const model=financeModel(reportPeriod);const rows=model.rows.slice().sort((a,b)=>Date.parse(b.operation_date||'')-Date.parse(a.operation_date||''));const body=rows.length?rows.map(r=>'<div class="item" style="margin-top:8px"><div class="row"><div class="grow"><b>'+esc(r.operation_type_name||'Операция Ozon')+'</b><div class="muted">'+new Date(r.operation_date).toLocaleDateString('ru-RU')+(r.posting?.posting_number?' · заказ '+esc(r.posting.posting_number):'')+(r._account?' · '+esc(r._account):'')+'</div></div><b>'+money(r.amount,r.currency_code||r.currency)+'</b></div></div>').join(''):'<div class="empty">Операций нет</div>';showSheet('<h3>Ozon FBO · финансовые операции</h3>'+body+'<div class="link-note">Суммы показаны в валюте, которую вернул Ozon. Это не расчёт чистой прибыли.</div>');};
 window.setReportMarket=function(market){ozonReportActive=market==='Ozon';return baseSetReportMarket?.(market);};
-window.renderReports=function(){if(ozonReportActive)return renderOzonReport();return baseRenderReports?.();};
+window.renderReports=function(){return baseRenderReports?.();};
 function ensureReportTab(){const tabs=document.getElementById('reportMarketTabs');if(tabs&&!tabs.querySelector('[data-report-market="Ozon"]'))tabs.insertAdjacentHTML('beforeend','<button class="market-tab" data-report-market="Ozon" onclick="setReportMarket(\'Ozon\')">Ozon</button>');}
 ensureReportTab();
 ensureOzonHeaderIndicator();

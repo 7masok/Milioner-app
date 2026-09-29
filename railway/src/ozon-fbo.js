@@ -2,7 +2,6 @@ import express from 'express';
 import { pool } from './db.js';
 import { credentialFor } from './connections.js';
 import { asyncRoute, requireTrustedOrigin } from './http.js';
-import { buildOzonReplenishmentRows, mergeAnalyticsCycleRows } from './ozon-replenishment.js';
 export const ozonRouter=express.Router();
 let ready, running;
 function ensureTable(){return ready ||= pool.query('CREATE TABLE IF NOT EXISTS ozon_fbo_cache (account TEXT PRIMARY KEY, payload JSONB NOT NULL, updated_at BIGINT NOT NULL)').catch(e=>{ready=null;throw e});}
@@ -13,113 +12,6 @@ async function request(credentials,path,body){
   if((response.status===429||response.status>=500)&&attempt<2){await new Promise(r=>setTimeout(r,1000*(attempt+1)));continue;}
   if(!response.ok){const detail=await response.json().catch(()=>({}));const reason=String(detail.message||detail.error?.message||'').replaceAll(String(credentials.apiKey),'[hidden]').replaceAll(String(credentials.clientId),'[hidden]').slice(0,300);const e=new Error('Ozon '+path+': HTTP '+response.status+(reason?' · '+reason:''));e.status=502;throw e;}
   const data=await response.json();if(data.error)throw new Error('Ozon '+path+': ошибка ответа');return data;
- }
-}
-
-const ANALYTICS_CHUNK_SIZE=100;
-const ANALYTICS_MIN_GAP_MS=1500;
-const ANALYTICS_RETRY_FALLBACK_MS=15*60*1000;
-
-function retryAtFromHeaders(headers,now=Date.now()){
- const values=[];
- const retryAfter=String(headers?.get?.('retry-after')||'').trim();
- if(retryAfter){
-  const numeric=Number(retryAfter);
-  if(Number.isFinite(numeric)&&numeric>=0)values.push(now+numeric*1000);
-  else{const parsed=Date.parse(retryAfter);if(Number.isFinite(parsed))values.push(parsed);}
- }
- const itemRetry=Number(headers?.get?.('item-retry-after'));
- if(Number.isFinite(itemRetry)&&itemRetry>=0)values.push(now+itemRetry*60*1000);
- const reset=Number(headers?.get?.('x-ratelimit-retry'));
- if(Number.isFinite(reset)&&reset>0)values.push(reset>1e12?reset:reset>1e9?reset*1000:now+reset*1000);
- return values.length?Math.max(...values):0;
-}
-
-async function requestAnalyticsStocksChunk(credentials,skus){
- const started=Date.now();
- const response=await fetch('https://api-seller.ozon.ru/v1/analytics/stocks',{
-  method:'POST',
-  headers:{'Content-Type':'application/json','Client-Id':credentials.clientId,'Api-Key':credentials.apiKey},
-  body:JSON.stringify({skus}),
-  signal:AbortSignal.timeout(30000)
- });
- const retryAt=retryAtFromHeaders(response.headers,started);
- const data=await response.json().catch(()=>({}));
- if(!response.ok){
-  const reason=String(data?.message||data?.error?.message||data?.error||'')
-    .replaceAll(String(credentials.apiKey),'[hidden]').replaceAll(String(credentials.clientId),'[hidden]').slice(0,300);
-  const error=new Error('Ozon /v1/analytics/stocks: HTTP '+response.status+(reason?' · '+reason:''));
-  error.status=response.status;
-  error.retryAt=response.status===429?(retryAt||Date.now()+ANALYTICS_RETRY_FALLBACK_MS):0;
-  throw error;
- }
- const items=Array.isArray(data?.items)?data.items:Array.isArray(data?.result?.items)?data.result.items:null;
- if(!items)throw new Error('Ozon /v1/analytics/stocks: неизвестный формат ответа');
- return {items,retryAt};
-}
-
-function analyticsSkus(stockRows){
- const values=[];
- for(const row of Array.isArray(stockRows)?stockRows:[]){
-  for(const stock of row?.stocks||[]){
-   const sku=String(stock?.sku||'').trim();
-   if(sku)values.push(sku);
-  }
- }
- return [...new Set(values)].sort((a,b)=>a.localeCompare(b,'en'));
-}
-
-export async function syncClusterAnalytics(credentials,previous,stockRows,supplyOrders,now=Date.now()){
- const skus=analyticsSkus(stockRows);
- const prev=previous&&typeof previous==='object'?previous:{};
- if(!skus.length){
-  return {rows:[],workingRows:[],cursor:0,totalSkus:0,complete:true,updatedAt:now,attemptAt:now,nextAllowedAt:0,lastError:'',stale:false,
-    replenishment:{targetDays:14,rows:[],updatedAt:now}};
- }
- const previousPerSecondLimit=/rate limit per second/i.test(String(prev.lastError||''));
- const effectiveNextAllowedAt=previousPerSecondLimit
-  ? Math.min(Number(prev.nextAllowedAt||0),Number(prev.attemptAt||0)+5000)
-  : Number(prev.nextAllowedAt||0);
- if(effectiveNextAllowedAt>now){
-  const rows=Array.isArray(prev.rows)?prev.rows:[];
-  return {...prev,totalSkus:skus.length,attemptAt:now,stale:true,
-    replenishment:{targetDays:14,rows:buildOzonReplenishmentRows(rows,supplyOrders,{targetDays:14,now}),updatedAt:Number(prev.updatedAt||0)}};
- }
- const safeCursor=Math.max(0,Math.min(skus.length-1,Math.trunc(Number(prev.cursor)||0)));
- const cursor=(safeCursor>=skus.length?0:safeCursor);
- const chunk=skus.slice(cursor,cursor+ANALYTICS_CHUNK_SIZE);
- try{
-  // Existing Ozon FBO sync makes several API calls first. Keep this analytics
-  // request out of the same per-second bucket instead of retrying it in a burst.
-  await new Promise(resolve=>setTimeout(resolve,ANALYTICS_MIN_GAP_MS));
-  const result=await requestAnalyticsStocksChunk(credentials,chunk);
-  const working=cursor===0?result.items:mergeAnalyticsCycleRows(prev.workingRows,result.items);
-  const nextCursor=cursor+chunk.length;
-  const cycleComplete=nextCursor>=skus.length;
-  const rows=cycleComplete?working:(Array.isArray(prev.rows)?prev.rows:[]);
-  const updatedAt=cycleComplete?now:Number(prev.updatedAt||0);
-  const next={
-   rows,
-   workingRows:cycleComplete?[]:working,
-   cursor:cycleComplete?0:nextCursor,
-   totalSkus:skus.length,
-   complete:cycleComplete,
-   updatedAt,
-   attemptAt:now,
-   nextAllowedAt:Math.max(0,Number(result.retryAt||0)),
-   lastError:'',
-   stale:!cycleComplete&&rows.length>0,
-   source:'/v1/analytics/stocks'
-  };
-  next.replenishment={targetDays:14,rows:buildOzonReplenishmentRows(rows,supplyOrders,{targetDays:14,now}),updatedAt};
-  return next;
- }catch(error){
-  const perSecond=/rate limit per second/i.test(String(error?.message||''));
-  const retryAt=Math.max(Number(error?.retryAt||0),error?.status===429?(now+(perSecond?5000:ANALYTICS_RETRY_FALLBACK_MS)):now+10*60*1000);
-  const rows=Array.isArray(prev.rows)?prev.rows:[];
-  return {...prev,rows,totalSkus:skus.length,attemptAt:now,nextAllowedAt:retryAt,
-   lastError:String(error?.message||error).slice(0,500),stale:true,
-   replenishment:{targetDays:14,rows:buildOzonReplenishmentRows(rows,supplyOrders,{targetDays:14,now}),updatedAt:Number(prev.updatedAt||0)}};
  }
 }
 export async function fetchPostings(credentials,from,to){
@@ -233,17 +125,8 @@ async function run(){
    try{payload[key]={rows:await fn(),updatedAt:Date.now(),from,to};}
    catch(e){payload.errors[key]=String(e.message||e);}
   }
-  payload.analytics=await syncClusterAnalytics(credentials,previous.analytics,payload.stocks?.rows||[],payload.supplies?.rows||[],Date.now());
-  if(payload.analytics?.lastError)payload.errors.analytics=payload.analytics.lastError;
-  console.info('Ozon cluster analytics',JSON.stringify({
-   account:account.id,rows:payload.analytics?.rows?.length||0,complete:Boolean(payload.analytics?.complete),
-   stale:Boolean(payload.analytics?.stale),cursor:Number(payload.analytics?.cursor||0),
-   totalSkus:Number(payload.analytics?.totalSkus||0),nextAllowedAt:Number(payload.analytics?.nextAllowedAt||0),
-   error:payload.analytics?.lastError||''
-  }));
   await pool.query('INSERT INTO ozon_fbo_cache(account,payload,updated_at) VALUES($1,$2::jsonb,$3) ON CONFLICT(account) DO UPDATE SET payload=EXCLUDED.payload,updated_at=EXCLUDED.updated_at',[account.id,JSON.stringify(payload),Date.now()]);
-  const result={account:account.id,postings:payload.postings?.rows?.length||0,stocks:payload.stocks?.rows?.length||0,finance:payload.finance?.rows?.length||0,supplies:payload.supplies?.rows?.length||0,
-   analytics:payload.analytics?.rows?.length||0,analyticsComplete:Boolean(payload.analytics?.complete),analyticsStale:Boolean(payload.analytics?.stale),errors:payload.errors};
+  const result={account:account.id,postings:payload.postings?.rows?.length||0,stocks:payload.stocks?.rows?.length||0,finance:payload.finance?.rows?.length||0,supplies:payload.supplies?.rows?.length||0,errors:payload.errors};
   results.push(result);if(result.error||Object.keys(result.errors||{}).length)console.warn('Ozon FBO sync issue',JSON.stringify(result));
  }
  return {ok:results.every(x=>!x.error&&!Object.keys(x.errors||{}).length),results};
