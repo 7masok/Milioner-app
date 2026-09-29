@@ -232,11 +232,33 @@ function replenishmentRows(){
   const analytics=account.analytics||{},updatedAt=Number(analytics.updatedAt||0),stale=Boolean(analytics.stale),error=String(analytics.lastError||'');
   for(const row of analytics.replenishment?.rows||[])rows.push({...row,_account:account.label||account.account||'Ozon',_updatedAt:updatedAt,_stale:stale,_error:error});
  }
- return rows.sort((a,b)=>{
-  const aUrgent=a.exact&&Number(a.sendQty)>0?0:Number(a.shortageNow)>0?1:2;
-  const bUrgent=b.exact&&Number(b.sendQty)>0?0:Number(b.shortageNow)>0?1:2;
-  return aUrgent-bUrgent+(Number(a.daysWithIncoming??999999)-Number(b.daysWithIncoming??999999))||String(a.name||'').localeCompare(String(b.name||''),'ru');
+ return rows;
+}
+function replenishmentUrgency(row){
+ if(row?.exact&&Number(row?.sendQty)>0)return 0;
+ if(Number(row?.shortageNow)>0)return 1;
+ return 2;
+}
+function replenishmentGroups(rows){
+ const groups=new Map();
+ for(const row of rows){
+  const key=[row?._account||'',row?.sku||'',row?.offerId||'',row?.name||''].join('|');
+  if(!groups.has(key))groups.set(key,{key,name:row?.name||row?.offerId||row?.sku||'Товар',account:row?._account||'Ozon',rows:[]});
+  groups.get(key).rows.push(row);
+ }
+ const result=[...groups.values()].map(group=>{
+  group.rows.sort((a,b)=>replenishmentUrgency(a)-replenishmentUrgency(b)
+   +(Number(a?.sendAt||Number.MAX_SAFE_INTEGER)-Number(b?.sendAt||Number.MAX_SAFE_INTEGER))
+   +(Number(a?.daysWithIncoming??999999)-Number(b?.daysWithIncoming??999999))
+   ||String(a?.clusterName||'').localeCompare(String(b?.clusterName||''),'ru'));
+  group.totalSend=group.rows.reduce((sum,row)=>sum+(row?.exact?Math.max(0,Number(row?.sendQty)||0):0),0);
+  group.needCount=group.rows.filter(row=>replenishmentUrgency(row)<2).length;
+  group.shortage=group.rows.reduce((sum,row)=>sum+(!row?.exact?Math.max(0,Number(row?.shortageNow)||0):0),0);
+  group.earliestSend=Math.min(...group.rows.map(row=>Number(row?.sendAt)||Number.MAX_SAFE_INTEGER));
+  group.urgency=Math.min(...group.rows.map(replenishmentUrgency));
+  return group;
  });
+ return result.sort((a,b)=>a.urgency-b.urgency+(a.earliestSend-b.earliestSend)+(b.totalSend-a.totalSend)||a.name.localeCompare(b.name,'ru'));
 }
 function shortDays(value){
  const n=Number(value);if(!Number.isFinite(n))return '—';
@@ -249,8 +271,25 @@ function dateLabel(value){
  if(d.getTime()>=today.getTime()&&d.getTime()<tomorrow)return 'сегодня';
  return d.toLocaleDateString('ru-RU',{day:'2-digit',month:'2-digit'});
 }
+function renderReplenishmentCluster(row,index){
+ const incoming=Math.max(0,Number(row?.incomingKnown)||0);
+ const extra=index>=2?' ozon-cluster-extra':'';
+ const action=row?.exact
+  ? '<b>'+(Math.max(0,Number(row?.sendQty)||0))+' шт.</b><small>'+dateLabel(row?.sendAt)+'</small>'
+  : Number(row?.shortageNow)>0
+    ? '<b>≈ '+Math.max(0,Number(row.shortageNow)||0)+' шт.</b><small>дефицит</small>'
+    : '<b>0 шт.</b><small>не нужно</small>';
+ return '<div class="ozon-cluster-row'+extra+'"><div class="grow"><b>'+esc(row?.clusterName||('Кластер '+(row?.clusterId||'')))+'</b>'+
+  '<div class="muted">ост '+Math.max(0,Number(row?.available)||0)+' · '+shortDays(row?.daysLeft)+' дн. · в пути '+incoming+'</div></div>'+
+  '<div class="ozon-cluster-action">'+action+'</div></div>';
+}
+window.toggleOzonReplenishmentGroup=function(button){
+ const group=button?.closest?.('.ozon-product-group');if(!group)return;
+ const expanded=group.classList.toggle('expanded'),more=Number(button?.dataset?.more)||0;
+ button.textContent=expanded?'Свернуть':'Ещё '+more+' '+(more===1?'кластер':more<5?'кластера':'кластеров');
+};
 function renderReplenishmentBlock(){
- const rows=replenishmentRows();
+ const rows=replenishmentRows(),groups=replenishmentGroups(rows);
  const analytics=(data?.accounts||[]).map(a=>a.analytics).filter(Boolean);
  const updated=Math.max(0,...analytics.map(a=>Number(a.updatedAt||0)));
  const stale=analytics.some(a=>a.stale),errors=analytics.map(a=>String(a.lastError||'')).filter(Boolean);
@@ -258,25 +297,22 @@ function renderReplenishmentBlock(){
   const note=errors.length?'Кластерная аналитика пока недоступна · '+esc(errors[0]):'Кластерная аналитика Ozon ещё не загружена.';
   return '<div class="item ozon-replenishment"><div class="row"><b>Пополнение FBO · 14 дней</b></div><div class="muted" style="margin-top:6px">'+note+'</div></div>';
  }
- const cards=rows.map(row=>{
-  const incoming=Number(row.incomingKnown||0),parts=[];
-  if(Number(row.transit)>0)parts.push('едет '+Number(row.transit));
-  if(Number(row.valid)>0)parts.push('размещ. '+Number(row.valid));
-  if(Number(row.requested)>0)parts.push('заявка '+Number(row.requested));
-  const send=row.exact?(Number(row.sendQty||0)+' шт.'):'—';
-  const shortage=!row.exact&&Number(row.shortageNow)>0?' · дефицит до 14 дн. ≈ '+Number(row.shortageNow)+' шт.':'';
-  const lead=row.exact&&Number(row.leadDays)>0?' · срок ≈ '+Number(row.leadDays)+' дн.':'';
-  return '<div class="ozon-replenishment-line"><div class="grow"><b>'+esc(row.name||row.offerId||row.sku||'Товар')+'</b><div class="muted">'+esc(row.clusterName||('Кластер '+row.clusterId))+(row._account?' · '+esc(row._account):'')+'</div></div>'+
-   '<div class="ozon-replenishment-metrics"><span><small>Остаток</small><b>'+Number(row.available||0)+'</b></span>'+
-   '<span><small>Дней</small><b>'+shortDays(row.daysLeft)+'</b></span>'+
-   '<span title="'+esc(parts.join(' · '))+'"><small>В пути</small><b>'+incoming+'</b></span>'+
-   '<span><small>Отправить</small><b>'+send+'</b></span>'+
-   '<span><small>Дата</small><b>'+dateLabel(row.sendAt)+'</b></span></div>'+
-   '<div class="muted ozon-replenishment-note">'+(row.exact?'Учтены остаток и известные поставки'+lead:'Точная отправка появится после подтверждения срока поставки')+shortage+'</div></div>';
+ const cards=groups.map(group=>{
+  const more=Math.max(0,group.rows.length-2);
+  const nearest=Number.isFinite(group.earliestSend)&&group.earliestSend<Number.MAX_SAFE_INTEGER?dateLabel(group.earliestSend):'';
+  const summary=group.totalSend>0
+   ? group.rows.length+' кл. · отправить '+group.totalSend+' шт.'+(nearest?' · '+nearest:'')
+   : group.shortage>0
+    ? group.rows.length+' кл. · дефицит ≈ '+group.shortage+' шт.'
+    : group.rows.length+' кл. · запас достаточный';
+  return '<div class="ozon-product-group"><div class="ozon-product-head"><div class="grow"><b>'+esc(group.name)+'</b><div class="muted">'+esc(summary)+'</div></div></div>'+
+   '<div class="ozon-cluster-list">'+group.rows.map(renderReplenishmentCluster).join('')+'</div>'+
+   (more?'<button class="ozon-cluster-more" data-more="'+more+'" onclick="toggleOzonReplenishmentGroup(this)">Ещё '+more+' '+(more===1?'кластер':more<5?'кластера':'кластеров')+'</button>':'')+
+   '</div>';
  }).join('');
- const status=(updated?'Данные '+new Date(updated).toLocaleString('ru-RU',{day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit'}):'')+(stale?' · сохранённые':'');
- return '<div class="item ozon-replenishment"><div class="row"><div class="grow"><b>Пополнение FBO · 14 дней</b><div class="muted">'+esc(status||'По товарам и кластерам')+'</div></div></div>'+cards+
-  '<div class="link-note">Остатки складов одного кластера суммируются, продажи кластера считаются один раз. «В пути» включает едущие, размещаемые и уже заявленные поставки. При неподтверждённом сроке точные «Отправить» и дата не показываются.</div></div>';
+ const status=groups.length+' товаров · '+rows.length+' кластеров'+(updated?' · '+new Date(updated).toLocaleTimeString('ru-RU',{hour:'2-digit',minute:'2-digit'}):'')+(stale?' · сохранённые':'');
+ return '<div class="item ozon-replenishment"><div class="row"><div class="grow"><b>Пополнение FBO · 14 дней</b><div class="muted">'+esc(status)+'</div></div></div>'+
+  cards+'<div class="muted ozon-replenishment-foot">Учитываем остаток и уже известный товар в пути.</div></div>';
 }
 async function renderOzonReport(){
  ozonReportActive=true;state.settings.reportMarket='Ozon';
