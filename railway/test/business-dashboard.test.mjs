@@ -89,7 +89,7 @@ test('money formatting removes negative zero and unknown WB fields render as das
 test('business dashboard assets are cache-busted and served', () => {
   assert.match(html, /kaspi-report-v2\.js\?v=20260928-wb-missing-data/);
   assert.match(html, /business-dashboard-v1\.js\?v=20260928-business-ozon/);
-  assert.match(html, /ozon-fbo-v1\.js\?v=20260928-business-ozon/);
+  assert.match(html, /ozon-fbo-v1\.js\?v=20260929-replenishment-visible/);
   assert.match(server, /'business-dashboard-v1\.js'/);
 });
 
