@@ -6,6 +6,8 @@ import { credentialFor } from './connections.js';
 import { asyncRoute, requireTrustedOrigin, requireWritesEnabled } from './http.js';
 import { readWarehouseProducts } from './warehouse-products.js';
 import { decorateWbPromotionRows } from './wb-promotions.js';
+import { decorateWbProtectionRows, protectionFor, syncWbPriceProtection, updateProtectionBaseline } from './wb-price-protection.js';
+import { decorateWbCardGroupRows } from './wb-card-groups.js';
 
 const WB_PRICE_API = 'https://discounts-prices-api.wildberries.ru';
 const OZON_API = 'https://api-seller.ozon.ru';
@@ -465,7 +467,7 @@ async function queueSchedulePrice(market, nmId, price, client = pool) {
     ON CONFLICT(market,nm_id) DO UPDATE SET desired_price=excluded.desired_price,desired_discount=NULL,
       status='pending',queued_at=excluded.queued_at,sent_at=0,upload_id=0,last_error='',
       updated_at=excluded.updated_at,source='schedule',promotion_id=0
-    WHERE wb_price_update_queue.source<>'manual'`, [market, nmId, Number(price), now]);
+    WHERE wb_price_update_queue.source NOT IN ('manual','protection')`, [market, nmId, Number(price), now]);
   return Number(result.rowCount || 0) > 0;
 }
 
@@ -476,7 +478,7 @@ async function holdSchedulePrice(market, nmId, price, client = pool) {
     VALUES($1,$2,$3,NULL,'held',$4,0,0,'',$4,'schedule',0)
     ON CONFLICT(market,nm_id) DO UPDATE SET desired_price=excluded.desired_price,desired_discount=NULL,
       status='held',last_error='',updated_at=excluded.updated_at,source='schedule',promotion_id=0
-    WHERE wb_price_update_queue.source<>'manual'`, [market, nmId, Number(price), now]);
+    WHERE wb_price_update_queue.source NOT IN ('manual','protection')`, [market, nmId, Number(price), now]);
   return Number(result.rowCount || 0) > 0;
 }
 
@@ -503,7 +505,8 @@ async function syncWbNightSchedules(market, now = Date.now()) {
     wbPriceQueueRows(market)
   ]);
   if (!schedules.length || !snapshot) return { changed: 0 };
-  const byNm = new Map((snapshot.rows || []).map(row => [String(row.remoteId || ''), row]));
+  const protectedRows = await decorateWbProtectionRows(market, snapshot.rows || []);
+  const byNm = new Map(protectedRows.map(row => [String(row.remoteId || ''), row]));
   const queueByNm = new Map(queue.map(row => [String(row.nmId), row]));
   let changed = 0;
 
@@ -516,6 +519,14 @@ async function syncWbNightSchedules(market, now = Date.now()) {
       continue;
     }
     if (schedule.phase === 'error' && schedule.lastError && !isWbGradualReductionError(schedule.lastError)) continue;
+    if (row.priceProtected) {
+      const phase = Number(schedule.basePrice) > 0 ? 'restoring' : 'locked';
+      if (schedule.phase !== phase || schedule.lastError) {
+        await pool.query(`UPDATE wb_price_schedules SET phase=$3,last_error='',updated_at=$4 WHERE market=$1 AND nm_id=$2`,
+          [market, schedule.nmId, phase, now]);
+      }
+      continue;
+    }
     const confirmedPrice = number(row.price);
     const window = wbNightWindowState(schedule.startMinute, schedule.endMinute, now);
     let queueRow = queueByNm.get(schedule.nmId);
@@ -626,12 +637,17 @@ async function listWbPrices(market) {
   const queuedRows = overlayWbQueuedRows(Array.isArray(snapshot?.rows) ? snapshot.rows : [], queue);
   const promo = await decorateWbPromotionRows(market, queuedRows);
   const scheduledRows = decorateWbNightSchedules(promo.rows, schedules);
+  const protectedRows = await decorateWbProtectionRows(market, scheduledRows);
+  const grouped = await decorateWbCardGroupRows(market, protectedRows);
   return {
     ok: true,
     market,
     source: 'Снимок Railway · Wildberries Prices & Discounts API',
     fetchedAt: Number(snapshot?.fetchedAt || 0),
-    rows: scheduledRows,
+    rows: grouped.rows,
+    cardGroups: grouped.snapshot.cards,
+    cardGroupsFetchedAt: grouped.snapshot.fetchedAt,
+    cardGroupsError: grouped.snapshot.lastError,
     serverSnapshot: true,
     waiting: !snapshot,
     nextSyncAt: Number(state.nextAllowedAt || 0),
@@ -701,6 +717,12 @@ async function queueWbPrice(market, input) {
     throw error;
   }
   const current = await wbSnapshotRowForWrite(market, nmID);
+  const protection = await protectionFor(market, nmID);
+  if (protection.priceProtected && input?.overrideProtection !== true) {
+    const error = new Error('Защита цены включена. Для ручного изменения требуется отдельное подтверждение.');
+    error.status = 409;
+    throw error;
+  }
   let desiredPrice = null, desiredDiscount = null;
   if (input?.price !== null && input?.price !== undefined && input?.price !== '') {
     const price = number(input.price);
@@ -743,6 +765,9 @@ async function queueWbPrice(market, input) {
   if (desiredDiscount !== null) {
     await pool.query(`UPDATE wb_promo_preferences SET base_discount=$3,updated_at=$4
       WHERE market=$1 AND nm_id=$2 AND enabled=true`, [market, nmID, desiredDiscount, now]).catch(() => {});
+  }
+  if (protection.priceProtected && input?.overrideProtection === true) {
+    await updateProtectionBaseline(market, nmID, { price: desiredPrice, discount: desiredDiscount }).catch(() => {});
   }
   if (desiredPrice !== null) await markManualScheduleOverride(market, String(nmID), desiredPrice, now).catch(() => {});
   const state = await wbPriceState(market);
@@ -976,6 +1001,7 @@ async function syncWbPriceMarket(market) {
     if (!locked) return { ok: true, market, skipped: true, reason: 'already-running' };
 
     const now = Date.now();
+    await syncWbPriceProtection(market, now);
     await syncWbNightSchedules(market, now);
     const state = await wbPriceState(market);
     if (Number(state.nextAllowedAt || 0) > now) {
@@ -1341,6 +1367,7 @@ async function saveWbNightSchedules(market, input) {
       const row = byNm.get(nmId);
       if (!row) { skipped.push(String(nmId)); continue; }
       if (enabled && row.canEditPrice === false) { skipped.push(String(nmId)); continue; }
+      if (enabled && (await protectionFor(market, nmId, client)).priceProtected) { skipped.push(String(nmId)); continue; }
       if (enabled) {
         await client.query(`INSERT INTO wb_price_schedules
           (market,nm_id,enabled,start_minute,end_minute,target_price,base_price,window_key,manual_override_window,phase,last_error,updated_at)
