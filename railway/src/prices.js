@@ -10,6 +10,7 @@ import { decorateWbProtectionRows, protectionFor, syncWbPriceProtection, updateP
 import { decorateWbCardGroupRows } from './wb-card-groups.js';
 
 const WB_PRICE_API = 'https://discounts-prices-api.wildberries.ru';
+const WB_ANALYTICS_API = 'https://seller-analytics-api.wildberries.ru';
 const OZON_API = 'https://api-seller.ozon.ru';
 const CACHE_TTL_MS = 2 * 60 * 1000;
 const WB_MIN_INTERVAL_MS = 650;
@@ -295,6 +296,68 @@ async function requestWb(token, path, options = {}, meta = {}) {
 async function wbToken(market) {
   const fallback = market === 'WB2' ? config.wbToken2 : market === 'WB' ? config.wbToken : '';
   return credentialFor(market, fallback);
+}
+
+async function syncWbWarehouseStocksMaybe(market, token, now = Date.now()) {
+  const current = await pool.query('SELECT fetched_at AS "fetchedAt" FROM wb_stock_snapshots WHERE market=$1', [market]).catch(() => ({ rows: [] }));
+  if (Number(current.rows[0]?.fetchedAt || 0) > now - 25 * 60 * 1000) return;
+  const snapshot = await wbPriceSnapshot(market);
+  const ids = [...new Set((snapshot?.rows || []).map(row => Number(row?.remoteId)).filter(value => Number.isInteger(value) && value > 0))];
+  if (!ids.length) return;
+  if (ids.length > 1000) {
+    await pool.query(`INSERT INTO wb_stock_snapshots(market,payload,fetched_at,last_error,updated_at)
+      VALUES($1,'{"items":{}}'::jsonb,0,$2,$3)
+      ON CONFLICT(market) DO UPDATE SET last_error=excluded.last_error,updated_at=excluded.updated_at`,
+      [market, 'Остатков больше 1000: нужна пакетная синхронизация', now]).catch(() => {});
+    return;
+  }
+  try {
+    const response = await fetch(WB_ANALYTICS_API + '/api/analytics/v1/stocks-report/wb-warehouses', {
+      method: 'POST',
+      headers: { Accept: 'application/json', 'Content-Type': 'application/json', Authorization: token },
+      body: JSON.stringify({ nmIds: ids, chrtIds: [], limit: 250000, offset: 0 }),
+      signal: AbortSignal.timeout(45_000)
+    });
+    const text = await response.text();
+    let data = {};
+    try { data = text ? JSON.parse(text) : {}; } catch { data = { message: text.slice(0, 500) }; }
+    if (!response.ok) throw new Error(cleanText(data?.message || data?.errorText || data?.error) || ('WB Analytics HTTP ' + response.status));
+    const items = Object.fromEntries(ids.map(id => [String(id), { quantity: 0, inWayToClient: 0, inWayFromClient: 0 }]));
+    for (const raw of (Array.isArray(data?.data?.items) ? data.data.items : [])) {
+      const key = String(Number(raw?.nmId) || '');
+      if (!items[key]) continue;
+      items[key].quantity += Math.max(0, Math.floor(number(raw?.quantity)));
+      items[key].inWayToClient += Math.max(0, Math.floor(number(raw?.inWayToClient)));
+      items[key].inWayFromClient += Math.max(0, Math.floor(number(raw?.inWayFromClient)));
+    }
+    await pool.query(`INSERT INTO wb_stock_snapshots(market,payload,fetched_at,last_error,updated_at)
+      VALUES($1,$2::jsonb,$3,'',$3)
+      ON CONFLICT(market) DO UPDATE SET payload=excluded.payload,fetched_at=excluded.fetched_at,last_error='',updated_at=excluded.updated_at`,
+      [market, JSON.stringify({ items }), now]);
+  } catch (error) {
+    await pool.query(`INSERT INTO wb_stock_snapshots(market,payload,fetched_at,last_error,updated_at)
+      VALUES($1,'{"items":{}}'::jsonb,0,$2,$3)
+      ON CONFLICT(market) DO UPDATE SET last_error=excluded.last_error,updated_at=excluded.updated_at`,
+      [market, cleanText(error?.message || error).slice(0, 500), now]).catch(() => {});
+  }
+}
+
+async function decorateWbWarehouseStocks(market, rows) {
+  const result = await pool.query('SELECT payload,fetched_at AS "fetchedAt",last_error AS "lastError" FROM wb_stock_snapshots WHERE market=$1', [market]).catch(() => ({ rows: [] }));
+  const state = result.rows[0] || {}, payload = state.payload && typeof state.payload === 'object' ? state.payload : {};
+  const items = payload.items && typeof payload.items === 'object' ? payload.items : {};
+  return {
+    rows: (Array.isArray(rows) ? rows : []).map(raw => {
+      const row = { ...raw }, stock = items[String(row.remoteId || '')];
+      row.wbStockKnown = Boolean(stock);
+      row.wbAvailable = stock ? Math.max(0, Number(stock.quantity) || 0) : null;
+      row.wbInWayToClient = stock ? Math.max(0, Number(stock.inWayToClient) || 0) : null;
+      row.wbInWayFromClient = stock ? Math.max(0, Number(stock.inWayFromClient) || 0) : null;
+      return row;
+    }),
+    fetchedAt: Number(state.fetchedAt || 0),
+    lastError: cleanText(state.lastError)
+  };
 }
 
 async function normalizeWbPriceRows(market, rows) {
@@ -639,12 +702,15 @@ async function listWbPrices(market) {
   const scheduledRows = decorateWbNightSchedules(promo.rows, schedules);
   const protectedRows = await decorateWbProtectionRows(market, scheduledRows);
   const grouped = await decorateWbCardGroupRows(market, protectedRows);
+  const stocked = await decorateWbWarehouseStocks(market, grouped.rows);
   return {
     ok: true,
     market,
     source: 'Снимок Railway · Wildberries Prices & Discounts API',
     fetchedAt: Number(snapshot?.fetchedAt || 0),
-    rows: grouped.rows,
+    rows: stocked.rows,
+    wbStockFetchedAt: stocked.fetchedAt,
+    wbStockError: stocked.lastError,
     cardGroups: grouped.snapshot.cards,
     cardGroupsFetchedAt: grouped.snapshot.fetchedAt,
     cardGroupsError: grouped.snapshot.lastError,
@@ -1009,6 +1075,7 @@ async function syncWbPriceMarket(market) {
     }
     const token = await wbToken(market);
     if (!token) return { ok: true, market, skipped: true, reason: 'not-configured' };
+    await syncWbWarehouseStocksMaybe(market, token, now);
     const queue = await wbPriceQueueRows(market);
     const sent = queue.filter(row => row.status === 'sent' && Number(row.uploadId) > 0);
     const pending = queue.filter(row => row.status === 'pending');
