@@ -189,7 +189,9 @@ export async function syncWbPriceProtection(market,now=Date.now()){
       const client=await pool.connect();
       try{
         await client.query('BEGIN');
-        const baseline=await baselineFor(market,Number(pref.nmId),row,client);
+        const baseline=pref.manualPriceLock
+          ? {lockedPrice:pref.lockedPrice,lockedDiscount:pref.lockedDiscount}
+          : await baselineFor(market,Number(pref.nmId),row,client);
         lockedPrice=baseline.lockedPrice;lockedDiscount=baseline.lockedDiscount;autoLock=true;
         await client.query(`UPDATE wb_price_protection SET auto_zero_lock=true,locked_price=$3,locked_discount=$4,
           own_stock_known=true,own_available=0,stock_checked_at=$5,updated_at=$5 WHERE market=$1 AND nm_id=$2`,
@@ -217,7 +219,7 @@ export async function syncWbPriceProtection(market,now=Date.now()){
     if(queue&&['promo','schedule'].includes(cleanText(queue.source))&&['pending','held'].includes(cleanText(queue.status))){
       await pool.query('DELETE FROM wb_price_update_queue WHERE market=$1 AND nm_id=$2',[market,pref.nmId]);changed++;
     }
-    if(queue&&['sent','checking','manual','protection'].includes(cleanText(queue.source)))continue;
+    if(queue&&(['sent','checking'].includes(cleanText(queue.status))||['manual','protection'].includes(cleanText(queue.source))))continue;
     const desiredPrice=lockedPrice!=null&&row.canEditPrice!==false&&Math.abs(number(row.price)-number(lockedPrice))>0.000001?number(lockedPrice):null;
     const desiredDiscount=lockedDiscount!=null&&clampDiscount(row.discount)!==clampDiscount(lockedDiscount)?clampDiscount(lockedDiscount):null;
     if(desiredPrice===null&&desiredDiscount===null)continue;
