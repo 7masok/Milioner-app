@@ -585,7 +585,7 @@ window.submitPriceGroupDetach=async function(separateEach){
     await remoteGroupMove({market:priceUi.market,remoteIds:ids,separateEach:Boolean(separateEach)});
     priceSelection().clear();closeModal();bumpPriceEpoch(priceUi.market);await window.renderPrices(true);
     setPriceStatus(separateEach?'Карточки разъединены и проверены':'Новая группа проверена по фактическим данным WB','ok');
-  }catch(error){alert(priceErrorText(error))}
+  }catch(error){showPriceGroupFailure(error,ids)}
 };
 async function remotePromoBulk(remoteIds,enabled){
   const response=await fetch(MILLIONER_API+'/api/market-prices/promo/bulk',{
