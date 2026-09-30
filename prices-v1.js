@@ -162,7 +162,6 @@ function setPriceTabs(){
   if(hiddenTools)hiddenTools.hidden=!hiddenCount;
   if(hidden){hidden.hidden=!hiddenCount;hidden.textContent='Скрытые · '+hiddenCount;hidden.setAttribute('aria-label','Показать скрытые товары: '+hiddenCount);}
   updatePriceBulkTools();
-  updatePriceGroupTools();
 }
 function priceRetryLabel(retryAt){
   const ts=Number(retryAt)||0;
@@ -510,10 +509,15 @@ async function remoteGroupRecheck(remoteIds=[]){
   return data;
 }
 let priceGroupRecheckIds=[];
+function priceGroupErrorText(error){
+  const text=String(error?.message||error||'Не удалось проверить группы WB');
+  if(Number(error?.status)===429)return 'WB временно ограничил Content API. Повторная проверка '+priceRetryLabel(error?.retryAt)+'.';
+  return text;
+}
 function showPriceGroupFailure(error,ids=[]){
   priceGroupRecheckIds=[...new Set((ids||[]).map(String).filter(Boolean))];
   const retry=Number(error?.retryAt)>Date.now()?'<div class="price-inline-warning">Повторная проверка доступна после '+pEsc(priceRetryLabel(error.retryAt))+'.</div>':'';
-  showSheet('<h3>Группа WB не подтверждена</h3><div class="muted">'+pEsc(priceErrorText(error))+'</div>'+retry+
+  showSheet('<h3>Группа WB не подтверждена</h3><div class="muted">'+pEsc(priceGroupErrorText(error))+'</div>'+retry+
     '<button type="button" class="btn dark full" onclick="recheckPriceGroups()">Повторно проверить в WB</button>');
 }
 window.recheckPriceGroups=async function(){
