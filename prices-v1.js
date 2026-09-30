@@ -217,6 +217,11 @@ function priceInlineEditor(row,index){
       '<div class="price-inline-fields"><div class="field"><label>Цена, '+pEsc(row.currency||'RUB')+'</label><input id="priceEditCurrent" type="number" min="1" step="1" inputmode="decimal" value="'+pEsc(pNum(row.price)||'')+'" '+(priceDisabled?'disabled':'')+'></div>'+
       '<div class="field"><label>Скидка, %</label><input id="priceEditDiscount" type="number" min="0" max="99" step="1" inputmode="numeric" value="'+pEsc(Math.round(pNum(row.discount)))+'"></div></div>'+
       (priceDisabled?'<div class="price-inline-warning">Разные цены по размерам · меняется только скидка</div>':'')+
+      '<div class="price-protection-grid">'+
+        '<label class="price-protection-toggle"><input type="checkbox" '+(row.manualPriceLock?'checked':'')+' onchange="togglePriceProtection('+Number(index)+',\'manualPriceLock\',this.checked)"> <span><b>Зафиксировать цену продавца</b><br><span class="muted">Блокирует наши автоматические изменения цены и скидки.</span></span></label>'+
+        '<label class="price-protection-toggle"><input type="checkbox" '+(row.promoBlocked?'checked':'')+' onchange="togglePriceProtection('+Number(index)+',\'promoBlock\',this.checked)"> <span><b>Не участвовать в акциях</b><br><span class="muted">Блокирует добавление через Milioner. Автоакции WB API запретить не умеет.</span></span></label>'+
+        '<label class="price-protection-toggle"><input type="checkbox" '+(row.autoZeroEnabled?'checked':'')+' onchange="togglePriceProtection('+Number(index)+',\'autoZeroEnabled\',this.checked)"> <span><b>Защита при нулевом моём остатке</b><br><span class="muted">Включается только при подтверждённом доступном остатке 0.</span></span></label>'+
+      '</div>'+
       '<div class="price-inline-actions wb"><label class="price-promo-toggle"><input type="checkbox" '+(row.promoEnabled?'checked':'')+' onchange="togglePricePromo('+Number(index)+',this.checked)">Акции</label><button type="button" class="btn dark" onclick="submitPriceEdit('+Number(index)+')">Сохранить</button><button type="button" class="btn price-hide-action" onclick="hidePriceRow('+Number(index)+')">Скрыть</button></div>'+
       '</div>';
   }
@@ -240,7 +245,9 @@ function priceCard(row,index){
     lines='<span>Цена: <b>'+pRange(row.price,row.priceMax,row.currency)+'</b></span>'+
       '<span>Скидка: <b>'+(discount?discount+'%':'0%')+'</b></span>'+
       '<span>После скидки: <b>'+pRange(row.finalPrice,row.finalPriceMax,row.currency)+'</b></span>'+
-      (pNum(row.clubFinalPrice)>0?'<span>WB Клуб: <b>'+pMoney(row.clubFinalPrice,row.currency)+'</b></span>':'');
+      (pNum(row.clubFinalPrice)>0?'<span>WB Клуб: <b>'+pMoney(row.clubFinalPrice,row.currency)+'</b></span>':'')+
+      '<span class="price-stock-line">Мой склад: <b>'+(row.ownStockKnown?Number(row.ownAvailable||0):'—')+'</b></span>'+
+      '<span class="price-stock-line">WB: <b>'+(row.wbStockKnown?Number(row.wbAvailable||0):'—')+'</b></span>';
   }else if(row.market==='Ozon'){
     lines='<span>Цена: <b>'+pMoney(row.price,row.currency)+'</b></span>'+
       '<span>Скидка: <b>'+(discount?discount+'%':'0%')+'</b></span>'+
@@ -264,21 +271,23 @@ function priceCard(row,index){
   const night=(row.market==='WB'||row.market==='WB2')&&row.nightPriceEnabled
     ?'<span class="price-night-badge"> · 🌙 '+pEsc(row.nightPriceStart||'04:00')+'–'+pEsc(row.nightPriceEnd||'06:00')+' · '+pMoney(row.nightPriceTarget,row.currency)+'</span>'
     :'';
+  const protection=row.priceProtected?'<span class="price-lock-badge"> · 🔒 '+pEsc(row.protectionReason||'Защита цены')+'</span>':'';
+  const group=priceIsWbMarket(row.market)?'<span> · '+(row.grouped?('Группа '+pEsc(row.groupImtId)+' · '+Number(row.groupSize||0)):'Без группы')+'</span>':'';
   const expanded=Boolean(priceExpanded&&priceExpanded.market===priceUi.market&&priceExpanded.index===Number(index));
   const selected=priceIsWbMarket(row.market)&&priceSelection(row.market).has(String(row.remoteId||''));
   const selectBox=priceIsWbMarket(row.market)?'<label class="price-row-select" onclick="event.stopPropagation()"><input type="checkbox" '+(selected?'checked':'')+' onchange="priceSelectRow('+Number(index)+',this.checked)" aria-label="Выбрать товар"></label>':'';
   return '<div class="item price-item '+(!linked?'unlinked':'')+(expanded?' expanded':'')+(selected?' selected':'')+'" data-price-row="'+index+'">'+selectBox+
     '<button type="button" class="price-card-toggle" onclick="openPriceEditor('+index+')" aria-expanded="'+(expanded?'true':'false')+'">'+
       '<div class="price-item-head"><div class="grow"><div class="name">'+pEsc(row.name||row.sku||'Товар')+'</div>'+
-      '<div class="muted">'+pEsc(account?(row.account+' · '):'')+pEsc(row.sku?('Арт. '+row.sku):row.remoteId||'')+(linked?'':' · не привязан к товару склада')+promo+night+'</div>'+sync+'</div><span class="price-chevron">'+(expanded?'⌄':'›')+'</span></div>'+
+      '<div class="muted">'+pEsc(account?(row.account+' · '):'')+pEsc(row.sku?('Арт. '+row.sku):row.remoteId||'')+(linked?'':' · не привязан к товару склада')+group+promo+night+protection+'</div>'+sync+'</div><span class="price-chevron">'+(expanded?'⌄':'›')+'</span></div>'+
       '<div class="price-values">'+lines+'</div>'+
     '</button>'+priceInlineEditor(row,index)+'</div>';
 }
 function paintPrices(){
   setPriceTabs();
-  const rows=activeRows(),visibleRows=rows.filter(row=>!priceIsHidden(row)),q=priceUi.q.trim().toLocaleLowerCase('ru-RU');
+  const rows=activeRows(),visibleRows=rows.filter(row=>!priceIsHidden(row)&&priceMatchesGroup(row)),q=priceUi.q.trim().toLocaleLowerCase('ru-RU');
   const indexed=rows.map((row,index)=>({row,index})).filter(({row})=>{
-    if(priceIsHidden(row))return false;
+    if(priceIsHidden(row)||!priceMatchesGroup(row))return false;
     if(!q)return true;
     return [row.name,row.sku,row.remoteId,row.account].some(value=>String(value||'').toLocaleLowerCase('ru-RU').includes(q));
   }).sort((a,b)=>{
@@ -381,7 +390,15 @@ window.renderPrices=async function(force=false){
 
 window.priceSetMarket=function(market){
   if(!PRICE_MARKETS.includes(market)||market===priceUi.market)return;
-  priceExpanded=null;priceUi.market=market;rememberPriceUi();setPriceTabs();window.renderPrices(false);
+  if(priceIsWbMarket(priceUi.market))priceSelection(priceUi.market).clear();
+  if(priceIsWbMarket(market))priceSelection(market).clear();
+  priceExpanded=null;priceUi.market=market;priceUi.groupFilter='all';priceUi.groupId='';rememberPriceUi();setPriceTabs();window.renderPrices(false);
+};
+window.priceSetGroupFilter=function(value){
+  priceUi.groupFilter=['grouped','ungrouped'].includes(value)?value:'all';priceUi.groupId='';rememberPriceUi();paintPrices();
+};
+window.priceSetGroup=function(value){
+  priceUi.groupId=String(value||'');if(priceUi.groupId)priceUi.groupFilter='all';rememberPriceUi();paintPrices();
 };
 window.priceSearch=function(value){
   priceUi.q=String(value||'');rememberPriceUi();paintPrices();
@@ -546,6 +563,7 @@ async function remotePromoToggle(body){
 }
 window.togglePricePromo=async function(index,enabled){
   const row=activeRows()[Number(index)];if(!row||(row.market!=='WB'&&row.market!=='WB2'))return;
+  if(enabled&&(row.priceProtected||row.promoBlocked)){paintPrices();return alert('Для товара включена защита цены или запрет акций.');}
   const checkbox=document.querySelector('[data-price-row="'+Number(index)+'"] .price-promo-toggle input');
   if(checkbox)checkbox.disabled=true;
   try{
@@ -603,6 +621,10 @@ window.submitPriceEdit=async function(index){
       const question='Сохранить для '+marketLabel(row.market)+' '+changes.join(' и ')+'?';
       if(!confirm(question))return;
       const body={market:row.market,remoteId:row.remoteId};
+      if(row.priceProtected){
+        if(!confirm('Защита цены включена. Всё равно изменить цену/скидку вручную и сохранить новое значение как защищённое?'))return;
+        body.overrideProtection=true;
+      }
       if(priceChanged)body.price=enteredPrice;
       if(discountChanged)body.discount=enteredDiscount;
       const result=await remotePriceUpdate(body);
