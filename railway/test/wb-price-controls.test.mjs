@@ -44,6 +44,8 @@ test('night raise cannot strand a temporary high price when protection is enable
   assert.match(protection,/SELECT base_price AS "basePrice" FROM wb_price_schedules/);
   assert.match(protection,/number\(schedule\?\.basePrice\)>0\?number\(schedule\.basePrice\)/);
   assert.match(protection,/source='protection'/);
+  assert.match(protection,/function protectedReturnPrice\(currentPrice,lockedPrice\)/);
+  assert.match(protection,/Math\.ceil\(current\/1\.9\)/);
   assert.match(prices,/phase = Number\(schedule\.basePrice\) > 0 \? 'restoring' : 'locked'/);
 });
 
