@@ -5,6 +5,9 @@ on:
     branches:
       - feature/wb-groups-price-protection
 
+permissions:
+  contents: read
+
 jobs:
   test:
     runs-on: ubuntu-latest
