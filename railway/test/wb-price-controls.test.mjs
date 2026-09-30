@@ -63,6 +63,8 @@ test('WB card grouping is user initiated, verifies actual result and separates o
   assert.match(groups,/await moveCards\(market,\{nmIDs:\[ids\[i\]\]\}\)/);
   assert.match(groups,/refreshed=await fetchWbCardGroupsRemote\(market\)/);
   assert.match(groups,/if\(!verified\)return res\.status\(409\)/);
+  assert.match(groups,/card-groups\/recheck/);
+  assert.match(groups,/retryAt:Number\(error\?\.retryAt\)\|\|0/);
   assert.match(groups,/wb_control_history/);
 });
 
@@ -72,6 +74,8 @@ test('Prices UI isolates WB shops and exposes group and protection controls',()=
   assert.match(ui,/priceUi\.groupFilter='all';priceUi\.groupId=''/);
   assert.match(ui,/openPriceGroupMerge/);
   assert.match(ui,/submitPriceGroupDetach\(true\)/);
+  assert.match(ui,/recheckPriceGroups/);
+  assert.match(ui,/Повторно проверить в WB/);
   assert.match(ui,/Итоговый состав/);
   assert.match(ui,/manualPriceLock/);
   assert.match(ui,/promoBlock/);
