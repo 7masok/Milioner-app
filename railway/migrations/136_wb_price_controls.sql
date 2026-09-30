@@ -31,6 +31,15 @@ CREATE TABLE IF NOT EXISTS wb_card_group_snapshots (
   CHECK (market IN ('WB','WB2'))
 );
 
+CREATE TABLE IF NOT EXISTS wb_stock_snapshots (
+  market TEXT PRIMARY KEY,
+  payload JSONB NOT NULL DEFAULT '{"items":{}}'::jsonb,
+  fetched_at BIGINT NOT NULL DEFAULT 0,
+  last_error TEXT NOT NULL DEFAULT '',
+  updated_at BIGINT NOT NULL DEFAULT 0,
+  CHECK (market IN ('WB','WB2'))
+);
+
 CREATE TABLE IF NOT EXISTS wb_control_history (
   id BIGSERIAL PRIMARY KEY,
   market TEXT NOT NULL,
