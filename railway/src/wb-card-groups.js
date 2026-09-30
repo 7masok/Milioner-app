@@ -49,8 +49,12 @@ async function requestContent(token,path,options={},market='WB'){
   const text=await response.text();let data={};
   try{data=text?JSON.parse(text):{}}catch{data={errorText:text.slice(0,500)}}
   if(!response.ok){
-    const error=new Error(cleanText(data?.errorText||data?.message||data?.error)||('WB Content HTTP '+response.status));
-    error.status=response.status;error.retryAt=retryAtHeaders(response.headers);error.market=market;throw error;
+    let message=cleanText(data?.errorText||data?.message||data?.error)||('WB Content HTTP '+response.status);
+    const retryAt=retryAtHeaders(response.headers);
+    if(response.status===429&&retryAt>Date.now())message+=' · повторить после '+new Date(retryAt).toISOString();
+    if((response.status===401||response.status===403)&&!/контент|content/i.test(message))message+=' · проверьте право токена WB на категорию «Контент»';
+    const error=new Error(message);
+    error.status=response.status;error.retryAt=retryAt;error.market=market;throw error;
   }
   return data||{};
 }
@@ -144,6 +148,26 @@ wbCardGroupsRouter.get('/market-prices/card-groups',asyncRoute(async(req,res)=>{
   const snapshot=await wbCardGroupSnapshot(market);
   return res.json({ok:true,...snapshot,serverSnapshot:true});
 }));
+wbCardGroupsRouter.post('/market-prices/card-groups/recheck',requireWritesEnabled,asyncRoute(async(req,res)=>{
+  const market=marketName(req.body?.market);
+  try{
+    const cards=await fetchWbCardGroupsRemote(market);
+    const snapshot=await saveWbCardGroupSnapshot(market,cards);
+    const ids=[...new Set((Array.isArray(req.body?.remoteIds)?req.body.remoteIds:[])
+      .map(Number).filter(value=>Number.isInteger(value)&&value>0))].slice(0,30);
+    const byNm=cardMap(snapshot.cards);
+    const actual=ids.map(id=>byNm.get(String(id))).filter(Boolean).map(card=>({
+      nmId:card.nmId,imtId:card.imtId,subjectId:card.subjectId,title:card.title,vendorCode:card.vendorCode,photo:card.photo
+    }));
+    return res.json({ok:true,...snapshot,actual});
+  }catch(error){
+    await markWbCardGroupError(market,error).catch(()=>{});
+    return res.status(Number(error?.status)||500).json({
+      ok:false,error:cleanText(error?.message||error),retryAt:Number(error?.retryAt)||0
+    });
+  }
+}));
+
 wbCardGroupsRouter.post('/market-prices/card-groups/move',requireWritesEnabled,asyncRoute(async(req,res)=>{
   if(req.body?.confirm!==true)return res.status(400).json({ok:false,error:'Подтвердите изменение группы карточек'});
   const market=marketName(req.body?.market);
