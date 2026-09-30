@@ -10,6 +10,11 @@ wbPriceProtectionRouter.use(requireTrustedOrigin);
 function cleanText(value) { return String(value ?? '').trim(); }
 function number(value) { const n=Number(value); return Number.isFinite(n)?n:0; }
 function clampDiscount(value) { return Math.max(0,Math.min(99,Math.round(number(value)))); }
+function protectedReturnPrice(currentPrice,lockedPrice){
+  const current=number(currentPrice),base=number(lockedPrice);
+  if(!(base>0)||!(current>0)||base>=current)return base;
+  return Math.max(base,Math.ceil(current/1.9));
+}
 function marketName(value) {
   const market=cleanText(value);
   if(market!=='WB'&&market!=='WB2'){const error=new Error('Защита цены доступна только для WB');error.status=400;throw error;}
@@ -220,7 +225,9 @@ export async function syncWbPriceProtection(market,now=Date.now()){
       await pool.query('DELETE FROM wb_price_update_queue WHERE market=$1 AND nm_id=$2',[market,pref.nmId]);changed++;
     }
     if(queue&&(['sent','checking'].includes(cleanText(queue.status))||['manual','protection'].includes(cleanText(queue.source))))continue;
-    const desiredPrice=lockedPrice!=null&&row.canEditPrice!==false&&Math.abs(number(row.price)-number(lockedPrice))>0.000001?number(lockedPrice):null;
+    const confirmedPrice=number(row.price);
+    const protectedPrice=lockedPrice!=null?protectedReturnPrice(confirmedPrice,lockedPrice):null;
+    const desiredPrice=protectedPrice!=null&&row.canEditPrice!==false&&Math.abs(confirmedPrice-number(lockedPrice))>0.000001?protectedPrice:null;
     const desiredDiscount=lockedDiscount!=null&&clampDiscount(row.discount)!==clampDiscount(lockedDiscount)?clampDiscount(lockedDiscount):null;
     if(desiredPrice===null&&desiredDiscount===null)continue;
     await pool.query(`INSERT INTO wb_price_update_queue
