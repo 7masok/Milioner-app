@@ -511,7 +511,7 @@ window.refreshPriceGroupMergePreview=function(){
   const finalRows=[];for(const row of activeRows())if(String(row.groupImtId||'')===target||selectedIds.has(String(row.remoteId||'')))finalRows.push(row);
   const unique=[...new Map(finalRows.map(row=>[String(row.remoteId||''),row])).values()];
   const el=document.getElementById('priceGroupMergePreview');if(!el)return;
-  el.innerHTML='<div class="muted">После операции в группе ожидается '+unique.length+' товаров. Ниже показаны выбранные товары и их текущие группы.</div><div class="price-group-preview">'+selected.map(groupPreviewRow).join('')+'</div>';
+  el.innerHTML='<div class="muted">Итоговый состав: '+unique.length+' товаров. У каждого товара ниже указана его текущая группа, поэтому перенос из другой группы виден до подтверждения.</div><div class="price-group-preview">'+unique.map(groupPreviewRow).join('')+'</div>';
 };
 window.submitPriceGroupMerge=async function(){
   const rows=selectedPriceRows(),ids=rows.map(row=>String(row.remoteId||'')).filter(Boolean),targetImt=String(document.getElementById('priceGroupTarget')?.value||'');
