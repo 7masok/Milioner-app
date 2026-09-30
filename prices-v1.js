@@ -4,7 +4,7 @@
 const PRICE_UI_KEY=(typeof KEY==='string'?KEY:'sklad_mvp_v2')+'_prices_ui_v1';
 const PRICE_MARKETS=['Kaspi','WB','WB2','Ozon'];
 const PRICE_CLIENT_TTL_MS=2*60*1000;
-let priceUi={market:'Kaspi',q:'',sort:'asc',hidden:{}};
+let priceUi={market:'Kaspi',q:'',sort:'asc',hidden:{},groupFilter:'all',groupId:''};
 let priceExpanded=null;
 const priceSelected={WB:new Set(),WB2:new Set()};
 try{
@@ -13,6 +13,8 @@ try{
   priceUi.q=String(saved.q||'');
   if(saved.sort==='desc'||saved.sort==='asc')priceUi.sort=saved.sort;
   if(saved.hidden&&typeof saved.hidden==='object')priceUi.hidden=saved.hidden;
+  if(['all','grouped','ungrouped'].includes(saved.groupFilter))priceUi.groupFilter=saved.groupFilter;
+  priceUi.groupId=String(saved.groupId||'');
 }catch{}
 const priceCache=new Map();
 const priceFetchInFlight=new Map();
@@ -72,17 +74,40 @@ function priceSelection(market=priceUi.market){
 function priceIsWbMarket(market=priceUi.market){
   return market==='WB'||market==='WB2';
 }
+function priceMatchesGroup(row){
+  if(!priceIsWbMarket(row?.market))return true;
+  if(priceUi.groupId)return String(row?.groupImtId||'')===String(priceUi.groupId);
+  if(priceUi.groupFilter==='grouped')return Boolean(row?.grouped);
+  if(priceUi.groupFilter==='ungrouped')return !row?.grouped;
+  return true;
+}
 function priceVisibleRows(){
   const q=priceUi.q.trim().toLocaleLowerCase('ru-RU');
   return activeRows().map((row,index)=>({row,index})).filter(({row})=>{
-    if(row?.error||priceIsHidden(row))return false;
+    if(row?.error||priceIsHidden(row)||!priceMatchesGroup(row))return false;
     if(!q)return true;
     return [row.name,row.sku,row.remoteId,row.account].some(value=>String(value||'').toLocaleLowerCase('ru-RU').includes(q));
   });
 }
+function updatePriceGroupTools(){
+  const tools=document.getElementById('priceGroupTools'),filter=document.getElementById('priceGroupFilter'),select=document.getElementById('priceGroupSelect'),
+    merge=document.getElementById('priceGroupMerge'),detach=document.getElementById('priceGroupDetach');
+  const isWb=priceIsWbMarket(),selection=priceSelection();
+  if(tools)tools.hidden=!isWb;if(!isWb)return;
+  if(filter)filter.value=priceUi.groupFilter||'all';
+  if(select){
+    const groups=new Map();
+    for(const row of activeRows())if(row?.grouped&&row?.groupImtId&&!groups.has(String(row.groupImtId)))groups.set(String(row.groupImtId),row);
+    const options=['<option value="">Все группы</option>',...[...groups.entries()].sort((a,b)=>String(a[1]?.name||'').localeCompare(String(b[1]?.name||''),'ru')).map(([id,row])=>'<option value="'+pEsc(id)+'">Группа '+pEsc(id)+' · '+Number(row.groupSize||0)+'</option>')];
+    select.innerHTML=options.join('');select.value=priceUi.groupId||'';
+  }
+  if(merge)merge.disabled=!selection.size;
+  if(detach)detach.disabled=!selection.size;
+}
 function updatePriceBulkTools(indexed=priceVisibleRows()){
   const tools=document.getElementById('priceBulkTools'),all=document.getElementById('priceSelectAll'),count=document.getElementById('priceSelectedCount'),
-    enable=document.getElementById('priceBulkEnablePromo'),disable=document.getElementById('priceBulkDisablePromo'),night=document.getElementById('priceBulkNight');
+    enable=document.getElementById('priceBulkEnablePromo'),disable=document.getElementById('priceBulkDisablePromo'),night=document.getElementById('priceBulkNight'),
+    protection=document.getElementById('priceBulkProtection');
   const isWb=priceIsWbMarket(),selection=priceSelection(),visibleIds=indexed.map(({row})=>String(row.remoteId||'')).filter(Boolean),
     selectedVisible=visibleIds.filter(id=>selection.has(id)).length;
   if(tools)tools.hidden=!isWb;
@@ -94,6 +119,8 @@ function updatePriceBulkTools(indexed=priceVisibleRows()){
   if(enable)enable.disabled=!selection.size;
   if(disable)disable.disabled=!selection.size;
   if(night)night.disabled=!selection.size;
+  if(protection)protection.disabled=!selection.size;
+  updatePriceGroupTools();
 }
 
 function priceHideAction(index){
@@ -135,6 +162,7 @@ function setPriceTabs(){
   if(hiddenTools)hiddenTools.hidden=!hiddenCount;
   if(hidden){hidden.hidden=!hiddenCount;hidden.textContent='Скрытые · '+hiddenCount;hidden.setAttribute('aria-label','Показать скрытые товары: '+hiddenCount);}
   updatePriceBulkTools();
+  updatePriceGroupTools();
 }
 function priceRetryLabel(retryAt){
   const ts=Number(retryAt)||0;
