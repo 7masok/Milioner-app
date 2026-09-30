@@ -8,6 +8,7 @@ import { linkFingerprint, validateWbLink, applyLinkObservation } from './wb-link
 import { config } from './config.js';
 import { credentialFor } from './connections.js';
 import { normalizeWbCard, normalizeWbText } from './wb-variant-normalize.js';
+import { wbCardGroupCard, saveWbCardGroupSnapshot } from './wb-card-groups.js';
 
 const CONTENT_API='https://content-api.wildberries.ru';
 const MARKETPLACE_API='https://marketplace-api.wildberries.ru';
@@ -51,7 +52,8 @@ async function catalog(token){
   for(let page=0;page<20;page++){
     const body={settings:{sort:{ascending:true},cursor:{limit:100,...cursor},filter:{withPhoto:-1}}};
     const data=await requestJson(CONTENT_API+'/content/v2/get/cards/list',{method:'POST',headers:{Accept:'application/json','Content-Type':'application/json',Authorization:token},body:JSON.stringify(body)},'WB Content cards');
-    const batch=Array.isArray(data?.cards)?data.cards:[];cards.push(...batch.map(normalizeWbCard).filter(card=>card.vendorCode&&card.sizes.length));
+    const batch=Array.isArray(data?.cards)?data.cards:[];
+    cards.push(...batch.map(raw=>({...normalizeWbCard(raw),...wbCardGroupCard(raw)})).filter(card=>card.vendorCode&&card.sizes.length));
     if(!Array.isArray(data?.cards))throw new Error('WB catalog response is incomplete');
     if(!batch.length||batch.length<100)return cards;
     const next=data?.cursor||{};if(!next.updatedAt||!next.nmID)throw new Error('WB catalog cursor is incomplete');cursor={updatedAt:next.updatedAt,nmID:next.nmID};
@@ -65,6 +67,8 @@ export async function validateWbStockLinks(market) {
   if(!token)return;
   const initial=await pool.query('SELECT payload FROM warehouse_state WHERE id=1');
   const cards=await catalog(token);
+  // Reuse the already permitted Content API crawl for the Prices tab group snapshot.
+  if(cards.length)await saveWbCardGroupSnapshot(id,cards).catch(error=>console.warn('WB card group snapshot failed',id,String(error?.message||error)));
   // An empty successful response is not sufficient evidence to detach a shop.
   if(!cards.length)return;
   const initialState=await hydrateWarehouseProducts(pool, parse(initial.rows[0]?.payload));
