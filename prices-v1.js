@@ -311,7 +311,14 @@ function paintPrices(){
     }
     list.innerHTML='<div class="empty">Нет позиций для этого магазина</div>';return;
   }
-  if(!visibleRows.length&&rows.length){list.innerHTML='<div class="empty">Все позиции этого магазина скрыты.<br><span class="muted">Вернуть их можно через «Скрытые».</span></div>';return;}
+  if(!visibleRows.length&&rows.length){
+    if(priceIsWbMarket()&&(priceUi.groupId||priceUi.groupFilter!=='all')){
+      list.innerHTML='<div class="empty">По выбранной группе или фильтру товаров нет.</div>';
+    }else{
+      list.innerHTML='<div class="empty">Все позиции этого магазина скрыты.<br><span class="muted">Вернуть их можно через «Скрытые».</span></div>';
+    }
+    return;
+  }
   if(!indexed.length){updatePriceBulkTools(indexed);list.innerHTML='<div class="empty">Поиск ничего не нашёл</div>';return;}
   updatePriceBulkTools(indexed);
   list.innerHTML=indexed.map(({row,index})=>priceCard(row,index)).join('');
@@ -484,9 +491,46 @@ async function remoteGroupMove(body){
   });
   const text=await response.text();let data=null;
   if(text){try{data=JSON.parse(text)}catch{throw new Error('Сервер групп WB вернул некорректный ответ')}}
-  if(!response.ok||data?.ok===false){const error=new Error(data?.error||('HTTP '+response.status));error.status=response.status;error.data=data;throw error}
+  if(!response.ok||data?.ok===false){
+    const error=new Error(data?.error||('HTTP '+response.status));
+    error.status=response.status;error.retryAt=Number(data?.retryAt)||0;error.data=data;throw error;
+  }
   return data;
 }
+async function remoteGroupRecheck(remoteIds=[]){
+  const response=await fetch(MILLIONER_API+'/api/market-prices/card-groups/recheck',{
+    method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({market:priceUi.market,remoteIds})
+  });
+  const text=await response.text();let data=null;
+  if(text){try{data=JSON.parse(text)}catch{throw new Error('Сервер проверки групп WB вернул некорректный ответ')}}
+  if(!response.ok||data?.ok===false){
+    const error=new Error(data?.error||('HTTP '+response.status));
+    error.status=response.status;error.retryAt=Number(data?.retryAt)||0;throw error;
+  }
+  return data;
+}
+let priceGroupRecheckIds=[];
+function showPriceGroupFailure(error,ids=[]){
+  priceGroupRecheckIds=[...new Set((ids||[]).map(String).filter(Boolean))];
+  const retry=Number(error?.retryAt)>Date.now()?'<div class="price-inline-warning">Повторная проверка доступна после '+pEsc(priceRetryLabel(error.retryAt))+'.</div>':'';
+  showSheet('<h3>Группа WB не подтверждена</h3><div class="muted">'+pEsc(priceErrorText(error))+'</div>'+retry+
+    '<button type="button" class="btn dark full" onclick="recheckPriceGroups()">Повторно проверить в WB</button>');
+}
+window.recheckPriceGroups=async function(){
+  if(!priceIsWbMarket())return;
+  try{
+    const data=await remoteGroupRecheck(priceGroupRecheckIds);
+    const cached=priceCache.get(priceUi.market);
+    if(cached){
+      cached.cardGroups=Array.isArray(data.cards)?data.cards:[];
+      cached.cardGroupsFetchedAt=Number(data.fetchedAt)||Date.now();
+    }
+    closeModal();bumpPriceEpoch(priceUi.market);await window.renderPrices(true);
+    setPriceStatus('Группы повторно проверены по фактическим данным WB','ok');
+  }catch(error){
+    showPriceGroupFailure(error,priceGroupRecheckIds);
+  }
+};
 window.openPriceGroupMerge=function(){
   if(!priceIsWbMarket())return;
   const selected=selectedPriceRows();if(!selected.length)return;
@@ -497,7 +541,10 @@ window.openPriceGroupMerge=function(){
     if(subject&&String(row?.groupSubjectId||'')!==subject)continue;
     const id=String(row?.groupImtId||'');if(id&&!candidates.has(id))candidates.set(id,row);
   }
-  if(!candidates.size)return alert('Снимок групп WB ещё не загружен.');
+  if(!candidates.size){
+    priceGroupRecheckIds=selected.map(row=>String(row.remoteId||'')).filter(Boolean);
+    return showSheet('<h3>Группы WB ещё не загружены</h3><div class="muted">Можно запросить актуальный состав каталога WB вручную. Это не меняет карточки.</div><button type="button" class="btn dark full" onclick="recheckPriceGroups()">Проверить группы WB</button>');
+  }
   const selectedImt=String(selected[0]?.groupImtId||''),defaultTarget=candidates.has(selectedImt)?selectedImt:[...candidates.keys()][0];
   const options=[...candidates.entries()].map(([id,row])=>'<option value="'+pEsc(id)+'" '+(id===defaultTarget?'selected':'')+'>Группа '+pEsc(id)+' · сейчас '+Number(row.groupSize||1)+'</option>').join('');
   showSheet('<h3>Объединить · '+selected.length+'</h3>'+
@@ -521,7 +568,7 @@ window.submitPriceGroupMerge=async function(){
     await remoteGroupMove({market:priceUi.market,remoteIds:ids,targetImt});
     priceSelection().clear();closeModal();bumpPriceEpoch(priceUi.market);await window.renderPrices(true);
     setPriceStatus('WB подтвердил фактический состав группы после проверки','ok');
-  }catch(error){alert(priceErrorText(error))}
+  }catch(error){showPriceGroupFailure(error,ids)}
 };
 window.openPriceGroupDetach=function(){
   if(!priceIsWbMarket())return;
