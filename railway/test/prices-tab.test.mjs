@@ -148,7 +148,7 @@ test('WB pagination spends at most one upstream request per sync slot',()=>{
 test('Prices can sort by price in both directions and remember the choice',()=>{
   assert.match(html,/id="priceSortButton"/);
   assert.match(html,/onclick="priceToggleSort\(\)"/);
-  assert.match(ui,/priceUi=\{market:'Kaspi',q:'',sort:'asc',hidden:\{\}\}/);
+  assert.match(ui,/priceUi=\{market:'Kaspi',q:'',sort:'asc',hidden:\{\},groupFilter:'all',groupId:''\}/);
   assert.match(ui,/saved\.sort==='desc'\|\|saved\.sort==='asc'/);
   assert.match(ui,/function priceSortValue\(row\)/);
   assert.match(ui,/priceUi\.sort==='desc'\?bv-av:av-bv/);
