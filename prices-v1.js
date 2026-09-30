@@ -421,6 +421,125 @@ window.priceSelectAllVisible=function(checked){
   }
   paintPrices();
 };
+
+async function remotePriceProtection(body){
+  const response=await fetch(MILLIONER_API+'/api/market-prices/protection',{
+    method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({...body,confirm:true})
+  });
+  const text=await response.text();let data=null;
+  if(text){try{data=JSON.parse(text)}catch{throw new Error('Сервер защиты цены вернул некорректный ответ')}}
+  if(!response.ok||data?.ok===false){const error=new Error(data?.error||('HTTP '+response.status));error.status=response.status;throw error}
+  return data;
+}
+window.togglePriceProtection=async function(index,field,enabled){
+  const row=activeRows()[Number(index)];if(!row||!priceIsWbMarket(row.market))return;
+  const body={market:row.market,remoteId:row.remoteId};body[field]=Boolean(enabled);
+  try{
+    await remotePriceProtection(body);
+    bumpPriceEpoch(row.market);
+    await window.renderPrices(true);
+    setPriceStatus(enabled?'Защита включена':'Настройка защиты выключена','ok');
+  }catch(error){paintPrices();alert(priceErrorText(error))}
+};
+window.openPriceBulkProtection=function(){
+  if(!priceIsWbMarket())return;
+  const ids=[...priceSelection()].filter(Boolean);if(!ids.length)return;
+  showSheet('<h3>Защита · '+ids.length+' товаров</h3>'+
+    '<div class="muted">Ручной замок блокирует наши автоматические изменения цены и акции. Автозащита по остатку включается только при подтверждённом нуле нашего склада.</div>'+
+    '<div class="price-protection-grid">'+
+      '<button type="button" class="btn" onclick="applyPriceBulkProtection(\'manualPriceLock\',true)">🔒 Зафиксировать цену</button>'+
+      '<button type="button" class="btn" onclick="applyPriceBulkProtection(\'manualPriceLock\',false)">Снять ручной замок</button>'+
+      '<button type="button" class="btn" onclick="applyPriceBulkProtection(\'promoBlock\',true)">Не добавлять в акции</button>'+
+      '<button type="button" class="btn" onclick="applyPriceBulkProtection(\'promoBlock\',false)">Разрешить акции сервиса</button>'+
+      '<button type="button" class="btn" onclick="applyPriceBulkProtection(\'autoZeroEnabled\',true)">Автозащита при 0 · вкл</button>'+
+      '<button type="button" class="btn" onclick="applyPriceBulkProtection(\'autoZeroEnabled\',false)">Автозащита при 0 · выкл</button>'+
+    '</div><div class="price-inline-warning">Запрет акций действует на Milioner. Публичный API WB не даёт выключить автоакции WB или гарантированно удалить товар из уже действующей акции.</div>');
+};
+window.applyPriceBulkProtection=async function(field,enabled){
+  if(!priceIsWbMarket())return;
+  const ids=[...priceSelection()].filter(Boolean);if(!ids.length)return;
+  const label=field==='manualPriceLock'?'ручную защиту цены':field==='promoBlock'?'запрет акций':'автозащиту при нулевом остатке';
+  if(!confirm((enabled?'Включить ':'Выключить ')+label+' для '+ids.length+' товаров?'))return;
+  const body={market:priceUi.market,remoteIds:ids};body[field]=Boolean(enabled);
+  try{
+    const result=await remotePriceProtection(body);
+    priceSelection().clear();closeModal();bumpPriceEpoch(priceUi.market);await window.renderPrices(true);
+    setPriceStatus('Изменено для '+Number(result.count||ids.length)+' товаров','ok');
+  }catch(error){alert(priceErrorText(error))}
+};
+function selectedPriceRows(){
+  const ids=priceSelection();return activeRows().filter(row=>ids.has(String(row.remoteId||'')));
+}
+function groupPreviewRow(row){
+  const image=row?.groupPhoto?'<img src="'+pEsc(row.groupPhoto)+'" alt="">':'<span class="thumb"></span>';
+  const group=row?.grouped?('Группа '+String(row.groupImtId||'')+' · '+Number(row.groupSize||0)):'Без группы';
+  return '<div class="price-group-preview-row">'+image+'<div><b>'+pEsc(row?.name||row?.sku||('WB '+row?.remoteId))+'</b><span>Арт. '+pEsc(row?.sku||row?.remoteId||'')+' · '+pEsc(group)+'</span></div></div>';
+}
+function sameSelectedSubject(rows){
+  const subjects=new Set(rows.map(row=>String(row?.groupSubjectId||'')).filter(Boolean));return subjects.size<=1;
+}
+async function remoteGroupMove(body){
+  const response=await fetch(MILLIONER_API+'/api/market-prices/card-groups/move',{
+    method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({...body,confirm:true})
+  });
+  const text=await response.text();let data=null;
+  if(text){try{data=JSON.parse(text)}catch{throw new Error('Сервер групп WB вернул некорректный ответ')}}
+  if(!response.ok||data?.ok===false){const error=new Error(data?.error||('HTTP '+response.status));error.status=response.status;error.data=data;throw error}
+  return data;
+}
+window.openPriceGroupMerge=function(){
+  if(!priceIsWbMarket())return;
+  const selected=selectedPriceRows();if(!selected.length)return;
+  if(!sameSelectedSubject(selected))return alert('WB разрешает объединять только карточки одного предмета.');
+  const subject=String(selected[0]?.groupSubjectId||'');
+  const candidates=new Map();
+  for(const row of activeRows()){
+    if(subject&&String(row?.groupSubjectId||'')!==subject)continue;
+    const id=String(row?.groupImtId||'');if(id&&!candidates.has(id))candidates.set(id,row);
+  }
+  if(!candidates.size)return alert('Снимок групп WB ещё не загружен.');
+  const selectedImt=String(selected[0]?.groupImtId||''),defaultTarget=candidates.has(selectedImt)?selectedImt:[...candidates.keys()][0];
+  const options=[...candidates.entries()].map(([id,row])=>'<option value="'+pEsc(id)+'" '+(id===defaultTarget?'selected':'')+'>Группа '+pEsc(id)+' · сейчас '+Number(row.groupSize||1)+'</option>').join('');
+  showSheet('<h3>Объединить · '+selected.length+'</h3>'+
+    '<div class="field"><label>Итоговая группа</label><select id="priceGroupTarget" onchange="refreshPriceGroupMergePreview()">'+options+'</select></div>'+
+    '<div id="priceGroupMergePreview"></div>'+
+    '<div class="actions"><button type="button" class="btn" onclick="closeModal()">Отмена</button><button type="button" class="btn dark" onclick="submitPriceGroupMerge()">Добавить / объединить</button></div>');
+  refreshPriceGroupMergePreview();
+};
+window.refreshPriceGroupMergePreview=function(){
+  const target=String(document.getElementById('priceGroupTarget')?.value||''),selected=selectedPriceRows(),selectedIds=new Set(selected.map(row=>String(row.remoteId||'')));
+  const finalRows=[];for(const row of activeRows())if(String(row.groupImtId||'')===target||selectedIds.has(String(row.remoteId||'')))finalRows.push(row);
+  const unique=[...new Map(finalRows.map(row=>[String(row.remoteId||''),row])).values()];
+  const el=document.getElementById('priceGroupMergePreview');if(!el)return;
+  el.innerHTML='<div class="muted">После операции в группе ожидается '+unique.length+' товаров. Ниже показаны выбранные товары и их текущие группы.</div><div class="price-group-preview">'+selected.map(groupPreviewRow).join('')+'</div>';
+};
+window.submitPriceGroupMerge=async function(){
+  const rows=selectedPriceRows(),ids=rows.map(row=>String(row.remoteId||'')).filter(Boolean),targetImt=String(document.getElementById('priceGroupTarget')?.value||'');
+  if(!ids.length||!targetImt)return;
+  if(!confirm('Переместить '+ids.length+' карточек в выбранную группу WB?'))return;
+  try{
+    await remoteGroupMove({market:priceUi.market,remoteIds:ids,targetImt});
+    priceSelection().clear();closeModal();bumpPriceEpoch(priceUi.market);await window.renderPrices(true);
+    setPriceStatus('WB подтвердил фактический состав группы после проверки','ok');
+  }catch(error){alert(priceErrorText(error))}
+};
+window.openPriceGroupDetach=function(){
+  if(!priceIsWbMarket())return;
+  const selected=selectedPriceRows();if(!selected.length)return;
+  showSheet('<h3>Отсоединить · '+selected.length+'</h3><div class="price-group-preview">'+selected.map(groupPreviewRow).join('')+'</div>'+
+    '<div class="muted">Если выбрать «каждый отдельно», Milioner отправит отдельный запрос для каждой карточки. Иначе WB может объединить выбранные карточки между собой в новую группу.</div>'+
+    '<button type="button" class="btn full" onclick="submitPriceGroupDetach(false)">Отсоединить одной новой группой</button>'+
+    '<button type="button" class="btn dark full" onclick="submitPriceGroupDetach(true)">Сделать каждый товар отдельным</button>');
+};
+window.submitPriceGroupDetach=async function(separateEach){
+  const ids=selectedPriceRows().map(row=>String(row.remoteId||'')).filter(Boolean);if(!ids.length)return;
+  if(!confirm(separateEach?'Сделать каждую выбранную карточку отдельной?':'Отсоединить выбранные карточки в новую группу?'))return;
+  try{
+    await remoteGroupMove({market:priceUi.market,remoteIds:ids,separateEach:Boolean(separateEach)});
+    priceSelection().clear();closeModal();bumpPriceEpoch(priceUi.market);await window.renderPrices(true);
+    setPriceStatus(separateEach?'Карточки разъединены и проверены':'Новая группа проверена по фактическим данным WB','ok');
+  }catch(error){alert(priceErrorText(error))}
+};
 async function remotePromoBulk(remoteIds,enabled){
   const response=await fetch(MILLIONER_API+'/api/market-prices/promo/bulk',{
     method:'POST',headers:{'Content-Type':'application/json'},
