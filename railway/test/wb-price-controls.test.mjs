@@ -63,6 +63,9 @@ test('WB card grouping is user initiated, verifies actual result and separates o
   assert.match(groups,/ids\.length>30/);
   assert.match(groups,/ensureSameSubject/);
   assert.match(groups,/await moveCards\(market,\{nmIDs:\[ids\[i\]\]\}\)/);
+  assert.match(groups,/const createNewGroup=req\.body\?\.createNewGroup===true/);
+  assert.match(groups,/action=createNewGroup\?'merge-new':'detach-group'/);
+  assert.match(groups,/await moveCards\(market,\{nmIDs:ids\}\)/);
   assert.match(groups,/refreshed=await fetchWbCardGroupsRemote\(market\)/);
   assert.match(groups,/if\(!verified\)return res\.status\(409\)/);
   assert.match(groups,/card-groups\/recheck/);
@@ -75,10 +78,13 @@ test('Prices UI isolates WB shops and exposes group and protection controls',()=
   assert.match(ui,/priceSelection\(priceUi\.market\)\.clear\(\)/);
   assert.match(ui,/priceUi\.groupFilter='all';priceUi\.groupId=''/);
   assert.match(ui,/openPriceGroupMerge/);
+  assert.match(ui,/createNewGroup:true/);
+  assert.match(ui,/Объединить выбранные/);
+  assert.doesNotMatch(ui,/Итоговая группа/);
+  assert.doesNotMatch(ui,/priceGroupTarget/);
   assert.match(ui,/submitPriceGroupDetach\(true\)/);
   assert.match(ui,/recheckPriceGroups/);
   assert.match(ui,/Повторно проверить в WB/);
-  assert.match(ui,/Итоговый состав/);
   assert.match(ui,/manualPriceLock/);
   assert.match(ui,/promoBlock/);
   assert.match(ui,/autoZeroEnabled/);
