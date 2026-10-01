@@ -181,6 +181,9 @@ wbCardGroupsRouter.post('/market-prices/card-groups/move',requireWritesEnabled,a
   if(selected.length!==ids.length)return res.status(409).json({ok:false,error:'Часть выбранных карточек отсутствует в последнем снимке WB'});
   const targetImt=cleanText(req.body?.targetImt);
   const separateEach=req.body?.separateEach===true;
+  const createNewGroup=req.body?.createNewGroup===true;
+  if(targetImt&&createNewGroup)return res.status(400).json({ok:false,error:'Нельзя одновременно выбрать существующую и новую группу'});
+  if(createNewGroup&&ids.length<2)return res.status(400).json({ok:false,error:'Для новой группы выберите минимум 2 карточки'});
   let action='',target=null;
   if(targetImt){
     target=snapshot.cards.find(card=>cleanText(card.imtId)===targetImt)||null;
@@ -199,7 +202,7 @@ wbCardGroupsRouter.post('/market-prices/card-groups/move',requireWritesEnabled,a
       action='separate-each';
     }else{
       await moveCards(market,{nmIDs:ids});
-      action='detach-group';
+      action=createNewGroup?'merge-new':'detach-group';
     }
   }
   await sleep(CONTENT_INTERVAL_MS);
@@ -211,7 +214,7 @@ wbCardGroupsRouter.post('/market-prices/card-groups/move',requireWritesEnabled,a
   if(targetImt)verified=actual.length===ids.length&&actual.every(card=>cleanText(card.imtId)===targetImt);
   else if(separateEach)verified=actual.length===ids.length&&new Set(actual.map(card=>cleanText(card.imtId)).filter(Boolean)).size===ids.length;
   else verified=actual.length===ids.length&&new Set(actual.map(card=>cleanText(card.imtId)).filter(Boolean)).size===1;
-  const payload={remoteIds:ids.map(String),targetImt:targetImt||null,separateEach,verified,
+  const payload={remoteIds:ids.map(String),targetImt:targetImt||null,separateEach,createNewGroup,verified,
     before:selected.map(card=>({nmId:card.nmId,imtId:card.imtId})),
     after:actual.map(card=>({nmId:card.nmId,imtId:card.imtId}))};
   await writeHistory(market,ids,action,actorFrom(req),payload);
