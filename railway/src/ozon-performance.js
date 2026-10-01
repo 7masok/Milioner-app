@@ -206,16 +206,18 @@ async function productReportRows(token, from, to) {
 
 async function build(from, to) {
   const token = await tokenFor();
-  const ids = await skuCampaignIds(token);
   const bySku = new Map();
-  let source = 'products-sku';
-  let directError = '';
+  let source = 'product-report';
+  let fallbackError = '';
   try {
-    mergeSkuRows(bySku, await directSkuRows(token, ids, from, to));
+    const rows = await enqueue(() => productReportRows(token, from, to));
+    mergeSkuRows(bySku, rows);
+    if (!rows.length) throw new Error('Ozon Performance: товарный отчёт не вернул расходы по SKU');
   } catch (error) {
-    directError = String(error?.message || error);
-    source = 'product-report';
-    mergeSkuRows(bySku, await enqueue(() => productReportRows(token, from, to)));
+    fallbackError = String(error?.message || error);
+    source = 'products-sku';
+    const ids = await skuCampaignIds(token);
+    if (ids.length) mergeSkuRows(bySku, await directSkuRows(token, ids, from, to));
   }
   const rows = [...bySku.values()];
   return {
@@ -224,7 +226,7 @@ async function build(from, to) {
     rows,
     totalSpent: rows.reduce((sum, row) => sum + (Number(row.spent) || 0), 0),
     source,
-    directError,
+    fallbackError,
     updatedAt: Date.now()
   };
 }
