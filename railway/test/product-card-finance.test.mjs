@@ -113,7 +113,7 @@ test('unified Product-period profit includes Ozon and supports an explicit custo
 
 test('Ozon cross-docking is automatic from finance accruals and remains product-linked',()=>{
   assert.match(compat,/function ozonCrossdockFinanceRow\(row,maps\)/);
-  assert.match(compat,/maps\.crossdockByUnit\.has\(account\+'\\\|'+unit\)/);
+  assert.ok(compat.includes("crossdockByUnit.has(account+'|'+unit)"));
   assert.match(compat,/function ozonCrossdockTargets\(row,maps,directProduct\)/);
   assert.match(compat,/if\(ozonCrossdockFinanceRow\(row,maps\)\)/);
   assert.match(compat,/pr\.fbo\+=expense\*share;pr\.net\+=amount\*share/);
