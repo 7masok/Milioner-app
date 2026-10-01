@@ -6,6 +6,7 @@ const CACHE_MS = 15 * 60 * 1000;
 const cache = new Map();
 let statsChain = Promise.resolve();
 let access = { value: '', exp: 0 };
+let performanceCooldown = { until: 0, error: '' };
 
 export const ozonPerformanceRouter = express.Router();
 
@@ -98,6 +99,30 @@ function enqueue(task) {
   return run;
 }
 
+function nextMoscowReset() {
+  const shifted = new Date(Date.now() + 3 * 60 * 60 * 1000);
+  return Date.UTC(shifted.getUTCFullYear(), shifted.getUTCMonth(), shifted.getUTCDate() + 1) - 3 * 60 * 60 * 1000 + 5 * 60 * 1000;
+}
+
+function performanceError(path, status, text) {
+  const reason = String(text || '').replace(/client_secret\":\"[^\"]+/g, 'client_secret\":\"[hidden]').slice(0, 240);
+  const error = new Error('Ozon Performance ' + path + ': HTTP ' + status + (reason ? ' · ' + reason : ''));
+  error.status = status;
+  if (status === 429 && /дневн.*лимит|daily limit|максимум\s*720|превышен дневной лимит/i.test(reason)) {
+    error.code = 'DAILY_LIMIT';
+    error.retryAt = nextMoscowReset();
+    error.userMessage = 'Дневной лимит Ozon Performance исчерпан';
+  } else if (status === 429) {
+    error.code = 'RATE_LIMIT';
+    error.retryAt = Date.now() + 60_000;
+    error.userMessage = 'Ozon Performance временно ограничил запросы';
+  } else if (status === 400 && /today or yesterday|только.*сегодня|только.*вчера/i.test(reason)) {
+    error.code = 'TODAY_YESTERDAY_ONLY';
+    error.userMessage = 'Этот метод Ozon доступен только за сегодня или вчера';
+  }
+  return error;
+}
+
 async function api(token, path, body, attempt = 0) {
   const response = await fetch(HOST + path, {
     method: body ? 'POST' : 'GET',
@@ -110,16 +135,16 @@ async function api(token, path, body, attempt = 0) {
     signal: AbortSignal.timeout(40000)
   });
   const text = await response.text();
-  if (response.status === 429 && attempt < 6) {
-    await new Promise(resolve => setTimeout(resolve, 2000 * (attempt + 1)));
-    return api(token, path, body, attempt + 1);
-  }
-  if (!response.ok) {
-    const reason = text.replace(/client_secret":"[^"]+/g, 'client_secret":"[hidden]').slice(0, 240);
-    const error = new Error('Ozon Performance ' + path + ': HTTP ' + response.status + (reason ? ' · ' + reason : ''));
-    error.status = 502;
+  if (response.status === 429) {
+    const error = performanceError(path, response.status, text);
+    if (error.code === 'DAILY_LIMIT') throw error;
+    if (attempt < 2) {
+      await new Promise(resolve => setTimeout(resolve, 2000 * (attempt + 1)));
+      return api(token, path, body, attempt + 1);
+    }
     throw error;
   }
+  if (!response.ok) throw performanceError(path, response.status, text);
   return text ? JSON.parse(text) : {};
 }
 
@@ -204,7 +229,22 @@ async function productReportRows(token, from, to) {
   return skuSpendFromProductReport(await api(token, path.startsWith('/') ? path : '/' + path));
 }
 
+function directRangeAllowed(from, to) {
+  if (from !== to) return false;
+  const shifted = new Date(Date.now() + 3 * 60 * 60 * 1000);
+  const today = shifted.toISOString().slice(0, 10);
+  const yesterday = new Date(shifted.getTime() - 86400000).toISOString().slice(0, 10);
+  return from === today || from === yesterday;
+}
+
 async function build(from, to) {
+  if (performanceCooldown.until > Date.now()) {
+    const error = new Error(performanceCooldown.error || 'Ozon Performance временно недоступен');
+    error.code = 'COOLDOWN';
+    error.retryAt = performanceCooldown.until;
+    error.userMessage = performanceCooldown.error;
+    throw error;
+  }
   const token = await tokenFor();
   const bySku = new Map();
   let source = 'product-report';
@@ -214,7 +254,9 @@ async function build(from, to) {
     mergeSkuRows(bySku, rows);
     if (!rows.length) throw new Error('Ozon Performance: товарный отчёт не вернул расходы по SKU');
   } catch (error) {
+    if (error?.code === 'DAILY_LIMIT') throw error;
     fallbackError = String(error?.message || error);
+    if (!directRangeAllowed(from, to)) throw error;
     source = 'products-sku';
     const ids = await skuCampaignIds(token);
     if (ids.length) mergeSkuRows(bySku, await directSkuRows(token, ids, from, to));
@@ -235,13 +277,26 @@ export async function ozonSkuSpend(from, to) {
   const key = from + '|' + to;
   const hit = cache.get(key);
   if (hit?.data && Date.now() - hit.at < CACHE_MS) return hit.data;
+  if (hit?.error && Number(hit.retryAt) > Date.now()) return {
+    from, to, rows: [], totalSpent: 0, source: 'error',
+    error: hit.error, retryAt: Number(hit.retryAt), limited: hit.limited === true, updatedAt: Number(hit.at) || Date.now()
+  };
+  if (performanceCooldown.until > Date.now()) return {
+    from, to, rows: [], totalSpent: 0, source: 'error',
+    error: performanceCooldown.error || 'Ozon Performance временно недоступен',
+    retryAt: performanceCooldown.until, limited: true, updatedAt: Date.now()
+  };
   if (hit?.promise) return hit.promise;
   const promise = build(from, to).then(data => {
     cache.set(key, { at: Date.now(), data });
     return data;
   }).catch(error => {
-    cache.delete(key);
-    throw error;
+    const retryAt = Number(error?.retryAt) || (Date.now() + 5 * 60 * 1000);
+    const message = String(error?.userMessage || error?.message || error);
+    const limited = error?.code === 'DAILY_LIMIT' || error?.code === 'COOLDOWN';
+    if (error?.code === 'DAILY_LIMIT') performanceCooldown = { until: retryAt, error: message };
+    cache.set(key, { at: Date.now(), error: message, retryAt, limited });
+    return { from, to, rows: [], totalSpent: 0, source: 'error', error: message, retryAt, limited, updatedAt: Date.now() };
   });
   cache.set(key, { promise });
   return promise;

@@ -51,3 +51,21 @@ test('Ozon advertising requests the exact selected calendar range and product-le
   assert.match(source,/dateTo: to/);
   assert.match(source,/totalSpent: rows\.reduce/);
 });
+
+
+test('Ozon Performance quota protection stops daily-limit retry storms',()=>{
+  assert.match(source,/error\.code = 'DAILY_LIMIT'/);
+  assert.match(source,/error\.retryAt = nextMoscowReset\(\)/);
+  assert.match(source,/if \(error\.code === 'DAILY_LIMIT'\) throw error/);
+  assert.match(source,/if \(error\?\.code === 'DAILY_LIMIT'\) throw error/);
+  assert.match(source,/if \(!directRangeAllowed\(from, to\)\) throw error/);
+  assert.match(source,/performanceCooldown = \{ until: retryAt, error: message \}/);
+  assert.match(source,/hit\?\.error && Number\(hit\.retryAt\) > Date\.now\(\)/);
+  assert.match(source,/source: 'error'/);
+});
+
+test('Ozon direct SKU endpoint is only a fallback for today or yesterday',()=>{
+  assert.match(source,/function directRangeAllowed\(from, to\)/);
+  assert.match(source,/if \(from !== to\) return false/);
+  assert.match(source,/return from === today \|\| from === yesterday/);
+});
