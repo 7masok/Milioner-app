@@ -1,9 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-const source=readFileSync(new URL('../src/ozon-performance.js',import.meta.url),'utf8');
-
 import { parseOzonMoney, skuSpendFromProductReport, skuSpendFromReport, skuSpendFromSkuStats } from '../src/ozon-performance.js';
+
+const source=readFileSync(new URL('../src/ozon-performance.js',import.meta.url),'utf8');
 
 test('Ozon performance money uses a comma decimal', () => {
   assert.equal(parseOzonMoney('7552,97'), 7552.97);
