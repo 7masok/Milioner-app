@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import { selectedGroupState } from '../src/wb-card-groups.js';
 
 const read=path=>readFileSync(new URL(path,import.meta.url),'utf8');
 
@@ -64,8 +65,11 @@ test('WB card grouping is user initiated, verifies actual result and separates o
   assert.match(groups,/ensureSameSubject/);
   assert.match(groups,/await moveCards\(market,\{nmIDs:\[ids\[i\]\]\}\)/);
   assert.match(groups,/const createNewGroup=req\.body\?\.createNewGroup===true/);
-  assert.match(groups,/action=createNewGroup\?'merge-new':'detach-group'/);
+  assert.match(groups,/liveState\.exactGroup/);
+  assert.match(groups,/liveState\.sameGroup/);
+  assert.match(groups,/await carveSelectedGroup\(market,ids,liveState\.imtId\)/);
   assert.match(groups,/await moveCards\(market,\{nmIDs:ids\}\)/);
+  assert.match(groups,/targetIMT:Number\(targetImt\),nmIDs:moving/);
   assert.match(groups,/refreshed=await fetchWbCardGroupsRemote\(market\)/);
   assert.match(groups,/if\(!verified\)return res\.status\(409\)/);
   assert.match(groups,/card-groups\/recheck/);
@@ -97,4 +101,27 @@ test('WB stock display uses the current Analytics warehouse inventory API and ca
   assert.match(prices,/\/api\/analytics\/v1\/stocks-report\/wb-warehouses/);
   assert.match(prices,/wb_stock_snapshots/);
   assert.doesNotMatch(read('../../prices-v1.js'),/stocks-report\/wb-warehouses/);
+});
+
+
+test('selected-only WB grouping distinguishes exact, subgroup and mixed states',()=>{
+  const cards=[
+    {nmId:'1',imtId:'10',subjectId:'5'},
+    {nmId:'2',imtId:'10',subjectId:'5'},
+    {nmId:'3',imtId:'10',subjectId:'5'},
+    {nmId:'4',imtId:'20',subjectId:'5'}
+  ];
+  const exact=selectedGroupState(cards,['1','2','3']);
+  assert.equal(exact.sameGroup,true);
+  assert.equal(exact.exactGroup,true);
+  assert.equal(exact.imtId,'10');
+
+  const subgroup=selectedGroupState(cards,['1','2']);
+  assert.equal(subgroup.sameGroup,true);
+  assert.equal(subgroup.exactGroup,false);
+  assert.equal(subgroup.members.length,3);
+
+  const mixed=selectedGroupState(cards,['1','4']);
+  assert.equal(mixed.sameGroup,false);
+  assert.equal(mixed.exactGroup,false);
 });
