@@ -153,5 +153,6 @@ test('Ozon SKU advertising uses the same selected period and reconciles to finan
   assert.match(report,/window\.onOzonSummary=function\(days,summary,range=null\)/);
   assert.match(report,/const key=periodCacheKey\(days,range\)/);
   assert.match(report,/sameRange=range\?Number\(reportPeriod\)===0/);
+  assert.match(report,/if\(Number\(days\)===0&&!range&&reportCustomFrom&&reportCustomTo\)range=\{from:String\(reportCustomFrom\),to:String\(reportCustomTo\)\}/);
   assert.match(report,/Реклама по SKU:/);
 });
