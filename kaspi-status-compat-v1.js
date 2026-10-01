@@ -227,14 +227,14 @@ try{
     window.__ozonProfitModel=model;
     const g=model.groups.find(x=>x.currency==='KZT')||model.groups[0]||null;
     if(!g)return{sales:0,cost:0,fees:0,ads:0,profit:0,qty:0,empty:true,products:[],adSource};
-    const ads=Math.abs(g.ads),deductions=g.sales-g.net,fees=Math.max(0,deductions-ads)+Math.max(0,g.fbo);
+    const ads=Math.abs(g.ads),deductions=g.sales-g.net,platformFees=Math.max(0,deductions-ads),fbo=Math.max(0,Number(g.fbo)||0),fees=platformFees+fbo;
     const qty=model.products.reduce((n,row)=>n+Math.max(0,row.qty),0);
     const products=model.products.map(row=>{
       const financeAds=Number(row.financeAds!=null?row.financeAds:row.ads)||0;
-      return {productId:String(row.product?.id||''),name:row.product?.name||'Товар',qty:row.qty,sales:row.sales,cost:(row.cogs||0)+(row.fbo||0),fees:Math.max(0,(row.sales||0)-(row.net||0)-Math.abs(financeAds)),ads:Math.abs(row.ads||0),profit:row.profit};
+      return {productId:String(row.product?.id||''),name:row.product?.name||'Товар',qty:row.qty,sales:row.sales,cost:Number(row.cogs)||0,fbo:Math.max(0,Number(row.fbo)||0),fees:Math.max(0,(row.sales||0)-(row.net||0)-Math.abs(financeAds)),ads:Math.abs(row.ads||0),profit:row.profit};
     });
-    for(const row of model.looseAds||[])products.push({productId:'',name:row.name||'Товар Ozon',qty:0,sales:0,cost:0,fees:0,ads:row.spent,profit:-row.spent});
-    return{sales:g.sales,cost:g.cogs,fees,ads,profit:g.profit,qty,empty:false,products,unallocatedAds:adSource==='performance'?0:Math.abs(model.unallocatedAds||0),adSource};
+    for(const row of model.looseAds||[])products.push({productId:'',name:row.name||'Товар Ozon',qty:0,sales:0,cost:0,fbo:0,fees:0,ads:row.spent,profit:-row.spent});
+    return{sales:g.sales,cost:g.cogs,fees,platformFees,fbo,ads,profit:g.profit,qty,empty:false,products,unallocatedAds:adSource==='performance'?0:Math.abs(model.unallocatedAds||0),adSource};
   }
   const ozonAdsJobs=new Map();
   function watchOzonAds(days,payload,range=null){
