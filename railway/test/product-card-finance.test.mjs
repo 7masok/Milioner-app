@@ -111,13 +111,19 @@ test('unified Product-period profit includes Ozon and supports an explicit custo
 });
 
 
-test('Ozon report keeps FBO cross-docking attached to each product and shows it separately',()=>{
-  assert.match(compat,/pr\.fbo=pr\.qty\*ozonFboUnitCost\(pr\.product\.id\)/);
-  assert.match(compat,/pr\.profit=pr\.net-pr\.cogs-pr\.fbo/);
-  assert.match(compat,/platformFees=Math\.max\(0,deductions-ads\),fbo=Math\.max\(0,Number\(g\.fbo\)\|\|0\),fees=platformFees\+fbo/);
-  assert.match(compat,/cost:Number\(row\.cogs\)\|\|0,fbo:Math\.max\(0,Number\(row\.fbo\)\|\|0\)/);
-  assert.match(compat,/return\{sales:g\.sales,cost:g\.cogs,fees,platformFees,fbo,ads,profit:g\.profit/);
+test('Ozon cross-docking is automatic from finance accruals and remains product-linked',()=>{
+  assert.match(compat,/function ozonCrossdockFinanceRow\(row,maps\)/);
+  assert.ok(compat.includes("crossdockByUnit.has(account+'|'+unit)"));
+  assert.match(compat,/function ozonCrossdockTargets\(row,maps,directProduct\)/);
+  assert.match(compat,/if\(ozonCrossdockFinanceRow\(row,maps\)\)/);
+  assert.match(compat,/pr\.fbo\+=expense\*share;pr\.net\+=amount\*share/);
+  assert.match(compat,/pr\.profit=pr\.net-pr\.cogs/);
+  assert.match(compat,/platformFees=Math\.max\(0,deductions-ads-fbo\),fees=platformFees\+fbo/);
+  assert.match(compat,/fees:Math\.max\(0,\(row\.sales\|\|0\)-\(row\.net\|\|0\)-Math\.abs\(financeAds\)-fbo\)/);
+  assert.doesNotMatch(compat,/ozonFboUnitCost|ozonFboUnitCosts|openOzonFboCosts|saveOzonFboCosts|data-ozon-fbo-cost/);
+  assert.doesNotMatch(report,/openOzonFboCosts|FBO расходы<\/button>/);
   assert.match(report,/x\.fbo!==undefined&&x\.fbo!==null\?'<div class="row"[^']*FBO \/ кросс-докинг/);
   assert.match(report,/\{label:'FBO \/ кросс-докинг',text:fmt\(fbo\)\}/);
   assert.match(report,/expenseText:empty\?'—':fmt\(cost\+fees\+fbo\+ads\)/);
+  assert.match(report,/unallocatedFbo/);
 });
