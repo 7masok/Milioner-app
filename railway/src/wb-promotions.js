@@ -225,6 +225,9 @@ async function currentQueueRow(market, nmId, client = pool) {
 }
 
 async function queuePromoDiscount(market, nmId, discount, promotionId = 0, client = pool) {
+  const protectedRow = await client.query(`SELECT 1 FROM wb_price_protection
+    WHERE market=$1 AND nm_id=$2 AND (manual_price_lock=true OR auto_zero_lock=true) LIMIT 1`, [market, nmId]);
+  if (protectedRow.rowCount) return false;
   const now = Date.now();
   const normalized = clampDiscount(discount);
   const result = await client.query(`INSERT INTO wb_price_update_queue
@@ -662,7 +665,11 @@ async function syncWbPromotionsMarket(market) {
     const state = await promoMarketState(market);
     if (state.nextSyncAt > now) return { ok: true, skipped: true, reason: 'slot-cooldown', nextSyncAt: state.nextSyncAt };
 
-    const prefs = await promoPreferences(market, pool, true);
+    const rawPrefs = await promoPreferences(market, pool, true);
+    const blockedResult = await pool.query(`SELECT nm_id AS "nmId" FROM wb_price_protection
+      WHERE market=$1 AND (promo_block=true OR manual_price_lock=true OR auto_zero_lock=true)`, [market]);
+    const blocked = new Set(blockedResult.rows.map(row => String(row.nmId)));
+    const prefs = rawPrefs.filter(pref => !blocked.has(String(pref.nmId)));
     if (!prefs.length) {
       await markPromoMarketState(market, {
         nextSyncAt: 0, lastSyncAt: state.lastSyncAt, lastError: '', phase: 'list', payload: {}
@@ -740,6 +747,9 @@ async function applyPromoPreferenceChange(market, rawIds, enabled) {
     const byNm = new Map(rows.map(row => [Number(row?.remoteId), row]));
     const prefs = await promoPreferences(market, client);
     const prefByNm = new Map(prefs.map(pref => [Number(pref.nmId), pref]));
+    const blockedResult = enabled ? await client.query(`SELECT nm_id AS "nmId" FROM wb_price_protection
+      WHERE market=$1 AND (promo_block=true OR manual_price_lock=true OR auto_zero_lock=true)`, [market]) : { rows: [] };
+    const blocked = new Set(blockedResult.rows.map(row => Number(row.nmId)));
     const queueResult = await client.query(`SELECT nm_id AS "nmId",desired_discount AS "desiredDiscount",source,status
       FROM wb_price_update_queue WHERE market=$1`, [market]);
     const queueByNm = new Map(queueResult.rows.map(row => [Number(row.nmId), row]));
@@ -747,7 +757,7 @@ async function applyPromoPreferenceChange(market, rawIds, enabled) {
 
     for (const nmId of ids) {
       const row = byNm.get(nmId);
-      if (!row) continue;
+      if (!row || (enabled && blocked.has(nmId))) continue;
       const existing = prefByNm.get(nmId);
       const queue = queueByNm.get(nmId);
       const effectiveDiscount = queue?.desiredDiscount !== null && queue?.desiredDiscount !== undefined
@@ -776,7 +786,7 @@ async function applyPromoPreferenceChange(market, rawIds, enabled) {
     }
 
     if (!applied.length) {
-      const error = new Error('Выбранные товары не найдены в последнем снимке цен WB');
+      const error = new Error(enabled && blocked.size ? 'Для выбранных товаров включена защита цены или запрет акций' : 'Выбранные товары не найдены в последнем снимке цен WB');
       error.status = 409;
       throw error;
     }

@@ -26,6 +26,8 @@ import { wbAdsRouter, startWbAdsLimitLoop } from './wb-ads.js';
 import { aiAssistantRouter } from './ai-assistant.js';
 import { pricesRouter, startWbPriceSyncLoop } from './prices.js';
 import { wbPromotionsRouter, startWbPromotionLoop } from './wb-promotions.js';
+import { wbPriceProtectionRouter } from './wb-price-protection.js';
+import { wbCardGroupsRouter } from './wb-card-groups.js';
 import { wbHourlyOrdersRouter, logWbHourlyOrders } from './wb-hourly-orders.js';
 import { registerDeveloperGuideRoutes } from './developer-guide.js';
 
@@ -244,6 +246,8 @@ app.use('/api', reportsRouter);
 app.use('/api', stockRouter);
 app.use('/api', pricesRouter);
 app.use('/api', wbPromotionsRouter);
+app.use('/api', wbPriceProtectionRouter);
+app.use('/api', wbCardGroupsRouter);
 app.use('/api', wbHourlyOrdersRouter);
 app.use('/api', aiAssistantRouter);
 // Keep every legacy path used by Kaspi automatic feeds, but serve the XML

@@ -6,8 +6,11 @@ import { credentialFor } from './connections.js';
 import { asyncRoute, requireTrustedOrigin, requireWritesEnabled } from './http.js';
 import { readWarehouseProducts } from './warehouse-products.js';
 import { decorateWbPromotionRows } from './wb-promotions.js';
+import { decorateWbProtectionRows, protectionFor, syncWbPriceProtection, updateProtectionBaseline } from './wb-price-protection.js';
+import { decorateWbCardGroupRows } from './wb-card-groups.js';
 
 const WB_PRICE_API = 'https://discounts-prices-api.wildberries.ru';
+const WB_ANALYTICS_API = 'https://seller-analytics-api.wildberries.ru';
 const OZON_API = 'https://api-seller.ozon.ru';
 const CACHE_TTL_MS = 2 * 60 * 1000;
 const WB_MIN_INTERVAL_MS = 650;
@@ -295,6 +298,68 @@ async function wbToken(market) {
   return credentialFor(market, fallback);
 }
 
+async function syncWbWarehouseStocksMaybe(market, token, now = Date.now()) {
+  const current = await pool.query('SELECT fetched_at AS "fetchedAt" FROM wb_stock_snapshots WHERE market=$1', [market]).catch(() => ({ rows: [] }));
+  if (Number(current.rows[0]?.fetchedAt || 0) > now - 25 * 60 * 1000) return;
+  const snapshot = await wbPriceSnapshot(market);
+  const ids = [...new Set((snapshot?.rows || []).map(row => Number(row?.remoteId)).filter(value => Number.isInteger(value) && value > 0))];
+  if (!ids.length) return;
+  if (ids.length > 1000) {
+    await pool.query(`INSERT INTO wb_stock_snapshots(market,payload,fetched_at,last_error,updated_at)
+      VALUES($1,'{"items":{}}'::jsonb,0,$2,$3)
+      ON CONFLICT(market) DO UPDATE SET last_error=excluded.last_error,updated_at=excluded.updated_at`,
+      [market, 'Остатков больше 1000: нужна пакетная синхронизация', now]).catch(() => {});
+    return;
+  }
+  try {
+    const response = await fetch(WB_ANALYTICS_API + '/api/analytics/v1/stocks-report/wb-warehouses', {
+      method: 'POST',
+      headers: { Accept: 'application/json', 'Content-Type': 'application/json', Authorization: token },
+      body: JSON.stringify({ nmIds: ids, chrtIds: [], limit: 250000, offset: 0 }),
+      signal: AbortSignal.timeout(45_000)
+    });
+    const text = await response.text();
+    let data = {};
+    try { data = text ? JSON.parse(text) : {}; } catch { data = { message: text.slice(0, 500) }; }
+    if (!response.ok) throw new Error(cleanText(data?.message || data?.errorText || data?.error) || ('WB Analytics HTTP ' + response.status));
+    const items = Object.fromEntries(ids.map(id => [String(id), { quantity: 0, inWayToClient: 0, inWayFromClient: 0 }]));
+    for (const raw of (Array.isArray(data?.data?.items) ? data.data.items : [])) {
+      const key = String(Number(raw?.nmId) || '');
+      if (!items[key]) continue;
+      items[key].quantity += Math.max(0, Math.floor(number(raw?.quantity)));
+      items[key].inWayToClient += Math.max(0, Math.floor(number(raw?.inWayToClient)));
+      items[key].inWayFromClient += Math.max(0, Math.floor(number(raw?.inWayFromClient)));
+    }
+    await pool.query(`INSERT INTO wb_stock_snapshots(market,payload,fetched_at,last_error,updated_at)
+      VALUES($1,$2::jsonb,$3,'',$3)
+      ON CONFLICT(market) DO UPDATE SET payload=excluded.payload,fetched_at=excluded.fetched_at,last_error='',updated_at=excluded.updated_at`,
+      [market, JSON.stringify({ items }), now]);
+  } catch (error) {
+    await pool.query(`INSERT INTO wb_stock_snapshots(market,payload,fetched_at,last_error,updated_at)
+      VALUES($1,'{"items":{}}'::jsonb,0,$2,$3)
+      ON CONFLICT(market) DO UPDATE SET last_error=excluded.last_error,updated_at=excluded.updated_at`,
+      [market, cleanText(error?.message || error).slice(0, 500), now]).catch(() => {});
+  }
+}
+
+async function decorateWbWarehouseStocks(market, rows) {
+  const result = await pool.query('SELECT payload,fetched_at AS "fetchedAt",last_error AS "lastError" FROM wb_stock_snapshots WHERE market=$1', [market]).catch(() => ({ rows: [] }));
+  const state = result.rows[0] || {}, payload = state.payload && typeof state.payload === 'object' ? state.payload : {};
+  const items = payload.items && typeof payload.items === 'object' ? payload.items : {};
+  return {
+    rows: (Array.isArray(rows) ? rows : []).map(raw => {
+      const row = { ...raw }, stock = items[String(row.remoteId || '')];
+      row.wbStockKnown = Boolean(stock);
+      row.wbAvailable = stock ? Math.max(0, Number(stock.quantity) || 0) : null;
+      row.wbInWayToClient = stock ? Math.max(0, Number(stock.inWayToClient) || 0) : null;
+      row.wbInWayFromClient = stock ? Math.max(0, Number(stock.inWayFromClient) || 0) : null;
+      return row;
+    }),
+    fetchedAt: Number(state.fetchedAt || 0),
+    lastError: cleanText(state.lastError)
+  };
+}
+
 async function normalizeWbPriceRows(market, rows) {
   const links = await productLinks(market);
   return rows.map(row => {
@@ -465,7 +530,7 @@ async function queueSchedulePrice(market, nmId, price, client = pool) {
     ON CONFLICT(market,nm_id) DO UPDATE SET desired_price=excluded.desired_price,desired_discount=NULL,
       status='pending',queued_at=excluded.queued_at,sent_at=0,upload_id=0,last_error='',
       updated_at=excluded.updated_at,source='schedule',promotion_id=0
-    WHERE wb_price_update_queue.source<>'manual'`, [market, nmId, Number(price), now]);
+    WHERE wb_price_update_queue.source NOT IN ('manual','protection')`, [market, nmId, Number(price), now]);
   return Number(result.rowCount || 0) > 0;
 }
 
@@ -476,7 +541,7 @@ async function holdSchedulePrice(market, nmId, price, client = pool) {
     VALUES($1,$2,$3,NULL,'held',$4,0,0,'',$4,'schedule',0)
     ON CONFLICT(market,nm_id) DO UPDATE SET desired_price=excluded.desired_price,desired_discount=NULL,
       status='held',last_error='',updated_at=excluded.updated_at,source='schedule',promotion_id=0
-    WHERE wb_price_update_queue.source<>'manual'`, [market, nmId, Number(price), now]);
+    WHERE wb_price_update_queue.source NOT IN ('manual','protection')`, [market, nmId, Number(price), now]);
   return Number(result.rowCount || 0) > 0;
 }
 
@@ -503,7 +568,8 @@ async function syncWbNightSchedules(market, now = Date.now()) {
     wbPriceQueueRows(market)
   ]);
   if (!schedules.length || !snapshot) return { changed: 0 };
-  const byNm = new Map((snapshot.rows || []).map(row => [String(row.remoteId || ''), row]));
+  const protectedRows = await decorateWbProtectionRows(market, snapshot.rows || []);
+  const byNm = new Map(protectedRows.map(row => [String(row.remoteId || ''), row]));
   const queueByNm = new Map(queue.map(row => [String(row.nmId), row]));
   let changed = 0;
 
@@ -516,6 +582,14 @@ async function syncWbNightSchedules(market, now = Date.now()) {
       continue;
     }
     if (schedule.phase === 'error' && schedule.lastError && !isWbGradualReductionError(schedule.lastError)) continue;
+    if (row.priceProtected) {
+      const phase = Number(schedule.basePrice) > 0 ? 'restoring' : 'locked';
+      if (schedule.phase !== phase || schedule.lastError) {
+        await pool.query(`UPDATE wb_price_schedules SET phase=$3,last_error='',updated_at=$4 WHERE market=$1 AND nm_id=$2`,
+          [market, schedule.nmId, phase, now]);
+      }
+      continue;
+    }
     const confirmedPrice = number(row.price);
     const window = wbNightWindowState(schedule.startMinute, schedule.endMinute, now);
     let queueRow = queueByNm.get(schedule.nmId);
@@ -626,12 +700,20 @@ async function listWbPrices(market) {
   const queuedRows = overlayWbQueuedRows(Array.isArray(snapshot?.rows) ? snapshot.rows : [], queue);
   const promo = await decorateWbPromotionRows(market, queuedRows);
   const scheduledRows = decorateWbNightSchedules(promo.rows, schedules);
+  const protectedRows = await decorateWbProtectionRows(market, scheduledRows);
+  const grouped = await decorateWbCardGroupRows(market, protectedRows);
+  const stocked = await decorateWbWarehouseStocks(market, grouped.rows);
   return {
     ok: true,
     market,
     source: 'Снимок Railway · Wildberries Prices & Discounts API',
     fetchedAt: Number(snapshot?.fetchedAt || 0),
-    rows: scheduledRows,
+    rows: stocked.rows,
+    wbStockFetchedAt: stocked.fetchedAt,
+    wbStockError: stocked.lastError,
+    cardGroups: grouped.snapshot.cards,
+    cardGroupsFetchedAt: grouped.snapshot.fetchedAt,
+    cardGroupsError: grouped.snapshot.lastError,
     serverSnapshot: true,
     waiting: !snapshot,
     nextSyncAt: Number(state.nextAllowedAt || 0),
@@ -701,6 +783,12 @@ async function queueWbPrice(market, input) {
     throw error;
   }
   const current = await wbSnapshotRowForWrite(market, nmID);
+  const protection = await protectionFor(market, nmID);
+  if (protection.priceProtected && input?.overrideProtection !== true) {
+    const error = new Error('Защита цены включена. Для ручного изменения требуется отдельное подтверждение.');
+    error.status = 409;
+    throw error;
+  }
   let desiredPrice = null, desiredDiscount = null;
   if (input?.price !== null && input?.price !== undefined && input?.price !== '') {
     const price = number(input.price);
@@ -743,6 +831,9 @@ async function queueWbPrice(market, input) {
   if (desiredDiscount !== null) {
     await pool.query(`UPDATE wb_promo_preferences SET base_discount=$3,updated_at=$4
       WHERE market=$1 AND nm_id=$2 AND enabled=true`, [market, nmID, desiredDiscount, now]).catch(() => {});
+  }
+  if (protection.priceProtected && input?.overrideProtection === true) {
+    await updateProtectionBaseline(market, nmID, { price: desiredPrice, discount: desiredDiscount }).catch(() => {});
   }
   if (desiredPrice !== null) await markManualScheduleOverride(market, String(nmID), desiredPrice, now).catch(() => {});
   const state = await wbPriceState(market);
@@ -976,6 +1067,7 @@ async function syncWbPriceMarket(market) {
     if (!locked) return { ok: true, market, skipped: true, reason: 'already-running' };
 
     const now = Date.now();
+    await syncWbPriceProtection(market, now);
     await syncWbNightSchedules(market, now);
     const state = await wbPriceState(market);
     if (Number(state.nextAllowedAt || 0) > now) {
@@ -983,6 +1075,7 @@ async function syncWbPriceMarket(market) {
     }
     const token = await wbToken(market);
     if (!token) return { ok: true, market, skipped: true, reason: 'not-configured' };
+    await syncWbWarehouseStocksMaybe(market, token, now);
     const queue = await wbPriceQueueRows(market);
     const sent = queue.filter(row => row.status === 'sent' && Number(row.uploadId) > 0);
     const pending = queue.filter(row => row.status === 'pending');
@@ -1341,6 +1434,7 @@ async function saveWbNightSchedules(market, input) {
       const row = byNm.get(nmId);
       if (!row) { skipped.push(String(nmId)); continue; }
       if (enabled && row.canEditPrice === false) { skipped.push(String(nmId)); continue; }
+      if (enabled && (await protectionFor(market, nmId, client)).priceProtected) { skipped.push(String(nmId)); continue; }
       if (enabled) {
         await client.query(`INSERT INTO wb_price_schedules
           (market,nm_id,enabled,start_minute,end_minute,target_price,base_price,window_key,manual_override_window,phase,last_error,updated_at)
