@@ -109,3 +109,15 @@ test('unified Product-period profit includes Ozon and supports an explicit custo
   assert.match(kaspiAds,/function breakdown\(days = reportPeriod, range = null\)/);
   assert.match(kaspiAds,/effectiveRows\(days, '', range\)/);
 });
+
+
+test('Ozon report keeps FBO cross-docking attached to each product and shows it separately',()=>{
+  assert.match(compat,/pr\.fbo=pr\.qty\*ozonFboUnitCost\(pr\.product\.id\)/);
+  assert.match(compat,/pr\.profit=pr\.net-pr\.cogs-pr\.fbo/);
+  assert.match(compat,/platformFees=Math\.max\(0,deductions-ads\),fbo=Math\.max\(0,Number\(g\.fbo\)\|\|0\),fees=platformFees\+fbo/);
+  assert.match(compat,/cost:Number\(row\.cogs\)\|\|0,fbo:Math\.max\(0,Number\(row\.fbo\)\|\|0\)/);
+  assert.match(compat,/return\{sales:g\.sales,cost:g\.cogs,fees,platformFees,fbo,ads,profit:g\.profit/);
+  assert.match(report,/x\.fbo!==undefined&&x\.fbo!==null\?'<div class="row"[^']*FBO \/ кросс-докинг/);
+  assert.match(report,/\{label:'FBO \/ кросс-докинг',text:fmt\(fbo\)\}/);
+  assert.match(report,/expenseText:empty\?'—':fmt\(cost\+fees\+fbo\+ads\)/);
+});
