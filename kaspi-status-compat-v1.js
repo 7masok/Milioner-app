@@ -146,7 +146,7 @@ try{
       for(const raw of items){
         const sku=String(raw?.sku||'').trim(),productId=String(raw?.productId||'').trim(),qty=Math.max(0,ozonNum(raw?.quantity??raw?.qty));
         if(!sku&&!productId||!(qty>0))continue;
-        const found=next.find(x=>x.sku===sku&&x.productId===productId);if(found)found.qty+=qty;else next.push({sku,productId,qty});
+        const found=next.find(x=>(sku&&x.sku===sku)||(productId&&x.productId===productId));if(found){found.qty=Math.max(found.qty,qty);if(!found.productId&&productId)found.productId=productId;if(!found.sku&&sku)found.sku=sku;}else next.push({sku,productId,qty});
       }
       if(next.length)crossdockByUnit.set(mapKey,next);
     };
