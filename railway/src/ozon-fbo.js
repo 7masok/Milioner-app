@@ -37,7 +37,29 @@ export async function fetchStocks(credentials){
  }throw new Error('Ozon: превышен лимит страниц остатков');
 }
 const SUPPLY_STATES=['DATA_FILLING','READY_TO_SUPPLY','ACCEPTED_AT_SUPPLY_WAREHOUSE','IN_TRANSIT','ACCEPTANCE_AT_STORAGE_WAREHOUSE','REPORTS_CONFIRMATION_AWAITING','REPORT_REJECTED','COMPLETED','REJECTED_AT_SUPPLY_WAREHOUSE','CANCELLED','OVERDUE','SUPPLY_VARIANTS_ARRANGING','SUPPLY_VARIANTS_CONFIRMATION','TIMESLOT_BOOKING'];
-export async function fetchSupplyOrders(credentials){
+function cachedBundleItems(previousRows){
+ const map=new Map();
+ for(const order of Array.isArray(previousRows)?previousRows:[])for(const supply of order?.supplies||[]){
+  const key=String(supply?.bundle_id||'');if(key&&Array.isArray(supply?.items)&&supply.items.length)map.set(key,supply.items);
+ }
+ return map;
+}
+async function enrichCrossdockBundles(credentials,orders,previousRows=[]){
+ const cached=cachedBundleItems(previousRows);let budget=12;
+ for(const order of orders)for(const supply of order?.supplies||[]){
+  if(!supply?.is_crossdock)continue;
+  const bundleId=String(supply?.bundle_id||'');
+  if(!bundleId){supply.items=[];supply.bundle_error='Нет bundle_id';continue;}
+  if(cached.has(bundleId)){supply.items=cached.get(bundleId);continue;}
+  if(budget<=0){supply.items=[];supply.bundle_pending=true;continue;}
+  budget--;
+  try{supply.items=await fetchSupplyBundle(credentials,bundleId);supply.bundle_error='';}
+  catch(e){supply.items=[];supply.bundle_error=String(e.message||e);}
+  await new Promise(r=>setTimeout(r,150));
+ }
+ return orders;
+}
+export async function fetchSupplyOrders(credentials,previousRows=[]){
  const listed=await request(credentials,'/v3/supply-order/list',{filter:{states:SUPPLY_STATES},last_id:'',limit:100,sort_by:'ORDER_CREATION',sort_dir:'DESC'});
  const ids=(Array.isArray(listed.order_ids)?listed.order_ids:[]).map(String).filter(Boolean);
  if(!ids.length)return [];
@@ -47,7 +69,7 @@ export async function fetchSupplyOrders(credentials){
   if(!Array.isArray(data.orders))throw new Error('Ozon: неизвестный формат заявок FBO');
   rows.push(...data.orders);
  }
- return rows;
+ return enrichCrossdockBundles(credentials,rows,previousRows);
 }
 async function fetchSupplyBundle(credentials,bundleId){
  const rows=[];let lastId='';
@@ -74,22 +96,22 @@ async function detailedSupplyOrder(credentials,orderId){
 export function normalizeAccruals(accruals,date,types){
  const rows=[];
  for(let index=0;index<accruals.length;index++){
-  const a=accruals[index],posting=a.posting||{};
-  const add=(value,name,sku,kind='service')=>{
+  const a=accruals[index],posting=a.posting||{},unitNumber=String(a.unit_number||''),accruedCategory=String(a.accrued_category||'');
+  const add=(value,name,sku,kind='service',typeId='',scope='service')=>{
    if(value==null)return;
    if(typeof value!=='object'||!Number.isFinite(Number(value.amount)))throw new Error('Ozon: неизвестный формат суммы начисления');
    const amount=Number(value.amount);
-   rows.push({operation_id:date+':'+String(a.accrual_id??index)+':'+rows.length,operation_date:date+'T12:00:00Z',operation_type_name:name,amount,currency_code:value.currency,accruals_for_sale:kind==='sale'?amount:0,sale_commission:kind==='commission'?amount:0,posting:{posting_number:posting.posting_number||''},items:sku?[{sku}]:[]});
+   rows.push({operation_id:date+':'+String(a.accrual_id??index)+':'+rows.length,operation_date:date+'T12:00:00Z',operation_type_name:name,operation_type_id:String(typeId||a.type_id||''),unit_number:unitNumber,accrued_category:accruedCategory,fee_scope:scope,amount,currency_code:value.currency,accruals_for_sale:kind==='sale'?amount:0,sale_commission:kind==='commission'?amount:0,posting:{posting_number:posting.posting_number||''},items:sku?[{sku:String(sku)}]:[]});
   };
   for(const p of posting.products||[]){
-   add(p.commission?.seller_price,'Продажа',p.sku,'sale');
-   add(p.commission?.sale_commission,'Комиссия Ozon',p.sku,'commission');
+   add(p.commission?.seller_price,'Продажа',p.sku,'sale',a.type_id,'posting');
+   add(p.commission?.sale_commission,'Комиссия Ozon',p.sku,'commission',a.type_id,'posting');
    const delivery=p.delivery;
-   if(delivery?.services?.length){for(const f of delivery.services)add(f.accrued,types.get(String(f.type_id))||'Доставка · '+f.type_id,p.sku);}
-   else add(delivery?.total_accrued,'Доставка',p.sku);
+   if(delivery?.services?.length){for(const fee of delivery.services)add(fee.accrued,types.get(String(fee.type_id))||'Доставка · '+fee.type_id,p.sku,'service',fee.type_id,'posting_delivery');}
+   else add(delivery?.total_accrued,'Доставка',p.sku,'service',a.type_id,'posting_delivery');
   }
-  for(const group of a.item_fees?.fees||[])for(const fee of group.fees||[])add(fee.accrued,types.get(String(fee.type_id))||'Услуга · '+fee.type_id,group.sku);
-  const fee=a.non_item_fee;if(fee)add(fee.accrued,types.get(String(fee.type_id))||'Услуга · '+fee.type_id);
+  for(const group of a.item_fees?.fees||[])for(const fee of group.fees||[])add(fee.accrued,types.get(String(fee.type_id))||'Услуга · '+fee.type_id,group.sku,'service',fee.type_id,'item_fee');
+  const fee=a.non_item_fee;if(fee)add(fee.accrued,types.get(String(fee.type_id))||'Услуга · '+fee.type_id,null,'service',fee.type_id,'non_item_fee');
   if(!a.posting&&!a.item_fees&&!a.non_item_fee)throw new Error('Ozon: неизвестная категория начисления '+String(a.accrued_category));
  }
  return rows;
@@ -121,7 +143,7 @@ async function run(){
   try{credentials=JSON.parse(await credentialFor(account.id));if(!credentials.clientId||!credentials.apiKey)throw new Error('missing');}catch{results.push({account:account.id,error:'Проверьте Client ID и API-ключ'});continue;}
   const to=new Date().toISOString(),from=new Date(Date.now()-30*86400000).toISOString();
   const payload={...previous,account:account.id,label:account.label,scheme:'FBO',attemptAt:Date.now(),errors:{}};
-  for(const [key,fn] of [['postings',()=>fetchPostings(credentials,from,to)],['stocks',()=>fetchStocks(credentials)],['finance',()=>fetchFinance(credentials,from,to)],['supplies',()=>fetchSupplyOrders(credentials)]]){
+  for(const [key,fn] of [['postings',()=>fetchPostings(credentials,from,to)],['stocks',()=>fetchStocks(credentials)],['finance',()=>fetchFinance(credentials,from,to)],['supplies',()=>fetchSupplyOrders(credentials,previous.supplies?.rows||[])]]){
    try{payload[key]={rows:await fn(),updatedAt:Date.now(),from,to};}
    catch(e){payload.errors[key]=String(e.message||e);}
   }
