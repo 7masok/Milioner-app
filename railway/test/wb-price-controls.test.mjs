@@ -70,7 +70,7 @@ test('WB card grouping is user initiated, verifies actual result and separates o
   assert.match(groups,/await carveSelectedGroup\(market,ids,liveState\.imtId\)/);
   assert.match(groups,/await moveCards\(market,\{nmIDs:ids\}\)/);
   assert.match(groups,/targetIMT:Number\(targetImt\),nmIDs:moving/);
-  assert.match(groups,/refreshed=await fetchWbCardGroupsRemote\(market\)/);
+  assert.match(groups,/refreshed=await fetchAndSaveGroups\(market\)/);
   assert.match(groups,/if\(!verified\)return res\.status\(409\)/);
   assert.match(groups,/card-groups\/recheck/);
   assert.match(groups,/retryAt:Number\(error\?\.retryAt\)\|\|0/);
