@@ -140,3 +140,18 @@ test('Ozon product-profit sheet does not show advertising zero before Performanc
   assert.match(report,/html\.includes\('Ozon FBO · прибыль по товарам'\)/);
   assert.match(report,/openOzonProductProfit\(\);requestAnimationFrame/);
 });
+
+
+test('Ozon SKU advertising uses the same selected period and reconciles to finance total',()=>{
+  assert.match(compat,/model\.performanceAdsFrom=String\(adPayload\?\.from\|\|''\)/);
+  assert.match(compat,/model\.performanceAdsTo=String\(adPayload\?\.to\|\|''\)/);
+  assert.match(compat,/model\.performanceAdsTotal=Math\.max\(0,Number\(adPayload\?\.totalSpent\)\|\|0\)/);
+  assert.match(compat,/unallocatedAds=adSource==='performance'\?Math\.max\(0,ads-performanceAdsTotal\)/);
+  assert.match(compat,/performanceAdsOver=Math\.max\(0,performanceAdsTotal-ads\)/);
+  assert.match(compat,/if\(ads\?\.configured&&ads\?\.pending\)watchOzonAds\(days,payload,range\)/);
+  assert.match(compat,/window\.onOzonSummary\(Number\(days\),next,range\)/);
+  assert.match(report,/window\.onOzonSummary=function\(days,summary,range=null\)/);
+  assert.match(report,/const key=periodCacheKey\(days,range\)/);
+  assert.match(report,/sameRange=range\?Number\(reportPeriod\)===0/);
+  assert.match(report,/Реклама по SKU:/);
+});
