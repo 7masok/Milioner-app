@@ -1,5 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+const source=readFileSync(new URL('../src/ozon-performance.js',import.meta.url),'utf8');
+
 import { parseOzonMoney, skuSpendFromProductReport, skuSpendFromReport, skuSpendFromSkuStats } from '../src/ozon-performance.js';
 
 test('Ozon performance money uses a comma decimal', () => {
@@ -36,4 +39,15 @@ test('fallback Ozon product report keeps spend on SKU',()=>{
     ]}
   });
   assert.deepEqual(rows,[{sku:'501',title:'Товар 501',spent:75.5,orders:1}]);
+});
+
+
+test('Ozon advertising requests the exact selected calendar range and product-level SKU report',()=>{
+  assert.match(source,/\/api\/client\/statistic\/products\/generate\/json/);
+  assert.match(source,/from: from \+ 'T00:00:00\+03:00'/);
+  assert.match(source,/to: to \+ 'T23:59:59\+03:00'/);
+  assert.match(source,/\/api\/client\/statistics\/products\/sku/);
+  assert.match(source,/dateFrom: from/);
+  assert.match(source,/dateTo: to/);
+  assert.match(source,/totalSpent: rows\.reduce/);
 });
