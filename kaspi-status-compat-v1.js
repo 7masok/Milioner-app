@@ -93,9 +93,9 @@ try{
 function initMovementHistoryUi(){paintMovementPeriodControls();}
 if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',initMovementHistoryUi,{once:true});else initMovementHistoryUi();
 
-// Ozon profitability report. Finance rows that contain an Ozon SKU are attributed
-// to the linked warehouse product. FBO inbound/cross-docking is seller-specific and
-// is stored as a per-unit product cost instead of being guessed from order logistics.
+// Ozon profitability report. Finance rows are attributed to linked warehouse products.
+// FBO inbound/cross-docking comes from actual Ozon finance accruals and is tied back
+// to cross-dock supply/order identifiers and bundle SKU composition.
 try{
   let ozonProfitData=null,ozonProfitLoadedAt=0;
   const baseOzonSetReportMarket=window.setReportMarket;
@@ -136,9 +136,20 @@ try{
     if(qty>0)return total/qty;
     return Math.max(0,ozonNum(product?.cost)||ozonNum(product?.unitCost));
   }
-  function ozonFboUnitCost(productId){return Math.max(0,ozonNum(state?.settings?.ozonFboUnitCosts?.[String(productId)]));}
+  const ozonCrossdockStrongName=name=>/кросс[\s_-]*док|cross[\s_-]*dock/i.test(String(name||''));
+  const ozonCrossdockServiceName=name=>/кросс|cross|перемещ|достав|обработ|при[её]м|fbo|склад/i.test(String(name||''));
   function buildOzonMaps(payload){
-    const aliasToProduct=new Map(),postingQty=new Map();
+    const aliasToProduct=new Map(),postingQty=new Map(),crossdockByUnit=new Map();
+    const addCrossdock=(account,key,items)=>{
+      key=String(key||'').trim();if(!key||!Array.isArray(items)||!items.length)return;
+      const mapKey=String(account||'')+'|'+key,prior=crossdockByUnit.get(mapKey)||[],next=[...prior];
+      for(const raw of items){
+        const sku=String(raw?.sku||'').trim(),productId=String(raw?.productId||'').trim(),qty=Math.max(0,ozonNum(raw?.quantity??raw?.qty));
+        if(!sku&&!productId||!(qty>0))continue;
+        const found=next.find(x=>x.sku===sku&&x.productId===productId);if(found)found.qty+=qty;else next.push({sku,productId,qty});
+      }
+      if(next.length)crossdockByUnit.set(mapKey,next);
+    };
     for(const p of state.products||[])for(const key of ozonKeys(p))aliasToProduct.set(key,p);
     for(const account of payload?.accounts||[]){
       for(const stock of account?.stocks?.rows||[]){
@@ -156,12 +167,40 @@ try{
           for(const key of aliases)postingQty.set(String(account?.account||'')+'|'+number+'|'+key,q);
         }
       }
+      for(const order of account?.supplies?.rows||[]){
+        const ids=[order?.order_id,order?.order_number,order?.order_tags?.original_supply_id];
+        for(const supply of order?.supplies||[]){
+          if(!supply?.is_crossdock)continue;
+          const items=(supply.items||[]).map(item=>({sku:String(item?.sku||'').trim(),quantity:Math.max(0,ozonNum(item?.quantity))})).filter(item=>item.sku&&item.quantity>0);
+          for(const key of [...ids,supply?.supply_id,supply?.bundle_id])addCrossdock(account?.account,key,items);
+        }
+      }
     }
     for(const line of state.ozonOrderFeed||[]){const p=prod(line?.productId);if(p&&line?.sku)aliasToProduct.set(String(line.sku),p);}
-    return{aliasToProduct,postingQty};
+    for(const transfer of Object.values(state?.settings?.ozonFboTransfers||{})){
+      if(!transfer?.crossdock)continue;
+      const items=[{sku:String(transfer?.sku||''),productId:String(transfer?.productId||''),qty:Math.max(0,ozonNum(transfer?.qty))}];
+      for(const key of [transfer?.orderId,transfer?.supplyId,transfer?.bundleId])addCrossdock(transfer?.account,key,items);
+    }
+    return{aliasToProduct,postingQty,crossdockByUnit};
+  }
+  function ozonCrossdockFinanceRow(row,maps){
+    const name=String(row?.operation_type_name||''),account=String(row?._account||''),unit=String(row?.unit_number||'').trim();
+    if(ozonCrossdockStrongName(name))return true;
+    return Boolean(unit&&maps.crossdockByUnit.has(account+'|'+unit)&&ozonCrossdockServiceName(name));
+  }
+  function ozonCrossdockTargets(row,maps,directProduct){
+    if(directProduct)return[{product:directProduct,qty:1}];
+    const key=String(row?._account||'')+'|'+String(row?.unit_number||'').trim(),items=maps.crossdockByUnit.get(key)||[],grouped=new Map();
+    for(const item of items){
+      const product=item.productId?prod(item.productId):maps.aliasToProduct.get(String(item.sku||''));
+      if(!product)continue;
+      const id=String(product.id),prior=grouped.get(id)||{product,qty:0};prior.qty+=Math.max(0,ozonNum(item.qty));grouped.set(id,prior);
+    }
+    return [...grouped.values()].filter(x=>x.qty>0);
   }
   function ozonProfitModel(payload,days,range=null){
-    const bounds=ozonBounds(days,range),maps=buildOzonMaps(payload),groups=new Map(),products=new Map();let unallocated=0,unallocatedAds=0;
+    const bounds=ozonBounds(days,range),maps=buildOzonMaps(payload),groups=new Map(),products=new Map();let unallocated=0,unallocatedAds=0,unallocatedFbo=0;
     const productRow=p=>{const id=String(p.id);if(!products.has(id))products.set(id,{product:p,qty:0,sales:0,commission:0,delivery:0,ads:0,services:0,other:0,net:0,cogs:0,fbo:0});return products.get(id);};
     for(const account of payload?.accounts||[])for(const raw of account?.finance?.rows||[]){
       const t=Date.parse(raw?.operation_date||'');if(!(t>=bounds.start&&t<bounds.end))continue;
@@ -169,8 +208,16 @@ try{
       const currency=String(row.currency_code||row.currency||'KZT').toUpperCase();
       if(!groups.has(currency))groups.set(currency,{currency,sales:0,commission:0,delivery:0,ads:0,services:0,other:0,net:0,cogs:0,fbo:0});
       const g=groups.get(currency),category=ozonCategory(row),amount=ozonNum(row.amount),categoryAmount=category==='sales'?(ozonNum(row.accruals_for_sale)||amount):category==='commission'?(ozonNum(row.sale_commission)||amount):amount;
-      g[category]+=categoryAmount;g.net+=amount;
       const sku=String(row?.items?.[0]?.sku||'').trim(),product=maps.aliasToProduct.get(sku);
+      if(ozonCrossdockFinanceRow(row,maps)){
+        const expense=-amount;g.fbo+=expense;g.net+=amount;
+        const targets=ozonCrossdockTargets(row,maps,product),total=targets.reduce((n,x)=>n+x.qty,0);
+        if(total>0){
+          for(const target of targets){const share=target.qty/total,pr=productRow(target.product);pr.fbo+=expense*share;pr.net+=amount*share;}
+        }else unallocatedFbo+=expense;
+        continue;
+      }
+      g[category]+=categoryAmount;g.net+=amount;
       if(!product){if(category==='ads')unallocatedAds+=amount;else if(category!=='sales')unallocated+=amount;continue;}
       const pr=productRow(product);pr[category]+=categoryAmount;pr.net+=amount;
       if(category==='sales'){
@@ -180,12 +227,12 @@ try{
       }
     }
     for(const pr of products.values()){
-      pr.cogs=pr.qty*ozonUnitCost(pr.product);pr.fbo=pr.qty*ozonFboUnitCost(pr.product.id);
-      const currency='KZT',g=groups.get(currency);if(g){g.cogs+=pr.cogs;g.fbo+=pr.fbo;}
-      pr.financeAds=pr.ads;pr.profit=pr.net-pr.cogs-pr.fbo;pr.margin=pr.sales?pr.profit/pr.sales*100:0;
+      pr.cogs=pr.qty*ozonUnitCost(pr.product);
+      const currency='KZT',g=groups.get(currency);if(g)g.cogs+=pr.cogs;
+      pr.financeAds=pr.ads;pr.profit=pr.net-pr.cogs;pr.margin=pr.sales?pr.profit/pr.sales*100:0;
     }
-    for(const g of groups.values()){g.profit=g.net-g.cogs-g.fbo;g.margin=g.sales?g.profit/g.sales*100:0;}
-    return{groups:[...groups.values()],products:[...products.values()].sort((a,b)=>b.sales-a.sales),unallocated,unallocatedAds};
+    for(const g of groups.values()){g.profit=g.net-g.cogs;g.margin=g.sales?g.profit/g.sales*100:0;}
+    return{groups:[...groups.values()],products:[...products.values()].sort((a,b)=>b.sales-a.sales),unallocated,unallocatedAds,unallocatedFbo};
   }
   function applyPerformanceAds(model,maps,adRows){
     const byId=new Map(),loose=new Map();
@@ -207,7 +254,7 @@ try{
         model.products.push(pr);have.set(id,pr);
       }
       const financeAds=Number(pr.financeAds)||0;
-      pr.ads=spent;pr.profit=(Number(pr.net)||0)-financeAds-(Number(pr.cogs)||0)-(Number(pr.fbo)||0)-spent;pr.margin=pr.sales?pr.profit/pr.sales*100:0;
+      pr.ads=spent;pr.profit=(Number(pr.net)||0)-financeAds-(Number(pr.cogs)||0)-spent;pr.margin=pr.sales?pr.profit/pr.sales*100:0;
     }
     model.products.sort((a,b)=>(b.sales-a.sales)||((Number(b.ads)||0)-(Number(a.ads)||0)));
     return [...loose.values()];
@@ -227,14 +274,14 @@ try{
     window.__ozonProfitModel=model;
     const g=model.groups.find(x=>x.currency==='KZT')||model.groups[0]||null;
     if(!g)return{sales:0,cost:0,fees:0,ads:0,profit:0,qty:0,empty:true,products:[],adSource};
-    const ads=Math.abs(g.ads),deductions=g.sales-g.net,platformFees=Math.max(0,deductions-ads),fbo=Math.max(0,Number(g.fbo)||0),fees=platformFees+fbo;
+    const ads=Math.abs(g.ads),deductions=g.sales-g.net,fbo=Math.max(0,Number(g.fbo)||0),platformFees=Math.max(0,deductions-ads-fbo),fees=platformFees+fbo;
     const qty=model.products.reduce((n,row)=>n+Math.max(0,row.qty),0);
     const products=model.products.map(row=>{
       const financeAds=Number(row.financeAds!=null?row.financeAds:row.ads)||0;
-      return {productId:String(row.product?.id||''),name:row.product?.name||'Товар',qty:row.qty,sales:row.sales,cost:Number(row.cogs)||0,fbo:Math.max(0,Number(row.fbo)||0),fees:Math.max(0,(row.sales||0)-(row.net||0)-Math.abs(financeAds)),ads:Math.abs(row.ads||0),profit:row.profit};
+      const fbo=Math.max(0,Number(row.fbo)||0);return {productId:String(row.product?.id||''),name:row.product?.name||'Товар',qty:row.qty,sales:row.sales,cost:Number(row.cogs)||0,fbo,fees:Math.max(0,(row.sales||0)-(row.net||0)-Math.abs(financeAds)-fbo),ads:Math.abs(row.ads||0),profit:row.profit};
     });
     for(const row of model.looseAds||[])products.push({productId:'',name:row.name||'Товар Ozon',qty:0,sales:0,cost:0,fbo:0,fees:0,ads:row.spent,profit:-row.spent});
-    return{sales:g.sales,cost:g.cogs,fees,platformFees,fbo,ads,profit:g.profit,qty,empty:false,products,unallocatedAds:adSource==='performance'?0:Math.abs(model.unallocatedAds||0),adSource};
+    return{sales:g.sales,cost:g.cogs,fees,platformFees,fbo,ads,profit:g.profit,qty,empty:false,products,unallocatedAds:adSource==='performance'?0:Math.abs(model.unallocatedAds||0),unallocatedFbo:Math.max(0,Number(model.unallocatedFbo)||0),adSource};
   }
   const ozonAdsJobs=new Map();
   function watchOzonAds(days,payload,range=null){
@@ -287,8 +334,8 @@ try{
           '<div class="row" style="margin-top:9px;padding-top:8px;border-top:1px solid #eee"><span class="grow"><b>Чистая прибыль</b></span><b>'+ozonMoney(x.profit,x.currency)+'</b></div>'+
           '<div class="row" style="margin-top:4px"><span class="grow muted">Маржа</span><b>'+x.margin.toLocaleString('ru-RU',{maximumFractionDigits:1})+'%</b></div></div>';
       }).join('');
-      const warning=Math.abs(model.unallocated)>0.01?'<div class="link-note">Есть расходы Ozon без SKU на сумму '+ozonMoney(model.unallocated,'KZT')+'. Они учтены в общей прибыли, но не распределены по товарам.</div>':'';
-      box.innerHTML=cards+'<div class="row" style="gap:8px;margin-top:10px"><button class="btn dark grow" onclick="openOzonProductProfit()">По товарам</button><button class="btn grow" onclick="openOzonFboCosts()">FBO расходы</button></div><button class="btn full" style="margin-top:8px" onclick="openOzonFinanceDetails()">Все операции Ozon</button>'+warning+'<div class="link-note">Себестоимость берётся из принятых закупок. FBO/кросс-докинг задаётся на единицу товара. Реклама распределяется по товару только когда финансовая операция Ozon содержит его SKU.</div>';
+      const warning=Math.abs(model.unallocated)>0.01?'<div class="link-note">Есть расходы Ozon без SKU на сумму '+ozonMoney(model.unallocated,'KZT')+'. Они учтены в общей прибыли, но не распределены по товарам.</div>':'',fboWarning=Math.max(0,Number(model.unallocatedFbo)||0)>0.01?'<div class="link-note">Кросс-докинг на '+ozonMoney(model.unallocatedFbo,'KZT')+' уже учтён в общей прибыли, но Ozon не дал достаточно данных, чтобы надёжно привязать его к конкретному товару.</div>':'';
+      box.innerHTML=cards+'<div class="row" style="gap:8px;margin-top:10px"><button class="btn dark grow" onclick="openOzonProductProfit()">По товарам</button></div><button class="btn full" style="margin-top:8px" onclick="openOzonFinanceDetails()">Все операции Ozon</button>'+warning+fboWarning+'<div class="link-note">FBO/кросс-докинг берётся автоматически из фактических начислений Ozon и связывается с поставкой и SKU. Ручного тарифа нет.</div>';
       window.__ozonProfitModel=model;
     }catch(error){if(box)box.innerHTML='<div class="empty">Не удалось рассчитать прибыль Ozon: '+esc(String(error?.message||error))+'</div>';}
   }
@@ -296,16 +343,6 @@ try{
     const model=window.__ozonProfitModel;if(!model){if(typeof openStoreDetail==='function')return openStoreDetail('Ozon',typeof reportPeriod!=='undefined'?reportPeriod:30);return renderOzonProfitReport();}
     const body=model.products.length?model.products.map(r=>'<div class="item" style="margin-top:8px"><div class="row"><div class="grow"><b>'+esc(r.product?.name||'Товар')+'</b><div class="muted">Продано: '+r.qty.toLocaleString('ru-RU')+' шт.</div></div><b>'+ozonMoney(r.profit,'KZT')+'</b></div><div class="row" style="margin-top:6px"><span class="grow muted">Продажи</span><b>'+ozonMoney(r.sales,'KZT')+'</b></div><div class="row" style="margin-top:4px"><span class="grow muted">Расходы Ozon</span><b>'+ozonMoney(r.net-r.sales,'KZT')+'</b></div><div class="row" style="margin-top:4px"><span class="grow muted">Реклама</span><b>'+ozonMoney(Math.abs(r.ads),'KZT')+'</b></div><div class="row" style="margin-top:4px"><span class="grow muted">Себестоимость</span><b>-'+ozonMoney(r.cogs,'KZT').replace(/^-/,'')+'</b></div><div class="row" style="margin-top:4px"><span class="grow muted">FBO / кросс-докинг</span><b>-'+ozonMoney(r.fbo,'KZT').replace(/^-/,'')+'</b></div><div class="row" style="margin-top:6px"><span class="grow muted">Маржа</span><b>'+r.margin.toLocaleString('ru-RU',{maximumFractionDigits:1})+'%</b></div></div>').join(''):'<div class="empty">Нет привязанных продаж Ozon за выбранный период.</div>';
     showSheet('<h3>Ozon FBO · прибыль по товарам</h3>'+body);
-  };
-  window.openOzonFboCosts=function(){
-    const products=(state.products||[]).filter(p=>ozonKeys(p).length).sort((a,b)=>String(a.name||'').localeCompare(String(b.name||''),'ru'));
-    const body=products.length?products.map(p=>'<label class="item" style="display:block;margin-top:8px"><b>'+esc(p.name||'Товар')+'</b><div class="muted" style="margin:4px 0">FBO / кросс-докинг / доставка на склад Ozon, ₸ за 1 шт.</div><input type="number" inputmode="decimal" min="0" step="0.01" data-ozon-fbo-cost="'+esc(String(p.id))+'" value="'+ozonFboUnitCost(p.id)+'"></label>').join(''):'<div class="empty">Сначала привяжите товары к Ozon.</div>';
-    showSheet('<h3>FBO расходы по товарам</h3>'+body+(products.length?'<button class="btn dark full" style="margin-top:12px" onclick="saveOzonFboCosts()">Сохранить</button>':'')+'<div class="link-note">Указывайте стоимость доставки партии на FBO/кросс-докинга в пересчёте на одну единицу. Она будет вычитаться только из проданных единиц.</div>');
-  };
-  window.saveOzonFboCosts=function(){
-    state.settings=state.settings||{};const next={...(state.settings.ozonFboUnitCosts||{})};
-    document.querySelectorAll('[data-ozon-fbo-cost]').forEach(input=>{const key=String(input.dataset.ozonFboCost||'');if(key)next[key]=Math.max(0,ozonNum(input.value));});
-    state.settings.ozonFboUnitCosts=next;try{save();}catch(error){console.warn('Ozon FBO cost save failed',error);}if(typeof openStoreDetail==='function')return openStoreDetail('Ozon',typeof reportPeriod!=='undefined'?reportPeriod:30);renderReports?.();
   };
   window.setReportMarket=function(market){
     return baseOzonSetReportMarket?.(market);
