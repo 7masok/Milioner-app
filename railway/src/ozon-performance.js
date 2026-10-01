@@ -21,21 +21,69 @@ export function parseOzonMoney(value) {
   return Number.isFinite(n) ? n : 0;
 }
 
+function addSkuSpend(bySku, row, spentValue) {
+  const sku = String(row?.sku || row?.productSku || row?.product_sku || '').trim();
+  const spent = parseOzonMoney(spentValue);
+  if (!sku || spent <= 0) return;
+  const prev = bySku.get(sku) || { sku, title: '', spent: 0, orders: 0 };
+  prev.spent += spent;
+  prev.orders += parseOzonMoney(row?.orders ?? row?.modelOrders ?? row?.cpcOrders);
+  if (!prev.title && (row?.title || row?.name)) prev.title = String(row.title || row.name);
+  bySku.set(sku, prev);
+}
+
 export function skuSpendFromReport(payload) {
   const bySku = new Map();
   if (!payload || typeof payload !== 'object') return [];
   for (const block of Object.values(payload)) {
     const list = Array.isArray(block?.report?.rows) ? block.report.rows : [];
-    for (const row of list) {
-      const sku = String(row?.sku || '').trim();
-      const spent = parseOzonMoney(row?.moneySpent);
-      if (!sku || spent <= 0) continue;
-      const prev = bySku.get(sku) || { sku, title: '', spent: 0, orders: 0 };
-      prev.spent += spent;
-      prev.orders += parseOzonMoney(row?.orders);
-      if (!prev.title && row?.title) prev.title = String(row.title);
-      bySku.set(sku, prev);
+    for (const row of list) addSkuSpend(bySku, row, row?.moneySpent ?? row?.expense);
+  }
+  return [...bySku.values()];
+}
+
+export function skuSpendFromSkuStats(payload) {
+  const bySku = new Map();
+  for (const row of Array.isArray(payload?.rows) ? payload.rows : []) addSkuSpend(bySku, row, row?.expense);
+  return [...bySku.values()];
+}
+
+function reportCandidateRows(payload) {
+  const rows = [];
+  const seen = new Set();
+  const walk = value => {
+    if (!value || typeof value !== 'object' || seen.has(value)) return;
+    seen.add(value);
+    if (Array.isArray(value)) {
+      for (const item of value) {
+        if (item && typeof item === 'object' && ('sku' in item || 'productSku' in item || 'product_sku' in item)) rows.push(item);
+        else walk(item);
+      }
+      return;
     }
+    for (const child of Object.values(value)) walk(child);
+  };
+  walk(payload);
+  return rows;
+}
+
+export function skuSpendFromProductReport(payload) {
+  const bySku = new Map();
+  for (const row of reportCandidateRows(payload)) {
+    const candidates = [
+      row?.expense,
+      row?.moneySpent,
+      row?.cpcExpense,
+      row?.cpc_expense,
+      row?.expenseCpc,
+      row?.searchPromoExpense
+    ];
+    let spent = 0;
+    for (const value of candidates) {
+      const amount = parseOzonMoney(value);
+      if (amount > 0) spent += amount;
+    }
+    addSkuSpend(bySku, row, spent);
   }
   return [...bySku.values()];
 }
@@ -96,50 +144,91 @@ async function tokenFor() {
 }
 
 async function skuCampaignIds(token) {
-  const body = await api(token, '/api/client/campaign?page=1&pageSize=200');
-  const list = Array.isArray(body.list) ? body.list : [];
-  return list.filter(row => row?.advObjectType === 'SKU').map(row => String(row.id)).filter(Boolean);
+  const ids = [];
+  for (let page = 1; page <= 20; page++) {
+    const body = await api(token, '/api/client/campaign?page=' + page + '&pageSize=200&advObjectType=SKU');
+    const list = Array.isArray(body.list) ? body.list : [];
+    ids.push(...list.filter(row => row?.advObjectType === 'SKU').map(row => String(row.id)).filter(Boolean));
+    if (list.length < 200) break;
+  }
+  return [...new Set(ids)];
 }
 
-async function reportRows(token, ids, from, to) {
-  const created = await api(token, '/api/client/statistics/json', {
-    campaigns: ids,
-    dateFrom: from,
-    dateTo: to,
-    groupBy: 'NO_GROUP_BY'
-  });
+function mergeSkuRows(bySku, rows) {
+  for (const row of rows || []) {
+    const prev = bySku.get(row.sku) || { sku: row.sku, title: '', spent: 0, orders: 0 };
+    prev.spent += Number(row.spent) || 0;
+    prev.orders += Number(row.orders) || 0;
+    if (!prev.title && row.title) prev.title = row.title;
+    bySku.set(row.sku, prev);
+  }
+}
+
+function moscowRange(from, to) {
+  return {
+    from: from + 'T00:00:00+03:00',
+    to: to + 'T23:59:59+03:00'
+  };
+}
+
+async function directSkuRows(token, ids, from, to) {
+  const bySku = new Map();
+  for (let offset = 0; offset < ids.length; offset += 100) {
+    const body = await api(token, '/api/client/statistics/products/sku', {
+      campaignIds: ids.slice(offset, offset + 100),
+      dateFrom: from,
+      dateTo: to
+    });
+    if (!Array.isArray(body?.rows)) throw new Error('Ozon Performance: неизвестный формат статистики по SKU');
+    mergeSkuRows(bySku, skuSpendFromSkuStats(body));
+  }
+  return [...bySku.values()];
+}
+
+async function productReportRows(token, from, to) {
+  const range = moscowRange(from, to);
+  const created = await api(token, '/api/client/statistic/products/generate/json', range);
   const uuid = String(created.UUID || created.uuid || '');
-  if (!uuid) throw new Error('Ozon Performance: отчёт не поставлен в очередь');
+  if (!uuid) throw new Error('Ozon Performance: товарный отчёт не поставлен в очередь');
   const started = Date.now();
   let link = '';
   while (Date.now() - started < 90_000) {
     const status = await api(token, '/api/client/statistics/' + encodeURIComponent(uuid));
     const state = String(status.state || '');
     if (state === 'OK' && status.link) { link = String(status.link); break; }
-    if (state === 'ERROR' || state === 'FAILED') throw new Error('Ozon Performance: отчёт не собрался');
+    if (state === 'ERROR' || state === 'FAILED') throw new Error('Ozon Performance: товарный отчёт не собрался');
     await new Promise(resolve => setTimeout(resolve, 2000));
   }
-  if (!link) throw new Error('Ozon Performance: отчёт не готов');
+  if (!link) throw new Error('Ozon Performance: товарный отчёт не готов');
   const path = link.startsWith('http') ? link.slice(HOST.length) : link;
-  return skuSpendFromReport(await api(token, path.startsWith('/') ? path : '/' + path));
+  return skuSpendFromProductReport(await api(token, path.startsWith('/') ? path : '/' + path));
 }
 
 async function build(from, to) {
   const token = await tokenFor();
-  const ids = await skuCampaignIds(token);
   const bySku = new Map();
-  for (let offset = 0; offset < ids.length; offset += 10) {
-    const chunk = ids.slice(offset, offset + 10);
-    const rows = await enqueue(() => reportRows(token, chunk, from, to));
-    for (const row of rows) {
-      const prev = bySku.get(row.sku) || { sku: row.sku, title: '', spent: 0, orders: 0 };
-      prev.spent += row.spent;
-      prev.orders += row.orders;
-      if (!prev.title && row.title) prev.title = row.title;
-      bySku.set(row.sku, prev);
-    }
+  let source = 'product-report';
+  let fallbackError = '';
+  try {
+    const rows = await enqueue(() => productReportRows(token, from, to));
+    mergeSkuRows(bySku, rows);
+    if (!rows.length) throw new Error('Ozon Performance: товарный отчёт не вернул расходы по SKU');
+  } catch (error) {
+    fallbackError = String(error?.message || error);
+    source = 'products-sku';
+    const ids = await skuCampaignIds(token);
+    if (ids.length) mergeSkuRows(bySku, await directSkuRows(token, ids, from, to));
   }
-  return { from, to, rows: [...bySku.values()], updatedAt: Date.now() };
+  const rows = [...bySku.values()];
+  return {
+    from,
+    to,
+    rows,
+    totalSpent: rows.reduce((sum, row) => sum + (Number(row.spent) || 0), 0),
+    source,
+    fallbackError,
+    updatedAt: Date.now()
+  };
 }
 
 export async function ozonSkuSpend(from, to) {
