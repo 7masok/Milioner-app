@@ -351,6 +351,9 @@ test('WB bulk promotion controls can select all visible rows and enable or disab
   assert.match(ui,/window\.priceBulkPromo=async function\(enabled\)/);
   assert.match(ui,/\/api\/market-prices\/promo\/bulk/);
   assert.match(ui,/class="price-row-select"/);
+  assert.match(html,/\.price-row-select\{[^}]*right:8px[^}]*width:52px[^}]*height:48px/);
+  assert.match(html,/\.price-item:has\(\.price-row-select\) \.price-card-toggle\{padding-right:92px\}/);
+  assert.match(html,/\.price-item:has\(\.price-row-select\) \.price-chevron\{[^}]*width:32px[^}]*height:44px/);
 });
 
 
