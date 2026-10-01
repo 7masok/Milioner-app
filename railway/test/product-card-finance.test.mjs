@@ -133,10 +133,13 @@ test('Ozon product-profit sheet does not show advertising zero before Performanc
   assert.match(compat,/model\.performanceAdsConfigured=Boolean\(adPayload\?\.configured\)/);
   assert.match(compat,/model\.performanceAdsPending=Boolean\(adPayload\?\.configured&&adPayload\?\.pending\)/);
   assert.match(compat,/let ads=null;\s*try\{ads=await loadOzonSkuAds\(days,range\)\}/);
-  assert.match(compat,/if\(ads\?\.configured&&!ads\?\.pending&&Array\.isArray\(ads\.rows\)\)return ozonSummaryFrom/);
+  assert.match(compat,/if\(ads\?\.configured&&!ads\?\.pending&&\(ads\?\.error\|\|Array\.isArray\(ads\.rows\)\)\)return ozonSummaryFrom/);
   assert.match(compat,/model\.performanceAdsPending\?'загрузка…'/);
+  assert.match(compat,/model\.performanceAdsError/);
+  assert.match(compat,/model\.performanceAdsLimited\?'лимит Ozon':'недоступно'/);
   assert.match(compat,/Реклама Ozon загружается из Performance API/);
-  assert.match(compat,/if\(!ads\?\.configured\|\|!Array\.isArray\(ads\.rows\)\)return/);
+  assert.match(report,/summary\?\.adsLimited\?'лимит Ozon':'недоступно'/);
+  assert.match(report,/Общая реклама/);
   assert.match(report,/html\.includes\('Ozon FBO · прибыль по товарам'\)/);
   assert.match(report,/openOzonProductProfit\(\);requestAnimationFrame/);
 });
