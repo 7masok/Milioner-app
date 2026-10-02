@@ -71,6 +71,12 @@ test('Ozon direct SKU endpoint is used first for today or yesterday and falls ba
   assert.match(source,/mergeSkuRows\(bySku, await directSkuRows\(token, from, to\)\)/);
   assert.match(source,/source = 'product-report-fallback'/);
   assert.match(source,/mergeSkuRows\(bySku, await enqueue\(\(\) => productReportRows\(token, from, to\)\)\)/);
+  assert.match(source,/function campaignBatches/);
+  assert.match(source,/advObjectType/);
+  assert.match(source,/SEARCH_PROMO/);
+  assert.match(source,/\/api\/client\/statistics\/json/);
+  assert.match(source,/campaignIds: batch/);
+  assert.match(source,/statisticsReportRows\(token, from, to, batch\)/);
   assert.doesNotMatch(source,/campaignIds: ids\.slice/);
   assert.match(source,/dateFrom: from/);
   assert.match(source,/dateTo: to/);

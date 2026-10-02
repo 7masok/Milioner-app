@@ -23,7 +23,7 @@ export function parseOzonMoney(value) {
 }
 
 function addSkuSpend(bySku, row, spentValue) {
-  const sku = String(row?.sku || row?.productSku || row?.product_sku || '').trim();
+  const sku = String(row?.sku || row?.SKU || row?.productSku || row?.product_sku || '').trim();
   const spent = parseOzonMoney(spentValue);
   if (!sku || spent <= 0) return;
   const prev = bySku.get(sku) || { sku, title: '', spent: 0, orders: 0 };
@@ -38,7 +38,7 @@ export function skuSpendFromReport(payload) {
   if (!payload || typeof payload !== 'object') return [];
   for (const block of Object.values(payload)) {
     const list = Array.isArray(block?.report?.rows) ? block.report.rows : [];
-    for (const row of list) addSkuSpend(bySku, row, row?.moneySpent ?? row?.expense);
+    for (const row of list) addSkuSpend(bySku, row, row?.moneySpent ?? row?.expense ?? row?.MoneySpent ?? row?.cost);
   }
   return [...bySku.values()];
 }
@@ -168,15 +168,33 @@ async function tokenFor() {
   return access.value;
 }
 
-async function skuCampaignIds(token) {
-  const ids = [];
-  for (let page = 1; page <= 20; page++) {
-    const body = await api(token, '/api/client/campaign?page=' + page + '&pageSize=200&advObjectType=SKU');
+const CAMPAIGN_BATCH = 10;
+let campaignGroupsCache = { at: 0, groups: null };
+
+function campaignBatches(ids) {
+  const batches = [];
+  for (let index = 0; index < ids.length; index += CAMPAIGN_BATCH) batches.push(ids.slice(index, index + CAMPAIGN_BATCH));
+  return batches;
+}
+
+async function campaignGroups(token) {
+  if (campaignGroupsCache.groups && Date.now() - campaignGroupsCache.at < CACHE_MS) return campaignGroupsCache.groups;
+  const groups = { SKU: [], SEARCH_PROMO: [] };
+  for (let page = 1; page <= 5; page++) {
+    const body = await api(token, '/api/client/campaign?page=' + page + '&pageSize=200');
     const list = Array.isArray(body.list) ? body.list : [];
-    ids.push(...list.filter(row => row?.advObjectType === 'SKU').map(row => String(row.id)).filter(Boolean));
+    for (const row of list) {
+      const type = String(row?.advObjectType || '');
+      const id = String(row?.id || '').trim();
+      if (!id || !groups[type]) continue;
+      groups[type].push(id);
+    }
     if (list.length < 200) break;
   }
-  return [...new Set(ids)];
+  groups.SKU = [...new Set(groups.SKU)];
+  groups.SEARCH_PROMO = [...new Set(groups.SEARCH_PROMO)];
+  campaignGroupsCache = { at: Date.now(), groups };
+  return groups;
 }
 
 function mergeSkuRows(bySku, rows) {
@@ -197,19 +215,27 @@ function moscowRange(from, to) {
 }
 
 async function directSkuRows(token, from, to) {
-  const body = await api(token, '/api/client/statistics/products/sku', {
-    dateFrom: from,
-    dateTo: to
-  });
-  if (!Array.isArray(body?.rows)) throw new Error('Ozon Performance: неизвестный формат статистики по SKU');
-  return skuSpendFromSkuStats(body);
+  const groups = await campaignGroups(token);
+  const ids = groups.SKU || [];
+  if (!ids.length) {
+    const error = new Error('Ozon Performance /api/client/statistics/products/sku: empty campaigns');
+    error.code = 'EMPTY_CAMPAIGNS';
+    throw error;
+  }
+  const rows = [];
+  for (const batch of campaignBatches(ids)) {
+    const body = await api(token, '/api/client/statistics/products/sku', {
+      campaignIds: batch,
+      dateFrom: from,
+      dateTo: to
+    });
+    if (!Array.isArray(body?.rows)) throw new Error('Ozon Performance: неизвестный формат статистики по SKU');
+    rows.push(...skuSpendFromSkuStats(body));
+  }
+  return rows;
 }
 
-async function productReportRows(token, from, to) {
-  const range = moscowRange(from, to);
-  const created = await api(token, '/api/client/statistic/products/generate/json', range);
-  const uuid = String(created.UUID || created.uuid || '');
-  if (!uuid) throw new Error('Ozon Performance: товарный отчёт не поставлен в очередь');
+async function pollReport(token, uuid, label) {
   const started = Date.now();
   let link = '';
   await new Promise(resolve => setTimeout(resolve, 4000));
@@ -218,19 +244,62 @@ async function productReportRows(token, from, to) {
     const state = String(status.state || '');
     if (state === 'OK' && status.link) { link = String(status.link); break; }
     if (state === 'ERROR' || state === 'FAILED') {
-      const error = new Error('Ozon Performance: товарный отчёт не собрался' + (status.error ? ' · ' + String(status.error).slice(0,180) : ''));
+      const error = new Error('Ozon Performance: ' + label + ' не собрался' + (status.error ? ' · ' + String(status.error).slice(0,180) : ''));
       error.code = 'REPORT_FAILED';
       throw error;
     }
     await new Promise(resolve => setTimeout(resolve, 7000));
   }
   if (!link) {
-    const error = new Error('Ozon Performance: товарный отчёт не готов');
+    const error = new Error('Ozon Performance: ' + label + ' не готов');
     error.code = 'REPORT_TIMEOUT';
     throw error;
   }
+  return link;
+}
+
+async function downloadReport(token, link) {
   const path = link.startsWith('http') ? link.slice(HOST.length) : link;
-  return skuSpendFromProductReport(await api(token, path.startsWith('/') ? path : '/' + path));
+  return api(token, path.startsWith('/') ? path : '/' + path);
+}
+
+async function productReportRows(token, from, to) {
+  const created = await api(token, '/api/client/statistic/products/generate/json', moscowRange(from, to));
+  const uuid = String(created.UUID || created.uuid || '');
+  if (!uuid) throw new Error('Ozon Performance: товарный отчёт не поставлен в очередь');
+  return skuSpendFromProductReport(await downloadReport(token, await pollReport(token, uuid, 'товарный отчёт')));
+}
+
+async function statisticsReportRows(token, from, to, campaigns) {
+  const created = await api(token, '/api/client/statistics/json', {
+    campaigns,
+    dateFrom: from,
+    dateTo: to,
+    groupBy: 'DATE'
+  });
+  const uuid = String(created.UUID || created.uuid || '');
+  if (!uuid) throw new Error('Ozon Performance: отчёт по кампаниям не поставлен в очередь');
+  const payload = await downloadReport(token, await pollReport(token, uuid, 'отчёт по кампаниям'));
+  const parsed = skuSpendFromReport(payload);
+  return parsed.length ? parsed : skuSpendFromProductReport(payload);
+}
+
+async function campaignStatisticsRows(token, from, to, types) {
+  const groups = await campaignGroups(token);
+  const rows = [];
+  for (const type of types) {
+    for (const batch of campaignBatches(groups[type] || [])) {
+      if (performanceCooldown.until > Date.now()) {
+        const error = new Error(performanceCooldown.error || 'Ozon Performance временно недоступен');
+        error.code = 'COOLDOWN';
+        error.retryAt = performanceCooldown.until;
+        error.userMessage = performanceCooldown.error;
+        throw error;
+      }
+      rows.push(...await statisticsReportRows(token, from, to, batch));
+    }
+  }
+  return rows;
 }
 
 function directRangeAllowed(from, to) {
@@ -246,6 +315,28 @@ async function build(from, to) {
   const bySku = new Map();
   let source = '';
   let fallbackError = '';
+  const ensureCooldown = () => {
+    if (performanceCooldown.until <= Date.now()) return;
+    const error = new Error(performanceCooldown.error || 'Ozon Performance временно недоступен');
+    error.code = 'COOLDOWN';
+    error.retryAt = performanceCooldown.until;
+    error.userMessage = performanceCooldown.error;
+    throw error;
+  };
+  const useCampaignReport = async (label, types) => {
+    ensureCooldown();
+    const groups = await campaignGroups(token);
+    const wanted = types.filter(type => (groups[type] || []).length);
+    if (wanted.length) {
+      source = label;
+      mergeSkuRows(bySku, await enqueue(() => campaignStatisticsRows(token, from, to, wanted)));
+      return;
+    }
+    if (types.includes('SKU') && bySku.size === 0) {
+      source = 'product-report-fallback';
+      mergeSkuRows(bySku, await enqueue(() => productReportRows(token, from, to)));
+    }
+  };
 
   if (directRangeAllowed(from, to)) {
     source = 'products-sku';
@@ -253,20 +344,13 @@ async function build(from, to) {
       mergeSkuRows(bySku, await directSkuRows(token, from, to));
     } catch (error) {
       fallbackError = String(error?.message || error);
+      if (error.code === 'DAILY_LIMIT') throw error;
       if (performanceCooldown.until > Date.now()) throw error;
-      source = 'product-report-fallback';
-      mergeSkuRows(bySku, await enqueue(() => productReportRows(token, from, to)));
     }
+    if (bySku.size === 0) await useCampaignReport('campaign-report-fallback', ['SKU', 'SEARCH_PROMO']);
+    else await useCampaignReport('products-sku+search-promo', ['SEARCH_PROMO']);
   } else {
-    if (performanceCooldown.until > Date.now()) {
-      const error = new Error(performanceCooldown.error || 'Ozon Performance временно недоступен');
-      error.code = 'COOLDOWN';
-      error.retryAt = performanceCooldown.until;
-      error.userMessage = performanceCooldown.error;
-      throw error;
-    }
-    source = 'product-report';
-    mergeSkuRows(bySku, await enqueue(() => productReportRows(token, from, to)));
+    await useCampaignReport('campaign-report', ['SKU', 'SEARCH_PROMO']);
   }
 
   const rows = [...bySku.values()];
