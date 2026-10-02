@@ -196,18 +196,13 @@ function moscowRange(from, to) {
   };
 }
 
-async function directSkuRows(token, ids, from, to) {
-  const bySku = new Map();
-  for (let offset = 0; offset < ids.length; offset += 100) {
-    const body = await api(token, '/api/client/statistics/products/sku', {
-      campaignIds: ids.slice(offset, offset + 100),
-      dateFrom: from,
-      dateTo: to
-    });
-    if (!Array.isArray(body?.rows)) throw new Error('Ozon Performance: неизвестный формат статистики по SKU');
-    mergeSkuRows(bySku, skuSpendFromSkuStats(body));
-  }
-  return [...bySku.values()];
+async function directSkuRows(token, from, to) {
+  const body = await api(token, '/api/client/statistics/products/sku', {
+    dateFrom: from,
+    dateTo: to
+  });
+  if (!Array.isArray(body?.rows)) throw new Error('Ozon Performance: неизвестный формат статистики по SKU');
+  return skuSpendFromSkuStats(body);
 }
 
 async function productReportRows(token, from, to) {
@@ -238,29 +233,28 @@ function directRangeAllowed(from, to) {
 }
 
 async function build(from, to) {
-  if (performanceCooldown.until > Date.now()) {
-    const error = new Error(performanceCooldown.error || 'Ozon Performance временно недоступен');
-    error.code = 'COOLDOWN';
-    error.retryAt = performanceCooldown.until;
-    error.userMessage = performanceCooldown.error;
-    throw error;
-  }
   const token = await tokenFor();
   const bySku = new Map();
-  let source = 'product-report';
+  let source = '';
   let fallbackError = '';
-  try {
+
+  if (directRangeAllowed(from, to)) {
+    source = 'products-sku';
+    const rows = await directSkuRows(token, from, to);
+    mergeSkuRows(bySku, rows);
+  } else {
+    if (performanceCooldown.until > Date.now()) {
+      const error = new Error(performanceCooldown.error || 'Ozon Performance временно недоступен');
+      error.code = 'COOLDOWN';
+      error.retryAt = performanceCooldown.until;
+      error.userMessage = performanceCooldown.error;
+      throw error;
+    }
+    source = 'product-report';
     const rows = await enqueue(() => productReportRows(token, from, to));
     mergeSkuRows(bySku, rows);
-    if (!rows.length) throw new Error('Ozon Performance: товарный отчёт не вернул расходы по SKU');
-  } catch (error) {
-    if (error?.code === 'DAILY_LIMIT') throw error;
-    fallbackError = String(error?.message || error);
-    if (!directRangeAllowed(from, to)) throw error;
-    source = 'products-sku';
-    const ids = await skuCampaignIds(token);
-    if (ids.length) mergeSkuRows(bySku, await directSkuRows(token, ids, from, to));
   }
+
   const rows = [...bySku.values()];
   return {
     from,
