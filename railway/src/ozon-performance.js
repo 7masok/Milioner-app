@@ -68,6 +68,37 @@ function reportCandidateRows(payload) {
   return rows;
 }
 
+export function skuSpendFromCsv(text) {
+  const lines = String(text || '').split(/\r?\n/).map(line => line.trim()).filter(Boolean);
+  const headerAt = lines.findIndex(line => /(^|[;,])sku([;,]|$)/i.test(line));
+  if (headerAt < 0) return [];
+  const delimiter = lines[headerAt].includes(';') ? ';' : ',';
+  const header = lines[headerAt].split(delimiter).map(cell => cell.trim().toLowerCase());
+  const skuIndex = header.findIndex(cell => cell === 'sku' || cell.startsWith('sku'));
+  const spentIndex = header.findIndex(cell => /расход|moneyspent|expense|затрат/.test(cell));
+  const ordersIndex = header.findIndex(cell => cell === 'orders' || cell === 'заказы' || cell.startsWith('заказы'));
+  const titleIndex = header.findIndex(cell => /название|title|^name$/.test(cell));
+  if (skuIndex < 0 || spentIndex < 0) return [];
+  const bySku = new Map();
+  for (const line of lines.slice(headerAt + 1)) {
+    const cells = line.split(delimiter).map(cell => cell.trim().replace(/^"|"$/g, ''));
+    const sku = String(cells[skuIndex] || '').trim();
+    if (!/^\d{4,}$/.test(sku)) continue;
+    addSkuSpend(bySku, {
+      sku,
+      title: titleIndex >= 0 ? cells[titleIndex] : '',
+      orders: ordersIndex >= 0 ? cells[ordersIndex] : 0
+    }, cells[spentIndex]);
+  }
+  return [...bySku.values()];
+}
+
+function spendFromPayload(payload) {
+  if (typeof payload?.csv === 'string') return skuSpendFromCsv(payload.csv);
+  const parsed = skuSpendFromReport(payload);
+  return parsed.length ? parsed : skuSpendFromProductReport(payload);
+}
+
 export function skuSpendFromProductReport(payload) {
   const bySku = new Map();
   for (const row of reportCandidateRows(payload)) {
@@ -82,7 +113,7 @@ export function skuSpendFromProductReport(payload) {
     let spent = 0;
     for (const value of candidates) {
       const amount = parseOzonMoney(value);
-      if (amount > 0) spent += amount;
+      if (amount > 0) { spent = amount; break; }
     }
     addSkuSpend(bySku, row, spent);
   }
@@ -179,20 +210,26 @@ function campaignBatches(ids) {
 
 async function campaignGroups(token) {
   if (campaignGroupsCache.groups && Date.now() - campaignGroupsCache.at < CACHE_MS) return campaignGroupsCache.groups;
-  const groups = { SKU: [], SEARCH_PROMO: [] };
+  const groups = { SKU: [], SEARCH_PROMO: [], skuByPayment: {} };
   for (let page = 1; page <= 5; page++) {
     const body = await api(token, '/api/client/campaign?page=' + page + '&pageSize=200');
     const list = Array.isArray(body.list) ? body.list : [];
     for (const row of list) {
       const type = String(row?.advObjectType || '');
       const id = String(row?.id || '').trim();
-      if (!id || !groups[type]) continue;
+      if (!id || (type !== 'SKU' && type !== 'SEARCH_PROMO')) continue;
       groups[type].push(id);
+      if (type === 'SKU') {
+        const payment = String(row?.paymentType || 'UNKNOWN');
+        groups.skuByPayment[payment] = groups.skuByPayment[payment] || [];
+        groups.skuByPayment[payment].push(id);
+      }
     }
     if (list.length < 200) break;
   }
   groups.SKU = [...new Set(groups.SKU)];
   groups.SEARCH_PROMO = [...new Set(groups.SEARCH_PROMO)];
+  for (const payment of Object.keys(groups.skuByPayment)) groups.skuByPayment[payment] = [...new Set(groups.skuByPayment[payment])];
   campaignGroupsCache = { at: Date.now(), groups };
   return groups;
 }
@@ -216,14 +253,14 @@ function moscowRange(from, to) {
 
 async function directSkuRows(token, from, to) {
   const groups = await campaignGroups(token);
-  const ids = groups.SKU || [];
-  if (!ids.length) {
+  const paymentGroups = Object.values(groups.skuByPayment || {}).filter(ids => ids.length);
+  if (!paymentGroups.length) {
     const error = new Error('Ozon Performance /api/client/statistics/products/sku: empty campaigns');
     error.code = 'EMPTY_CAMPAIGNS';
     throw error;
   }
   const rows = [];
-  for (const batch of campaignBatches(ids)) {
+  for (const ids of paymentGroups) for (const batch of campaignBatches(ids)) {
     const body = await api(token, '/api/client/statistics/products/sku', {
       campaignIds: batch,
       dateFrom: from,
@@ -260,14 +297,34 @@ async function pollReport(token, uuid, label) {
 
 async function downloadReport(token, link) {
   const path = link.startsWith('http') ? link.slice(HOST.length) : link;
-  return api(token, path.startsWith('/') ? path : '/' + path);
+  const reportPath = path.startsWith('/') ? path : '/' + path;
+  const response = await fetch(HOST + reportPath, {
+    headers: { Accept: 'application/json, text/csv, */*', Authorization: 'Bearer ' + token },
+    signal: AbortSignal.timeout(40000)
+  });
+  const text = await response.text();
+  if (!response.ok) throw performanceError(reportPath, response.status, text);
+  const trimmed = text.trim();
+  if (trimmed.startsWith('{') || trimmed.startsWith('[')) return JSON.parse(trimmed);
+  return { csv: text };
 }
 
 async function productReportRows(token, from, to) {
   const created = await api(token, '/api/client/statistic/products/generate/json', moscowRange(from, to));
   const uuid = String(created.UUID || created.uuid || '');
   if (!uuid) throw new Error('Ozon Performance: товарный отчёт не поставлен в очередь');
-  return skuSpendFromProductReport(await downloadReport(token, await pollReport(token, uuid, 'товарный отчёт')));
+  return spendFromPayload(await downloadReport(token, await pollReport(token, uuid, 'товарный отчёт')));
+}
+
+async function allSkuPromoRows(token, from, to) {
+  const range = moscowRange(from, to);
+  const query = new URLSearchParams();
+  query.set('timeBounds.from', range.from);
+  query.set('timeBounds.to', range.to);
+  const created = await api(token, '/api/client/statistics/all_sku_promo/products/generate?' + query.toString());
+  const uuid = String(created.UUID || created.uuid || '');
+  if (!uuid) throw new Error('Ozon Performance: отчёт оплаты за заказ не поставлен в очередь');
+  return spendFromPayload(await downloadReport(token, await pollReport(token, uuid, 'отчёт оплаты за заказ')));
 }
 
 async function statisticsReportRows(token, from, to, campaigns) {
@@ -280,15 +337,18 @@ async function statisticsReportRows(token, from, to, campaigns) {
   const uuid = String(created.UUID || created.uuid || '');
   if (!uuid) throw new Error('Ozon Performance: отчёт по кампаниям не поставлен в очередь');
   const payload = await downloadReport(token, await pollReport(token, uuid, 'отчёт по кампаниям'));
-  const parsed = skuSpendFromReport(payload);
-  return parsed.length ? parsed : skuSpendFromProductReport(payload);
+  return spendFromPayload(payload);
 }
 
-async function campaignStatisticsRows(token, from, to, types) {
+function reportListRejected(error) {
+  return error?.status === 400 && /forbidden for the transferred list|invalidargument|empty campaigns/i.test(String(error?.message || ''));
+}
+
+async function campaignStatisticsRows(token, from, to, notes) {
   const groups = await campaignGroups(token);
   const rows = [];
-  for (const type of types) {
-    for (const batch of campaignBatches(groups[type] || [])) {
+  for (const ids of Object.values(groups.skuByPayment || {})) {
+    for (const batch of campaignBatches(ids)) {
       if (performanceCooldown.until > Date.now()) {
         const error = new Error(performanceCooldown.error || 'Ozon Performance временно недоступен');
         error.code = 'COOLDOWN';
@@ -296,7 +356,13 @@ async function campaignStatisticsRows(token, from, to, types) {
         error.userMessage = performanceCooldown.error;
         throw error;
       }
-      rows.push(...await statisticsReportRows(token, from, to, batch));
+      try {
+        rows.push(...await statisticsReportRows(token, from, to, batch));
+      } catch (error) {
+        if (error.code === 'DAILY_LIMIT' || error.code === 'COOLDOWN') throw error;
+        if (!reportListRejected(error)) throw error;
+        notes.push(String(error.message || error).slice(0, 240));
+      }
     }
   }
   return rows;
@@ -323,19 +389,27 @@ async function build(from, to) {
     error.userMessage = performanceCooldown.error;
     throw error;
   };
-  const useCampaignReport = async (label, types) => {
+  const useCampaignReport = async (label) => {
     ensureCooldown();
     const groups = await campaignGroups(token);
-    const wanted = types.filter(type => (groups[type] || []).length);
-    if (wanted.length) {
+    const notes = [];
+    if (Object.values(groups.skuByPayment || {}).some(ids => ids.length)) {
       source = label;
-      mergeSkuRows(bySku, await enqueue(() => campaignStatisticsRows(token, from, to, wanted)));
-      return;
+      mergeSkuRows(bySku, await enqueue(() => campaignStatisticsRows(token, from, to, notes)));
     }
-    if (types.includes('SKU') && bySku.size === 0) {
+    try {
+      ensureCooldown();
+      if (!source) source = 'all-sku-promo';
+      mergeSkuRows(bySku, await enqueue(() => allSkuPromoRows(token, from, to)));
+    } catch (error) {
+      if (error.code === 'DAILY_LIMIT' || error.code === 'COOLDOWN') throw error;
+      notes.push(String(error.message || error).slice(0, 240));
+    }
+    if (bySku.size === 0 && !groups.SKU.length && !groups.SEARCH_PROMO.length) {
       source = 'product-report-fallback';
       mergeSkuRows(bySku, await enqueue(() => productReportRows(token, from, to)));
     }
+    if (notes.length) fallbackError = notes.join(' | ').slice(0, 500);
   };
 
   if (directRangeAllowed(from, to)) {
@@ -347,10 +421,10 @@ async function build(from, to) {
       if (error.code === 'DAILY_LIMIT') throw error;
       if (performanceCooldown.until > Date.now()) throw error;
     }
-    if (bySku.size === 0) await useCampaignReport('campaign-report-fallback', ['SKU', 'SEARCH_PROMO']);
-    else await useCampaignReport('products-sku+search-promo', ['SEARCH_PROMO']);
+    if (bySku.size === 0) await useCampaignReport('campaign-report-fallback');
+    else await useCampaignReport('products-sku+all-sku-promo');
   } else {
-    await useCampaignReport('campaign-report', ['SKU', 'SEARCH_PROMO']);
+    await useCampaignReport('campaign-report');
   }
 
   const rows = [...bySku.values()];
@@ -361,6 +435,7 @@ async function build(from, to) {
     totalSpent: rows.reduce((sum, row) => sum + (Number(row.spent) || 0), 0),
     source,
     fallbackError,
+    error: rows.length || !fallbackError ? '' : fallbackError,
     updatedAt: Date.now()
   };
 }

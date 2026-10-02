@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { parseOzonMoney, skuSpendFromProductReport, skuSpendFromReport, skuSpendFromSkuStats } from '../src/ozon-performance.js';
+import { parseOzonMoney, skuSpendFromCsv, skuSpendFromProductReport, skuSpendFromReport, skuSpendFromSkuStats } from '../src/ozon-performance.js';
 
 const source=readFileSync(new URL('../src/ozon-performance.js',import.meta.url),'utf8');
 
@@ -29,6 +29,16 @@ test('direct Ozon SKU statistics aggregate real expense by SKU',()=>{
     {sku:'200',expense:'0',orders:'0'}
   ]});
   assert.deepEqual(rows,[{sku:'100',title:'',spent:150.75,orders:3}]);
+});
+
+test('Ozon pay-per-order CSV keeps spend on the numeric SKU',()=>{
+  const rows=skuSpendFromCsv([
+    '; Кампания, период',
+    'sku;Название товара;Расход, ₽, с НДС;Заказы',
+    '4161397839;Зёрна;1000,50;2',
+    'Всего;;;0'
+  ].join('\n'));
+  assert.deepEqual(rows,[{sku:'4161397839',title:'Зёрна',spent:1000.5,orders:2}]);
 });
 
 test('fallback Ozon product report keeps spend on SKU',()=>{
@@ -75,6 +85,9 @@ test('Ozon direct SKU endpoint is used first for today or yesterday and falls ba
   assert.match(source,/advObjectType/);
   assert.match(source,/SEARCH_PROMO/);
   assert.match(source,/\/api\/client\/statistics\/json/);
+  assert.match(source,/\/api\/client\/statistics\/all_sku_promo\/products\/generate/);
+  assert.match(source,/reportListRejected/);
+  assert.match(source,/skuByPayment/);
   assert.match(source,/campaignIds: batch/);
   assert.match(source,/statisticsReportRows\(token, from, to, batch\)/);
   assert.doesNotMatch(source,/campaignIds: ids\.slice/);
