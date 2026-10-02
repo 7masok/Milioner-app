@@ -37,8 +37,8 @@ function populateOzonOrderFeed(){
    if(!postingNumber)continue;
    for(let lineIdx=0;lineIdx<(posting.products||[]).length;lineIdx++){
     const product=posting.products[lineIdx];
-    const offerIdPreferred=String(product.offer_id||'').trim();
-    const sku=offerIdPreferred||String(product.sku||'').trim();
+    const offerId=String(product.offer_id||'').trim();
+    const sku=String(product.sku||'').trim()||offerId;
     const creationDate=Date.parse(posting.created_at||posting.in_process_at||'')||0;
     const deliveredDate=Date.parse(posting.delivered_date||'')||0;
     const entryId=postingNumber+'_'+sku+'_'+lineIdx;
@@ -55,6 +55,7 @@ function populateOzonOrderFeed(){
      code,
      entryId,
      sku,
+     offerId,
      productName,
      qty,
      unitPrice,
@@ -244,6 +245,16 @@ window.openOzonFinanceDetails=async()=>{await load();const model=financeModel(re
 window.setReportMarket=function(market){ozonReportActive=market==='Ozon';return baseSetReportMarket?.(market);};
 window.renderReports=function(){return baseRenderReports?.();};
 function ensureReportTab(){const tabs=document.getElementById('reportMarketTabs');if(tabs&&!tabs.querySelector('[data-report-market="Ozon"]'))tabs.insertAdjacentHTML('beforeend','<button class="market-tab" data-report-market="Ozon" onclick="setReportMarket(\'Ozon\')">Ozon</button>');}
+const baseAttachMarketplaceSku=attachMarketplaceSku;
+attachMarketplaceSku=function(p,market,sku,feedKey=''){
+ const saved=baseAttachMarketplaceSku(p,market,sku,feedKey);
+ if(saved===false||market!=='Ozon')return saved;
+ const bound=String(sku||'').trim();
+ const line=(state.ozonOrderFeed||[]).find(row=>String(row.sku||'').trim()===bound);
+ const offer=String(line?.offerId||'').trim();
+ if(offer&&offer!==bound)baseAttachMarketplaceSku(p,'Ozon',offer,'');
+ return saved;
+};
 ensureReportTab();
 ensureOzonHeaderIndicator();
 setInterval(()=>{if(document.getElementById('home')?.classList.contains('active')&&selectedOrderMarket==='Ozon')load(true);},60000);

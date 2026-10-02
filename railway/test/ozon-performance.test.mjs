@@ -76,6 +76,14 @@ test('Ozon direct SKU endpoint is used first for today or yesterday and falls ba
   assert.match(source,/dateTo: to/);
 });
 
+test('Ozon order and supply binding keeps the numeric SKU',()=>{
+  const orders=readFileSync(new URL('../../ozon-fbo-v1.js',import.meta.url),'utf8');
+  const supplies=readFileSync(new URL('../../ozon-supplies-v1.js',import.meta.url),'utf8');
+  assert.match(orders,/const sku=String\(product\.sku\|\|''\)\.trim\(\)\|\|offerId/);
+  assert.doesNotMatch(orders,/offerIdPreferred/);
+  assert.match(supplies,/preferred=String\(linkContext\.item\.sku\|\|''\)\.trim\(\)\|\|ids\[0\]/);
+});
+
 test('Ozon product-report fallback polls conservatively and logs the exact safe failure',()=>{
   assert.match(source,/await new Promise\(resolve => setTimeout\(resolve, 4000\)\)/);
   assert.match(source,/await new Promise\(resolve => setTimeout\(resolve, 7000\)\)/);

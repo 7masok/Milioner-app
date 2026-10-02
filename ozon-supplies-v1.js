@@ -83,7 +83,7 @@ window.filterOzonFboLinkPicker=q=>{const list=document.getElementById('ozonSuppl
 window.renderOzonFboLinkPicker=q=>renderLinkPicker(q);
 window.chooseOzonFboProduct=pid=>{
  pid=decodeURIComponent(pid);const p=prod(pid);if(!p||!linkContext)return;
- const ids=itemIdentifiers(linkContext.account,linkContext.item),preferred=String(linkContext.item.offer_id||ids[0]||linkContext.item.sku||'');
+ const ids=itemIdentifiers(linkContext.account,linkContext.item),preferred=String(linkContext.item.sku||'').trim()||ids[0]||'';
  attachMarketplaceSku(p,'Ozon',preferred,'');
  for(const alias of ids)if(alias&&alias!==preferred)attachMarketplaceSku(p,'Ozon',alias,'');
  try{save();}catch(_){}renderOrder();
