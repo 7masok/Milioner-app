@@ -23,6 +23,17 @@ test('migration stores protection, group snapshots, history and WB stock cache',
   for(const token of ['wb_price_protection','wb_card_group_snapshots','wb_control_history','wb_stock_snapshots',"'protection'"])assert.match(sql,new RegExp(token));
 });
 
+test('night restore guard keeps the original base price and retries failed restoration',()=>{
+  const sql=read('../migrations/137_wb_night_restore_guard.sql');
+  assert.match(sql,/CREATE OR REPLACE FUNCTION guard_wb_night_schedule_restore/);
+  assert.match(sql,/IF NEW\.phase = 'error'/);
+  assert.match(sql,/NEW\.phase := 'restoring'/);
+  assert.match(sql,/OLD\.phase IN \('restoring','error'\)/);
+  assert.match(sql,/NEW\.phase = 'raising'/);
+  assert.match(sql,/NEW\.base_price := OLD\.base_price/);
+  assert.match(sql,/WHERE base_price IS NOT NULL[\s\S]*AND phase='error'/);
+});
+
 test('manual and automatic price protection guard all price automation paths',()=>{
   const prices=read('../src/prices.js');
   const protection=read('../src/wb-price-protection.js');
