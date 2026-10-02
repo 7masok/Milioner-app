@@ -85,7 +85,9 @@ test('Ozon direct SKU endpoint is used first for today or yesterday and falls ba
   assert.match(source,/advObjectType/);
   assert.match(source,/SEARCH_PROMO/);
   assert.match(source,/\/api\/client\/statistics\/json/);
-  assert.match(source,/\/api\/client\/statistics\/all_sku_promo\/products\/generate/);
+  assert.match(source,/all_sku_promo\/' \+ kind \+ '\/generate/);
+  assert.match(source,/promoReportRows\(token, from, to, 'products'\)/);
+  assert.match(source,/promoReportRows\(token, from, to, 'orders'\)/);
   assert.match(source,/reportListRejected/);
   assert.match(source,/skuByPayment/);
   assert.match(source,/campaignIds: batch/);

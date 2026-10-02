@@ -57,7 +57,7 @@ function reportCandidateRows(payload) {
     seen.add(value);
     if (Array.isArray(value)) {
       for (const item of value) {
-        if (item && typeof item === 'object' && ('sku' in item || 'productSku' in item || 'product_sku' in item)) rows.push(item);
+        if (item && typeof item === 'object' && ('sku' in item || 'SKU' in item || 'productSku' in item || 'product_sku' in item)) rows.push(item);
         else walk(item);
       }
       return;
@@ -75,7 +75,7 @@ export function skuSpendFromCsv(text) {
   const delimiter = lines[headerAt].includes(';') ? ';' : ',';
   const header = lines[headerAt].split(delimiter).map(cell => cell.trim().toLowerCase());
   const skuIndex = header.findIndex(cell => cell === 'sku' || cell.startsWith('sku'));
-  const spentIndex = header.findIndex(cell => /расход|moneyspent|expense|затрат/.test(cell));
+  const spentIndex = header.findIndex(cell => /расход|списан|moneyspent|expense|затрат/.test(cell) && !/выруч|продаж|стоим/.test(cell));
   const ordersIndex = header.findIndex(cell => cell === 'orders' || cell === 'заказы' || cell.startsWith('заказы'));
   const titleIndex = header.findIndex(cell => /название|title|^name$/.test(cell));
   if (skuIndex < 0 || spentIndex < 0) return [];
@@ -108,7 +108,11 @@ export function skuSpendFromProductReport(payload) {
       row?.cpcExpense,
       row?.cpc_expense,
       row?.expenseCpc,
-      row?.searchPromoExpense
+      row?.searchPromoExpense,
+      row?.cpoExpense,
+      row?.cpo_expense,
+      row?.promotionExpense,
+      row?.['Расход']
     ];
     let spent = 0;
     for (const value of candidates) {
@@ -316,15 +320,40 @@ async function productReportRows(token, from, to) {
   return spendFromPayload(await downloadReport(token, await pollReport(token, uuid, 'товарный отчёт')));
 }
 
-async function allSkuPromoRows(token, from, to) {
+function payloadHint(payload) {
+  if (typeof payload?.csv === 'string') {
+    const header = payload.csv.split(/\r?\n/).map(line => line.trim()).find(line => /sku/i.test(line));
+    return header ? header.slice(0, 180) : 'csv-without-sku';
+  }
+  if (!payload || typeof payload !== 'object') return '';
+  return Object.keys(payload).slice(0, 8).join(',');
+}
+
+async function promoReportRows(token, from, to, kind) {
   const range = moscowRange(from, to);
   const query = new URLSearchParams();
   query.set('timeBounds.from', range.from);
   query.set('timeBounds.to', range.to);
-  const created = await api(token, '/api/client/statistics/all_sku_promo/products/generate?' + query.toString());
+  const label = kind === 'orders' ? 'отчёт заказов оплаты за заказ' : 'отчёт оплаты за заказ';
+  const created = await api(token, '/api/client/statistics/all_sku_promo/' + kind + '/generate?' + query.toString());
   const uuid = String(created.UUID || created.uuid || '');
-  if (!uuid) throw new Error('Ozon Performance: отчёт оплаты за заказ не поставлен в очередь');
-  return spendFromPayload(await downloadReport(token, await pollReport(token, uuid, 'отчёт оплаты за заказ')));
+  if (!uuid) throw new Error('Ozon Performance: ' + label + ' не поставлен в очередь');
+  const payload = await downloadReport(token, await pollReport(token, uuid, label));
+  return { rows: spendFromPayload(payload), hint: payloadHint(payload) };
+}
+
+async function allSkuPromoRows(token, from, to, notes) {
+  let products = { rows: [], hint: '' };
+  try {
+    products = await promoReportRows(token, from, to, 'products');
+    if (products.rows.length) return products.rows;
+  } catch (error) {
+    if (error.code === 'DAILY_LIMIT' || error.code === 'COOLDOWN') throw error;
+    notes.push(String(error.message || error).slice(0, 180));
+  }
+  const orders = await promoReportRows(token, from, to, 'orders');
+  if (!orders.rows.length) notes.push('оплата за заказ без SKU: ' + [products.hint, orders.hint].filter(Boolean).join(' | ').slice(0, 220));
+  return orders.rows;
 }
 
 async function statisticsReportRows(token, from, to, campaigns) {
@@ -400,7 +429,7 @@ async function build(from, to) {
     try {
       ensureCooldown();
       if (!source) source = 'all-sku-promo';
-      mergeSkuRows(bySku, await enqueue(() => allSkuPromoRows(token, from, to)));
+      mergeSkuRows(bySku, await enqueue(() => allSkuPromoRows(token, from, to, notes)));
     } catch (error) {
       if (error.code === 'DAILY_LIMIT' || error.code === 'COOLDOWN') throw error;
       notes.push(String(error.message || error).slice(0, 240));
