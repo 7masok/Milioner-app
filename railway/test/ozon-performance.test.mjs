@@ -62,14 +62,24 @@ test('Ozon Performance quota protection stops daily-limit retry storms for histo
   assert.match(source,/source: 'error'/);
 });
 
-test('Ozon direct SKU endpoint is used first for today or yesterday and does not require campaign IDs',()=>{
+test('Ozon direct SKU endpoint is used first for today or yesterday and falls back once to the product report',()=>{
   assert.match(source,/function directRangeAllowed\(from, to\)/);
   assert.match(source,/if \(from !== to\) return false/);
   assert.match(source,/return from === today \|\| from === yesterday/);
   assert.match(source,/if \(directRangeAllowed\(from, to\)\) \{/);
   assert.match(source,/source = 'products-sku'/);
-  assert.match(source,/await directSkuRows\(token, from, to\)/);
+  assert.match(source,/mergeSkuRows\(bySku, await directSkuRows\(token, from, to\)\)/);
+  assert.match(source,/source = 'product-report-fallback'/);
+  assert.match(source,/mergeSkuRows\(bySku, await enqueue\(\(\) => productReportRows\(token, from, to\)\)\)/);
   assert.doesNotMatch(source,/campaignIds: ids\.slice/);
   assert.match(source,/dateFrom: from/);
   assert.match(source,/dateTo: to/);
+});
+
+test('Ozon product-report fallback polls conservatively and logs the exact safe failure',()=>{
+  assert.match(source,/await new Promise\(resolve => setTimeout\(resolve, 4000\)\)/);
+  assert.match(source,/await new Promise\(resolve => setTimeout\(resolve, 7000\)\)/);
+  assert.match(source,/error\.code = 'REPORT_FAILED'/);
+  assert.match(source,/error\.code = 'REPORT_TIMEOUT'/);
+  assert.match(source,/console\.warn\('\[ozon-performance\]'/);
 });
