@@ -9,10 +9,10 @@ const server = readFileSync(new URL('../src/server.js', import.meta.url), 'utf8'
 const passport = readFileSync(new URL('../../docs/SITE-PASSPORT.md', import.meta.url), 'utf8');
 
 test('business dashboard keeps day and week and all agreed profit layers', () => {
-  for (const word of ['Сегодня','Неделя','Заказы','Выкупы','Прибыль заказов','Прибыль выкупов']) assert.match(ui, new RegExp(word));
+  for (const word of ['Сегодня','Неделя','Месяц','Заказы','Выкупы','Прибыль заказов','Прибыль выкупов']) assert.match(ui, new RegExp(word));
   assert.doesNotMatch(ui, /Чистая прибыль/);
-  for (const word of ['Месяц','Год']) assert.equal(ui.includes(word),false);
-  assert.match(ui, /BUSINESS_PERIODS=new Set\(\['day','week'\]\)/);
+  assert.equal(ui.includes('Год'),false);
+  assert.match(ui, /BUSINESS_PERIODS=new Set\(\['day','week','month'\]\)/);
   assert.match(ui, /BUSINESS_METRICS=new Set\(\['orders','buyouts','orderProfit','buyoutProfit'\]\)/);
   assert.match(ui, /BUSINESS_SUPPORTED_MARKETS=new Set\(\['Kaspi','WB','WB2','Ozon'\]\)/);
   assert.match(ui, /allMarketUnitProfit30/);
@@ -89,7 +89,7 @@ test('money formatting removes negative zero and unknown WB fields render as das
 
 test('business dashboard assets are cache-busted and served', () => {
   assert.match(html, /kaspi-report-v2\.js\?v=20260928-wb-missing-data/);
-  assert.match(html, /business-dashboard-v1\.js\?v=20261003-business-week/);
+  assert.match(html, /business-dashboard-v1\.js\?v=20261003-business-month/);
   assert.match(html, /ozon-fbo-v1\.js\?v=20261002-ozon-sku-link/);
   assert.match(server, /'business-dashboard-v1\.js'/);
 });
@@ -129,7 +129,18 @@ test('week chart compares the calendar week with the previous week through the s
   assert.match(ui, /businessBuildDaySnapshot\(businessDayBounds\(0\),1,force\)/);
   assert.match(passport, /Переключатель «Неделя»/);
   assert.match(report, /explicitRangeBounds\(range\)/);
-  assert.doesNotMatch(ui, /Месяц/);
+  assert.doesNotMatch(ui, /Год/);
+});
+
+test('month chart compares the calendar month with the previous month through the same day and time', () => {
+  assert.match(ui, /function businessMonthBounds\(which=0\)/);
+  assert.match(ui, /new Date\(today\.getFullYear\(\),today\.getMonth\(\)\+Number\(which\|\|0\),1\)/);
+  assert.match(ui, /function businessMonthSamePoint\(fullMonth\)/);
+  assert.match(ui, /setBusinessDashboardPeriod\('month'\)/);
+  assert.match(ui, /прошлый до /);
+  assert.match(ui, /весь месяц/);
+  assert.match(ui, /businessBuildMonthSnapshot/);
+  assert.match(passport, /Переключатель «Месяц»/);
   assert.doesNotMatch(ui, /Год/);
 });
 
