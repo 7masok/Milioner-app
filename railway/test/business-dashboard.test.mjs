@@ -88,7 +88,7 @@ test('money formatting removes negative zero and unknown WB fields render as das
 });
 
 test('business dashboard assets are cache-busted and served', () => {
-  assert.match(html, /kaspi-report-v2\.js\?v=20261003-audit-sheet-period/);
+  assert.match(html, /kaspi-report-v2\.js\?v=20261003-report-ads-panel/);
   assert.match(html, /business-dashboard-v1\.js\?v=20261003-business-month/);
   assert.match(html, /ozon-fbo-v1\.js\?v=20261002-ozon-sku-link/);
   assert.match(server, /'business-dashboard-v1\.js'/);
@@ -159,5 +159,5 @@ test('report market selection is local UI state and does not restore stale WB2 f
   assert.match(report, /localStorage\.setItem\(REPORT_MARKET_UI_KEY,market\)/);
   assert.doesNotMatch(report, /reportMarket=\['all','Kaspi','WB','WB2'\]\.includes\(state\.settings\.reportMarket\)/);
   assert.doesNotMatch(report, /state\.settings\.reportMarket=market;try\{save\(\)\}/);
-  assert.match(html, /kaspi-report-v2\.js\?v=20261003-audit-sheet-period/);
+  assert.match(html, /kaspi-report-v2\.js\?v=20261003-report-ads-panel/);
 });

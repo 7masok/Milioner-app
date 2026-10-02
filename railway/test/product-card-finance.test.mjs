@@ -75,7 +75,10 @@ test('Kaspi advertising uses deterministic links and exposes repair audit',()=>{
   assert.match(html,/function openKaspiAdAssign\(/);
   assert.match(html,/function confirmKaspiAdAssign\(/);
   assert.match(report,/Есть реклама Kaspi без товара/);
-  assert.match(report,/:'<div class="link-note">'\)\+'<button type="button" class="btn" onclick="openReportAdsLinkAudit\(\)">Разобрать<\/button>/);
+  assert.match(report,/openReportAdsPanel\('Kaspi'\)/);
+  assert.match(report,/onclick="openReportAdsLinkAudit\(\)">Разобрать<\/button>/);
+  assert.doesNotMatch(report,/kaspiSheetNote/);
+  assert.match(html,/onclick="openReportAdsPanel\(\)"/);
   assert.match(report,/window\.openStoreDetail=async function\(market,days\)\{days=days===undefined\|\|days===null\?reportPeriod:Number\(days\);if\(!\['Kaspi','WB','WB2','Ozon'\]\.includes\(market\)\)return;marketplaceReportContext=\{market,days\}/);
   assert.match(kaspiAds,/window\.kaspiAdsAssignManual = function/);
   assert.match(html,/p\.kaspiAdTitles/);
