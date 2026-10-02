@@ -6,12 +6,13 @@ const ui = readFileSync(new URL('../../business-dashboard-v1.js', import.meta.ur
 const report = readFileSync(new URL('../../kaspi-report-v2.js', import.meta.url), 'utf8');
 const html = readFileSync(new URL('../../index.html', import.meta.url), 'utf8');
 const server = readFileSync(new URL('../src/server.js', import.meta.url), 'utf8');
+const passport = readFileSync(new URL('../../docs/SITE-PASSPORT.md', import.meta.url), 'utf8');
 
-test('business dashboard is day-only and keeps all agreed profit layers', () => {
-  for (const word of ['Сегодня','Заказы','Выкупы','Прибыль заказов','Прибыль выкупов']) assert.match(ui, new RegExp(word));
+test('business dashboard keeps day and week and all agreed profit layers', () => {
+  for (const word of ['Сегодня','Неделя','Заказы','Выкупы','Прибыль заказов','Прибыль выкупов']) assert.match(ui, new RegExp(word));
   assert.doesNotMatch(ui, /Чистая прибыль/);
-  for (const word of ['Неделя','Месяц','Год']) assert.equal(ui.includes(word),false);
-  assert.match(ui, /BUSINESS_PERIODS=new Set\(\['day'\]\)/);
+  for (const word of ['Месяц','Год']) assert.equal(ui.includes(word),false);
+  assert.match(ui, /BUSINESS_PERIODS=new Set\(\['day','week'\]\)/);
   assert.match(ui, /BUSINESS_METRICS=new Set\(\['orders','buyouts','orderProfit','buyoutProfit'\]\)/);
   assert.match(ui, /BUSINESS_SUPPORTED_MARKETS=new Set\(\['Kaspi','WB','WB2','Ozon'\]\)/);
   assert.match(ui, /allMarketUnitProfit30/);
@@ -25,7 +26,7 @@ test('business dashboard includes Ozon orders, delivered buyouts and finance tot
   assert.ok(ui.includes("String(line?.status||'').toLowerCase()!=='delivered'"));
   assert.match(ui, /businessSummaryPart\(summary,\['Ozon'\]\)/);
   assert.match(ui, /ozonFboRefreshStatus/);
-  assert.match(report, /loadOzonSummary\(n\)/);
+  assert.match(report, /loadOzonSummary\(n,\{range:span\}\)/);
   assert.match(report, /Ozon:ozonStats/);
 });
 
@@ -88,7 +89,7 @@ test('money formatting removes negative zero and unknown WB fields render as das
 
 test('business dashboard assets are cache-busted and served', () => {
   assert.match(html, /kaspi-report-v2\.js\?v=20260928-wb-missing-data/);
-  assert.match(html, /business-dashboard-v1\.js\?v=20260928-business-ozon/);
+  assert.match(html, /business-dashboard-v1\.js\?v=20261003-business-week/);
   assert.match(html, /ozon-fbo-v1\.js\?v=20261002-ozon-sku-link/);
   assert.match(server, /'business-dashboard-v1\.js'/);
 });
@@ -115,6 +116,22 @@ test('known marketplace values remain visible when another marketplace is unknow
   assert.match(report, /profit=financeAvailable&&model\?\.profit!==null&&model\?\.profit!==undefined\?Number\(model\.profit\):null/);
 });
 
+
+test('week chart compares the calendar week with the previous week through the same moment', () => {
+  assert.match(ui, /function businessWeekBounds\(which=0\)/);
+  assert.match(ui, /\(today\.getDay\(\)\+6\)%7/);
+  assert.match(ui, /BUSINESS_WEEKDAYS=\['Пн','Вт','Ср','Чт','Пт','Сб','Вс'\]/);
+  assert.match(ui, /function businessWeekSamePoint\(fullWeek\)/);
+  assert.match(ui, /setBusinessDashboardPeriod\('week'\)/);
+  assert.match(ui, /прошлая до /);
+  assert.match(ui, /вся неделя/);
+  assert.match(ui, /businessApplyRangeBuyouts/);
+  assert.match(ui, /businessBuildDaySnapshot\(businessDayBounds\(0\),1,force\)/);
+  assert.match(passport, /Переключатель «Неделя»/);
+  assert.match(report, /explicitRangeBounds\(range\)/);
+  assert.doesNotMatch(ui, /Месяц/);
+  assert.doesNotMatch(ui, /Год/);
+});
 
 test('legacy net profit selection migrates to buyout profit and four buttons stay 2x2', () => {
   assert.match(ui, /saved\.metric==='netProfit'\)businessMetric='buyoutProfit'/);

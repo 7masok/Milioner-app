@@ -73,18 +73,18 @@ function businessWbLiveStats(model,live,market,days){
 }
 function resolvedWbReportStats(model,live,market,days){const products=Array.isArray(model?.products)?model.products:[],qty=products.reduce((sum,x)=>sum+Math.max(0,Number(x?.saleQty??x?.qty)||0),0),financeAvailable=Boolean(model?.financeAvailable),finance={qty,revenue:Number(model?.revenue)||0,cost:financeAvailable?Number(model?.cost)||0:null,fees:financeAvailable?Number(model?.expenses)||0:null,ads:Number(model?.ads)||0,profit:financeAvailable&&model?.profit!==null&&model?.profit!==undefined?Number(model.profit):null,complete:financeAvailable&&Boolean(model?.complete),financeAvailable,estimated:!financeAvailable||!Boolean(model?.complete),live:false,useLive:false},liveRevenue=Math.max(0,Number(live?.buyoutSum)||0),liveQty=Math.max(0,Number(live?.buyoutCount)||0),liveReady=Boolean(live)&&(liveRevenue>0||liveQty>0||(Array.isArray(live?.products)&&live.products.some(x=>Math.max(0,Number(x?.qty)||0)>0))),useLive=liveReady&&(!(finance.revenue>0)||!finance.financeAvailable||liveRevenue>finance.revenue+1);if(useLive&&typeof businessWbLiveStats==='function')return {...businessWbLiveStats(model,live,market,days),useLive:true};return finance}
 const businessMarketplaceSummaryCache=new Map();
-window.loadBusinessMarketplaceSummary=async function(days=30,{force=false}={}){
- const raw=Math.round(Number(days)||30),n=raw===-1?-1:Math.max(1,Math.min(3650,raw)),key=String(n),cached=businessMarketplaceSummaryCache.get(key);
+window.loadBusinessMarketplaceSummary=async function(days=30,{force=false,range=null}={}){
+ const explicit=explicitRangeBounds(range),raw=Math.round(Number(days)||30),n=explicit?0:(raw===-1?-1:Math.max(1,Math.min(3650,raw))),key=explicit?'range:'+range.from+':'+range.to:String(n),cached=businessMarketplaceSummaryCache.get(key);
  if(!force&&cached?.data&&Date.now()-Number(cached.at||0)<60000)return cached.data;
  if(!force&&cached?.promise)return cached.promise;
  const promise=(async()=>{
-  const useLive=[-1,1].includes(n)&&typeof ensureWbLiveOverview==='function',
+  const span=explicit?range:null,useLive=!explicit&&[-1,1].includes(n)&&typeof ensureWbLiveOverview==='function',
     [kaspiSnapshot,wb1,wb2,ozon,wb1Live,wb2Live]=await Promise.all([
-      loadKaspiOrders(n,{force}),loadWbModel('WB',n),loadWbModel('WB2',n),loadOzonSummary(n),
+      loadKaspiOrders(n,{force,range:span}),loadWbModel('WB',n,{range:span}),loadWbModel('WB2',n,{range:span}),loadOzonSummary(n,{range:span}),
       useLive?ensureWbLiveOverview('WB',n):Promise.resolve(null),
       useLive?ensureWbLiveOverview('WB2',n):Promise.resolve(null)
     ]),
-    kaspi=buildModel(kaspiSnapshot,n),kaspiView=reportProfitView(kaspi),
+    kaspi=buildModel(kaspiSnapshot,n,span),kaspiView=reportProfitView(kaspi),
     wbStats=(model,live,market)=>{const finance=businessWbFinanceStats(model),liveRevenue=Math.max(0,Number(live?.buyoutSum)||0),liveQty=Math.max(0,Number(live?.buyoutCount)||0),liveReady=live&&(liveRevenue>0||liveQty>0);if(liveReady&&(!(Number(finance.revenue)>0)||!finance.financeAvailable||liveRevenue>Number(finance.revenue)+1))return businessWbLiveStats(model,live,market,n);return finance},
     kaspiStats={qty:Math.max(0,Number(kaspi.qty)||0),revenue:Number(kaspi.revenue)||0,cost:Number(kaspi.cost)||0,fees:Number(kaspi.fees)||0,ads:Number(kaspi.ads)||0,profit:Number(kaspiView.value)||0,complete:!(Number(kaspi.unknownRevenue)>0),financeAvailable:true,estimated:Boolean(kaspiView.estimated),live:false},
     wb1Stats=wbStats(wb1,wb1Live,'WB'),wb2Stats=wbStats(wb2,wb2Live,'WB2'),
