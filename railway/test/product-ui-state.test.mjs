@@ -4,6 +4,7 @@ import {readFileSync} from 'node:fs';
 
 const html=readFileSync(new URL('../../index.html',import.meta.url),'utf8');
 const cloud=readFileSync(new URL('../../cloud-sync-v3.js',import.meta.url),'utf8');
+const report=readFileSync(new URL('../../kaspi-report-v2.js',import.meta.url),'utf8');
 
 test('Products reload preserves search page and the approved ranking filter while legacy controls stay reset',()=>{
   assert.match(html,/const PRODUCT_UI_KEY=KEY\+'_product_ui_v1'/);
@@ -93,11 +94,14 @@ test('Product details show progress before waiting on combined finance',()=>{
 
 test('Advertising page exposes a six-month link audit for Kaspi, WB1 and WB2',()=>{
   assert.match(html,/onclick="openAdsLinkAudit\(\)">Аудит привязки<\/button>/);
-  assert.match(html,/async function openAdsLinkAudit\(\)/);
+  assert.match(html,/async function openAdsLinkAudit\(period\)/);
   assert.match(html,/window\.kaspiAdsRepairLinksStrict/);
-  assert.match(html,/window\.kaspiAdsLinkAudit\('?[0-9]*'?\)/);
+  assert.match(html,/kaspiAdsLinkAudit\(Number\(spec\.days\)===0\?0:spec\.days,range\)/);
+  assert.match(html,/function openReportAdsLinkAudit\(\)/);
+  assert.match(report,/openReportAdsLinkAudit\(\)/);
   assert.match(html,/\/api\/wb-ad-link-audit\?market=/);
-  assert.match(html,/Проверяю Kaspi, WB1 и WB2 за 6 месяцев/);
+  assert.match(html,/Проверяю Kaspi, WB1 и WB2 за /);
+  assert.match(html,/'6 месяцев'/);
   assert.match(html,/Суммы кампаний по нескольким разным товарам не делятся наугад/);
   assert.match(html,/function setAdsAuditMarket\(market\)/);
   assert.match(html,/chip\('Kaspi','Kaspi'\)/);

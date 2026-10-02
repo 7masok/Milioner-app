@@ -97,6 +97,8 @@ test('WB advertising recovers deterministic links but keeps true multi-product s
   assert.match(source, /reason = 'multiple_products'/);
   assert.match(source, /Одна рекламная сумма относится к нескольким разным товарам/);
   assert.match(source, /reportsRouter\.get\('\/wb-ad-link-audit'/);
+  assert.match(source, /requested === -1/);
+  assert.match(source, /requestPeriodBounds\(req\)/);
   assert.match(source, /autoRecoveredAdvertising/);
   assert.match(source, /unmatchedAdvertising: attribution\.unmatched/);
   assert.match(source, /wbExpenses/);

@@ -371,8 +371,20 @@ reportsRouter.get('/wb-finance-products', asyncRoute(async (req, res) => {
 reportsRouter.get('/wb-ad-link-audit', asyncRoute(async (req, res) => {
   const selected = market(req.query.market);
   if (!['WB', 'WB2'].includes(selected)) return res.status(400).json({ ok: false, error: 'market must be WB or WB2' });
-  const days = Math.max(1, Math.min(365, Number(req.query.days || 180) || 180));
-  const { since, until } = periodBounds(days), daysList = [];
+  const raw = req.query.days;
+  const requested = raw === undefined || raw === '' ? 180 : Number(raw);
+  let since, until, days;
+  if (requested === 0) {
+    ({ since, until } = requestPeriodBounds(req));
+    days = 0;
+  } else if (requested === -1) {
+    ({ since, until } = periodBounds(-1));
+    days = -1;
+  } else {
+    days = Math.max(1, Math.min(365, Number.isFinite(requested) ? requested : 180));
+    ({ since, until } = periodBounds(days));
+  }
+  const daysList = [];
   for (let time = since; time < until; time += 86_400_000) daysList.push(dateKey(time));
   const adResult = daysList.length
     ? await pool.query('SELECT day,advert_id AS "advertId",campaign,payment_type AS "paymentType",amount,nm_ids AS "nmIds" FROM wb_ad_costs WHERE market=$1 AND day=ANY($2::text[]) ORDER BY day DESC,advert_id', [selected, daysList])
