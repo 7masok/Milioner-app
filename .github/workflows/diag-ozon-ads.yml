@@ -1,0 +1,21 @@
+name: Diagnose live Ozon ads
+
+on:
+  push:
+    branches:
+      - diag/ozon-ads-live
+
+permissions:
+  contents: read
+
+jobs:
+  curl:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Call live endpoint
+        run: |
+          set -x
+          curl -i -sS --max-time 30 \
+            -H 'Origin: https://milioner-app-staging.up.railway.app' \
+            -H 'Referer: https://milioner-app-staging.up.railway.app/' \
+            'https://milioner-app-staging.up.railway.app/api/ozon-ads?from=2026-10-02&to=2026-10-02'
