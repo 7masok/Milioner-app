@@ -99,6 +99,11 @@ test('Advertising page exposes a six-month link audit for Kaspi, WB1 and WB2',()
   assert.match(html,/\/api\/wb-ad-link-audit\?market=/);
   assert.match(html,/Проверяю Kaspi, WB1 и WB2 за 6 месяцев/);
   assert.match(html,/Суммы кампаний по нескольким разным товарам не делятся наугад/);
+  assert.match(html,/function setAdsAuditMarket\(market\)/);
+  assert.match(html,/chip\('Kaspi','Kaspi'\)/);
+  assert.match(html,/chip\('WB1','WB 1'\)/);
+  assert.match(html,/chip\('WB2','WB 2'\)/);
+  assert.match(html,/market==='all'\|\|x\.market===market/);
 });
 
 test('Products keep search FBO filter and one ranking button without old dropdown controls',()=>{
