@@ -75,6 +75,7 @@ test('Kaspi advertising uses deterministic links and exposes repair audit',()=>{
   assert.match(html,/function openKaspiAdAssign\(/);
   assert.match(html,/function confirmKaspiAdAssign\(/);
   assert.match(report,/Есть реклама Kaspi без товара/);
+  assert.match(report,/:'<div class="link-note">'\)\+'<button type="button" class="btn" onclick="openReportAdsLinkAudit\(\)">Разобрать<\/button>/);
   assert.match(kaspiAds,/window\.kaspiAdsAssignManual = function/);
   assert.match(html,/p\.kaspiAdTitles/);
   assert.doesNotMatch(html,/key\.includes\(identity\)\|\|identity\.includes\(key\)/);
