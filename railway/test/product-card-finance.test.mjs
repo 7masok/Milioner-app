@@ -72,6 +72,11 @@ test('Kaspi advertising uses deterministic links and exposes repair audit',()=>{
   assert.match(html,/'см','cm'/);
   assert.match(html,/function kaspiOrderTitleProducts\(\)/);
   assert.match(html,/kaspiOrderTitleProducts\(\)\.get\(nn\)/);
+  assert.match(html,/function openKaspiAdAssign\(/);
+  assert.match(html,/function confirmKaspiAdAssign\(/);
+  assert.match(report,/Есть реклама Kaspi без товара/);
+  assert.match(kaspiAds,/window\.kaspiAdsAssignManual = function/);
+  assert.match(html,/p\.kaspiAdTitles/);
   assert.doesNotMatch(html,/key\.includes\(identity\)\|\|identity\.includes\(key\)/);
   assert.doesNotMatch(html,/nn\.includes\(x\.key\)\|\|x\.key\.includes\(nn\)/);
   assert.match(kaspiAds,/window\.kaspiAdsRepairLinksStrict = function \(\)/);

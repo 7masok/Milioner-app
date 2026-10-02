@@ -306,6 +306,28 @@
     return { repairedRows, clearedRows, repairedAmount };
   };
 
+  window.kaspiAdsAssignManual = function (sku, name, productId) {
+    const product = typeof prod === 'function' ? prod(productId) : null;
+    if (!product) return { ok: false, error: 'Товар не найден' };
+    const code = String(sku || '').trim();
+    const nameKey = typeof kaspiAdsNameKey === 'function' ? kaspiAdsNameKey(name || '') : '';
+    if (!code && !nameKey) return { ok: false, error: 'В строке нет артикула и названия' };
+    if (code) {
+      const owner = (state.products || []).find(item => String(item.id) !== String(product.id) && [item.kaspi, ...(Array.isArray(item.kaspiAliases) ? item.kaspiAliases : [])].some(value => adsSkuEqual(value, code)));
+      if (owner) return { ok: false, error: 'Этот артикул уже указан у товара ' + (owner.name || '') };
+      const aliases = Array.isArray(product.kaspiAliases) ? product.kaspiAliases : [];
+      if (!aliases.some(value => adsSkuEqual(value, code)) && !adsSkuEqual(product.kaspi, code)) product.kaspiAliases = [...aliases, code];
+    } else {
+      const owner = (state.products || []).find(item => String(item.id) !== String(product.id) && Array.isArray(item.kaspiAdTitles) && item.kaspiAdTitles.includes(nameKey));
+      if (owner) return { ok: false, error: 'Это название уже указано у товара ' + (owner.name || '') };
+      const titles = Array.isArray(product.kaspiAdTitles) ? product.kaspiAdTitles : [];
+      if (!titles.includes(nameKey)) product.kaspiAdTitles = [...titles, nameKey];
+    }
+    const repaired = window.kaspiAdsRepairLinksStrict();
+    if (typeof save === 'function') save();
+    return { ok: true, ...repaired };
+  };
+
   window.kaspiAdsLinkAudit = function (days = 'all', range = null) {
     const effective = effectiveRows(days, '', range), rows = [];
     let total = 0, linked = 0, unmatched = 0;
