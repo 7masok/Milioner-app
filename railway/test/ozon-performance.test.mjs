@@ -53,19 +53,23 @@ test('Ozon advertising requests the exact selected calendar range and product-le
 });
 
 
-test('Ozon Performance quota protection stops daily-limit retry storms',()=>{
+test('Ozon Performance quota protection stops daily-limit retry storms for historical reports',()=>{
   assert.match(source,/error\.code = 'DAILY_LIMIT'/);
   assert.match(source,/error\.retryAt = nextMoscowReset\(\)/);
   assert.match(source,/if \(error\.code === 'DAILY_LIMIT'\) throw error/);
-  assert.match(source,/if \(error\?\.code === 'DAILY_LIMIT'\) throw error/);
-  assert.match(source,/if \(!directRangeAllowed\(from, to\)\) throw error/);
   assert.match(source,/performanceCooldown = \{ until: retryAt, error: message \}/);
   assert.match(source,/hit\?\.error && Number\(hit\.retryAt\) > Date\.now\(\)/);
   assert.match(source,/source: 'error'/);
 });
 
-test('Ozon direct SKU endpoint is only a fallback for today or yesterday',()=>{
+test('Ozon direct SKU endpoint is used first for today or yesterday and does not require campaign IDs',()=>{
   assert.match(source,/function directRangeAllowed\(from, to\)/);
   assert.match(source,/if \(from !== to\) return false/);
   assert.match(source,/return from === today \|\| from === yesterday/);
+  assert.match(source,/if \(directRangeAllowed\(from, to\)\) \{/);
+  assert.match(source,/source = 'products-sku'/);
+  assert.match(source,/await directSkuRows\(token, from, to\)/);
+  assert.doesNotMatch(source,/campaignIds: ids\.slice/);
+  assert.match(source,/dateFrom: from/);
+  assert.match(source,/dateTo: to/);
 });
