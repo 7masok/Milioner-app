@@ -212,14 +212,23 @@ async function productReportRows(token, from, to) {
   if (!uuid) throw new Error('Ozon Performance: товарный отчёт не поставлен в очередь');
   const started = Date.now();
   let link = '';
-  while (Date.now() - started < 90_000) {
+  await new Promise(resolve => setTimeout(resolve, 4000));
+  while (Date.now() - started < 100_000) {
     const status = await api(token, '/api/client/statistics/' + encodeURIComponent(uuid));
     const state = String(status.state || '');
     if (state === 'OK' && status.link) { link = String(status.link); break; }
-    if (state === 'ERROR' || state === 'FAILED') throw new Error('Ozon Performance: товарный отчёт не собрался');
-    await new Promise(resolve => setTimeout(resolve, 2000));
+    if (state === 'ERROR' || state === 'FAILED') {
+      const error = new Error('Ozon Performance: товарный отчёт не собрался' + (status.error ? ' · ' + String(status.error).slice(0,180) : ''));
+      error.code = 'REPORT_FAILED';
+      throw error;
+    }
+    await new Promise(resolve => setTimeout(resolve, 7000));
   }
-  if (!link) throw new Error('Ozon Performance: товарный отчёт не готов');
+  if (!link) {
+    const error = new Error('Ozon Performance: товарный отчёт не готов');
+    error.code = 'REPORT_TIMEOUT';
+    throw error;
+  }
   const path = link.startsWith('http') ? link.slice(HOST.length) : link;
   return skuSpendFromProductReport(await api(token, path.startsWith('/') ? path : '/' + path));
 }
@@ -240,8 +249,14 @@ async function build(from, to) {
 
   if (directRangeAllowed(from, to)) {
     source = 'products-sku';
-    const rows = await directSkuRows(token, from, to);
-    mergeSkuRows(bySku, rows);
+    try {
+      mergeSkuRows(bySku, await directSkuRows(token, from, to));
+    } catch (error) {
+      fallbackError = String(error?.message || error);
+      if (performanceCooldown.until > Date.now()) throw error;
+      source = 'product-report-fallback';
+      mergeSkuRows(bySku, await enqueue(() => productReportRows(token, from, to)));
+    }
   } else {
     if (performanceCooldown.until > Date.now()) {
       const error = new Error(performanceCooldown.error || 'Ozon Performance временно недоступен');
@@ -251,8 +266,7 @@ async function build(from, to) {
       throw error;
     }
     source = 'product-report';
-    const rows = await enqueue(() => productReportRows(token, from, to));
-    mergeSkuRows(bySku, rows);
+    mergeSkuRows(bySku, await enqueue(() => productReportRows(token, from, to)));
   }
 
   const rows = [...bySku.values()];
@@ -289,6 +303,7 @@ export async function ozonSkuSpend(from, to) {
     const message = String(error?.userMessage || error?.message || error);
     const limited = error?.code === 'DAILY_LIMIT' || error?.code === 'COOLDOWN';
     if (error?.code === 'DAILY_LIMIT') performanceCooldown = { until: retryAt, error: message };
+    console.warn('[ozon-performance]', JSON.stringify({ from, to, code:String(error?.code||''), status:Number(error?.status)||0, limited, message:message.slice(0,260) }));
     cache.set(key, { at: Date.now(), error: message, retryAt, limited });
     return { from, to, rows: [], totalSpent: 0, source: 'error', error: message, retryAt, limited, updatedAt: Date.now() };
   });
