@@ -15,7 +15,7 @@ function rowFor(index){return window.financeStatementDraft?.transactions?.[Numbe
 function n(value){const x=Number(value);return Number.isFinite(x)?x:0}
 function money(value){try{return typeof window.fmt==='function'?window.fmt(value):String(Math.round(n(value)*100)/100)}catch{return String(Math.round(n(value)*100)/100)}}
 function html(value){try{return typeof window.esc==='function'?window.esc(String(value??'')):String(value??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}catch{return String(value??'')}}
-function categoryName(id){try{return window.financeCategoryName(String(id||''),'Категория')}catch{return'Категория'}}
+function categoryName(id){if(String(id)==='__transit__')return 'Транзит';try{return window.financeCategoryName(String(id||''),'Категория')}catch{return'Категория'}}
 function visibleCategoriesFor(row){
   try{return window.financeVisibleCategories().filter(c=>c.kind==='both'||c.kind===row?.type)}catch{return[]}
 }
@@ -57,7 +57,7 @@ function splitValid(index){
   return {ok:true,message:'Разделено: '+state.parts.map(p=>categoryName(p.categoryId)+' '+money(p.amount)).join(' + ')};
 }
 function categoryOptions(row,selected){
-  return '<option value="">Категория</option>'+visibleCategoriesFor(row).map(c=>'<option value="'+html(c.id)+'" '+(String(c.id)===String(selected)?'selected':'')+'>'+html(c.name)+'</option>').join('');
+  return '<option value="">Категория</option><option value="__transit__" '+(String(selected)==='__transit__'?'selected':'')+'>Транзит · не учитывать</option>'+visibleCategoriesFor(row).map(c=>'<option value="'+html(c.id)+'" '+(String(c.id)===String(selected)?'selected':'')+'>'+html(c.name)+'</option>').join('');
 }
 function enforceSplitControls(index){
   const state=splitFor(index);if(!state)return;
@@ -133,7 +133,7 @@ window.financeStatementEnableSplit=function(index){
   if(splitFor(index)){renderSplit(index);return}
   const total=splitTotal(index);if(!(total>0))return alert('У платежа нет суммы для разделения.');
   const current=String(document.getElementById('financeStatementCategory-'+index)?.value||'');
-  const firstCategory=current&&current!=='__transit__'?current:'';
+  const firstCategory=current||'';
   splitState.set(index,{parts:[{categoryId:firstCategory,amount:'',auto:false},{categoryId:'',amount:total,auto:true}]});
   const launch=document.getElementById('financeStatementSplitLaunch-'+index);if(launch)launch.hidden=true;
   renderSplit(index);
@@ -205,6 +205,35 @@ window.financeStatementSaveQuickCategory=async function(index,splitPart=-1){
   }catch(error){alert('Не удалось создать категорию: '+String(error?.message||error));return null}
 };
 
+const originalSummary=window.financeStatementUpdateSummary;
+window.financeStatementUpdateSummary=function(){
+  if(!splitState.size)return originalSummary();
+  const rows=window.financeStatementDraft?.transactions||[];
+  let income=0,expense=0,excluded=0,selected=0;
+  rows.forEach((row,index)=>{
+    const check=document.querySelector('.finance-statement-use[data-index="'+index+'"]');
+    if(!check?.checked)return;
+    selected++;
+    const state=splitFor(index);
+    if(state){
+      let transit=false;
+      for(const part of state.parts){
+        const amount=Math.abs(n(part.amount));
+        if(String(part.categoryId)==='__transit__'||!String(part.categoryId||'')){if(String(part.categoryId)==='__transit__')transit=true;continue}
+        if(row?.type==='income')income+=amount;else if(row?.type==='expense')expense+=amount;
+      }
+      if(transit)excluded++;
+      return;
+    }
+    const transfer=String(document.getElementById('financeStatementTransfer-'+index)?.value||''),refundId=String(document.getElementById('financeStatementRefund-'+index)?.value||''),category=String(document.getElementById('financeStatementCategory-'+index)?.value||''),amount=Math.abs(n(row?.amount));
+    if(refundId){expense-=amount;return}
+    if(transfer||category==='__transit__'||!category){excluded++;return}
+    if(row?.type==='income')income+=amount;else if(row?.type==='expense')expense+=amount;
+  });
+  const setText=(id,value)=>{const el=document.getElementById(id);if(el)el.textContent=String(value)};
+  const setMoney=(id,value)=>{const el=document.getElementById(id);if(el)el.textContent=typeof window.fmt==='function'?window.fmt(value):String(value)};
+  setText('financeStatementSelectedCount',selected);setMoney('financeStatementExpenseTotal',expense);setMoney('financeStatementIncomeTotal',income);setText('financeStatementExcludedCount',excluded);
+};
 window.financeStatementTransferChanged=function(index){const result=originalTransferChanged(index);if(splitFor(index))enforceSplitControls(Number(index));return result};
 window.financeStatementRefundChanged=function(index){const result=originalRefundChanged(index);if(splitFor(index))enforceSplitControls(Number(index));return result};
 window.financeStatementPreview=function(data){splitState.clear();const result=originalStatementPreview(data);setTimeout(()=>{ensureStyles()},0);return result};

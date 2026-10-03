@@ -14,7 +14,7 @@ test('finance import category/split addon has valid JavaScript syntax',()=>{
 
 test('finance import addon is loaded directly by the app',()=>{
   const html=read('../../index.html');
-  assert.match(html,/finance-import-tools-v1\.js\?v=20261003-split-many/);
+  assert.match(html,/finance-import-tools-v1\.js\?v=20261003-split-transit/);
   assert.match(read('../../railway/src/server.js'),/'finance-import-tools-v1\.js'/);
 });
 
@@ -40,4 +40,6 @@ test('statement payment can split into exact category amounts without doubling b
   assert.match(source,/financeStatementAddSplitPart/);
   assert.match(source,/financeStatementRemoveSplitPart/);
   assert.match(source,/for\(let p=1;p<parts\.length;p\+\+\)/);
+  assert.match(source,/__transit__/);
+  assert.match(source,/Транзит · не учитывать/);
 });
