@@ -363,3 +363,16 @@ test('statement import can create and select a missing transfer account without 
   assert.match(create,/financeStatementRefreshTransferAccounts\(index,account\.id\)/);
   assert.match(refresh,/select\.innerHTML=financeStatementTransferOptions/);
 });
+
+test('statement import can create and select a missing category without closing the draft',()=>{
+  const open=extractFunction('financeStatementOpenCategoryPicker');
+  const create=extractFunction('financeStatementCreateCategory');
+  assert.match(open,/\+ Категория/);
+  assert.match(open,/financeStatementOpenCategoryCreator\(/);
+  assert.match(create,/financeRunLocalMutation\(/);
+  assert.match(create,/financeCommand\('\/api\/finance\/categories'/);
+  assert.match(create,/financeStatementChooseCategory\(index,category\.id\)/);
+  assert.match(create,/financeStatementDraft/);
+  assert.doesNotMatch(create,/closeModal\(/);
+  assert.doesNotMatch(create,/financeStatementPreview\(/);
+});
