@@ -136,3 +136,17 @@ test('selected-only WB grouping distinguishes exact, subgroup and mixed states',
   assert.equal(mixed.sameGroup,false);
   assert.equal(mixed.exactGroup,false);
 });
+
+
+test('night scheduler source restores the previous window before any new raise',()=>{
+  const prices=read('../src/prices.js');
+  const sql=read('../migrations/138_wb_night_restore_source_guard.sql');
+  assert.match(prices,/savedBasePrice > 0 && schedule\.windowKey !== window\.windowKey/);
+  assert.match(prices,/const previousRestoreTarget = wbSafeReturnPrice\(confirmedPrice, savedBasePrice\)/);
+  assert.match(prices,/queueSchedulePrice\(market, schedule\.nmId, previousRestoreTarget\)/);
+  assert.match(prices,/phase='restoring',last_error='',updated_at=\$3/);
+  assert.match(prices,/schedule\.phase === 'error'[\s\S]*Number\(schedule\.basePrice\) > 0/);
+  assert.match(prices,/CASE WHEN base_price IS NOT NULL AND base_price > 0 THEN 'restoring' ELSE \$3 END/);
+  assert.match(sql,/NEW\.phase = 'raising'[\s\S]*NEW\.window_key IS DISTINCT FROM OLD\.window_key/);
+  assert.match(sql,/NEW\.base_price := OLD\.base_price/);
+});
