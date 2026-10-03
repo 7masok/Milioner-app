@@ -1,0 +1,66 @@
+name: Finance import category split
+
+on:
+  push:
+    branches:
+      - feature/finance-import-category-split
+
+permissions:
+  contents: write
+
+jobs:
+  prepare-and-test:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Wire addon and update passport
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          index = Path('index.html')
+          text = index.read_text(encoding='utf-8')
+          script = '<script src="./finance-import-tools-v1.js?v=20261003-category-split-v1"></script>'
+          marker = '<script src="./purchase-delete-v1.js?v=20260821-0014"></script>'
+          if script not in text:
+              if marker not in text:
+                  raise SystemExit('purchase-delete script marker not found')
+              text = text.replace(marker, script + '\n' + marker, 1)
+              index.write_text(text, encoding='utf-8')
+
+          purchase = Path('purchase-delete-v1.js')
+          p = purchase.read_text(encoding='utf-8')
+          loader = "\n(function(){\n  if(document.querySelector('script[data-finance-import-tools]'))return;"
+          if loader in p:
+              p = p.split(loader, 1)[0].rstrip() + '\n'
+              purchase.write_text(p, encoding='utf-8')
+
+          passport = Path('docs/SITE-PASSPORT.md')
+          d = passport.read_text(encoding='utf-8')
+          heading = '## FIN-IMPORT-2026-10-03 — категории и разделение платежа'
+          if heading not in d:
+              d = d.rstrip() + '\n\n' + heading + '\n' + (
+                  '- В выборе категории при импорте банковской выписки доступна кнопка «+ Добавить категорию»; новая категория создаётся без закрытия импорта и сразу выбирается.\n'
+                  '- Один импортируемый платёж можно разделить на две категории с разными суммами. Импорт разрешён только когда суммы частей положительные и в точности дают исходную сумму платежа.\n'
+                  '- Части получают отдельные отпечатки операции, а первая часть сохраняет исходный отпечаток/ключ банка. Это сохраняет защиту от повторного импорта и не удваивает движение по счёту: сумма частей равна исходному платежу.\n'
+                  '- Разделение несовместимо с переводом между своими счетами и возвратом в рамках той же строки импорта; при включённом разделении эти режимы блокируются.\n'
+              )
+              passport.write_text(d, encoding='utf-8')
+          PY
+      - name: Commit prepared files
+        run: |
+          if ! git diff --quiet; then
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add index.html purchase-delete-v1.js docs/SITE-PASSPORT.md
+            git commit -m "Подключить разделение платежей в импорте"
+            git push origin HEAD:feature/finance-import-category-split
+          fi
+      - run: npm install --ignore-scripts
+      - run: npm test
