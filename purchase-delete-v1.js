@@ -106,3 +106,11 @@ openPurchaseShipment=function(encodedKey){
   sheet.appendChild(btn);
 };
 })();
+
+(function(){
+  if(document.querySelector('script[data-finance-import-tools]'))return;
+  const script=document.createElement('script');
+  script.src='./finance-import-tools-v1.js?v=20261003-category-split-v1';
+  script.dataset.financeImportTools='1';
+  document.head.appendChild(script);
+})();
