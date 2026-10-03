@@ -81,10 +81,19 @@ function updateSplitStatus(index){
   enforceSplitControls(index);
   try{window.financeStatementUpdateSummary()}catch{}
 }
+function fillSplitRemainder(index){
+  const state=splitFor(index);if(!state||!state.parts.length)return;
+  const last=state.parts.length-1;
+  if(!state.parts[last].auto)return;
+  const others=state.parts.slice(0,-1).reduce((sum,part)=>sum+Math.abs(n(part.amount)),0);
+  state.parts[last].amount=Math.max(0,Math.round((splitTotal(index)-others)*100)/100);
+}
 function renderSplit(index){
   const state=splitFor(index),box=document.getElementById('financeStatementSplitBox-'+index),row=rowFor(index);if(!state||!box||!row)return;
+  const removable=state.parts.length>2;
   box.innerHTML='<div class="finance-statement-split-card"><div class="finance-statement-split-head"><b>Разделить платёж</b><button type="button" class="finance-statement-split-close" onclick="financeStatementDisableSplit('+index+')">×</button></div>'+
-    state.parts.map((part,p)=>'<div class="finance-statement-split-row"><div class="finance-statement-split-category"><select id="financeStatementSplitCategory-'+index+'-'+p+'" onchange="financeStatementSplitCategoryChanged('+index+','+p+',this.value)">'+categoryOptions(row,part.categoryId)+'</select><button type="button" class="finance-statement-split-add-category" onclick="financeStatementQuickAddCategory('+index+','+p+')">+ категория</button></div><input id="financeStatementSplitAmount-'+index+'-'+p+'" type="number" min="0" step="0.01" inputmode="decimal" placeholder="Сумма" value="'+html(part.amount??'')+'" oninput="financeStatementSplitAmountChanged('+index+','+p+',this.value)"></div>').join('')+
+    state.parts.map((part,p)=>'<div class="finance-statement-split-row'+(removable?' removable':'')+'"><div class="finance-statement-split-category"><select id="financeStatementSplitCategory-'+index+'-'+p+'" onchange="financeStatementSplitCategoryChanged('+index+','+p+',this.value)">'+categoryOptions(row,part.categoryId)+'</select><button type="button" class="finance-statement-split-add-category" onclick="financeStatementQuickAddCategory('+index+','+p+')">+ категория</button></div><input id="financeStatementSplitAmount-'+index+'-'+p+'" type="number" min="0" step="0.01" inputmode="decimal" placeholder="Сумма" value="'+html(part.amount??'')+'" oninput="financeStatementSplitAmountChanged('+index+','+p+',this.value)">'+(removable?'<button type="button" class="finance-statement-split-remove" onclick="financeStatementRemoveSplitPart('+index+','+p+')">×</button>':'')+'</div>').join('')+
+    '<button type="button" class="finance-statement-split-more" onclick="financeStatementAddSplitPart('+index+')">Ещё категория</button>'+
     '<div id="financeStatementSplitStatus-'+index+'" class="finance-statement-split-status"></div><div class="finance-statement-split-total">Сумма платежа: <b>'+money(splitTotal(index))+'</b></div></div>';
   enforceSplitControls(index);updateSplitStatus(index);
 }
@@ -105,7 +114,10 @@ function ensureStyles(){
 .finance-statement-split-add-category{border:1px solid var(--line);border-radius:10px;background:#fff;padding:7px 8px;font-size:11px;white-space:nowrap}
 .finance-statement-split-status{margin-top:8px;font-size:11px;line-height:1.3}.finance-statement-split-status.ok{color:#16752d}.finance-statement-split-status.warn{color:#9a5a00}
 .finance-statement-split-total{margin-top:5px;font-size:11px;color:var(--muted)}
-@media(max-width:420px){.finance-statement-split-row{grid-template-columns:minmax(0,1fr) 96px}.finance-statement-split-category{grid-template-columns:1fr}.finance-statement-split-add-category{justify-self:start}}
+.finance-statement-split-more{margin-top:8px;width:100%;border:1px dashed #aeb3ba;background:#fff;border-radius:11px;padding:8px 12px;font-weight:700;text-align:left}
+.finance-statement-split-row.removable{grid-template-columns:minmax(0,1fr) 96px 28px}
+.finance-statement-split-remove{border:0;background:transparent;font-size:20px;line-height:1;padding:0}
+@media(max-width:420px){.finance-statement-split-row{grid-template-columns:minmax(0,1fr) 96px}.finance-statement-split-row.removable{grid-template-columns:minmax(0,1fr) 84px 28px}.finance-statement-split-category{grid-template-columns:1fr}.finance-statement-split-add-category{justify-self:start}}
 `;document.head.appendChild(style);
 }
 
@@ -140,11 +152,28 @@ window.financeStatementSplitCategoryChanged=function(index,part,value){
   if(Number(part)===0){const hidden=document.getElementById('financeStatementCategory-'+index);if(hidden)hidden.value=String(value||'')}
   updateSplitStatus(Number(index));
 };
+window.financeStatementAddSplitPart=function(index){
+  index=Number(index);const state=splitFor(index);if(!state)return;
+  if(state.parts.length>=20)return alert('Для одного платежа можно указать не больше 20 категорий.');
+  const last=state.parts[state.parts.length-1];
+  state.parts.splice(state.parts.length-1,0,{categoryId:'',amount:'',auto:false});
+  if(last)last.auto=true;
+  fillSplitRemainder(index);
+  renderSplit(index);
+};
+window.financeStatementRemoveSplitPart=function(index,part){
+  index=Number(index);part=Number(part);const state=splitFor(index);if(!state||state.parts.length<=2||!state.parts[part])return;
+  const removed=state.parts.splice(part,1)[0];
+  if(removed?.auto&&state.parts.length)state.parts[state.parts.length-1].auto=true;
+  fillSplitRemainder(index);
+  renderSplit(index);
+};
 window.financeStatementSplitAmountChanged=function(index,part,value){
   index=Number(index);part=Number(part);const state=splitFor(index);if(!state||!state.parts[part])return;
   state.parts[part].amount=value;
-  if(part===1)state.parts[1].auto=false;
-  if(part===0&&state.parts[1]?.auto){const total=splitTotal(index),first=Math.max(0,n(value)),remainder=Math.max(0,Math.round((total-first)*100)/100);state.parts[1].amount=remainder;const second=document.getElementById('financeStatementSplitAmount-'+index+'-1');if(second)second.value=String(remainder)}
+  state.parts[part].auto=false;
+  const last=state.parts.length-1;
+  if(part!==last&&state.parts[last]?.auto){fillSplitRemainder(index);const input=document.getElementById('financeStatementSplitAmount-'+index+'-'+last);if(input)input.value=String(state.parts[last].amount)}
   updateSplitStatus(index);
 };
 
