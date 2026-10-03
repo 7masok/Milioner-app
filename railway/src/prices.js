@@ -581,7 +581,7 @@ async function syncWbNightSchedules(market, now = Date.now()) {
         [market, schedule.nmId, row ? 'Разные цены по размерам' : 'Товар отсутствует в снимке цен', now]);
       continue;
     }
-    if (schedule.phase === 'error' && schedule.lastError && !isWbGradualReductionError(schedule.lastError)) continue;
+    if (schedule.phase === 'error' && schedule.lastError && !isWbGradualReductionError(schedule.lastError) && !(Number(schedule.basePrice) > 0)) continue;
     if (row.priceProtected) {
       const phase = Number(schedule.basePrice) > 0 ? 'restoring' : 'locked';
       if (schedule.phase !== phase || schedule.lastError) {
@@ -593,6 +593,32 @@ async function syncWbNightSchedules(market, now = Date.now()) {
     const confirmedPrice = number(row.price);
     const window = wbNightWindowState(schedule.startMinute, schedule.endMinute, now);
     let queueRow = queueByNm.get(schedule.nmId);
+
+    // Never start a new night window while the previous night's base price is still
+    // waiting to be restored. Otherwise the temporary raised WB price can become
+    // the next window's baseline after downtime or a failed restore.
+    const savedBasePrice = Number(schedule.basePrice);
+    if (schedule.enabled && window.inWindow && savedBasePrice > 0 && schedule.windowKey !== window.windowKey) {
+      if (queueRow?.source === 'manual') continue;
+      if (Math.abs(confirmedPrice - savedBasePrice) < 0.000001) {
+        await pool.query(`DELETE FROM wb_price_update_queue WHERE market=$1 AND nm_id=$2 AND source='schedule'`, [market, schedule.nmId]);
+        await pool.query(`UPDATE wb_price_schedules SET base_price=NULL,window_key='',manual_override_window='',
+          phase='idle',last_error='',updated_at=$3 WHERE market=$1 AND nm_id=$2`,
+          [market, schedule.nmId, now]);
+        changed += 1;
+        continue;
+      }
+      const previousRestoreTarget = wbSafeReturnPrice(confirmedPrice, savedBasePrice);
+      const alreadyRestoring = queueRow?.source === 'schedule'
+        && Number(queueRow.desiredPrice) === previousRestoreTarget
+        && ['pending','sent','checking'].includes(queueRow.status);
+      if (!alreadyRestoring && await queueSchedulePrice(market, schedule.nmId, previousRestoreTarget)) {
+        changed += 1;
+      }
+      await pool.query(`UPDATE wb_price_schedules SET phase='restoring',last_error='',updated_at=$3
+        WHERE market=$1 AND nm_id=$2`, [market, schedule.nmId, now]);
+      continue;
+    }
 
     if (schedule.enabled && window.inWindow) {
       if (schedule.manualOverrideWindow && schedule.manualOverrideWindow === window.windowKey) {
@@ -897,7 +923,9 @@ async function inspectWbPriceUpload(market, token, sentRows, now) {
           WHERE market=$1 AND nm_id=$2 AND status='sent'`,
           [market, queued.nmId, errorText.slice(0, 500), now]);
         if (queued.source === 'schedule') {
-          await client.query(`UPDATE wb_price_schedules SET phase=$3,last_error=$4,updated_at=$5
+          await client.query(`UPDATE wb_price_schedules
+            SET phase=CASE WHEN base_price IS NOT NULL AND base_price > 0 THEN 'restoring' ELSE $3 END,
+              last_error=$4,updated_at=$5
             WHERE market=$1 AND nm_id=$2`,
             [market, queued.nmId, isWbGradualReductionError(errorText) ? 'restoring' : 'error', errorText.slice(0, 500), now]);
         }
