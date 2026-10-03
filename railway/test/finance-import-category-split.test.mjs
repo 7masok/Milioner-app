@@ -14,7 +14,7 @@ test('finance import category/split addon has valid JavaScript syntax',()=>{
 
 test('finance import addon is loaded directly by the app',()=>{
   const html=read('../../index.html');
-  assert.match(html,/finance-import-tools-v1\.js\?v=20261003-category-split-v1/);
+  assert.match(html,/finance-import-tools-v1\.js\?v=20261003-category-header/);
 });
 
 test('category picker can create a category during statement import',()=>{

@@ -150,7 +150,7 @@ window.financeStatementSplitAmountChanged=function(index,part,value){
 
 window.financeStatementRenderCategoryPicker=function(index,query=''){
   const result=originalCategoryPickerRender(index,query),box=document.getElementById('financeStatementCategoryPickerList');
-  if(box&&!box.querySelector('.finance-category-picker-add')){const btn=document.createElement('button');btn.type='button';btn.className='finance-category-picker-add';btn.textContent='+ Добавить категорию';btn.onclick=()=>window.financeStatementQuickAddCategory(Number(index),-1);box.appendChild(btn)}
+  const head=document.querySelector('#financeStatementCategoryPicker .finance-category-picker-head');if(head&&!head.querySelector('.finance-category-picker-add')&&!head.querySelector('[onclick*="financeStatementOpenCategoryCreator"]')){const btn=document.createElement('button');btn.type='button';btn.className='finance-category-picker-add';btn.textContent='+ Добавить категорию';btn.onclick=()=>window.financeStatementQuickAddCategory(Number(index),-1);const close=head.querySelector('.finance-category-picker-close');if(close)head.insertBefore(btn,close);else head.appendChild(btn)}
   return result;
 };
 window.financeStatementQuickAddCategory=function(index,splitPart=-1){
