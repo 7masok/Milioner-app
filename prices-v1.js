@@ -215,6 +215,8 @@ function priceInlineEditor(row,index){
     return '<div class="price-inline-editor" onclick="event.stopPropagation()">'+
       '<div class="price-inline-fields"><div class="field"><label>Цена, '+pEsc(row.currency||'RUB')+'</label><input id="priceEditCurrent" type="number" min="1" step="1" inputmode="decimal" value="'+pEsc(pNum(row.price)||'')+'" '+(priceDisabled?'disabled':'')+'></div>'+
       '<div class="field"><label>Скидка, %</label><input id="priceEditDiscount" type="number" min="0" max="99" step="1" inputmode="numeric" value="'+pEsc(Math.round(pNum(row.discount)))+'"></div></div>'+
+      '<div class="price-night-row"><label class="price-promo-toggle"><input id="priceNightEnabled" type="checkbox" '+(row.nightPriceEnabled?'checked':'')+' '+(priceDisabled?'disabled':'')+' onchange="savePriceCardNight('+Number(index)+',this.checked)">Ночь</label>'+
+      '<div class="field"><label>Ночная цена, '+pEsc(row.currency||'RUB')+'</label><input id="priceNightCardValue" type="number" min="1" step="1" inputmode="decimal" value="'+pEsc(pNum(row.nightPriceTarget)||'')+'" '+(priceDisabled?'disabled':'')+' onchange="savePriceCardNight('+Number(index)+',document.getElementById(\'priceNightEnabled\').checked)"></div></div>'+
       (priceDisabled?'<div class="price-inline-warning">Разные цены по размерам · меняется только скидка</div>':'')+
       '<div class="price-protection-grid">'+
         '<label class="price-protection-toggle"><input type="checkbox" '+(row.manualPriceLock?'checked':'')+' onchange="togglePriceProtection('+Number(index)+',\'manualPriceLock\',this.checked)"> <span><b>Зафиксировать цену продавца</b><br><span class="muted">Блокирует наши автоматические изменения цены и скидки.</span></span></label>'+
@@ -268,7 +270,7 @@ function priceCard(row,index){
       row.promoEnabled?'Ждёт акцию':'Без акции')+'</span>'
     :'';
   const night=(row.market==='WB'||row.market==='WB2')&&row.nightPriceEnabled
-    ?'<span class="price-night-badge"> · 🌙 '+pEsc(row.nightPriceStart||'04:00')+'–'+pEsc(row.nightPriceEnd||'06:00')+' · '+pMoney(row.nightPriceTarget,row.currency)+'</span>'
+    ?'<span class="price-night-badge"> · 🌙 '+pEsc(row.nightPriceStart||'04:00')+'–'+pEsc(row.nightPriceEnd||'06:00')+' · '+pMoney(row.nightPriceTarget,row.currency)+(row.nightPriceError?' · '+pEsc(row.nightPriceError):'')+'</span>'
     :'';
   const protection=row.priceProtected?'<span class="price-lock-badge"> · 🔒 '+pEsc(row.protectionReason||'Защита цены')+'</span>':'';
   const group=priceIsWbMarket(row.market)?'<span> · '+(row.grouped?('Группа '+pEsc(row.groupImtId)+' · '+Number(row.groupSize||0)):'Без группы')+'</span>':'';
@@ -622,6 +624,35 @@ async function remoteNightSchedule(body){
   if(!response.ok||data?.ok===false)throw new Error(data?.error||('HTTP '+response.status));
   return data;
 }
+window.savePriceCardNight=async function(index,enabled){
+  const row=activeRows()[Number(index)];
+  if(!row||(row.market!=='WB'&&row.market!=='WB2'))return;
+  const price=Number(document.getElementById('priceNightCardValue')?.value);
+  const box=document.getElementById('priceNightEnabled');
+  if(enabled&&!(price>0)){
+    if(box)box.checked=false;
+    alert('Укажите ночную цену.');
+    return;
+  }
+  const start=String(row.nightPriceStart||'04:00'),end=String(row.nightPriceEnd||'05:00');
+  try{
+    const result=await remoteNightSchedule({market:row.market,remoteIds:[row.remoteId],enabled:Boolean(enabled),start,end,price:price>0?price:0});
+    const schedule=(result.schedules||[]).find(item=>String(item.nmId||'')===String(row.remoteId||''));
+    row.nightPriceEnabled=Boolean(enabled);
+    if(schedule){
+      row.nightPriceStart=priceMinuteTime(schedule.startMinute);
+      row.nightPriceEnd=priceMinuteTime(schedule.endMinute);
+      row.nightPriceTarget=Number(schedule.targetPrice)||null;
+      row.nightPricePhase=String(schedule.phase||'');
+      row.nightPriceError='';
+    }else if(price>0)row.nightPriceTarget=price;
+    paintPrices();
+    setPriceStatus(enabled?'Ночная цена включена':'Ночной режим выключен','ok');
+  }catch(error){
+    if(box)box.checked=Boolean(row.nightPriceEnabled);
+    alert(priceErrorText(error));
+  }
+};
 window.openPriceNightSchedule=function(){
   if(!priceIsWbMarket())return;
   const ids=[...priceSelection()].filter(Boolean);if(!ids.length)return;

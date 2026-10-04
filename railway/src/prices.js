@@ -428,6 +428,21 @@ export function wbSafeReturnPrice(currentPrice, basePrice) {
   return Math.max(base, Math.ceil(current / 1.9));
 }
 
+function samePrice(left, right) {
+  return Math.abs(number(left) - number(right)) < 0.000001;
+}
+
+const WB_PRICE_REFLECTION_WAIT = 'WB обработал загрузку, ждём отражения цены';
+
+function scheduleQueueBusy(queueRow, desiredPrice, confirmedPrice) {
+  if (!queueRow || queueRow.source !== 'schedule') return false;
+  if (!samePrice(queueRow.desiredPrice, desiredPrice)) return false;
+  if (queueRow.status === 'pending' || queueRow.status === 'sent') return true;
+  if (queueRow.status !== 'checking') return false;
+  if (samePrice(confirmedPrice, desiredPrice)) return true;
+  return queueRow.lastError !== WB_PRICE_REFLECTION_WAIT;
+}
+
 function isWbGradualReductionError(value) {
   return /quarant|карантин|more than.*twice|lower.*gradual|gradually|постеп/i.test(cleanText(value));
 }
@@ -548,17 +563,20 @@ async function holdSchedulePrice(market, nmId, price, client = pool) {
 async function markManualScheduleOverride(market, nmId, desiredPrice, now = Date.now()) {
   if (!(Number(desiredPrice) > 0)) return;
   const result = await pool.query(`SELECT enabled,start_minute AS "startMinute",end_minute AS "endMinute",
-    base_price AS "basePrice",window_key AS "windowKey"
+    target_price AS "targetPrice",base_price AS "basePrice",window_key AS "windowKey"
     FROM wb_price_schedules WHERE market=$1 AND nm_id=$2`, [market, nmId]);
   const schedule = result.rows[0];
   if (!schedule) return;
   const window = wbNightWindowState(schedule.startMinute, schedule.endMinute, now);
+  const inWindow = Boolean(schedule.enabled) && window.inWindow;
+  const desiredIsNight = samePrice(desiredPrice, schedule.targetPrice);
+  const replaceBase = !inWindow && !desiredIsNight;
   await pool.query(`UPDATE wb_price_schedules SET
-    base_price=CASE WHEN base_price IS NOT NULL OR $4 THEN $3 ELSE base_price END,
-    manual_override_window=CASE WHEN $4 THEN $5 ELSE manual_override_window END,
-    phase=CASE WHEN $4 THEN 'manual' ELSE phase END,last_error='',updated_at=$6
+    base_price=CASE WHEN $4 THEN $3 ELSE base_price END,
+    manual_override_window=CASE WHEN $5 THEN $6 ELSE manual_override_window END,
+    phase=CASE WHEN $5 THEN 'manual' ELSE phase END,last_error='',updated_at=$7
     WHERE market=$1 AND nm_id=$2`,
-    [market, nmId, Number(desiredPrice), Boolean(schedule.enabled) && window.inWindow, window.windowKey, now]);
+    [market, nmId, Number(desiredPrice), replaceBase, inWindow, window.windowKey, now]);
 }
 
 async function syncWbNightSchedules(market, now = Date.now()) {
@@ -609,9 +627,7 @@ async function syncWbNightSchedules(market, now = Date.now()) {
         continue;
       }
       const previousRestoreTarget = wbSafeReturnPrice(confirmedPrice, savedBasePrice);
-      const alreadyRestoring = queueRow?.source === 'schedule'
-        && Number(queueRow.desiredPrice) === previousRestoreTarget
-        && ['pending','sent','checking'].includes(queueRow.status);
+      const alreadyRestoring = scheduleQueueBusy(queueRow, previousRestoreTarget, confirmedPrice);
       if (!alreadyRestoring && await queueSchedulePrice(market, schedule.nmId, previousRestoreTarget)) {
         changed += 1;
       }
@@ -631,11 +647,18 @@ async function syncWbNightSchedules(market, now = Date.now()) {
 
       let basePrice = Number(schedule.basePrice);
       if (!(basePrice > 0) || schedule.windowKey !== window.windowKey) {
-        basePrice = confirmedPrice;
-        await pool.query(`UPDATE wb_price_schedules SET base_price=$3,window_key=$4,manual_override_window='',
-          phase='raising',last_error='',updated_at=$5 WHERE market=$1 AND nm_id=$2`,
-          [market, schedule.nmId, basePrice, window.windowKey, now]);
-        schedule.basePrice = basePrice;
+        const confirmedIsNight = samePrice(confirmedPrice, schedule.targetPrice);
+        if (!confirmedIsNight && confirmedPrice > 0) {
+          basePrice = confirmedPrice;
+          await pool.query(`UPDATE wb_price_schedules SET base_price=$3,window_key=$4,manual_override_window='',
+            phase='raising',last_error='',updated_at=$5 WHERE market=$1 AND nm_id=$2`,
+            [market, schedule.nmId, basePrice, window.windowKey, now]);
+          schedule.basePrice = basePrice;
+        } else {
+          await pool.query(`UPDATE wb_price_schedules SET window_key=$3,manual_override_window='',
+            phase='raising',last_error='',updated_at=$4 WHERE market=$1 AND nm_id=$2`,
+            [market, schedule.nmId, window.windowKey, now]);
+        }
         schedule.windowKey = window.windowKey;
         schedule.manualOverrideWindow = '';
         schedule.phase = 'raising';
@@ -651,7 +674,7 @@ async function syncWbNightSchedules(market, now = Date.now()) {
         }
         continue;
       }
-      if (queueRow?.source === 'schedule' && Number(queueRow.desiredPrice) === schedule.targetPrice && ['pending','sent','checking'].includes(queueRow.status)) continue;
+      if (scheduleQueueBusy(queueRow, schedule.targetPrice, confirmedPrice)) continue;
       if (await queueSchedulePrice(market, schedule.nmId, schedule.targetPrice)) {
         await pool.query(`UPDATE wb_price_schedules SET phase='raising',last_error='',updated_at=$3 WHERE market=$1 AND nm_id=$2`,
           [market, schedule.nmId, now]);
@@ -670,7 +693,7 @@ async function syncWbNightSchedules(market, now = Date.now()) {
 
     if (queueRow?.source === 'manual') continue;
     const basePrice = Number(schedule.basePrice);
-    if (Math.abs(confirmedPrice - basePrice) < 0.000001) {
+    if (samePrice(confirmedPrice, basePrice)) {
       await pool.query(`DELETE FROM wb_price_update_queue WHERE market=$1 AND nm_id=$2 AND source='schedule'`, [market, schedule.nmId]);
       await pool.query(`UPDATE wb_price_schedules SET base_price=NULL,window_key='',manual_override_window='',
         phase=$3,last_error='',updated_at=$4 WHERE market=$1 AND nm_id=$2`,
@@ -679,7 +702,7 @@ async function syncWbNightSchedules(market, now = Date.now()) {
       continue;
     }
     const restoreTarget = wbSafeReturnPrice(confirmedPrice, basePrice);
-    if (queueRow?.source === 'schedule' && Number(queueRow.desiredPrice) === restoreTarget && ['pending','sent','checking'].includes(queueRow.status)) continue;
+    if (scheduleQueueBusy(queueRow, restoreTarget, confirmedPrice)) continue;
     if (await queueSchedulePrice(market, schedule.nmId, restoreTarget)) {
       await pool.query(`UPDATE wb_price_schedules SET phase='restoring',last_error='',updated_at=$3 WHERE market=$1 AND nm_id=$2`,
         [market, schedule.nmId, now]);
@@ -1469,6 +1492,15 @@ async function saveWbNightSchedules(market, input) {
           VALUES($1,$2,true,$3,$4,$5,NULL,'','','idle','',$6)
           ON CONFLICT(market,nm_id) DO UPDATE SET enabled=true,start_minute=excluded.start_minute,
             end_minute=excluded.end_minute,target_price=excluded.target_price,last_error='',updated_at=excluded.updated_at`,
+          [market, nmId, startMinute, endMinute, targetPrice, now]);
+      } else if (targetPrice > 0 && startMinute !== null && endMinute !== null && startMinute !== endMinute) {
+        await client.query(`INSERT INTO wb_price_schedules
+          (market,nm_id,enabled,start_minute,end_minute,target_price,base_price,window_key,manual_override_window,phase,last_error,updated_at)
+          VALUES($1,$2,false,$3,$4,$5,NULL,'','','off','',$6)
+          ON CONFLICT(market,nm_id) DO UPDATE SET enabled=false,start_minute=excluded.start_minute,
+            end_minute=excluded.end_minute,target_price=excluded.target_price,
+            phase=CASE WHEN wb_price_schedules.base_price IS NOT NULL THEN 'restoring' ELSE 'off' END,
+            last_error='',updated_at=excluded.updated_at`,
           [market, nmId, startMinute, endMinute, targetPrice, now]);
       } else {
         await client.query(`UPDATE wb_price_schedules SET enabled=false,

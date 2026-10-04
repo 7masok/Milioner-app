@@ -24,7 +24,7 @@ test('Prices is a real ninth tab and survives reload navigation',()=>{
 });
 
 test('Prices UI is static before auth but does not fetch prices on startup',()=>{
-  const scriptAt=html.indexOf('./prices-v1.js?v=20260928-night-price');
+  const scriptAt=html.indexOf('./prices-v1.js?v=20261004-night-toggle');
   const authAt=html.lastIndexOf('<script>initOwnerAuth();</script>');
   assert.ok(scriptAt>0&&scriptAt<authAt);
   const runtime=html.slice(html.indexOf('function startAppRuntime(){'),html.indexOf('// Wait for the server-sync module'));
@@ -360,6 +360,22 @@ test('WB bulk promotion controls can select all visible rows and enable or disab
 test('WB night schedule accepts normal HH:MM time values',()=>{
   assert.match(api,/const match = \/\^\(\\d\{2\}\):\(\\d\{2\}\)\$\//);
   assert.doesNotMatch(api,/const match = \/\^\(\\\\d\{2\}\):\(\\\\d\{2\}\)\$\//);
+});
+
+test('WB card has a night switch and a separate night price field',()=>{
+  const inline=ui.slice(ui.indexOf('function priceInlineEditor'),ui.indexOf('function priceCard'));
+  assert.match(inline,/id="priceNightEnabled"/);
+  assert.match(inline,/>Ночь</);
+  assert.match(inline,/id="priceNightCardValue"/);
+  assert.match(inline,/Ночная цена/);
+  assert.match(inline,/savePriceCardNight\(/);
+  assert.match(ui,/window\.savePriceCardNight=async function\(index,enabled\)/);
+  assert.match(ui,/Укажите ночную цену/);
+  assert.match(api,/enabled=false,start_minute=excluded.start_minute/);
+  assert.match(api,/target_price=excluded.target_price/);
+  assert.match(html,/\.price-night-row\{display:grid;grid-template-columns:auto minmax\(0,1fr\)/);
+  assert.match(api,/const confirmedIsNight = samePrice\(confirmedPrice, schedule.targetPrice\)/);
+  assert.match(api,/function scheduleQueueBusy\(queueRow, desiredPrice, confirmedPrice\)/);
 });
 
 test('WB night price restore stays below the configured 2x category quarantine threshold',()=> {
