@@ -140,10 +140,44 @@ async function history(client,market,nmId,action,actor,payload,now=Date.now()){
 function actorFrom(req){
   return cleanText(req?.session?.user?.email||req?.session?.user?.name||req?.user?.email||req?.user?.name||'owner');
 }
+// A discount block is independent of the seller-price/night-price lock.
+export async function setWbDiscountBlock(market,nmId,enabled,client=pool,now=Date.now()){
+  await client.query(`INSERT INTO wb_price_protection(market,nm_id,promo_block,updated_at)
+    VALUES($1,$2,$3,$4) ON CONFLICT(market,nm_id) DO UPDATE SET
+    promo_block=excluded.promo_block,
+    locked_discount=CASE WHEN excluded.promo_block THEN 0 ELSE wb_price_protection.locked_discount END,
+    updated_at=excluded.updated_at`,[market,nmId,Boolean(enabled),now]);
+}
+export async function syncWbDiscountBlocks(market,now=Date.now(),client=pool){
+  const [rows,prefs]=await Promise.all([priceRows(market,client),protectionRows(market,client)]);
+  const byNm=new Map(rows.map(row=>[cleanText(row.remoteId),row]));
+  let changed=0;
+  for(const pref of prefs){
+    if(!pref.promoBlock)continue;
+    const row=byNm.get(pref.nmId);if(!row)continue;
+    const result=await client.query(`SELECT desired_price AS "desiredPrice",desired_discount AS "desiredDiscount",source,status
+      FROM wb_price_update_queue WHERE market=$1 AND nm_id=$2`,[market,pref.nmId]);
+    const queue=result.rows[0];
+    // Never lose uploadID or blindly retry an item WB already rejected at zero.
+    if(queue&&(['sent','checking'].includes(queue.status)||queue.desiredDiscount===0))continue;
+    if(!queue&&clampDiscount(row.discount)===0)continue;
+    if(queue&&queue.desiredDiscount==null&&clampDiscount(row.discount)===0)continue;
+    await client.query(`INSERT INTO wb_price_update_queue
+      (market,nm_id,desired_price,desired_discount,status,queued_at,sent_at,upload_id,last_error,updated_at,source,promotion_id)
+      VALUES($1,$2,NULL,0,'pending',$3,0,0,'',$3,'protection',0)
+      ON CONFLICT(market,nm_id) DO UPDATE SET desired_discount=0,status='pending',
+        queued_at=excluded.queued_at,sent_at=0,upload_id=0,last_error='',updated_at=excluded.updated_at
+      WHERE wb_price_update_queue.status NOT IN ('sent','checking')
+        AND wb_price_update_queue.desired_discount IS DISTINCT FROM 0`,[market,pref.nmId,now]);
+    changed++;
+  }
+  return {changed};
+}
 async function applyProtection(market,ids,input,actor){
   const client=await pool.connect(),now=Date.now(),applied=[];
   try{
     await client.query('BEGIN');
+    await client.query('SELECT pg_advisory_xact_lock(hashtext($1))',['millioner:wb-prices:'+market]);
     const rows=await priceRows(market,client),byNm=new Map(rows.map(row=>[Number(row?.remoteId),row]));
     for(const nmId of ids){
       const row=byNm.get(nmId);if(!row)continue;
@@ -161,7 +195,7 @@ async function applyProtection(market,ids,input,actor){
           auto_zero_enabled=excluded.auto_zero_enabled,auto_zero_lock=excluded.auto_zero_lock,promo_block=excluded.promo_block,
           locked_price=COALESCE(excluded.locked_price,wb_price_protection.locked_price),
           locked_discount=COALESCE(excluded.locked_discount,wb_price_protection.locked_discount),updated_at=excluded.updated_at`,
-        [market,nmId,nextManual,nextAutoEnabled,nextAutoLock,nextPromoBlock,baseline.lockedPrice,baseline.lockedDiscount,now]);
+        [market,nmId,nextManual,nextAutoEnabled,nextAutoLock,nextPromoBlock,baseline.lockedPrice,nextPromoBlock?0:baseline.lockedDiscount,now]);
       if(nextManual||nextAutoLock)await disableAutomationForLock(market,nmId,client,now);
       if(nextPromoBlock){
         await client.query(`DELETE FROM wb_price_update_queue WHERE market=$1 AND nm_id=$2 AND source='promo' AND status IN ('pending','held')`,[market,nmId]);
@@ -173,9 +207,9 @@ async function applyProtection(market,ids,input,actor){
       applied.push(String(nmId));
     }
     if(!applied.length){const error=new Error('Выбранные товары не найдены в последнем снимке цен WB');error.status=409;throw error;}
+    await syncWbDiscountBlocks(market,now,client);
     await client.query('COMMIT');
   }catch(error){await client.query('ROLLBACK').catch(()=>{});throw error}finally{client.release()}
-  await syncWbPriceProtection(market).catch(()=>{});
   return {applied,rows:await protectionRows(market)};
 }
 export async function syncWbPriceProtection(market,now=Date.now()){
@@ -189,7 +223,7 @@ export async function syncWbPriceProtection(market,now=Date.now()){
     const available=cleanText(row.productId)?inventory.amount(row.productId):null;
     const known=available!==null;
     let autoLock=pref.autoZeroLock;
-    let lockedPrice=pref.lockedPrice,lockedDiscount=pref.lockedDiscount;
+    let lockedPrice=pref.lockedPrice,lockedDiscount=pref.promoBlock?0:pref.lockedDiscount;
     if(pref.autoZeroEnabled&&known&&available===0&&!autoLock){
       const client=await pool.connect();
       try{
@@ -197,7 +231,7 @@ export async function syncWbPriceProtection(market,now=Date.now()){
         const baseline=pref.manualPriceLock
           ? {lockedPrice:pref.lockedPrice,lockedDiscount:pref.lockedDiscount}
           : await baselineFor(market,Number(pref.nmId),row,client);
-        lockedPrice=baseline.lockedPrice;lockedDiscount=baseline.lockedDiscount;autoLock=true;
+        lockedPrice=baseline.lockedPrice;lockedDiscount=pref.promoBlock?0:baseline.lockedDiscount;autoLock=true;
         await client.query(`UPDATE wb_price_protection SET auto_zero_lock=true,locked_price=$3,locked_discount=$4,
           own_stock_known=true,own_available=0,stock_checked_at=$5,updated_at=$5 WHERE market=$1 AND nm_id=$2`,
           [market,pref.nmId,lockedPrice,lockedDiscount,now]);
@@ -260,5 +294,5 @@ wbPriceProtectionRouter.post('/market-prices/protection',requireWritesEnabled,as
     return res.status(400).json({ok:false,error:'Не выбрано изменение защиты'});
   const result=await applyProtection(market,ids,req.body,actorFrom(req));
   return res.json({ok:true,market,remoteIds:result.applied,count:result.applied.length,protection:result.rows,
-    limitation:'Защита акций действует на Milioner. Публичный WB API не даёт запрета автоакций WB и удаления товара из уже действующей акции.'});
+    limitation:'Блок поддерживает скидку продавца 0% через регулярные проверки WB. Скидки самой площадки отдельно.'});
 }));

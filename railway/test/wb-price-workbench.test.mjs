@@ -12,8 +12,8 @@ test('promotion actions change only the discount and cross the threshold in oppo
   assert.equal(exit.discount, 0);
   assert.ok(exit.finalPrice > 650);
   assert.throws(() => prepareWbPriceChange(row, { action: 'enter', discount: 34 }, pref), /недостаточно/);
-  assert.throws(() => prepareWbPriceChange(row, { action: 'exit', discount: 35 }, pref), /остаётся/);
-  assert.throws(() => prepareWbPriceChange(row, { action: 'exit' }, { planPrice: 1200 }), /остаётся/);
+  assert.throws(() => prepareWbPriceChange(row, { action: 'exit', discount: 35 }, pref), /обнуляет/);
+  assert.equal(prepareWbPriceChange(row, { action: 'exit' }, { planPrice: 1200 }).discount, 0);
 });
 
 test('rounding never claims an unattainable promotion price and unknown thresholds need an explicit discount', () => {
@@ -108,7 +108,7 @@ test('select all respects search, bulk requests capture the shop, and switching 
       else {
         const market = url.includes('market=WB2') ? 'WB2' : 'WB';
         data = { fetchedAt: Date.now(), rows: [
-          { market, remoteId: '1', name: 'Брелок', price: 1000, discount: 10, promoPlanPrice: 650, grouped: true, groupImtId: '101', groupSize: 2 },
+          { market, remoteId: '1', name: 'Брелок', price: 1000, discount: 10, promoPlanPrice: 650, promoBlocked: true, grouped: true, groupImtId: '101', groupSize: 2 },
           { market, remoteId: '2', name: 'Нож', price: 2000, discount: 20, promoPlanPrice: 1200, grouped: true, groupImtId: '202', groupSize: 2 }
         ] };
       }
@@ -151,4 +151,12 @@ test('select all respects search, bulk requests capture the shop, and switching 
   assert.match(element('priceList').innerHTML, /Группа не найдена/);
   assert.match(element('priceList').innerHTML, /Все группы/);
   assert.equal(posts.length, 1, 'group filtering must not write business data');
+  ctx.priceSetGroup(''); ctx.priceSearch(''); ctx.priceSelectAllVisible(true);
+  ctx.openPriceWorkbench('exit');
+  assert.match(sheet, /постоянный блок/);
+  assert.match(sheet, /readonly/);
+  element('priceWorkbenchDiscount').value = '9';
+  await ctx.submitPriceWorkbench();
+  assert.equal(posts[1].action, 'exit');
+  assert.equal(posts[1].discount, 0);
 });
