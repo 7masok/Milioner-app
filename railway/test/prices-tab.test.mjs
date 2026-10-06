@@ -24,7 +24,7 @@ test('Prices is a real ninth tab and survives reload navigation',()=>{
 });
 
 test('Prices UI is static before auth but does not fetch prices on startup',()=>{
-  const scriptAt=html.indexOf('./prices-v1.js?v=20261006-group-filter');
+  const scriptAt=html.indexOf('./prices-v1.js?v=20261006-price-recovery');
   const authAt=html.lastIndexOf('<script>initOwnerAuth();</script>');
   assert.ok(scriptAt>0&&scriptAt<authAt);
   const runtime=html.slice(html.indexOf('function startAppRuntime(){'),html.indexOf('// Wait for the server-sync module'));
@@ -394,7 +394,7 @@ test('WB price sync verifies upload details before retrying a rejected update',(
   assert.match(api,/async function inspectWbPriceUpload\(market, token, sentRows, now\)/);
   assert.match(api,/status='checking'/);
   assert.match(api,/WB price sync verify/);
-  assert.match(api,/sent\.length \? 'verify' : pending\.length \? 'write' : 'read'/);
+  assert.match(api,/wbPriceSyncAction\(state, queue, snapshot, now, WB_PRICE_SLOT_MS\)/);
   assert.doesNotMatch(api,/SET status='pending',sent_at=0,upload_id=0,\s*last_error='WB ещё не подтвердил изменение'/);
   assert.match(api,/WB обработал загрузку, ждём отражения цены/);
 });

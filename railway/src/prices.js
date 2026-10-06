@@ -9,6 +9,7 @@ import { decorateWbPromotionRows } from './wb-promotions.js';
 import { decorateWbProtectionRows, protectionFor, syncWbPriceProtection, updateProtectionBaseline } from './wb-price-protection.js';
 import { decorateWbCardGroupRows } from './wb-card-groups.js';
 import { prepareWbPriceChange, nightUploadInFlight } from './wb-price-workbench.js';
+import { wbPriceSyncAction, wbPriceRetryAfterRead } from './wb-price-sync-policy.js';
 
 const WB_PRICE_API = 'https://discounts-prices-api.wildberries.ru';
 const WB_ANALYTICS_API = 'https://seller-analytics-api.wildberries.ru';
@@ -938,6 +939,8 @@ async function inspectWbPriceUpload(market, token, sentRows, now) {
       const item = byNm.get(String(queued.nmId));
       if (!item) {
         missing += 1;
+        // Absence in upload history is not confirmation. The next slot reads
+        // actual prices; an old missing task must not monopolise the lane.
         continue;
       }
       checked += 1;
@@ -983,10 +986,12 @@ async function inspectWbPriceUpload(market, token, sentRows, now) {
 }
 
 async function sendWbPriceQueue(market, token, pending, now) {
+  const snapshot = await wbPriceSnapshot(market);
+  const byNm = new Map((snapshot?.rows || []).map(row => [String(row.remoteId), row]));
   const selected = pending.map(row => ({
     nmID: Number(row.nmId),
     updatedAt: Number(row.updatedAt || 0),
-    ...(row.desiredPrice !== null ? { price: Number(row.desiredPrice) } : {}),
+    ...(row.desiredPrice !== null ? { price: wbSafeReturnPrice(byNm.get(String(row.nmId))?.price, row.desiredPrice) } : {}),
     ...(row.desiredDiscount !== null ? { discount: Number(row.desiredDiscount) } : {})
   })).filter(row => Number.isInteger(row.nmID) && row.nmID > 0 && (row.price !== undefined || row.discount !== undefined));
   if (!selected.length) return { sent: 0, uploadId: 0, alreadyExists: false };
@@ -1087,6 +1092,12 @@ async function saveWbPriceRead(market, state, batch, now) {
         } else {
           await client.query("DELETE FROM wb_price_update_queue WHERE market=$1 AND nm_id=$2 AND status IN ('checking','sent')", [market, queued.nmId]);
         }
+      } else if (wbPriceRetryAfterRead(queued, now, WB_PRICE_SLOT_MS)) {
+        // Keep the user's final target. Only a fresh WB read permits a retry,
+        // including the next gradual reduction step or an old missing upload.
+        await client.query(`UPDATE wb_price_update_queue SET status='pending',sent_at=0,upload_id=0,
+          last_error='WB ещё не отразил целевую цену · повтор после проверки',updated_at=$3
+          WHERE market=$1 AND nm_id=$2 AND status IN ('checking','sent')`, [market, queued.nmId, now]);
       } else {
         await client.query(`UPDATE wb_price_update_queue SET last_error='WB обработал загрузку, ждём отражения цены',updated_at=$3
           WHERE market=$1 AND nm_id=$2 AND status IN ('checking','sent')`, [market, queued.nmId, now]);
@@ -1135,9 +1146,10 @@ async function syncWbPriceMarket(market) {
     const sent = queue.filter(row => row.status === 'sent' && Number(row.uploadId) > 0);
     const pending = queue.filter(row => row.status === 'pending');
     const checking = queue.filter(row => row.status === 'checking');
-    let action = sent.length ? 'verify' : pending.length ? 'write' : 'read';
+    const snapshot = await wbPriceSnapshot(market);
+    let action = wbPriceSyncAction(state, queue, snapshot, now, WB_PRICE_SLOT_MS);
     try {
-      if (sent.length) {
+      if (action === 'verify') {
         const result = await inspectWbPriceUpload(market, token, sent, now);
         console.info('WB price sync verify', JSON.stringify({
           market, uploadId: result.uploadId, checked: result.checked, errors: result.errors,
@@ -1145,7 +1157,7 @@ async function syncWbPriceMarket(market) {
         }));
         return { ok: result.errors === 0, market, action: 'verify', ...result, nextSyncAt: now + WB_PRICE_SLOT_MS };
       }
-      if (pending.length) {
+      if (action === 'write') {
         const result = await sendWbPriceQueue(market, token, pending, now);
         console.info('WB price sync write', JSON.stringify({ market, queued: pending.length, sent: result.sent, uploadId: result.uploadId }));
         return { ok: true, market, action: 'write', ...result, nextSyncAt: now + WB_PRICE_SLOT_MS };

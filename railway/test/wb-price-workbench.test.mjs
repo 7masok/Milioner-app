@@ -9,11 +9,11 @@ test('promotion actions change only the discount and cross the threshold in oppo
   assert.deepEqual(prepareWbPriceChange(row, { action: 'enter' }, pref), { price: null, discount: 35, finalPrice: 650 });
   const exit = prepareWbPriceChange(row, { action: 'exit' }, pref);
   assert.equal(exit.price, null);
-  assert.equal(exit.discount, 34);
+  assert.equal(exit.discount, 0);
   assert.ok(exit.finalPrice > 650);
   assert.throws(() => prepareWbPriceChange(row, { action: 'enter', discount: 34 }, pref), /недостаточно/);
   assert.throws(() => prepareWbPriceChange(row, { action: 'exit', discount: 35 }, pref), /остаётся/);
-  assert.throws(() => prepareWbPriceChange(row, { action: 'exit' }, { planPrice: 1200 }), /Скидка/);
+  assert.throws(() => prepareWbPriceChange(row, { action: 'exit' }, { planPrice: 1200 }), /остаётся/);
 });
 
 test('rounding never claims an unattainable promotion price and unknown thresholds need an explicit discount', () => {
