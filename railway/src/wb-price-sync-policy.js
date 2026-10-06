@@ -7,7 +7,13 @@ export function wbPriceSyncAction(state, queue, snapshot, now, slotMs) {
   }
   if (queue.some(row => row.status === 'checking')) return 'read';
   if (queue.some(row => row.status === 'pending')) {
-    return now - Number(snapshot?.fetchedAt || 0) > slotMs ? 'read' : 'write';
+    // A completed read is followed by a write in the NEXT permitted slot.
+    // Its snapshot is necessarily older than one slot by then (timer jitter).
+    // After a failed read, verification, or long downtime, refresh first.
+    const fetchedAt = Number(snapshot?.fetchedAt || 0);
+    const completedRead = state.lastAction === 'read';
+    const age = now - fetchedAt;
+    return completedRead && fetchedAt > 0 && age >= 0 && age <= 2 * slotMs ? 'write' : 'read';
   }
   return 'read';
 }
