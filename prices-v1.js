@@ -96,9 +96,16 @@ function updatePriceGroupTools(){
   if(tools)tools.hidden=!isWb;if(!isWb)return;
   if(filter)filter.value=priceUi.groupFilter||'all';
   if(select){
-    const groups=new Map();
-    for(const row of activeRows())if(row?.grouped&&row?.groupImtId&&!groups.has(String(row.groupImtId)))groups.set(String(row.groupImtId),row);
-    const options=['<option value="">Все группы</option>',...[...groups.entries()].sort((a,b)=>String(a[1]?.name||'').localeCompare(String(b[1]?.name||''),'ru')).map(([id,row])=>'<option value="'+pEsc(id)+'">Группа '+pEsc(id)+' · '+Number(row.groupSize||0)+'</option>')];
+    const groups=new Map(),q=priceUi.q.trim().toLocaleLowerCase('ru-RU');
+    for(const row of activeRows()){
+      if(row?.error||!row?.grouped||!row?.groupImtId||priceIsHidden(row)||priceUi.groupFilter==='ungrouped')continue;
+      if(q&&![row.name,row.sku,row.remoteId,row.account].some(value=>String(value||'').toLocaleLowerCase('ru-RU').includes(q)))continue;
+      const id=String(row.groupImtId),group=groups.get(id)||{row,count:0};
+      group.count+=1;groups.set(id,group);
+    }
+    const options=['<option value="">Все группы</option>',...[...groups.entries()].sort((a,b)=>String(a[1].row?.name||'').localeCompare(String(b[1].row?.name||''),'ru')).map(([id,group])=>'<option value="'+pEsc(id)+'">Группа '+pEsc(id)+' · '+(group.count===Number(group.row.groupSize)?group.count:group.count+' видно / '+Number(group.row.groupSize))+'</option>')];
+    // Keep the current filter explicit; never silently switch to unrelated products.
+    if(priceUi.groupId&&!groups.has(priceUi.groupId))options.push('<option value="'+pEsc(priceUi.groupId)+'">Группа '+pEsc(priceUi.groupId)+' · нет видимых товаров</option>');
     select.innerHTML=options.join('');select.value=priceUi.groupId||'';
   }
   if(merge)merge.disabled=!selection.size;
@@ -318,6 +325,14 @@ function paintPrices(){
       list.innerHTML='<div class="empty">Цены WB ещё не загружены сервером.<br><span class="muted">Склад получит их в ближайший разрешённый сеанс связи.</span></div>';return;
     }
     list.innerHTML='<div class="empty">Нет позиций для этого магазина</div>';return;
+  }
+  if(!indexed.length&&priceIsWbMarket()&&priceUi.groupId){
+    const members=rows.filter(row=>String(row.groupImtId||'')===priceUi.groupId);
+    const allHidden=members.length&&members.every(row=>priceIsHidden(row));
+    const message=!members.length?'Группа не найдена в текущем снимке WB.':allHidden?'Все товары этой группы скрыты.':'В этой группе нет товаров по текущему поиску.';
+    list.innerHTML='<div class="empty">'+message+'</div><div class="price-inline-actions"><button type="button" class="btn" onclick="priceSetGroup(\'\')">Все группы</button>'+
+      (q?'<button type="button" class="btn" onclick="priceSearch(\'\')">Очистить поиск</button>':'')+
+      (allHidden?'<button type="button" class="btn" onclick="openHiddenPrices()">Показать скрытые</button>':'')+'</div>';return;
   }
   if(!visibleRows.length&&rows.length){
     if(priceIsWbMarket()&&(priceUi.groupId||priceUi.groupFilter!=='all')){

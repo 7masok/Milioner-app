@@ -108,8 +108,8 @@ test('select all respects search, bulk requests capture the shop, and switching 
       else {
         const market = url.includes('market=WB2') ? 'WB2' : 'WB';
         data = { fetchedAt: Date.now(), rows: [
-          { market, remoteId: '1', name: 'Брелок', price: 1000, discount: 10, promoPlanPrice: 650 },
-          { market, remoteId: '2', name: 'Нож', price: 2000, discount: 20, promoPlanPrice: 1200 }
+          { market, remoteId: '1', name: 'Брелок', price: 1000, discount: 10, promoPlanPrice: 650, grouped: true, groupImtId: '101', groupSize: 2 },
+          { market, remoteId: '2', name: 'Нож', price: 2000, discount: 20, promoPlanPrice: 1200, grouped: true, groupImtId: '202', groupSize: 2 }
         ] };
       }
       return { ok: true, text: async () => JSON.stringify(data), json: async () => data };
@@ -130,4 +130,25 @@ test('select all respects search, bulk requests capture the shop, and switching 
   await ctx.submitPriceWorkbench();
   assert.equal(posts[0].market, 'WB');
   assert.deepEqual(posts[0].remoteIds, ['1']);
+  ctx.priceSearch('');
+  assert.match(element('priceGroupSelect').innerHTML, /value="101"/);
+  assert.match(element('priceGroupSelect').innerHTML, /1 видно \/ 2/);
+  ctx.priceSearch('Нож');
+  assert.doesNotMatch(element('priceGroupSelect').innerHTML, /value="101"/);
+  assert.match(element('priceGroupSelect').innerHTML, /value="202"/);
+  ctx.priceSearch(''); ctx.priceSetGroup('101'); ctx.priceSearch('Нож');
+  assert.equal(element('priceGroupSelect').value, '101');
+  assert.match(element('priceGroupSelect').innerHTML, /нет видимых товаров/);
+  assert.match(element('priceList').innerHTML, /нет товаров по текущему поиску/);
+  assert.match(element('priceList').innerHTML, /Очистить поиск/);
+  ctx.priceSearch(''); ctx.hidePriceRow(0);
+  assert.match(element('priceList').innerHTML, /Все товары этой группы скрыты/);
+  assert.match(element('priceList').innerHTML, /Показать скрытые/);
+  ctx.priceSetGroup('');
+  assert.doesNotMatch(element('priceGroupSelect').innerHTML, /value="101"/);
+  assert.match(element('priceGroupSelect').innerHTML, /value="202"/);
+  ctx.priceSetGroup('999');
+  assert.match(element('priceList').innerHTML, /Группа не найдена/);
+  assert.match(element('priceList').innerHTML, /Все группы/);
+  assert.equal(posts.length, 1, 'group filtering must not write business data');
 });
