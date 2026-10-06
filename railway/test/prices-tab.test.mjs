@@ -24,7 +24,7 @@ test('Prices is a real ninth tab and survives reload navigation',()=>{
 });
 
 test('Prices UI is static before auth but does not fetch prices on startup',()=>{
-  const scriptAt=html.indexOf('./prices-v1.js?v=20261004-night-toggle');
+  const scriptAt=html.indexOf('./prices-v1.js?v=20261006-workbench');
   const authAt=html.lastIndexOf('<script>initOwnerAuth();</script>');
   assert.ok(scriptAt>0&&scriptAt<authAt);
   const runtime=html.slice(html.indexOf('function startAppRuntime(){'),html.indexOf('// Wait for the server-sync module'));
@@ -240,13 +240,14 @@ test('Inline price editor stays compact and avoids explanatory blocks',()=>{
 });
 
 
-test('WB promotion checkbox is compact and only exists in WB editor',()=>{
+test('WB inline promotion actions change the discount through the workbench',()=>{
   const inline=ui.slice(ui.indexOf('function priceInlineEditor'),ui.indexOf('function priceCard'));
   const wb=inline.slice(inline.indexOf("if(row.market==='WB'||row.market==='WB2')"),inline.indexOf("if(row.market==='Ozon')"));
   const kaspi=inline.slice(inline.indexOf("if(row.market==='Kaspi')"),inline.indexOf("if(row.market==='WB'"));
   assert.match(wb,/price-promo-toggle/);
-  assert.match(wb,/togglePricePromo\(/);
-  assert.match(wb,/>Акции<\/label>/);
+  assert.match(wb,/openPriceWorkbench\(\\'enter/);
+  assert.match(wb,/openPriceWorkbench\(\\'exit/);
+  assert.doesNotMatch(wb,/onchange="togglePricePromo/);
   assert.doesNotMatch(kaspi,/price-promo-toggle/);
   assert.match(html,/\.price-inline-actions\.wb\{grid-template-columns:auto 1fr auto\}/);
   assert.match(ui,/window\.togglePricePromo=async function\(index,enabled\)/);
@@ -329,7 +330,7 @@ test('WB price rows expose persisted promotion state without browser calls to WB
 test('WB promotion state is visible on every collapsed card',()=>{
   assert.match(ui,/В акции/);
   assert.match(ui,/Ждёт акцию/);
-  assert.match(ui,/Без акции/);
+  assert.match(ui,/Участие проверяйте в WB/);
   assert.match(ui,/price-promo-badge/);
   assert.match(html,/\.price-promo-badge\.off/);
   assert.match(html,/\.price-promo-badge\.waiting/);
