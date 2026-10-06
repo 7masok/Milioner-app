@@ -107,7 +107,7 @@ function updatePriceGroupTools(){
 function updatePriceBulkTools(indexed=priceVisibleRows()){
   const tools=document.getElementById('priceBulkTools'),all=document.getElementById('priceSelectAll'),count=document.getElementById('priceSelectedCount'),
     enable=document.getElementById('priceBulkEnablePromo'),disable=document.getElementById('priceBulkDisablePromo'),night=document.getElementById('priceBulkNight'),
-    protection=document.getElementById('priceBulkProtection');
+    protection=document.getElementById('priceBulkProtection'),price=document.getElementById('priceBulkPrice');
   const isWb=priceIsWbMarket(),selection=priceSelection(),visibleIds=indexed.map(({row})=>String(row.remoteId||'')).filter(Boolean),
     selectedVisible=visibleIds.filter(id=>selection.has(id)).length;
   if(tools)tools.hidden=!isWb;
@@ -120,6 +120,7 @@ function updatePriceBulkTools(indexed=priceVisibleRows()){
   if(disable)disable.disabled=!selection.size;
   if(night)night.disabled=!selection.size;
   if(protection)protection.disabled=!selection.size;
+  if(price)price.disabled=!selection.size;
   updatePriceGroupTools();
 }
 
@@ -212,18 +213,23 @@ function priceInlineEditor(row,index){
   }
   if(row.market==='WB'||row.market==='WB2'){
     const priceDisabled=row.canEditPrice===false;
+    const ordinary=pNum(row.nightBasePrice)||pNum(row.confirmedPrice)||pNum(row.price);
     return '<div class="price-inline-editor" onclick="event.stopPropagation()">'+
-      '<div class="price-inline-fields"><div class="field"><label>Цена, '+pEsc(row.currency||'RUB')+'</label><input id="priceEditCurrent" type="number" min="1" step="1" inputmode="decimal" value="'+pEsc(pNum(row.price)||'')+'" '+(priceDisabled?'disabled':'')+'></div>'+
-      '<div class="field"><label>Скидка, %</label><input id="priceEditDiscount" type="number" min="0" max="99" step="1" inputmode="numeric" value="'+pEsc(Math.round(pNum(row.discount)))+'"></div></div>'+
-      '<div class="price-night-row"><label class="price-promo-toggle"><input id="priceNightEnabled" type="checkbox" '+(row.nightPriceEnabled?'checked':'')+' '+(priceDisabled?'disabled':'')+' onchange="savePriceCardNight('+Number(index)+',this.checked)">Ночь</label>'+
-      '<div class="field"><label>Ночная цена, '+pEsc(row.currency||'RUB')+'</label><input id="priceNightCardValue" type="number" min="1" step="1" inputmode="decimal" value="'+pEsc(pNum(row.nightPriceTarget)||'')+'" '+(priceDisabled?'disabled':'')+' onchange="savePriceCardNight('+Number(index)+',document.getElementById(\'priceNightEnabled\').checked)"></div></div>'+
+      '<div class="price-mode-title">Обычная цена</div><div class="price-inline-fields"><div class="field"><label>До скидки, '+pEsc(row.currency||'RUB')+'</label><input id="priceEditCurrent" type="number" min="1" step="1" inputmode="decimal" value="'+pEsc(ordinary||'')+'" '+(priceDisabled?'disabled':'')+' oninput="priceInlinePreview()"></div>'+
+      '<div class="field"><label>Скидка, %</label><input id="priceEditDiscount" type="number" min="0" max="99" step="1" inputmode="numeric" value="'+pEsc(Math.round(pNum(row.discount)))+'" oninput="priceInlinePreview()"></div></div>'+
+      '<div id="priceInlineTotal" class="muted">После скидки: '+pMoney(ordinary*(1-pNum(row.discount)/100),row.currency)+'</div>'+
+      '<div class="price-night-row"><label class="price-promo-toggle"><input id="priceNightEnabled" type="checkbox" '+(row.nightPriceEnabled?'checked':'')+' '+(priceDisabled?'disabled':'')+'>Ночь</label>'+
+      '<div class="field"><label>Ночная цена, '+pEsc(row.currency||'RUB')+'</label><input id="priceNightCardValue" type="number" min="1" step="1" inputmode="decimal" value="'+pEsc(pNum(row.nightPriceTarget)||'')+'" '+(priceDisabled?'disabled':'')+'></div></div>'+
+      '<div class="price-night-times"><div class="field"><label>С · Алматы</label><input id="priceNightCardStart" type="time" value="'+pEsc(row.nightPriceStart||'04:00')+'"></div><div class="field"><label>До</label><input id="priceNightCardEnd" type="time" value="'+pEsc(row.nightPriceEnd||'06:00')+'"></div><button type="button" class="btn" onclick="savePriceCardNight('+Number(index)+',document.getElementById(\'priceNightEnabled\').checked)">Сохранить ночь</button></div>'+
+      '<div class="muted">Возврат: '+pMoney(ordinary,row.currency)+' до скидки</div>'+
       (priceDisabled?'<div class="price-inline-warning">Разные цены по размерам · меняется только скидка</div>':'')+
-      '<div class="price-protection-grid">'+
+      '<details class="price-advanced"><summary>Защита</summary><div class="price-protection-grid">'+
         '<label class="price-protection-toggle"><input type="checkbox" '+(row.manualPriceLock?'checked':'')+' onchange="togglePriceProtection('+Number(index)+',\'manualPriceLock\',this.checked)"> <span><b>Зафиксировать цену продавца</b><br><span class="muted">Блокирует наши автоматические изменения цены и скидки.</span></span></label>'+
         '<label class="price-protection-toggle"><input type="checkbox" '+(row.promoBlocked?'checked':'')+' onchange="togglePriceProtection('+Number(index)+',\'promoBlock\',this.checked)"> <span><b>Не участвовать в акциях</b><br><span class="muted">Блокирует добавление через Milioner. Автоакции WB API запретить не умеет.</span></span></label>'+
         '<label class="price-protection-toggle"><input type="checkbox" '+(row.autoZeroEnabled?'checked':'')+' onchange="togglePriceProtection('+Number(index)+',\'autoZeroEnabled\',this.checked)"> <span><b>Защита при нулевом моём остатке</b><br><span class="muted">Включается только при подтверждённом доступном остатке 0.</span></span></label>'+
-      '</div>'+
-      '<div class="price-inline-actions wb"><label class="price-promo-toggle"><input type="checkbox" '+(row.promoEnabled?'checked':'')+' onchange="togglePricePromo('+Number(index)+',this.checked)">Акции</label><button type="button" class="btn dark" onclick="submitPriceEdit('+Number(index)+')">Сохранить</button><button type="button" class="btn price-hide-action" onclick="hidePriceRow('+Number(index)+')">Скрыть</button></div>'+
+      '</div></details>'+
+      '<div class="price-inline-actions"><button type="button" class="btn" onclick="openPriceWorkbench(\'enter\','+Number(index)+')">В акцию</button><button type="button" class="btn" onclick="openPriceWorkbench(\'exit\','+Number(index)+')">Выйти из акции</button></div>'+
+      '<div class="price-inline-actions wb"><button type="button" class="btn dark" onclick="submitPriceEdit('+Number(index)+')">Сохранить</button><button type="button" class="btn price-hide-action" onclick="hidePriceRow('+Number(index)+')">Скрыть</button></div>'+
       '</div>';
   }
   if(row.market==='Ozon'){
@@ -243,9 +249,9 @@ function priceCard(row,index){
   const account=row.account&&row.account!==marketLabel(row.market)?'<span>'+pEsc(row.account)+'</span>':'';
   let lines='';
   if(row.market==='WB'||row.market==='WB2'){
-    lines='<span>Цена: <b>'+pRange(row.price,row.priceMax,row.currency)+'</b></span>'+
-      '<span>Скидка: <b>'+(discount?discount+'%':'0%')+'</b></span>'+
-      '<span>После скидки: <b>'+pRange(row.finalPrice,row.finalPriceMax,row.currency)+'</b></span>'+
+    lines='<span>Цена сейчас: <b>'+pRange(row.confirmedPrice??row.price,row.confirmedPriceMax??row.priceMax,row.currency)+'</b></span>'+
+      '<span>Скидка: <b>'+pNum(row.confirmedDiscount??row.discount)+'%'+'</b></span>'+
+      '<span>После скидки: <b>'+pRange(pNum(row.confirmedPrice??row.price)*(1-pNum(row.confirmedDiscount??row.discount)/100),pNum(row.confirmedPriceMax??row.priceMax)*(1-pNum(row.confirmedDiscount??row.discount)/100),row.currency)+'</b></span>'+
       (pNum(row.clubFinalPrice)>0?'<span>WB Клуб: <b>'+pMoney(row.clubFinalPrice,row.currency)+'</b></span>':'')+
       '<span class="price-stock-line">Мой склад: <b>'+(row.ownStockKnown?Number(row.ownAvailable||0):'—')+'</b></span>'+
       '<span class="price-stock-line">WB: <b>'+(row.wbStockKnown?Number(row.wbAvailable||0):'—')+'</b></span>';
@@ -259,7 +265,7 @@ function priceCard(row,index){
       '<span>Скидка: <b>—</b></span>';
   }
   const sync=row.syncState==='pending'
-    ?'<div class="price-sync-state pending">Ожидает отправки в WB</div>'
+    ?'<div class="price-sync-state pending">Ожидает отправки в WB: '+pMoney(row.price,row.currency)+' · '+pNum(row.discount)+'% · итог '+pMoney(row.finalPrice,row.currency)+'</div>'
     :row.syncState==='sent'
       ?'<div class="price-sync-state sent">Отправлено в WB · ждём проверки</div>'
       :'';
@@ -267,10 +273,10 @@ function priceCard(row,index){
     ?'<span class="price-promo-badge '+(row.promoEnabled&&row.promoStatus==='participating'?'active':row.promoEnabled?'waiting':'off')+'"> · '+(
       row.promoEnabled&&row.promoStatus==='participating'?'В акции':
       row.promoEnabled&&row.promoStatus==='auto_only'?'Автоакции вручную':
-      row.promoEnabled?'Ждёт акцию':'Без акции')+'</span>'
+      row.promoEnabled?'Ждёт акцию':'Участие проверяйте в WB')+'</span>'
     :'';
-  const night=(row.market==='WB'||row.market==='WB2')&&row.nightPriceEnabled
-    ?'<span class="price-night-badge"> · 🌙 '+pEsc(row.nightPriceStart||'04:00')+'–'+pEsc(row.nightPriceEnd||'06:00')+' · '+pMoney(row.nightPriceTarget,row.currency)+(row.nightPriceError?' · '+pEsc(row.nightPriceError):'')+'</span>'
+  const night=(row.market==='WB'||row.market==='WB2')&&(row.nightPriceEnabled||row.nightPricePhase==='restoring')
+    ?'<span class="price-night-badge"> · 🌙 '+pEsc(row.nightPriceStart||'04:00')+'–'+pEsc(row.nightPriceEnd||'06:00')+' · '+pMoney(row.nightPriceTarget,row.currency)+' · '+pEsc(({idle:'Запланировано',raising:'Устанавливается',active:'Установлена',restoring:'Возвращается',manual:'Ручная цена',locked:'Защита',off:'Выключено',error:'Ошибка'})[row.nightPricePhase]||'Запланировано')+(row.nightPriceError?' · '+pEsc(row.nightPriceError):'')+'</span>'
     :'';
   const protection=row.priceProtected?'<span class="price-lock-badge"> · 🔒 '+pEsc(row.protectionReason||'Защита цены')+'</span>':'';
   const group=priceIsWbMarket(row.market)?'<span> · '+(row.grouped?('Группа '+pEsc(row.groupImtId)+' · '+Number(row.groupSize||0)):'Без группы')+'</span>':'';
@@ -304,6 +310,7 @@ function paintPrices(){
   if(discount)discount.textContent=withDiscount.toLocaleString('ru-RU');
   if(missing)missing.textContent=noPrice.toLocaleString('ru-RU');
   const list=document.getElementById('priceList');if(!list)return;
+  updatePriceBulkTools(indexed);
   if(!rows.length){
     const failure=priceErrors.get(priceUi.market),snapshot=activeSnapshot();
     if(failure){priceRenderError(failure.message);return;}
@@ -428,6 +435,64 @@ window.priceSelectAllVisible=function(checked){
     if(checked)set.add(id);else set.delete(id);
   }
   paintPrices();
+};
+window.priceInlinePreview=function(){const total=document.getElementById('priceInlineTotal');if(total)total.textContent='После скидки: '+pMoney(Number(document.getElementById('priceEditCurrent')?.value)*(1-Number(document.getElementById('priceEditDiscount')?.value)/100),'RUB');};
+window.priceClearSelection=function(){priceSelection().clear();paintPrices();};
+
+let priceWorkbench=null,nightWorkbench=null,priceWorkbenchBusy=false;
+window.openPriceWorkbench=function(action='price',index=null){
+  if(!priceIsWbMarket())return;
+  const rows=index===null?selectedPriceRows():[activeRows()[Number(index)]].filter(Boolean);
+  if(!rows.length)return;
+  priceWorkbench={market:priceUi.market,action,rows:rows.map(row=>({...row})),ids:rows.map(row=>String(row.remoteId))};
+  const title=action==='enter'?'Войти в акцию':action==='exit'?'Выйти из акции':'Обычная цена / скидка';
+  showSheet('<h3>'+title+' · '+rows.length+'</h3>'+
+    (action==='price'?'<div class="field"><label>Цена до скидки, ₽ · пусто = оставить свою</label><input id="priceWorkbenchPrice" type="number" min="1" step="1" oninput="priceWorkbenchPreview()"></div>':'')+
+    '<div class="field"><label>Скидка, % · '+(action==='price'?'пусто = оставить свою':'пусто = по известному порогу акции')+'</label><input id="priceWorkbenchDiscount" type="number" min="0" max="99" step="1" oninput="priceWorkbenchPreview()"></div>'+
+    '<div id="priceWorkbenchPreview" class="price-workbench-preview"></div><button id="priceWorkbenchApply" type="button" class="btn dark full" onclick="submitPriceWorkbench()">Применить к выбранным</button>');
+  window.priceWorkbenchPreview();
+};
+function workbenchChanges(){
+  const ctx=priceWorkbench;if(!ctx)return [];
+  const rawPrice=document.getElementById('priceWorkbenchPrice')?.value||'',rawDiscount=document.getElementById('priceWorkbenchDiscount')?.value||'';
+  return ctx.rows.map(row=>{
+    const price=rawPrice===''?pNum(row.syncSource==='manual'?row.price:(row.confirmedPrice??row.price)):Number(rawPrice);
+    const plan=pNum(row.promoPlanPrice);
+    let discount=rawDiscount===''?null:Number(rawDiscount),error='';
+    if(discount===null&&ctx.action==='price')discount=pNum(row.syncSource==='manual'?row.discount:(row.confirmedDiscount??row.discount));
+    if(discount===null&&plan>0&&price>0)discount=ctx.action==='enter'?Math.max(0,Math.ceil((1-plan/price)*100-1e-9)):Math.min(99,Math.ceil((1-plan/price)*100-1e-9)-1);
+    if(!(price>0)||!Number.isInteger(price)||!Number.isInteger(discount)||discount<0||discount>99)error='Укажите корректную цену / скидку';
+    if(discount===null)error='Нет порога акции · укажите скидку';
+    if(rawPrice!==''&&row.canEditPrice===false)error='Разные цены по размерам';
+    if(ctx.action==='price'&&rawPrice===''&&rawDiscount==='')error='Укажите цену или скидку';
+    const final=price*(1-Number(discount)/100);
+    if(ctx.action==='enter'&&plan>0&&final>plan+1e-6)error='Скидки недостаточно';
+    if(ctx.action==='exit'&&plan>0&&final<=plan+1e-6)error='Цена остаётся в акции';
+    if(row.priceProtected||(ctx.action==='enter'&&row.promoBlocked))error='Включена защита';
+    if(row.syncState==='sent')error='Предыдущее изменение проверяется';
+    return {row,price,discount,final,error};
+  });
+}
+window.priceWorkbenchPreview=function(){
+  const items=workbenchChanges(),el=document.getElementById('priceWorkbenchPreview');
+  if(el)el.innerHTML=items.map(item=>'<div class="item"><b>'+pEsc(item.row.name||item.row.sku)+'</b><div>'+pMoney(item.row.confirmedPrice??item.row.price,'RUB')+' → '+pMoney(item.price,'RUB')+' · скидка '+pEsc(item.discount??'—')+'% · итог '+pMoney(item.final,'RUB')+'</div>'+(item.error?'<div class="price-error">'+pEsc(item.error)+'</div>':!pNum(item.row.promoPlanPrice)&&priceWorkbench.action!=='price'?'<div class="muted">Порог неизвестен · статус участия проверьте в WB</div>':'')+'</div>').join('');
+  const button=document.getElementById('priceWorkbenchApply');if(button)button.disabled=!items.some(item=>!item.error)||priceWorkbenchBusy;
+};
+window.submitPriceWorkbench=async function(){
+  const ctx=priceWorkbench;if(!ctx||priceWorkbenchBusy)return;
+  const eligible=workbenchChanges().filter(item=>!item.error);if(!eligible.length)return;
+  if(!confirm('Сохранить изменения для '+eligible.length+' товаров? Они будут отправлены в ближайший сеанс WB.'))return;
+  priceWorkbenchBusy=true;window.priceWorkbenchPreview();
+  try{
+    const response=await fetch(MILLIONER_API+'/api/market-prices/update/bulk',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({market:ctx.market,action:ctx.action,remoteIds:eligible.map(item=>String(item.row.remoteId)),price:document.getElementById('priceWorkbenchPrice')?.value||null,discount:document.getElementById('priceWorkbenchDiscount')?.value||null,confirm:true})});
+    const result=await response.json();if(!response.ok||result.ok===false)throw new Error(result.error||('HTTP '+response.status));
+    const applied=new Set((result.applied||[]).map(String));
+    for(const id of applied)priceSelection(ctx.market).delete(id);
+    closeModal();bumpPriceEpoch(ctx.market);
+    if(priceUi.market===ctx.market){await window.renderPrices(true);setPriceStatus('В очереди: '+applied.size+' · пропущено: '+(ctx.ids.length-applied.size),'ok');}
+    if(result.skipped?.length)alert(result.skipped.map(item=>item.remoteId+': '+item.error).join('\n'));
+  }catch(error){alert(priceErrorText(error));}
+  finally{priceWorkbenchBusy=false;window.priceWorkbenchPreview();}
 };
 
 async function remotePriceProtection(body){
@@ -634,11 +699,12 @@ window.savePriceCardNight=async function(index,enabled){
     alert('Укажите ночную цену.');
     return;
   }
-  const start=String(row.nightPriceStart||'04:00'),end=String(row.nightPriceEnd||'05:00');
+  const start=String(document.getElementById('priceNightCardStart')?.value||row.nightPriceStart||'04:00'),end=String(document.getElementById('priceNightCardEnd')?.value||row.nightPriceEnd||'06:00');
   try{
     const result=await remoteNightSchedule({market:row.market,remoteIds:[row.remoteId],enabled:Boolean(enabled),start,end,price:price>0?price:0});
     const schedule=(result.schedules||[]).find(item=>String(item.nmId||'')===String(row.remoteId||''));
-    row.nightPriceEnabled=Boolean(enabled);
+    if(!schedule)throw new Error('Расписание не сохранено: товар защищён или недоступен');
+    row.nightPriceEnabled=Boolean(schedule.enabled);
     if(schedule){
       row.nightPriceStart=priceMinuteTime(schedule.startMinute);
       row.nightPriceEnd=priceMinuteTime(schedule.endMinute);
@@ -659,41 +725,31 @@ window.openPriceNightSchedule=function(){
   const selectedRows=activeRows().filter(row=>ids.includes(String(row.remoteId||'')));
   const configured=selectedRows.filter(row=>row.nightPriceEnabled);
   const first=configured[0]||selectedRows[0]||{};
-  const start=String(first.nightPriceStart||'04:00'),end=String(first.nightPriceEnd||'06:00'),price=pNum(first.nightPriceTarget)||5000;
+  nightWorkbench={market:priceUi.market,ids:[...ids]};
+  const start=String(first.nightPriceStart||'04:00'),end=String(first.nightPriceEnd||'06:00'),price=pNum(first.nightPriceTarget)||'';
   const activeCount=configured.length;
   showSheet('<div class="price-night-sheet"><h3>Ночная цена · '+ids.length+'</h3>'+
-    '<div class="two"><div class="field"><label>С</label><input id="priceNightStart" type="time" value="'+pEsc(start)+'"></div>'+
+    '<div class="muted">Каждый день · время Алматы · возврат к своей обычной цене</div><div class="two"><div class="field"><label>С</label><input id="priceNightStart" type="time" value="'+pEsc(start)+'"></div>'+
     '<div class="field"><label>До</label><input id="priceNightEnd" type="time" value="'+pEsc(end)+'"></div></div>'+
-    '<div class="field"><label>Цена, ₽</label><input id="priceNightValue" type="number" min="1" step="1" inputmode="decimal" value="'+pEsc(price)+'"></div>'+
+    '<div class="field"><label>Ночная цена до скидки, ₽</label><input id="priceNightValue" type="number" min="1" step="1" inputmode="decimal" value="'+pEsc(price)+'"></div>'+
     '<div class="actions"><button type="button" class="btn" onclick="savePriceNightSchedule(false)" '+(activeCount?'':'disabled')+'>Выключить</button>'+
     '<button type="button" class="btn dark" onclick="savePriceNightSchedule(true)">Сохранить</button></div></div>');
 };
 window.savePriceNightSchedule=async function(enabled){
-  if(!priceIsWbMarket())return;
-  const ids=[...priceSelection()].filter(Boolean);if(!ids.length)return;
+  const ctx=nightWorkbench;if(!ctx)return;
+  const ids=ctx.ids;if(!ids.length)return;
   const start=String(document.getElementById('priceNightStart')?.value||'04:00');
   const end=String(document.getElementById('priceNightEnd')?.value||'06:00');
   const price=Number(document.getElementById('priceNightValue')?.value);
   if(enabled&&(!/^\d{2}:\d{2}$/.test(start)||!/^\d{2}:\d{2}$/.test(end)||start===end))return alert('Укажите корректное время.');
   if(enabled&&!(price>0))return alert('Укажите цену больше 0.');
   try{
-    const result=await remoteNightSchedule({market:priceUi.market,remoteIds:ids,enabled:Boolean(enabled),start,end,price});
-    const scheduleByNm=new Map((result.schedules||[]).map(row=>[String(row.nmId||''),row]));
-    for(const row of activeRows()){
-      if(!ids.includes(String(row.remoteId||'')))continue;
-      const schedule=scheduleByNm.get(String(row.remoteId||''));
-      row.nightPriceEnabled=Boolean(enabled);
-      if(schedule){
-        row.nightPriceStart=priceMinuteTime(schedule.startMinute);
-        row.nightPriceEnd=priceMinuteTime(schedule.endMinute);
-        row.nightPriceTarget=Number(schedule.targetPrice)||null;
-        row.nightPricePhase=String(schedule.phase||'');
-      }else if(enabled){
-        row.nightPriceStart=start;row.nightPriceEnd=end;row.nightPriceTarget=price;
-      }
-    }
-    priceSelection().clear();closeModal();paintPrices();
-    setPriceStatus(enabled?'Ночная цена сохранена для '+Number(result.count||ids.length)+' товаров':'Ночная цена выключена','ok');
+    const result=await remoteNightSchedule({market:ctx.market,remoteIds:ids,enabled:Boolean(enabled),start,end,price});
+    const schedules=result.schedules||[],applied=new Set(schedules.map(row=>String(row.nmId)));
+    for(const id of applied)priceSelection(ctx.market).delete(id);
+    closeModal();bumpPriceEpoch(ctx.market);
+    if(priceUi.market===ctx.market){await window.renderPrices(true);setPriceStatus((enabled?'Ночь сохранена':'Ночь выключена')+' · '+applied.size+' · пропущено '+(ids.length-applied.size),'ok');}
+    if(result.skipped?.length)alert('Не изменены: '+result.skipped.join(', ')+'. Проверьте защиту цены и цены размеров.');
   }catch(error){alert(priceErrorText(error))}
 };
 
@@ -762,13 +818,16 @@ window.togglePricePromo=async function(index,enabled){
   }
 };
 async function remotePriceUpdate(body){
-  const response=await fetch(MILLIONER_API+'/api/market-prices/update',{
+  const workbench=priceIsWbMarket(body.market)&&body.overrideProtection!==true;
+  if(workbench)body={...body,remoteIds:[body.remoteId],action:'price'};
+  const response=await fetch(MILLIONER_API+'/api/market-prices/update'+(workbench?'/bulk':''),{
     method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({...body,confirm:true})
   });
   const text=await response.text();
   let data=null;if(text){try{data=JSON.parse(text)}catch{const e=new Error('Сервер цен вернул некорректный ответ');e.status=502;throw e}}
   if(!response.ok||data?.ok===false){const error=new Error(data?.error||('HTTP '+response.status));error.status=response.status;error.retryAt=Number(data?.retryAt)||0;throw error}
   if(!data||typeof data!=='object')throw new Error('Сервер цен вернул пустой ответ');
+  if(workbench&&!data.applied?.length)throw new Error(data.skipped?.[0]?.error||'Изменение не сохранено');
   return data;
 }
 window.submitPriceEdit=async function(index){
@@ -812,7 +871,7 @@ window.submitPriceEdit=async function(index){
       if(priceChanged)body.price=enteredPrice;
       if(discountChanged)body.discount=enteredDiscount;
       const result=await remotePriceUpdate(body);
-      if(priceChanged){row.price=enteredPrice;row.priceMax=enteredPrice;row.finalPrice=enteredPrice*(1-enteredDiscount/100);row.finalPriceMax=row.finalPrice}
+      if(priceChanged){row.nightBasePrice=enteredPrice;row.price=enteredPrice;row.priceMax=enteredPrice;row.finalPrice=enteredPrice*(1-enteredDiscount/100);row.finalPriceMax=row.finalPrice}
       if(discountChanged){row.discount=enteredDiscount;if(!priceChanged&&pNum(row.price)>0){row.finalPrice=pNum(row.price)*(1-enteredDiscount/100);row.finalPriceMax=pNum(row.priceMax||row.price)*(1-enteredDiscount/100)}}
       row.syncState='pending';row.syncQueuedAt=Number(result.queuedAt)||Date.now();row.syncSentAt=0;row.syncError='';
       const cached=priceCache.get(row.market);

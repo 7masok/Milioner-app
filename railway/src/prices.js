@@ -8,6 +8,7 @@ import { readWarehouseProducts } from './warehouse-products.js';
 import { decorateWbPromotionRows } from './wb-promotions.js';
 import { decorateWbProtectionRows, protectionFor, syncWbPriceProtection, updateProtectionBaseline } from './wb-price-protection.js';
 import { decorateWbCardGroupRows } from './wb-card-groups.js';
+import { prepareWbPriceChange, nightUploadInFlight } from './wb-price-workbench.js';
 
 const WB_PRICE_API = 'https://discounts-prices-api.wildberries.ru';
 const WB_ANALYTICS_API = 'https://seller-analytics-api.wildberries.ru';
@@ -533,6 +534,7 @@ function decorateWbNightSchedules(rows, schedules) {
     row.nightPriceTarget = schedule?.targetPrice || null;
     row.nightPricePhase = cleanText(schedule?.phase);
     row.nightPriceError = cleanText(schedule?.lastError);
+    row.nightBasePrice = schedule?.basePrice || null;
     return row;
   });
 }
@@ -611,6 +613,8 @@ async function syncWbNightSchedules(market, now = Date.now()) {
     const confirmedPrice = number(row.price);
     const window = wbNightWindowState(schedule.startMinute, schedule.endMinute, now);
     let queueRow = queueByNm.get(schedule.nmId);
+    // Preserve uploadID across an end-of-window or target change until WB is checked.
+    if (nightUploadInFlight(queueRow)) continue;
 
     // Never start a new night window while the previous night's base price is still
     // waiting to be restored. Otherwise the temporary raised WB price can become
@@ -1450,6 +1454,71 @@ pricesRouter.post('/market-prices/update', requireWritesEnabled, asyncRoute(asyn
   }
 }));
 
+pricesRouter.post('/market-prices/update/bulk', requireWritesEnabled, asyncRoute(async (req, res) => {
+  if (req.body?.confirm !== true) return res.status(400).json({ ok: false, error: 'Подтвердите изменение цены' });
+  const market = cleanText(req.body?.market);
+  if (!['WB', 'WB2'].includes(market)) return res.status(400).json({ ok: false, error: 'Массовое изменение доступно для WB' });
+  const raw = req.body?.remoteIds;
+  if (!Array.isArray(raw) || !raw.length || raw.length > 1000 || raw.some(id => !Number.isSafeInteger(Number(id)) || Number(id) <= 0)) {
+    return res.status(400).json({ ok: false, error: 'Выберите от 1 до 1000 корректных товаров WB' });
+  }
+  const ids = [...new Set(raw.map(id => String(Number(id))))], client = await pool.connect(), now = Date.now();
+  try {
+    await client.query('BEGIN');
+    await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', ['millioner:wb-prices:' + market]);
+    const snapshot = await wbPriceSnapshot(market, client);
+    const rows = new Map((snapshot?.rows || []).map(row => [String(row.remoteId), row]));
+    const prefs = await client.query('SELECT nm_id AS "nmId",plan_price AS "planPrice" FROM wb_promo_preferences WHERE market=$1', [market]);
+    const prefByNm = new Map(prefs.rows.map(row => [String(row.nmId), row]));
+    const queue = new Map((await wbPriceQueueRows(market, client)).map(row => [row.nmId, row]));
+    const applied = [], skipped = [];
+    for (const id of ids) {
+      const row = rows.get(id);
+      try {
+        if (!row) throw new Error('Товар отсутствует в снимке WB');
+        const protection = await protectionFor(market, Number(id), client);
+        if (protection.priceProtected) throw new Error('Включена защита цены');
+        if (req.body.action === 'enter' && protection.promoBlock) throw new Error('Включён запрет акций');
+        if (['sent', 'checking'].includes(queue.get(id)?.status)) throw new Error('Дождитесь проверки предыдущего изменения WB');
+        const previous = queue.get(id);
+        const effective = previous?.source === 'manual' ? { ...row, price: previous.desiredPrice ?? row.price, discount: previous.desiredDiscount ?? row.discount } : row;
+        const change = prepareWbPriceChange(effective, req.body, prefByNm.get(id));
+        // Disable the old calendar automation before setting an explicit discount.
+        await client.query(`UPDATE wb_promo_preferences SET enabled=false,status='off',last_error='',updated_at=$3 WHERE market=$1 AND nm_id=$2`, [market, id, now]);
+        const desiredPrice = change.price ?? (previous?.source === 'manual' ? previous.desiredPrice : null);
+        const desiredDiscount = change.discount ?? (previous?.source === 'manual' ? previous.desiredDiscount : null);
+        await client.query(`INSERT INTO wb_price_update_queue
+          (market,nm_id,desired_price,desired_discount,status,queued_at,sent_at,upload_id,last_error,updated_at,source,promotion_id)
+          VALUES($1,$2,$3,$4,'pending',$5,0,0,'',$5,'manual',0)
+          ON CONFLICT(market,nm_id) DO UPDATE SET desired_price=excluded.desired_price,desired_discount=excluded.desired_discount,
+          status='pending',queued_at=excluded.queued_at,sent_at=0,upload_id=0,last_error='',updated_at=excluded.updated_at,source='manual',promotion_id=0`,
+          [market, id, desiredPrice, desiredDiscount, now]);
+        const schedules = await client.query(`SELECT enabled,start_minute AS "startMinute",end_minute AS "endMinute" FROM wb_price_schedules WHERE market=$1 AND nm_id=$2`, [market, id]);
+        const schedule = schedules.rows[0];
+        if (schedule) {
+          const window = wbNightWindowState(schedule.startMinute, schedule.endMinute, now);
+          // A manual price becomes the daytime return target; discounts do not copy the temporary night price.
+          await client.query(`UPDATE wb_price_schedules SET
+            base_price=CASE WHEN $3::double precision IS NOT NULL AND base_price IS NOT NULL THEN $3 ELSE base_price END,
+            manual_override_window=CASE WHEN $4 THEN $5 ELSE manual_override_window END,
+            phase=CASE WHEN $4 THEN 'manual' ELSE phase END,updated_at=$6 WHERE market=$1 AND nm_id=$2`,
+            [market, id, change.price, Boolean(schedule.enabled && window.inWindow), window.windowKey, now]);
+        }
+        applied.push(id);
+      } catch (error) {
+        // SQL errors abort the transaction; only validation failures are skippable.
+        if (error.code) throw error;
+        skipped.push({ remoteId: id, error: cleanText(error.message) });
+      }
+    }
+    await client.query('COMMIT');
+    return res.json({ ok: true, market, queued: true, applied, skipped, count: applied.length });
+  } catch (error) {
+    await client.query('ROLLBACK').catch(() => {});
+    return sendPriceError(res, error);
+  } finally { client.release(); }
+}));
+
 async function saveWbNightSchedules(market, input) {
   const rawIds = Array.isArray(input?.remoteIds) ? input.remoteIds : [input?.remoteId];
   const ids = [...new Set(rawIds.map(Number).filter(value => Number.isInteger(value) && value > 0))].slice(0, 1000);
@@ -1477,6 +1546,7 @@ async function saveWbNightSchedules(market, input) {
   const now = Date.now();
   try {
     await client.query('BEGIN');
+    await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', ['millioner:wb-prices:' + market]);
     const snapshot = await wbPriceSnapshot(market, client);
     const byNm = new Map((snapshot?.rows || []).map(row => [Number(row.remoteId), row]));
     const applied = [];
