@@ -11,7 +11,7 @@ export function prepareWbPriceChange(row, input, pref = {}) {
   const base = Number(row.price);
   const plan = Number(pref.planPrice);
   if (discount === null && action === 'enter' && base > 0 && plan > 0) discount = Math.max(0, Math.ceil((1 - plan / base) * 100 - 1e-9));
-  if (discount === null && action === 'exit' && base > 0 && plan > 0) discount = Math.min(99, Math.ceil((1 - plan / base) * 100 - 1e-9) - 1);
+  if (discount === null && action === 'exit') discount = 0;
   if (discount !== null && (!Number.isInteger(discount) || discount < 0 || discount > 99)) throw new Error('Скидка должна быть целым числом от 0 до 99');
   if (action !== 'price' && discount === null) throw new Error('Порог акции неизвестен · укажите нужную скидку');
   if (action === 'enter' && plan > 0 && base * (1 - discount / 100) > plan + 1e-6) throw new Error('Этой скидки недостаточно для цены акции');

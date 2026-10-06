@@ -463,7 +463,7 @@ window.openPriceWorkbench=function(action='price',index=null){
   const title=action==='enter'?'Войти в акцию':action==='exit'?'Выйти из акции':'Обычная цена / скидка';
   showSheet('<h3>'+title+' · '+rows.length+'</h3>'+
     (action==='price'?'<div class="field"><label>Цена до скидки, ₽ · пусто = оставить свою</label><input id="priceWorkbenchPrice" type="number" min="1" step="1" oninput="priceWorkbenchPreview()"></div>':'')+
-    '<div class="field"><label>Скидка, % · '+(action==='price'?'пусто = оставить свою':'пусто = по известному порогу акции')+'</label><input id="priceWorkbenchDiscount" type="number" min="0" max="99" step="1" oninput="priceWorkbenchPreview()"></div>'+
+    '<div class="field"><label>Скидка, % · '+(action==='price'?'пусто = оставить свою':action==='exit'?'0 = убрать скидку':'пусто = по известному порогу акции')+'</label><input id="priceWorkbenchDiscount" type="number" min="0" max="99" step="1" value="'+(action==='exit'?'0':'')+'" oninput="priceWorkbenchPreview()"></div>'+
     '<div id="priceWorkbenchPreview" class="price-workbench-preview"></div><button id="priceWorkbenchApply" type="button" class="btn dark full" onclick="submitPriceWorkbench()">Применить к выбранным</button>');
   window.priceWorkbenchPreview();
 };
@@ -475,6 +475,7 @@ function workbenchChanges(){
     const plan=pNum(row.promoPlanPrice);
     let discount=rawDiscount===''?null:Number(rawDiscount),error='';
     if(discount===null&&ctx.action==='price')discount=pNum(row.syncSource==='manual'?row.discount:(row.confirmedDiscount??row.discount));
+    if(discount===null&&ctx.action==='exit')discount=0;
     if(discount===null&&plan>0&&price>0)discount=ctx.action==='enter'?Math.max(0,Math.ceil((1-plan/price)*100-1e-9)):Math.min(99,Math.ceil((1-plan/price)*100-1e-9)-1);
     if(!(price>0)||!Number.isInteger(price)||!Number.isInteger(discount)||discount<0||discount>99)error='Укажите корректную цену / скидку';
     if(discount===null)error='Нет порога акции · укажите скидку';
