@@ -232,7 +232,7 @@ function priceInlineEditor(row,index){
       (priceDisabled?'<div class="price-inline-warning">Разные цены по размерам · меняется только скидка</div>':'')+
       '<details class="price-advanced"><summary>Защита</summary><div class="price-protection-grid">'+
         '<label class="price-protection-toggle"><input type="checkbox" '+(row.manualPriceLock?'checked':'')+' onchange="togglePriceProtection('+Number(index)+',\'manualPriceLock\',this.checked)"> <span><b>Зафиксировать цену продавца</b><br><span class="muted">Блокирует наши автоматические изменения цены и скидки.</span></span></label>'+
-        '<label class="price-protection-toggle"><input type="checkbox" '+(row.promoBlocked?'checked':'')+' onchange="togglePriceProtection('+Number(index)+',\'promoBlock\',this.checked)"> <span><b>Не участвовать в акциях</b><br><span class="muted">Блокирует добавление через Milioner. Автоакции WB API запретить не умеет.</span></span></label>'+
+        '<label class="price-protection-toggle"><input type="checkbox" '+(row.promoBlocked?'checked':'')+' onchange="togglePriceProtection('+Number(index)+',\'promoBlock\',this.checked)"> <span><b>Не участвовать в акциях</b><br><span class="muted">Поддерживает скидку продавца 0%. Склад регулярно проверяет WB и убирает появившуюся скидку.</span></span></label>'+
         '<label class="price-protection-toggle"><input type="checkbox" '+(row.autoZeroEnabled?'checked':'')+' onchange="togglePriceProtection('+Number(index)+',\'autoZeroEnabled\',this.checked)"> <span><b>Защита при нулевом моём остатке</b><br><span class="muted">Включается только при подтверждённом доступном остатке 0.</span></span></label>'+
       '</div></details>'+
       '<div class="price-inline-actions"><button type="button" class="btn" onclick="openPriceWorkbench(\'enter\','+Number(index)+')">В акцию</button><button type="button" class="btn" onclick="openPriceWorkbench(\'exit\','+Number(index)+')">Выйти из акции</button></div>'+
@@ -285,6 +285,7 @@ function priceCard(row,index){
   const night=(row.market==='WB'||row.market==='WB2')&&(row.nightPriceEnabled||row.nightPricePhase==='restoring')
     ?'<span class="price-night-badge"> · 🌙 '+pEsc(row.nightPriceStart||'04:00')+'–'+pEsc(row.nightPriceEnd||'06:00')+' · '+pMoney(row.nightPriceTarget,row.currency)+' · '+pEsc(({idle:'Запланировано',raising:'Устанавливается',active:'Установлена',restoring:'Возвращается',manual:'Ручная цена',locked:'Защита',off:'Выключено',error:'Ошибка'})[row.nightPricePhase]||'Запланировано')+(row.nightPriceError?' · '+pEsc(row.nightPriceError):'')+'</span>'
     :'';
+  const discountBlock=row.promoBlocked?'<span class="price-lock-badge"> · Скидки заблокированы · 0%</span>':'';
   const protection=row.priceProtected?'<span class="price-lock-badge"> · 🔒 '+pEsc(row.protectionReason||'Защита цены')+'</span>':'';
   const group=priceIsWbMarket(row.market)?'<span> · '+(row.grouped?('Группа '+pEsc(row.groupImtId)+' · '+Number(row.groupSize||0)):'Без группы')+'</span>':'';
   const expanded=Boolean(priceExpanded&&priceExpanded.market===priceUi.market&&priceExpanded.index===Number(index));
@@ -293,7 +294,7 @@ function priceCard(row,index){
   return '<div class="item price-item '+(!linked?'unlinked':'')+(expanded?' expanded':'')+(selected?' selected':'')+'" data-price-row="'+index+'">'+selectBox+
     '<button type="button" class="price-card-toggle" onclick="openPriceEditor('+index+')" aria-expanded="'+(expanded?'true':'false')+'">'+
       '<div class="price-item-head"><div class="grow"><div class="name">'+pEsc(row.name||row.sku||'Товар')+'</div>'+
-      '<div class="muted">'+pEsc(account?(row.account+' · '):'')+pEsc(row.sku?('Арт. '+row.sku):row.remoteId||'')+(linked?'':' · не привязан к товару склада')+group+promo+night+protection+'</div>'+sync+'</div><span class="price-chevron">'+(expanded?'⌄':'›')+'</span></div>'+
+      '<div class="muted">'+pEsc(account?(row.account+' · '):'')+pEsc(row.sku?('Арт. '+row.sku):row.remoteId||'')+(linked?'':' · не привязан к товару склада')+group+promo+night+protection+discountBlock+'</div>'+sync+'</div><span class="price-chevron">'+(expanded?'⌄':'›')+'</span></div>'+
       '<div class="price-values">'+lines+'</div>'+
     '</button>'+priceInlineEditor(row,index)+'</div>';
 }
@@ -463,7 +464,8 @@ window.openPriceWorkbench=function(action='price',index=null){
   const title=action==='enter'?'Войти в акцию':action==='exit'?'Выйти из акции':'Обычная цена / скидка';
   showSheet('<h3>'+title+' · '+rows.length+'</h3>'+
     (action==='price'?'<div class="field"><label>Цена до скидки, ₽ · пусто = оставить свою</label><input id="priceWorkbenchPrice" type="number" min="1" step="1" oninput="priceWorkbenchPreview()"></div>':'')+
-    '<div class="field"><label>Скидка, % · '+(action==='price'?'пусто = оставить свою':action==='exit'?'0 = убрать скидку':'пусто = по известному порогу акции')+'</label><input id="priceWorkbenchDiscount" type="number" min="0" max="99" step="1" value="'+(action==='exit'?'0':'')+'" oninput="priceWorkbenchPreview()"></div>'+
+    '<div class="field"><label>Скидка, % · '+(action==='price'?'пусто = оставить свою':action==='exit'?'0 = убрать скидку':'пусто = по известному порогу акции')+'</label><input id="priceWorkbenchDiscount" type="number" min="0" max="99" step="1" value="'+(action==='exit'?'0':'')+'" '+(action==='exit'?'readonly ':'')+'oninput="priceWorkbenchPreview()"></div>'+
+    (action==='exit'?'<div class="muted">Скидка 0% · постоянный блок включится для выбранных товаров.</div>':action==='enter'?'<div class="muted">Блок скидок будет снят для выбранных товаров.</div>':'')+
     '<div id="priceWorkbenchPreview" class="price-workbench-preview"></div><button id="priceWorkbenchApply" type="button" class="btn dark full" onclick="submitPriceWorkbench()">Применить к выбранным</button>');
   window.priceWorkbenchPreview();
 };
@@ -475,7 +477,7 @@ function workbenchChanges(){
     const plan=pNum(row.promoPlanPrice);
     let discount=rawDiscount===''?null:Number(rawDiscount),error='';
     if(discount===null&&ctx.action==='price')discount=pNum(row.syncSource==='manual'?row.discount:(row.confirmedDiscount??row.discount));
-    if(discount===null&&ctx.action==='exit')discount=0;
+    if(ctx.action==='exit')discount=0;
     if(discount===null&&plan>0&&price>0)discount=ctx.action==='enter'?Math.max(0,Math.ceil((1-plan/price)*100-1e-9)):Math.min(99,Math.ceil((1-plan/price)*100-1e-9)-1);
     if(!(price>0)||!Number.isInteger(price)||!Number.isInteger(discount)||discount<0||discount>99)error='Укажите корректную цену / скидку';
     if(discount===null)error='Нет порога акции · укажите скидку';
@@ -483,9 +485,9 @@ function workbenchChanges(){
     if(ctx.action==='price'&&rawPrice===''&&rawDiscount==='')error='Укажите цену или скидку';
     const final=price*(1-Number(discount)/100);
     if(ctx.action==='enter'&&plan>0&&final>plan+1e-6)error='Скидки недостаточно';
-    if(ctx.action==='exit'&&plan>0&&final<=plan+1e-6)error='Цена остаётся в акции';
-    if(row.priceProtected||(ctx.action==='enter'&&row.promoBlocked))error='Включена защита';
-    if(row.syncState==='sent')error='Предыдущее изменение проверяется';
+    if(row.priceProtected&&ctx.action!=='exit')error='Включена защита';
+    if(ctx.action==='price'&&row.promoBlocked&&discount>0)error='Снимите блок скидок или нажмите «В акцию»';
+    if(row.syncState==='sent'&&ctx.action!=='exit')error='Предыдущее изменение проверяется';
     return {row,price,discount,final,error};
   });
 }
@@ -500,7 +502,7 @@ window.submitPriceWorkbench=async function(){
   if(!confirm('Сохранить изменения для '+eligible.length+' товаров? Они будут отправлены в ближайший сеанс WB.'))return;
   priceWorkbenchBusy=true;window.priceWorkbenchPreview();
   try{
-    const response=await fetch(MILLIONER_API+'/api/market-prices/update/bulk',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({market:ctx.market,action:ctx.action,remoteIds:eligible.map(item=>String(item.row.remoteId)),price:document.getElementById('priceWorkbenchPrice')?.value||null,discount:document.getElementById('priceWorkbenchDiscount')?.value||null,confirm:true})});
+    const response=await fetch(MILLIONER_API+'/api/market-prices/update/bulk',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({market:ctx.market,action:ctx.action,remoteIds:eligible.map(item=>String(item.row.remoteId)),price:document.getElementById('priceWorkbenchPrice')?.value||null,discount:ctx.action==='exit'?0:document.getElementById('priceWorkbenchDiscount')?.value||null,confirm:true})});
     const result=await response.json();if(!response.ok||result.ok===false)throw new Error(result.error||('HTTP '+response.status));
     const applied=new Set((result.applied||[]).map(String));
     for(const id of applied)priceSelection(ctx.market).delete(id);
@@ -538,11 +540,11 @@ window.openPriceBulkProtection=function(){
     '<div class="price-protection-grid">'+
       '<button type="button" class="btn" onclick="applyPriceBulkProtection(\'manualPriceLock\',true)">🔒 Зафиксировать цену</button>'+
       '<button type="button" class="btn" onclick="applyPriceBulkProtection(\'manualPriceLock\',false)">Снять ручной замок</button>'+
-      '<button type="button" class="btn" onclick="applyPriceBulkProtection(\'promoBlock\',true)">Не добавлять в акции</button>'+
-      '<button type="button" class="btn" onclick="applyPriceBulkProtection(\'promoBlock\',false)">Разрешить акции сервиса</button>'+
+      '<button type="button" class="btn" onclick="applyPriceBulkProtection(\'promoBlock\',true)">Блок скидок · 0%</button>'+
+      '<button type="button" class="btn" onclick="applyPriceBulkProtection(\'promoBlock\',false)">Снять блок скидок</button>'+
       '<button type="button" class="btn" onclick="applyPriceBulkProtection(\'autoZeroEnabled\',true)">Автозащита при 0 · вкл</button>'+
       '<button type="button" class="btn" onclick="applyPriceBulkProtection(\'autoZeroEnabled\',false)">Автозащита при 0 · выкл</button>'+
-    '</div><div class="price-inline-warning">Запрет акций действует на Milioner. Публичный API WB не даёт выключить автоакции WB или гарантированно удалить товар из уже действующей акции.</div>');
+    '</div><div class="price-inline-warning">Блок скидок поддерживает скидку продавца 0%. «В акцию» снимает блок. Скидки самой площадки отдельно.</div>');
 };
 window.applyPriceBulkProtection=async function(field,enabled){
   if(!priceIsWbMarket())return;

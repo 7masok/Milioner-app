@@ -6,7 +6,7 @@ import { credentialFor } from './connections.js';
 import { asyncRoute, requireTrustedOrigin, requireWritesEnabled } from './http.js';
 import { readWarehouseProducts } from './warehouse-products.js';
 import { decorateWbPromotionRows } from './wb-promotions.js';
-import { decorateWbProtectionRows, protectionFor, syncWbPriceProtection, updateProtectionBaseline } from './wb-price-protection.js';
+import { decorateWbProtectionRows, protectionFor, syncWbPriceProtection, syncWbDiscountBlocks, setWbDiscountBlock, updateProtectionBaseline } from './wb-price-protection.js';
 import { decorateWbCardGroupRows } from './wb-card-groups.js';
 import { prepareWbPriceChange, nightUploadInFlight } from './wb-price-workbench.js';
 import { wbPriceSyncAction, wbPriceRetryAfterRead } from './wb-price-sync-policy.js';
@@ -872,6 +872,11 @@ async function queueWbPrice(market, input) {
     error.status = 400;
     throw error;
   }
+  if (protection.promoBlock && desiredDiscount > 0) {
+    const error = new Error('Включён блок скидок. Снимите галочку или используйте «В акцию».');
+    error.status = 409;
+    throw error;
+  }
   const now = Date.now();
   await pool.query(`INSERT INTO wb_price_update_queue
     (market,nm_id,desired_price,desired_discount,status,queued_at,sent_at,upload_id,last_error,updated_at,source,promotion_id)
@@ -1135,6 +1140,7 @@ async function syncWbPriceMarket(market) {
     const now = Date.now();
     await syncWbPriceProtection(market, now);
     await syncWbNightSchedules(market, now);
+    await syncWbDiscountBlocks(market, now);
     const state = await wbPriceState(market);
     if (Number(state.nextAllowedAt || 0) > now) {
       return { ok: true, market, skipped: true, reason: 'slot-cooldown', nextSyncAt: Number(state.nextAllowedAt) };
@@ -1489,22 +1495,32 @@ pricesRouter.post('/market-prices/update/bulk', requireWritesEnabled, asyncRoute
       try {
         if (!row) throw new Error('Товар отсутствует в снимке WB');
         const protection = await protectionFor(market, Number(id), client);
-        if (protection.priceProtected) throw new Error('Включена защита цены');
-        if (req.body.action === 'enter' && protection.promoBlock) throw new Error('Включён запрет акций');
-        if (['sent', 'checking'].includes(queue.get(id)?.status)) throw new Error('Дождитесь проверки предыдущего изменения WB');
+        const exit = req.body.action === 'exit';
+        if (protection.priceProtected && !exit) throw new Error('Включена защита цены');
+        const inFlight = ['sent', 'checking'].includes(queue.get(id)?.status);
+        if (inFlight && !exit) throw new Error('Дождитесь проверки предыдущего изменения WB');
         const previous = queue.get(id);
         const effective = previous?.source === 'manual' ? { ...row, price: previous.desiredPrice ?? row.price, discount: previous.desiredDiscount ?? row.discount } : row;
         const change = prepareWbPriceChange(effective, req.body, prefByNm.get(id));
+        if (protection.promoBlock && req.body.action !== 'enter' && change.discount > 0) throw new Error('Включён блок скидок. Снимите галочку или используйте «В акцию».');
         // Disable the old calendar automation before setting an explicit discount.
         await client.query(`UPDATE wb_promo_preferences SET enabled=false,status='off',last_error='',updated_at=$3 WHERE market=$1 AND nm_id=$2`, [market, id, now]);
-        const desiredPrice = change.price ?? (previous?.source === 'manual' ? previous.desiredPrice : null);
+        if (exit || req.body.action === 'enter') {
+          await setWbDiscountBlock(market, Number(id), exit, client, now);
+          await client.query(`INSERT INTO wb_control_history(market,nm_id,action,actor,payload,created_at)
+            VALUES($1,$2,'discount-block','owner',$3::jsonb,$4)`, [market,id,JSON.stringify({ enabled: exit, action: req.body.action }),now]);
+        }
+        // Persist exit immediately, but keep a sent upload intact until its check.
+        if (inFlight) { applied.push(id); continue; }
+        const desiredPrice = change.price ?? (previous?.source === 'manual' || exit ? previous?.desiredPrice ?? null : null);
         const desiredDiscount = change.discount ?? (previous?.source === 'manual' ? previous.desiredDiscount : null);
+        const source = exit && ['schedule', 'protection'].includes(previous?.source) ? previous.source : 'manual';
         await client.query(`INSERT INTO wb_price_update_queue
           (market,nm_id,desired_price,desired_discount,status,queued_at,sent_at,upload_id,last_error,updated_at,source,promotion_id)
-          VALUES($1,$2,$3,$4,'pending',$5,0,0,'',$5,'manual',0)
+          VALUES($1,$2,$3,$4,'pending',$5,0,0,'',$5,$6,0)
           ON CONFLICT(market,nm_id) DO UPDATE SET desired_price=excluded.desired_price,desired_discount=excluded.desired_discount,
-          status='pending',queued_at=excluded.queued_at,sent_at=0,upload_id=0,last_error='',updated_at=excluded.updated_at,source='manual',promotion_id=0`,
-          [market, id, desiredPrice, desiredDiscount, now]);
+          status='pending',queued_at=excluded.queued_at,sent_at=0,upload_id=0,last_error='',updated_at=excluded.updated_at,source=excluded.source,promotion_id=0`,
+          [market, id, desiredPrice, desiredDiscount, now, source]);
         const schedules = await client.query(`SELECT enabled,start_minute AS "startMinute",end_minute AS "endMinute" FROM wb_price_schedules WHERE market=$1 AND nm_id=$2`, [market, id]);
         const schedule = schedules.rows[0];
         if (schedule) {
@@ -1514,7 +1530,7 @@ pricesRouter.post('/market-prices/update/bulk', requireWritesEnabled, asyncRoute
             base_price=CASE WHEN $3::double precision IS NOT NULL AND base_price IS NOT NULL THEN $3 ELSE base_price END,
             manual_override_window=CASE WHEN $4 THEN $5 ELSE manual_override_window END,
             phase=CASE WHEN $4 THEN 'manual' ELSE phase END,updated_at=$6 WHERE market=$1 AND nm_id=$2`,
-            [market, id, change.price, Boolean(schedule.enabled && window.inWindow), window.windowKey, now]);
+            [market, id, change.price, Boolean(change.price !== null && schedule.enabled && window.inWindow), window.windowKey, now]);
         }
         applied.push(id);
       } catch (error) {

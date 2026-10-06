@@ -16,7 +16,7 @@ test('missing upload history cannot starve actual reads or new pending discounts
   const actions = [], client = { query: async () => ({ rows: [{ locked: true }] }), release() {} };
   const ctx = { Date: { now: () => now }, Number, String, Boolean, console,
     pool: { connect: async () => client },
-    syncWbPriceProtection: async () => {}, syncWbNightSchedules: async () => {},
+    syncWbPriceProtection: async () => {}, syncWbNightSchedules: async () => {}, syncWbDiscountBlocks: async () => {},
     wbPriceState: async () => ({ lastAction: 'verify-upload', nextAllowedAt: 0 }),
     wbToken: async () => 'fixture', syncWbWarehouseStocksMaybe: async () => {},
     wbPriceQueueRows: async () => queue, wbPriceSnapshot: async () => ({ fetchedAt: now - 3 * slot }),
@@ -80,7 +80,7 @@ test('fresh actual read confirms matching missing uploads and retries old unmet 
 test('exit without a discount removes it, even when the promotion threshold is unknown', () => {
   assert.equal(prepareWbPriceChange({ price: 450, discount: 3 }, { action: 'exit' }).discount, 0);
   assert.equal(prepareWbPriceChange({ price: 450, discount: 3 }, { action: 'exit' }, { planPrice: 436.5 }).discount, 0);
-  assert.equal(prepareWbPriceChange({ price: 450, discount: 3 }, { action: 'exit', discount: 1 }, { planPrice: 436.5 }).discount, 1);
+  assert.throws(() => prepareWbPriceChange({ price: 450, discount: 3 }, { action: 'exit', discount: 1 }, { planPrice: 436.5 }), /обнуляет/);
 });
 
 test('pending writes progress at 16-minute intervals, but failed reads and long downtime require a refresh', () => {
@@ -172,7 +172,7 @@ test('real sync completes gradual night return and zero discount across timed sl
       console: { info() {}, warn() {} }, pool: { connect: async () => client },
       WB_PRICE_SLOT_MS: slot, WB_PRICE_PAGE_LIMIT: 1000, wbPriceSyncAction, wbPriceRetryAfterRead,
       number: value => Number(value) || 0, cleanText: value => String(value ?? ''), clampDiscount: Number,
-      syncWbPriceProtection: async () => {}, syncWbNightSchedules: async () => {},
+      syncWbPriceProtection: async () => {}, syncWbNightSchedules: async () => {}, syncWbDiscountBlocks: async () => {},
       wbPriceState: async () => ({ ...state }), wbPriceSnapshot: async () => snapshot,
       wbPriceQueueRows: async () => [...queue.values()].map(row => ({ ...row })),
       wbPriceSchedules: async () => [], wbToken: async () => 'fixture',
