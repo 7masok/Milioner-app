@@ -98,12 +98,12 @@ test('local repeated statement import cannot repair a split first part into the 
 });
 
 test('editor uses one durable local command, fills remainder, supports cancellation and rolls back local storage failure',async()=>{
-  const elements=new Map(),alerts=[],commands=[];let injected='',saved=0,fallback=0,fail=false;
+  const elements=new Map(),alerts=[],commands=[];let injected='',saved=0,fallback=0,fail=false,missingBox=false;
   const element=id=>{if(!elements.has(id))elements.set(id,{value:'',disabled:false,hidden:false,innerHTML:'',textContent:'',addEventListener(){},closest(){return {insertAdjacentHTML(where,html){injected=html;}};}});return elements.get(id);};
   const transactions=[structuredClone(before)],account={balance:690000};
   const ctx={console,Number,String,Object,JSON,Date,Math,Map,Set,Error,
-    document:{getElementById:element,querySelector:()=>element('save'),createElement:()=>({}),head:{appendChild(){}}},
-    alert:msg=>alerts.push(msg),esc:String,financeMoney:String,
+    document:{getElementById:id=>missingBox&&id==='financeEditSplitBox'?null:element(id),querySelector:()=>element('save'),createElement:()=>({}),head:{appendChild(){}}},
+    alert:msg=>alerts.push(msg),
     openModal(){},saveFinanceTransaction:()=>fallback++,closeModal:()=>saved++,
     financeTransactions:()=>transactions,financeVisibleCategories:()=>[{id:'c1',kind:'expense',name:'Газмяс'},{id:'c2',kind:'expense',name:'Доставка'}],financeCategoryName:id=>id,
     financeCommand:path=>({id:'command-123',path,method:'POST'}),
@@ -111,10 +111,29 @@ test('editor uses one durable local command, fills remainder, supports cancellat
     financeLocalCreateTransaction:row=>{transactions.push({...row});account.balance-=row.amount;},
     financeRunLocalMutation:async(fn,list)=>{const backup=structuredClone(transactions),balance=account.balance;try{const result=fn();if(fail)throw Error('storage failed');commands.push(...list());return result;}catch(e){transactions.splice(0,transactions.length,...backup);account.balance=balance;throw e;}}
   };ctx.window=ctx;
+  // Use the application's actual classic-script declarations. A top-level
+  // `const esc` is visible lexically but is not a property of window.
+  const app=readFileSync(new URL('../../index.html',import.meta.url),'utf8');
+  const helpers=app.slice(app.indexOf('const moneyFormatter='),app.indexOf('const prod='));
+  runInNewContext(helpers+'\n'+app.split('\n').find(line=>line.startsWith('function financeMoney(')),ctx);
+  assert.equal(ctx.esc,undefined);
   runInNewContext(readFileSync(new URL('../../finance-split-model.js',import.meta.url),'utf8'),ctx);
   runInNewContext(readFileSync(new URL('../../finance-edit-split-v1.js',import.meta.url),'utf8'),ctx);
   const open=()=>{element('financeTransactionType').value='expense';element('financeTransactionAccount').value='a';element('financeTransactionAmount').value='310000';element('financeTransactionCategory').value='c1';element('financeTransactionTitle').value='Платёж';ctx.openModal('financeTransaction','original');};
-  open();assert.match(injected,/Разделить по категориям/);ctx.financeEditSplitEnable();ctx.financeEditSplitAmount(0,'100000');assert.equal(element('financeEditSplitAmount-1').value,210000);
+  open();missingBox=true;ctx.financeEditSplitEnable();missingBox=false;
+  assert.match(alerts.at(-1),/Не удалось открыть разбивку/);
+  assert.equal(element('financeTransactionCategory').disabled,false);
+  assert.equal(element('financeEditSplitLaunch').hidden,false);
+  assert.equal(element('save').disabled,false);
+  open();assert.match(injected,/Разделить по категориям/);ctx.financeEditSplitEnable();
+  assert.match(element('financeEditSplitBox').innerHTML,/Категория 1/);
+  assert.match(element('financeEditSplitBox').innerHTML,/Категория 2/);
+  assert.match(element('financeEditSplitBox').innerHTML,/310\s?000/);
+  const categories=ctx.financeVisibleCategories;ctx.financeVisibleCategories=()=>[{id:'c1',kind:'expense',name:'Газмяс <>&"\''},{id:'c2',kind:'expense',name:'Доставка'}];
+  ctx.financeEditSplitAdd();assert.match(element('financeEditSplitBox').innerHTML,/Газмяс &lt;&gt;&amp;&quot;&#039;/);
+  ctx.financeEditSplitRemove(1);ctx.financeVisibleCategories=categories;
+  assert.equal(element('save').disabled,true,'incomplete split cannot be saved');
+  ctx.financeEditSplitAmount(0,'100000');assert.equal(element('financeEditSplitAmount-1').value,210000);
   ctx.financeEditSplitCategory(1,'c2');ctx.financeEditSplitAdd();ctx.financeEditSplitAmount(1,'150000');ctx.financeEditSplitCategory(1,'c2');ctx.financeEditSplitCategory(2,'__transit__');assert.equal(element('financeEditSplitAmount-2').value,60000);
   fail=true;await ctx.saveFinanceTransaction('original');assert.equal(transactions.length,1);assert.equal(account.balance,690000);assert.equal(commands.length,0);assert.match(alerts.at(-1),/storage failed/);
   fail=false;await Promise.all([ctx.saveFinanceTransaction('original'),ctx.saveFinanceTransaction('original')]);assert.equal(transactions.length,3);assert.equal(account.balance,690000);assert.equal(commands.length,1);assert.equal(saved,1);assert.equal(commands[0].body.parts.length,3);assert.match(commands[0].path,/original\/split$/);
