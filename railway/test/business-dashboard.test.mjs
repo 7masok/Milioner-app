@@ -38,7 +38,7 @@ test('business day chart uses real overlapping bars and no separate yesterday ca
   assert.match(ui, /todayShorter=sameSide&&!equal&&Math\.abs\(v\)<Math\.abs\(yv\)/);
   assert.match(ui, /todayZ=todayShorter\|\|equal\?3:2,yesterdayZ=yesterdayShorter\?3:1/);
   assert.match(ui, /todayHeight=equal/);
-  assert.match(ui, /сегодня .* вчера/);
+  assert.match(ui, /currentName.*previousName/);
 });
 
 test('business x-axis labels are 03 through 24 without 00', () => {
@@ -89,7 +89,7 @@ test('money formatting removes negative zero and unknown WB fields render as das
 
 test('business dashboard assets are cache-busted and served', () => {
   assert.match(html, /kaspi-report-v2\.js\?v=20261003-report-ads-panel/);
-  assert.match(html, /business-dashboard-v1\.js\?v=20261003-business-month/);
+  assert.match(html, /business-dashboard-v1\.js\?v=20261008-business-day-swipe/);
   assert.match(html, /ozon-fbo-v1\.js\?v=20261002-ozon-sku-link/);
   assert.match(server, /'business-dashboard-v1\.js'/);
 });
