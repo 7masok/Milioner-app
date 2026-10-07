@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { pool, transaction } from './db.js';
 import { asyncRoute, requireTrustedOrigin, requireWritesEnabled } from './http.js';
 import { financeMergeEffects, financePositive, financeTransactionEffects, financeTransactionType } from './finance-ledger-core.js';
+import '../../finance-split-model.js';
 
 export const financeLedgerRouter = express.Router();
 
@@ -327,8 +328,9 @@ async function createTransactionLocked(client, raw, { allowStatementDuplicate = 
   const sameId = await getTransactionRow(client, tx.id, true);
   if (sameId) {
     const before = transactionPayload(sameId);
-    const repairBalance = before.affectsBalance === false && tx.affectsBalance !== false;
+    const repairBalance = !before.splitCommandId && before.affectsBalance === false && tx.affectsBalance !== false;
     const promotePosted =
+      !before.splitCommandId &&
       before.source === 'bank_statement' &&
       tx.source === 'bank_statement' &&
       String(before.bankStatus || '') === 'blocked' &&
@@ -355,8 +357,9 @@ async function createTransactionLocked(client, raw, { allowStatementDuplicate = 
     const duplicate = await findStatementDuplicate(client, tx);
     if (duplicate) {
       const before = transactionPayload(duplicate);
-      const repairBalance = before.affectsBalance === false && tx.affectsBalance !== false;
+      const repairBalance = !before.splitCommandId && before.affectsBalance === false && tx.affectsBalance !== false;
       const promotePosted =
+        !before.splitCommandId &&
         before.source === 'bank_statement' &&
         tx.source === 'bank_statement' &&
         String(before.bankStatus || '') === 'blocked' &&
@@ -788,6 +791,50 @@ financeLedgerRouter.post('/finance/transactions', requireTrustedOrigin, requireW
     return {...meta,...created,accounts};
   });
   res.status(result.skipped?200:201).json({ok:true,...result});
+}));
+
+financeLedgerRouter.post('/finance/transactions/:id/split', requireTrustedOrigin, requireWritesEnabled, asyncRoute(async (req,res)=>{
+  const result=await transaction(async client=>{
+    await lockFinance(client);
+    const id=cleanText(req.params.id,220),commandId=cleanText(req.body?.commandId,180);
+    if(!/^[a-zA-Z0-9_-]{8,180}$/.test(commandId))throw httpError('Не найден идентификатор сохранения');
+    const retry=await client.query(`SELECT after_payload FROM finance_audit
+      WHERE entity_type='transaction' AND entity_id=$1 AND action='split'
+        AND after_payload->>'splitCommandId'=$2 ORDER BY created_at DESC LIMIT 1`,[id,commandId]);
+    if(retry.rows.length){
+      const ids=retry.rows[0].after_payload.splitPartIds||[],rows=[];
+      for(const partId of ids){const row=await getTransactionRow(client,partId);if(row)rows.push(transactionPayload(row));}
+      return {...await currentRevision(client),transactions:rows,accounts:await readChangedAccounts(client,rows.map(r=>r.accountId)),idempotent:true};
+    }
+    const existing=await getTransactionRow(client,id,true);
+    if(!existing)throw httpError('Операция не найдена',404);
+    const before=transactionPayload(existing),expected=req.body?.expected||{};
+    for(const key of ['amount','accountId','type','categoryId','statementFingerprint','title','note']){
+      if(expected[key]===undefined||String(expected[key])!==String(before[key]??''))throw httpError('Операция изменилась. Обновите данные перед разбивкой.',409);
+    }
+    const refunds=await client.query("SELECT id FROM finance_transactions WHERE payload->>'refundOfId'=$1 LIMIT 1",[id]);
+    if(refunds.rows.length)throw httpError('У операции есть возврат. Разбивка недоступна.',409);
+    const raw=globalThis.financeSplitModel.buildRows(before,req.body?.transaction||{},req.body?.parts,commandId);
+    const rows=[];
+    for(const row of raw){
+      if(row.categoryId){
+        const category=await getCategoryRow(client,row.categoryId);
+        if(!category||category.archived||!['both',row.type].includes(category.kind))throw httpError('Выберите действующую категорию каждой части',409);
+        row.category=category.name;
+      }else row.category='Транзитные деньги';
+      if(row.id!==id&&await getTransactionRow(client,row.id,true))throw httpError('Идентификатор части уже занят',409);
+      rows.push(await canonicalTransaction(client,row,row.id===id?existing:null));
+    }
+    // Same account, direction, total and affectsBalance: reclassification has
+    // zero balance effect, including existing foreign-currency conversions.
+    for(const row of rows){
+      await storeTransaction(client,row,row.id===id?existing:null);
+      if(row.id!==id)await addAudit(client,'transaction',row.id,'create',null,row,row.updatedAt);
+    }
+    await addAudit(client,'transaction',id,'split',before,{...rows[0],splitPartIds:rows.map(r=>r.id)},Date.now());
+    return {...await bumpRevision(client),transactions:rows,accounts:await readChangedAccounts(client,[before.accountId]),idempotent:false};
+  });
+  res.json({ok:true,...result});
 }));
 
 financeLedgerRouter.put('/finance/transactions/:id', requireTrustedOrigin, requireWritesEnabled, asyncRoute(async (req,res)=>{

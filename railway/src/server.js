@@ -58,6 +58,8 @@ const frontendFiles = Object.freeze([
   'ai-assistant-v1.js',
   'prices-v1.js',
   'finance-import-tools-v1.js',
+  'finance-split-model.js',
+  'finance-edit-split-v1.js',
 ]);
 app.set('trust proxy', 1);
 app.disable('x-powered-by');
