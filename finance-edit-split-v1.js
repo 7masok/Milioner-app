@@ -3,7 +3,10 @@
 const originalOpen=window.openModal,originalSave=window.saveFinanceTransaction;
 if(typeof originalOpen!=='function'||typeof originalSave!=='function'||!window.financeSplitModel)return;
 let editor=null,busy=false;
-const el=id=>document.getElementById(id),html=value=>window.esc(String(value??''));
+const el=id=>document.getElementById(id);
+// index.html declares esc with const; classic-script lexical bindings do not
+// become window properties. Keep this renderer's escaping self-contained.
+const html=value=>String(value??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[c]));
 const money=value=>window.financeMoney(Number(value)||0,editor?.before?.currency||'KZT');
 const expected=tx=>Object.fromEntries(['amount','accountId','type','categoryId','statementFingerprint','title','note'].map(k=>[k,tx[k]??'']));
 function input(){return {type:el('financeTransactionType')?.value,accountId:el('financeTransactionAccount')?.value,
@@ -33,7 +36,7 @@ function render(){
   if(!editor?.parts)return;
   const kind=['income','transit_in'].includes(editor.before.type)?'income':'expense';
   const options=selected=>'<option value="">Категория</option><option value="__transit__" '+(selected==='__transit__'?'selected':'')+'>Транзит · не учитывать</option>'+window.financeVisibleCategories().filter(c=>['both',kind].includes(c.kind)).map(c=>'<option value="'+html(c.id)+'" '+(String(c.id)===selected?'selected':'')+'>'+html(c.name)+'</option>').join('');
-  const box=el('financeEditSplitBox');if(!box)return;
+  const box=el('financeEditSplitBox');if(!box)throw Error('Не найден блок разбивки. Откройте операцию заново.');
   box.innerHTML='<div class="finance-edit-split-head"><b>Разбивка · '+money(editor.before.amount)+'</b><button type="button" class="btn" onclick="financeEditSplitDisable()">Отменить разбивку</button></div>'+editor.parts.map((p,i)=>'<div class="finance-edit-split-part"><div class="field"><label>Категория '+(i+1)+'</label><select onchange="financeEditSplitCategory('+i+',this.value)">'+options(p.categoryId)+'</select></div><div class="field"><label>'+(p.auto?'Остаток':'Сумма')+'</label><input id="financeEditSplitAmount-'+i+'" type="number" min="0.01" step="0.01" inputmode="decimal" value="'+html(p.amount)+'" oninput="financeEditSplitAmount('+i+',this.value)"></div>'+(editor.parts.length>2?'<button type="button" class="btn finance-edit-split-remove" aria-label="Убрать часть '+(i+1)+'" onclick="financeEditSplitRemove('+i+')">×</button>':'')+'</div>').join('')+'<button type="button" class="btn full" onclick="financeEditSplitAdd()">+ Ещё категория</button><div id="financeEditSplitStatus" class="finance-edit-split-status" aria-live="polite"></div>';
   updateStatus();
 }
@@ -56,12 +59,14 @@ window.financeEditSplitEnable=function(){
   if(before.source==='bank_statement'&&before.bankStatus==='blocked')return alert('Дождитесь проведения банковской операции.');
   const category=['transit_in','transit_out'].includes(before.type)?'__transit__':String(el('financeTransactionCategory')?.value||'');
   editor.parts=[{categoryId:category,amount:'',auto:false},{categoryId:'',amount:Number(before.amount),auto:true}];
-  el('financeEditSplitLaunch').hidden=true;
-  for(const id of ['financeTransactionType','financeTransactionAccount','financeTransactionAmount','financeTransactionCategory'])el(id).disabled=true;
-  render();
+  try{
+    render();
+    el('financeEditSplitLaunch').hidden=true;
+    for(const id of ['financeTransactionType','financeTransactionAccount','financeTransactionAmount','financeTransactionCategory'])el(id).disabled=true;
+  }catch(e){window.financeEditSplitDisable();alert('Не удалось открыть разбивку: '+String(e.message||e));}
 };
 window.financeEditSplitDisable=function(){
-  if(!editor||busy)return;editor.parts=null;el('financeEditSplitBox').innerHTML='';el('financeEditSplitLaunch').hidden=false;
+  if(!editor||busy)return;editor.parts=null;if(el('financeEditSplitBox'))el('financeEditSplitBox').innerHTML='';if(el('financeEditSplitLaunch'))el('financeEditSplitLaunch').hidden=false;
   for(const id of ['financeTransactionType','financeTransactionAccount','financeTransactionAmount','financeTransactionCategory'])el(id).disabled=false;
   if(saveButton())saveButton().disabled=false;
 };
