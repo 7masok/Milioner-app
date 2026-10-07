@@ -51,7 +51,7 @@ test('same transaction id is a pure retry unless statement repair is required',(
   assert.ok(start>=0&&end>start);
   const fn=ledgerSource.slice(start,end);
   assert.match(fn,/const sameId = await getTransactionRow/);
-  assert.match(fn,/const repairBalance = before\.affectsBalance === false/);
+  assert.match(fn,/const repairBalance = !before\.splitCommandId && before\.affectsBalance === false/);
   assert.match(fn,/const promotePosted =/);
   assert.match(fn,/idempotent:true/);
   assert.match(fn,/promote-statement/);
