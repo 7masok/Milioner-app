@@ -4,6 +4,7 @@ import { pool, transaction } from './db.js';
 import { asyncRoute, requireTrustedOrigin, requireWritesEnabled } from './http.js';
 import { financeMergeEffects, financePositive, financeTransactionEffects, financeTransactionType } from './finance-ledger-core.js';
 import '../../finance-split-model.js';
+import '../../finance-statement-transfers.js';
 
 export const financeLedgerRouter = express.Router();
 
@@ -157,6 +158,13 @@ async function findStatementDuplicate(client, tx) {
     WHERE (
       ($1 <> '' AND statement_fingerprint=$1)
       OR ($2 <> '' AND payload->>'bankOperationKey'=$2)
+      OR EXISTS (
+        SELECT 1 FROM jsonb_array_elements(CASE WHEN jsonb_typeof(payload->'statementLinks')='array' THEN payload->'statementLinks' ELSE '[]'::jsonb END) AS link
+        WHERE link->>'accountId'=$3 AND (
+          ($1 <> '' AND link->>'statementFingerprint'=$1)
+          OR ($2 <> '' AND link->>'bankOperationKey'=$2)
+        )
+      )
     )
       AND (
         $3 = ''
@@ -235,6 +243,9 @@ async function applyEffects(client, tx, direction = 1) {
 
 async function canonicalTransaction(client, raw, previous = null) {
   const source = stripSyncFields(raw);
+  // Linking identifies an existing movement; its command intent is never stored.
+  delete source.statementTransferMatchId;
+  delete source.statementLinks;
   const before = previous ? transactionPayload(previous) : null;
   const now = Date.now();
   const type = financeTransactionType(source || before);
@@ -380,6 +391,20 @@ async function createTransactionLocked(client, raw, { allowStatementDuplicate = 
       }
       return { transaction: before, accountIds:[], repaired:false, skipped:true };
     }
+  }
+
+  const matchId = cleanText(raw?.statementTransferMatchId, 220);
+  if (matchId) {
+    const existing = await getTransactionRow(client, matchId, true);
+    if (!existing) throw httpError('Учтённый перевод не найден. Обновите данные.', 409);
+    const before = transactionPayload(existing);
+    let linked;
+    try { linked = globalThis.FinanceStatementTransfers.link(before, tx); }
+    catch (error) { throw httpError(error.message, 409); }
+    linked = { ...linked, updatedAt: Date.now() };
+    await storeTransaction(client, linked, existing);
+    await addAudit(client, 'transaction', linked.id, 'link-statement-transfer', before, linked, linked.updatedAt);
+    return { transaction: linked, accountIds: [], repaired: false, skipped: true, linked: true };
   }
 
   const accountIds = await applyEffects(client, tx, 1);
@@ -782,7 +807,7 @@ financeLedgerRouter.post('/finance/transactions', requireTrustedOrigin, requireW
   const result=await transaction(async client=>{
     await lockFinance(client);
     const created=await createTransactionLocked(client,req.body?.transaction||req.body);
-    if(created.skipped){
+    if(created.skipped&&!created.linked){
       const meta=await currentRevision(client);
       return {...meta,...created,accounts:[]};
     }
@@ -875,6 +900,7 @@ financeLedgerRouter.post('/finance/transactions/batch', requireTrustedOrigin, re
     for(const raw of rows){
       const item=await createTransactionLocked(client,raw,{allowStatementDuplicate:true});
       if(item.skipped){
+        if(item.linked)changed++;
         const canonical=item.transaction;
         skipped.push(String(canonical?.id||''));
         if(canonical?.id)skippedTransactions.push(canonical);
