@@ -59,6 +59,7 @@ const frontendFiles = Object.freeze([
   'prices-v1.js',
   'finance-import-tools-v1.js',
   'finance-split-model.js',
+  'finance-statement-transfers.js',
   'finance-edit-split-v1.js',
 ]);
 app.set('trust proxy', 1);
