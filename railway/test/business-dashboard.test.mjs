@@ -89,8 +89,8 @@ test('money formatting removes negative zero and unknown WB fields render as das
 
 test('business dashboard assets are cache-busted and served', () => {
   assert.match(html, /kaspi-report-v2\.js\?v=20261003-report-ads-panel/);
-  assert.match(html, /business-dashboard-v1\.js\?v=20261008-business-day-swipe/);
-  assert.match(html, /ozon-fbo-v1\.js\?v=20261002-ozon-sku-link/);
+  assert.match(html, /business-dashboard-v1\.js\?v=20261008-business-week-swipe/);
+  assert.match(html, /ozon-fbo-v1\.js\?v=20261008-ozon-order-history/);
   assert.match(server, /'business-dashboard-v1\.js'/);
 });
 
@@ -119,7 +119,7 @@ test('known marketplace values remain visible when another marketplace is unknow
 
 test('week chart compares the calendar week with the previous week through the same moment', () => {
   assert.match(ui, /function businessWeekBounds\(which=0\)/);
-  assert.match(ui, /\(today\.getDay\(\)\+6\)%7/);
+  assert.match(ui, /getUTCDay\(\)\+6/);
   assert.match(ui, /BUSINESS_WEEKDAYS=\['Пн','Вт','Ср','Чт','Пт','Сб','Вс'\]/);
   assert.match(ui, /function businessWeekSamePoint\(fullWeek\)/);
   assert.match(ui, /setBusinessDashboardPeriod\('week'\)/);

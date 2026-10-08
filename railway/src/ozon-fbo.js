@@ -24,6 +24,17 @@ export async function fetchPostings(credentials,from,to){
   if(!data.cursor||data.cursor===cursor)throw new Error('Ozon: повтор курсора отправлений');cursor=data.cursor;
  }throw new Error('Ozon: превышен лимит страниц отправлений');
 }
+export async function fetchPostingHistory(credentials,from,to,previous={},fetchRows=fetchPostings){
+ const historyFrom=new Date(Date.parse(to)-50*86400000).toISOString(),fresh=await fetchRows(credentials,from,to),cachedFrom=Date.parse(previous.from||'');
+ let older=Array.isArray(previous.rows)?previous.rows:[];
+ // Backfill only the missing older segment, within the existing 30-day request size.
+ if(!Number.isFinite(cachedFrom)||cachedFrom>Date.parse(historyFrom)){
+  const olderTo=Number.isFinite(cachedFrom)?new Date(Math.min(cachedFrom,Date.parse(from))).toISOString():from;
+  older=[...older,...await fetchRows(credentials,historyFrom,olderTo)];
+ }
+ const retained=older.filter(row=>{const created=Date.parse(row.created_at||row.in_process_at||'');return created>=Date.parse(historyFrom)&&created<Date.parse(from)});
+ return {rows:[...new Map([...retained,...fresh].map(row=>[row.posting_number,row])).values()],from:historyFrom,to};
+}
 export async function fetchStocks(credentials){
  const rows=[];let cursor='';
  for(let page=0;page<100;page++){
@@ -143,8 +154,8 @@ async function run(){
   try{credentials=JSON.parse(await credentialFor(account.id));if(!credentials.clientId||!credentials.apiKey)throw new Error('missing');}catch{results.push({account:account.id,error:'Проверьте Client ID и API-ключ'});continue;}
   const to=new Date().toISOString(),from=new Date(Date.now()-30*86400000).toISOString();
   const payload={...previous,account:account.id,label:account.label,scheme:'FBO',attemptAt:Date.now(),errors:{}};
-  for(const [key,fn] of [['postings',()=>fetchPostings(credentials,from,to)],['stocks',()=>fetchStocks(credentials)],['finance',()=>fetchFinance(credentials,from,to)],['supplies',()=>fetchSupplyOrders(credentials,previous.supplies?.rows||[])]]){
-   try{payload[key]={rows:await fn(),updatedAt:Date.now(),from,to};}
+  for(const [key,fn] of [['postings',()=>fetchPostingHistory(credentials,from,to,previous.postings)],['stocks',()=>fetchStocks(credentials)],['finance',()=>fetchFinance(credentials,from,to)],['supplies',()=>fetchSupplyOrders(credentials,previous.supplies?.rows||[])]]){
+   try{const result=await fn();payload[key]={...(key==='postings'?result:{rows:result,from,to}),updatedAt:Date.now()};}
    catch(e){payload.errors[key]=String(e.message||e);}
   }
   await pool.query('INSERT INTO ozon_fbo_cache(account,payload,updated_at) VALUES($1,$2::jsonb,$3) ON CONFLICT(account) DO UPDATE SET payload=EXCLUDED.payload,updated_at=EXCLUDED.updated_at',[account.id,JSON.stringify(payload),Date.now()]);
