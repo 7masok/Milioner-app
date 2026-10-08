@@ -26,6 +26,7 @@ function productOzonKeys(p){return [...new Set([p?.ozon,...(Array.isArray(p?.ozo
 function ozonFboQtyForProduct(p){return productOzonKeys(p).reduce((n,key)=>n+(fboByKey.get(key)||0),0);}
 window.ozonFboQtyForProduct=ozonFboQtyForProduct;
 window.ozonFboDataReady=()=>Boolean(data);
+window.ozonFboOrderHistoryCovers=bounds=>Boolean(data?.accounts)&&data.accounts.every(account=>Array.isArray(account.postings?.rows)&&Date.parse(account.postings.from)<=bounds.start&&Date.parse(account.postings.to)>=bounds.end);
 function updateFboMetric(){const el=document.getElementById('productFboQty');if(el)el.textContent=data?fboTotal.toLocaleString('ru-RU')+' шт.':'—';}
 function populateOzonOrderFeed(){
  if(!data?.accounts)return;
