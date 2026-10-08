@@ -133,7 +133,7 @@ function normalizeStatementResult(raw, sourceHash, filename) {
       periodEnd: normalizeStatementDate(raw?.periodEnd),
       pendingCount: Math.max(0,Number(raw?.pendingCount)||0),
       blockedImportedCount: Math.max(0,Number(raw?.blockedImportedCount)||0),
-      currentBalance: Number.isFinite(Number(raw?.currentBalance)) ? Number(raw.currentBalance) : null
+      currentBalance: raw?.currentBalance !== null && raw?.currentBalance !== undefined && String(raw.currentBalance).trim() !== '' && Number.isFinite(Number(raw.currentBalance)) ? Number(raw.currentBalance) : null
     },
     transactions
   };
@@ -364,6 +364,29 @@ export function parseBccStatement(text, sourceHash, filename) {
   return normalized.transactions.length ? normalized : null;
 }
 
+function kaspiStatementBalance(clean, periodEnd) {
+  // Read the summary only: operation details can also contain the word «остаток».
+  const header = /Дата\s*Сумма\s*Операция\s*Детали/i.exec(clean);
+  const summary = (header ? clean.slice(0, header.index) : clean).replace(/\u2212/g, '-');
+  const labels = /(?:Доступно(?:\s+на\s+Kaspi\s+Gold)?|(?:Текущий|Итоговый|Конечный|Исходящий)\s+остаток|Остаток\s+на\s+конец(?:\s+периода)?|Остаток|Баланс)(?:\s+на(?:\s+дату)?\s+(\d{2}\.\d{2}\.(?:\d{4}|\d{2}))(?!\d))?/gi;
+  const candidates = [];
+  for (const match of summary.matchAll(labels)) {
+    const label = match[0];
+    if (/(?:Начальный|Входящий)\s*$/i.test(summary.slice(0, match.index))) continue;
+    // Parse separately so regex backtracking cannot mistake a date's year for money.
+    const money = summary.slice(match.index + match[0].length).match(/^\s*:?\s*([+-]?\s*\d+(?:[^\S\r\n]+\d{3})*(?:[.,]\d{2})?)(?![\d.,])(?=[^\S\r\n]*(?:₸|KZT|тенге|тг|\r?\n|$))/i);
+    if (!money) continue;
+    const dated = normalizeStatementDate(match[1]);
+    const explicit = /Доступно|Текущий|Итоговый|Конечный|Исходящий|на\s+конец/i.test(label);
+    // An opening balance dated at the start is not the closing balance.
+    if (dated && !explicit && (!periodEnd || dated !== normalizeStatementDate(periodEnd))) continue;
+    const amount = Number(money[1].replace(/\s+/g, '').replace(',', '.'));
+    if (Number.isFinite(amount)) candidates.push({ amount, priority: explicit ? 2 : dated ? 1 : 0 });
+  }
+  candidates.sort((a, b) => b.priority - a.priority);
+  return candidates[0]?.amount ?? null;
+}
+
 export function parseKaspiStatement(text, sourceHash, filename) {
   const clean=cleanPdfText(text);
   if(!/Kaspi\s+Gold/i.test(clean)||!/ВЫПИСКА/i.test(clean))return null;
@@ -371,7 +394,6 @@ export function parseKaspiStatement(text, sourceHash, filename) {
   const account=clean.match(/(?:Номер\s+сч[её]та|IBAN)\s*[:№#-]?\s*(KZ[A-Z0-9]{14,32}|[A-Z0-9]{12,34})/i);
   const cardRaw=clean.match(/Номер\s+карты\s*[:№#-]?\s*([0-9*Xx][0-9*Xx \-]{6,30}[0-9*Xx])/i);
   const cardNumber=cardRaw?String(cardRaw[1]||'').replace(/[^0-9*Xx]/g,''):'';
-  const balanceMatch=clean.match(/(?:Доступно|Текущий\s+остаток|Итоговый\s+остаток|Конечный\s+остаток|Остаток(?:\s+на\s+конец)?|Баланс)\s*[:\-]?\s*([+-]?[\d\s]+(?:[\.,]\d{2})?)\s*₸?/i);
   const accountNumber=String(account?.[1]||'').toUpperCase().replace(/[^A-Z0-9]/g,'');
   const raw={
     bank:'Kaspi Bank',
@@ -382,7 +404,7 @@ export function parseKaspiStatement(text, sourceHash, filename) {
     currency:'KZT',
     periodStart:period?.[1]||'',
     periodEnd:period?.[2]||'',
-    currentBalance:balanceMatch?Number(String(balanceMatch[1]).replace(/\s+/g,'').replace(',','.')):null,
+    currentBalance:kaspiStatementBalance(clean, period?.[2]),
     transactions:[]
   };
   const occurrence=new Map();
