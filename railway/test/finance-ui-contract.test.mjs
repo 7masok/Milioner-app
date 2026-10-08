@@ -268,7 +268,7 @@ test('statement import verifies final account balance against statement closing 
   const start=html.indexOf('async function financeImportStatementDraft(){');
   const end=html.indexOf('\nasync function financeProcessStatementFile',start);
   const fn=html.slice(start,end>start?end:start+40000);
-  assert.ok(fn.includes('statementBalance=Number(draft.statement?.currentBalance)'));
+  assert.ok(fn.includes('statementBalance=financeStatementBalance(draft.statement)'));
   assert.ok(fn.includes('Math.abs(statementDiff)<=.01'));
   assert.ok(fn.includes('Остаток совпадает с выпиской'));
   assert.ok(fn.includes('Остаток НЕ совпадает с выпиской'));
