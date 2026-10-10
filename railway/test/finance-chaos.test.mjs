@@ -71,8 +71,8 @@ test('finance cache read failure is not treated as an authoritative empty databa
   const read=extractFunction('financeCacheRead');
   assert.match(read,/return null/);
   assert.match(read,/financeCacheReadFailed=true/);
-  assert.ok(html.includes("if(cached&&(localReady||financeSnapshotHasData(cached)))financeLocalBefore=cached"));
-  assert.ok(html.includes("if(!financeCacheReadFailed){applyFinanceSnapshot(financeLocalBefore);"));
+  assert.equal(html.includes("const bootstrapFinance=async()=>"),false);
+  assert.equal(html.includes("setTimeout(()=>bootstrapFinance()"),false);
   assert.ok(html.includes("if(financeCacheReadFailed){try{const data=await fetchFinanceCloud(false)"));
 });
 

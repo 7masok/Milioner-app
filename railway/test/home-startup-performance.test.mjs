@@ -120,7 +120,7 @@ test('expensive finance, Ozon and maintenance work are deferred off first Home p
   const start=html.indexOf('function startAppRuntime(){');
   const end=html.indexOf('// Wait for the server-sync module',start);
   const runtime=html.slice(start,end);
-  assert.match(runtime,/setTimeout\(\(\)=>bootstrapFinance\(\),financePriority\?0:1800\)/);
+  assert.doesNotMatch(runtime,/bootstrapFinance|startFinanceServerWatcher/);
   assert.match(runtime,/ozonFboRefreshStatus\?\.\(\)/);
   assert.match(runtime,/\),3200\);setTimeout\(\(\)=>Promise\.resolve\(loadStorageStatus/);
   assert.match(runtime,/loadStorageStatus\(\{silent:true\}\)\)\.catch\(\(\)=>\{\}\),6500/);

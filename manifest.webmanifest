@@ -1,7 +1,7 @@
 {
-  "name": "Склад — Финансы",
+  "name": "Склад",
   "short_name": "Склад",
-  "description": "Склад и финансы",
+  "description": "Управление складом и продажами",
   "lang": "ru",
   "start_url": "/",
   "scope": "/",
@@ -21,20 +21,5 @@
       "type": "image/svg+xml",
       "purpose": "any maskable"
     }
-  ],
-  "share_target": {
-    "action": "/share/finance-statement",
-    "method": "POST",
-    "enctype": "multipart/form-data",
-    "params": {
-      "title": "title",
-      "text": "text",
-      "files": [
-        {
-          "name": "statement",
-          "accept": ["application/pdf", ".pdf"]
-        }
-      ]
-    }
-  }
+  ]
 }
