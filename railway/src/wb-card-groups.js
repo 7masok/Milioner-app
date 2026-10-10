@@ -102,13 +102,37 @@ export async function wbCardGroupSnapshot(market,client=pool){
   const payload=row.payload&&typeof row.payload==='object'?row.payload:{};
   return {market,cards:Array.isArray(payload.cards)?payload.cards.map(wbCardGroupCard):[],fetchedAt:Number(row.fetchedAt||0),lastError:cleanText(row.lastError)};
 }
+export async function wbCardGroupNames(market,client=pool){
+  market=marketName(market);
+  const result=await client.query('SELECT imt_id AS "groupId", name FROM wb_card_group_names WHERE market=$1',[market]);
+  return new Map(result.rows.map(row=>[String(row.groupId),String(row.name)]));
+}
+export async function saveWbCardGroupName(input,client=pool){
+  const market=marketName(input?.market),groupId=cleanText(input?.groupId),name=cleanText(input?.name);
+  if(!/^[1-9]\d{0,19}$/.test(groupId)||typeof input?.name!=='string'||name.length>80){
+    const error=new Error('Укажите группу WB и название до 80 символов');error.status=400;throw error;
+  }
+  const snapshot=await wbCardGroupSnapshot(market,client);
+  if(!snapshot.cards.some(card=>card.imtId===groupId)){
+    const error=new Error('Группа отсутствует в текущем снимке WB');error.status=409;throw error;
+  }
+  if(name)await client.query(`INSERT INTO wb_card_group_names(market,imt_id,name,updated_at) VALUES($1,$2,$3,$4)
+    ON CONFLICT(market,imt_id) DO UPDATE SET name=EXCLUDED.name,updated_at=EXCLUDED.updated_at`,[market,groupId,name,Date.now()]);
+  else await client.query('DELETE FROM wb_card_group_names WHERE market=$1 AND imt_id=$2',[market,groupId]);
+  return {market,groupId,name};
+}
+wbCardGroupsRouter.post('/market-prices/card-groups/name',requireWritesEnabled,asyncRoute(async(req,res)=>{
+  const result=await saveWbCardGroupName(req.body);
+  return res.json({ok:true,...result});
+}));
 export async function decorateWbCardGroupRows(market,rows,client=pool){
-  const snapshot=await wbCardGroupSnapshot(market,client),counts=new Map();
+  const [snapshot,names]=await Promise.all([wbCardGroupSnapshot(market,client),wbCardGroupNames(market,client)]),counts=new Map();
   for(const card of snapshot.cards){const key=cleanText(card.imtId);if(key)counts.set(key,(counts.get(key)||0)+1)}
   const byNm=new Map(snapshot.cards.map(card=>[cleanText(card.nmId),card]));
   return {snapshot,rows:(Array.isArray(rows)?rows:[]).map(raw=>{
     const row={...raw},card=byNm.get(cleanText(row.remoteId));
     row.groupImtId=cleanText(card?.imtId);
+    row.groupName=names.get(row.groupImtId)||'';
     row.groupSize=row.groupImtId?Number(counts.get(row.groupImtId)||1):0;
     row.grouped=row.groupSize>1;
     row.groupSubjectId=cleanText(card?.subjectId);

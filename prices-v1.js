@@ -74,6 +74,7 @@ function priceSelection(market=priceUi.market){
 function priceIsWbMarket(market=priceUi.market){
   return market==='WB'||market==='WB2';
 }
+function priceGroupLabel(row){return String(row?.groupName||'').trim()||('Группа '+String(row?.groupImtId||''))}
 function priceMatchesGroup(row){
   if(!priceIsWbMarket(row?.market))return true;
   if(priceUi.groupId)return String(row?.groupImtId||'')===String(priceUi.groupId);
@@ -86,7 +87,7 @@ function priceVisibleRows(){
   return activeRows().map((row,index)=>({row,index})).filter(({row})=>{
     if(row?.error||priceIsHidden(row)||!priceMatchesGroup(row))return false;
     if(!q)return true;
-    return [row.name,row.sku,row.remoteId,row.account].some(value=>String(value||'').toLocaleLowerCase('ru-RU').includes(q));
+    return [row.name,row.sku,row.remoteId,row.account,row.groupName].some(value=>String(value||'').toLocaleLowerCase('ru-RU').includes(q));
   });
 }
 function updatePriceGroupTools(){
@@ -99,15 +100,17 @@ function updatePriceGroupTools(){
     const groups=new Map(),q=priceUi.q.trim().toLocaleLowerCase('ru-RU');
     for(const row of activeRows()){
       if(row?.error||!row?.grouped||!row?.groupImtId||priceIsHidden(row)||priceUi.groupFilter==='ungrouped')continue;
-      if(q&&![row.name,row.sku,row.remoteId,row.account].some(value=>String(value||'').toLocaleLowerCase('ru-RU').includes(q)))continue;
+      if(q&&![row.name,row.sku,row.remoteId,row.account,row.groupName].some(value=>String(value||'').toLocaleLowerCase('ru-RU').includes(q)))continue;
       const id=String(row.groupImtId),group=groups.get(id)||{row,count:0};
       group.count+=1;groups.set(id,group);
     }
-    const options=['<option value="">Все группы</option>',...[...groups.entries()].sort((a,b)=>String(a[1].row?.name||'').localeCompare(String(b[1].row?.name||''),'ru')).map(([id,group])=>'<option value="'+pEsc(id)+'">Группа '+pEsc(id)+' · '+(group.count===Number(group.row.groupSize)?group.count:group.count+' видно / '+Number(group.row.groupSize))+'</option>')];
+    const options=['<option value="">Все группы</option>',...[...groups.entries()].sort((a,b)=>String(a[1].row?.name||'').localeCompare(String(b[1].row?.name||''),'ru')).map(([id,group])=>'<option value="'+pEsc(id)+'">'+pEsc(priceGroupLabel(group.row))+' · '+(group.count===Number(group.row.groupSize)?group.count:group.count+' видно / '+Number(group.row.groupSize))+'</option>')];
     // Keep the current filter explicit; never silently switch to unrelated products.
     if(priceUi.groupId&&!groups.has(priceUi.groupId))options.push('<option value="'+pEsc(priceUi.groupId)+'">Группа '+pEsc(priceUi.groupId)+' · нет видимых товаров</option>');
     select.innerHTML=options.join('');select.value=priceUi.groupId||'';
   }
+  const rename=document.getElementById('priceGroupName');
+  if(rename)rename.disabled=!priceUi.groupId||!activeRows().some(row=>row.grouped&&String(row.groupImtId)===priceUi.groupId);
   if(merge)merge.disabled=!selection.size;
   if(detach)detach.disabled=!selection.size;
 }
@@ -287,7 +290,7 @@ function priceCard(row,index){
     :'';
   const discountBlock=row.promoBlocked?'<span class="price-lock-badge"> · Скидки заблокированы · 0%</span>':'';
   const protection=row.priceProtected?'<span class="price-lock-badge"> · 🔒 '+pEsc(row.protectionReason||'Защита цены')+'</span>':'';
-  const group=priceIsWbMarket(row.market)?'<span> · '+(row.grouped?('Группа '+pEsc(row.groupImtId)+' · '+Number(row.groupSize||0)):'Без группы')+'</span>':'';
+  const group=priceIsWbMarket(row.market)?'<span> · '+(row.grouped?(pEsc(priceGroupLabel(row))+' · '+Number(row.groupSize||0)):'Без группы')+'</span>':'';
   const expanded=Boolean(priceExpanded&&priceExpanded.market===priceUi.market&&priceExpanded.index===Number(index));
   const selected=priceIsWbMarket(row.market)&&priceSelection(row.market).has(String(row.remoteId||''));
   const selectBox=priceIsWbMarket(row.market)?'<label class="price-row-select" onclick="event.stopPropagation()"><input type="checkbox" '+(selected?'checked':'')+' onchange="priceSelectRow('+Number(index)+',this.checked)" aria-label="Выбрать товар"></label>':'';
@@ -304,7 +307,7 @@ function paintPrices(){
   const indexed=rows.map((row,index)=>({row,index})).filter(({row})=>{
     if(priceIsHidden(row)||!priceMatchesGroup(row))return false;
     if(!q)return true;
-    return [row.name,row.sku,row.remoteId,row.account].some(value=>String(value||'').toLocaleLowerCase('ru-RU').includes(q));
+    return [row.name,row.sku,row.remoteId,row.account,row.groupName].some(value=>String(value||'').toLocaleLowerCase('ru-RU').includes(q));
   }).sort((a,b)=>{
     const av=priceSortValue(a.row),bv=priceSortValue(b.row),aMissing=!(av>0),bMissing=!(bv>0);
     if(aMissing!==bMissing)return aMissing?1:-1;
@@ -558,12 +561,34 @@ window.applyPriceBulkProtection=async function(field,enabled){
     setPriceStatus('Изменено для '+Number(result.count||ids.length)+' товаров','ok');
   }catch(error){alert(priceErrorText(error))}
 };
+let priceGroupNameContext=null;
+window.openPriceGroupName=function(){
+  if(!priceIsWbMarket()||!priceUi.groupId)return;
+  const row=activeRows().find(row=>row.grouped&&String(row.groupImtId)===priceUi.groupId);if(!row)return;
+  priceGroupNameContext={market:priceUi.market,groupId:String(row.groupImtId)};
+  showSheet('<h3>Название группы</h3><div class="muted">'+pEsc(marketLabel(priceUi.market))+' · Группа '+pEsc(row.groupImtId)+'</div>'+
+    '<div class="field"><label>Название</label><input id="priceGroupNameInput" maxlength="80" value="'+pEsc(row.groupName||'')+'" placeholder="Например: Рыбалка"></div>'+
+    '<div class="muted">Пустое название вернёт номер группы.</div><button id="priceGroupNameSave" type="button" class="btn dark full" onclick="savePriceGroupName()">Сохранить</button>');
+};
+window.savePriceGroupName=async function(){
+  const context=priceGroupNameContext,input=document.getElementById('priceGroupNameInput'),button=document.getElementById('priceGroupNameSave');
+  if(!context||!input||button?.disabled)return;
+  const name=input.value.trim();if(name.length>80)return alert('Название должно быть не длиннее 80 символов');
+  if(button)button.disabled=true;
+  try{
+    const response=await fetch(MILLIONER_API+'/api/market-prices/card-groups/name',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({...context,name})});
+    const data=await response.json();if(!response.ok||data.ok===false)throw new Error(data.error||('HTTP '+response.status));
+    for(const row of priceCache.get(context.market)?.rows||[])if(String(row.groupImtId)===context.groupId)row.groupName=data.name;
+    if(priceGroupNameContext===context){priceGroupNameContext=null;closeModal()}
+    await window.renderPrices(false);setPriceStatus('Название группы сохранено','ok');
+  }catch(error){alert(priceErrorText(error))}finally{if(button)button.disabled=false}
+};
 function selectedPriceRows(){
   const ids=priceSelection();return activeRows().filter(row=>ids.has(String(row.remoteId||'')));
 }
 function groupPreviewRow(row){
   const image=row?.groupPhoto?'<img src="'+pEsc(row.groupPhoto)+'" alt="">':'<span class="thumb"></span>';
-  const group=row?.grouped?('Группа '+String(row.groupImtId||'')+' · '+Number(row.groupSize||0)):'Без группы';
+  const group=row?.grouped?(priceGroupLabel(row)+' · '+Number(row.groupSize||0)):'Без группы';
   return '<div class="price-group-preview-row">'+image+'<div><b>'+pEsc(row?.name||row?.sku||('WB '+row?.remoteId))+'</b><span>Арт. '+pEsc(row?.sku||row?.remoteId||'')+' · '+pEsc(group)+'</span></div></div>';
 }
 function sameSelectedSubject(rows){
