@@ -1,6 +1,7 @@
 import crypto from 'node:crypto';
 import express from 'express';
 import pdfParse from 'pdf-parse';
+import '../../finance-kaspi-identity.js';
 import { pool } from './db.js';
 import { credentialFor } from './connections.js';
 import { asyncRoute, requireTrustedOrigin } from './http.js';
@@ -152,7 +153,7 @@ function kaspiOperationRows(text) {
   const rows=[];
   for(const m of section.matchAll(rx)){
     const amount=Number(String(m[4]).replace(/\s+/g,'').replace(',','.'));
-    let rest=String(m[5]||'').replace(/\s+/g,' ').trim();
+    let rest=globalThis.FinanceKaspiIdentity.cleanTitle(m[5]);
     rest=rest.replace(/-\s*Сумма заблокирована.*$/i,'').trim();
     if(!Number.isFinite(amount)||amount<=0||!rest)continue;
     if(/^доступно\b/i.test(rest)||/^остаток\b/i.test(rest)||/^итого\b/i.test(rest))continue;

@@ -103,7 +103,7 @@ public class MainActivity extends Activity {
         if("/finances/".equals(p)||"/finances/index.html".equals(p))return "finances/index.html";
         String[] files={"base.css","app.css","runtime.js","core.js","start.js","android.js","icon.svg","icon-192.png","icon-512.png","manifest.webmanifest"};
         for(String f:files)if(("/finances/"+f).equals(p))return "finances/"+f;
-        String[] shared={"finance-import-tools-v1.js","finance-split-model.js","finance-statement-transfers.js","finance-edit-split-v1.js"};
+        String[] shared={"finance-kaspi-identity.js","finance-import-tools-v1.js","finance-split-model.js","finance-statement-transfers.js","finance-edit-split-v1.js"};
         for(String f:shared)if(("/"+f).equals(p))return f;
         return null;
     }

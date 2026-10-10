@@ -58,6 +58,7 @@ const frontendFiles = Object.freeze([
   'ai-assistant-v1.js',
   'prices-v1.js',
   'finance-import-tools-v1.js',
+  'finance-kaspi-identity.js',
   'finance-split-model.js',
   'finance-statement-transfers.js',
   'finance-edit-split-v1.js',

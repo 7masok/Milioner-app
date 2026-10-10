@@ -23,6 +23,8 @@ core = core.replace("'milioner-finance-local-ready-v1'", "'luxar-finance-local-r
 core = core.replace("'sklad-share-target-v1'", "'luxar-finance-share-target-v1'")
 core = core.replace("'/__shared_finance_statement__'", "'/finances/__shared_finance_statement__'")
 core = core.replace('нашим складом без OpenAI', 'приложением без OpenAI')
+core = core.replace('financeStatementPreview(data);return true', 'await financeStatementPreview(data);return true')
+core = core.replace(":possibleDuplicate?' <span class=\"badge warn\">возможный дубль</span>':''", ":existing?' <span class=\"badge\">уже импортирован</span>':possibleDuplicate?' <span class=\"badge warn\">возможный дубль</span>':''")
 helpers = []
 for prefix in ('function jsonSame(', 'function itemVersion(', 'function mergeArray3(', 'function mergeObject3('):
     helpers.append(next(line for line in source.splitlines() if line.startswith(prefix)))
