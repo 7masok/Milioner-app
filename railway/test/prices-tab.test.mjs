@@ -19,7 +19,7 @@ test('Prices is a real ninth tab and survives reload navigation',()=>{
   assert.match(html,/<section id="prices" class="view">/);
   assert.match(html,/data-view="prices"/);
   assert.match(html,/grid-template-columns:repeat\(9,minmax\(0,1fr\)\)/);
-  assert.match(html,/\['home','products','prices','movement','purchases','reports','ads','settings','finance'\]/);
+  assert.match(html,/\['home','products','prices','movement','purchases','reports','ads','settings'\]/);
   assert.match(html,/view==='prices'.*renderPrices/s);
 });
 
@@ -76,7 +76,7 @@ test('Prices UI preserves selected market and search but not price truth',()=>{
 
 test('Passport and AGENTS define the Prices contract',()=>{
   assert.match(passport,/\| Цены \|/);
-  assert.match(passport,/Нижняя навигация содержит девять разделов/);
+  assert.match(passport,/Нижняя навигация содержит восемь разделов/);
   for(const rule of ['PRICE-01','PRICE-02','PRICE-03','PRICE-04','PRICE-05','PRICE-06','PRICE-07','PRICE-08'])assert.match(passport,new RegExp(rule));
   assert.match(agents,/Во вкладке «Цены»/);
   assert.match(agents,/фоновый цикл/);

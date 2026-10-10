@@ -47,9 +47,9 @@ test('finance is local-first with a durable IndexedDB outbox',()=>{
   assert.ok(html.includes('async function financeLocalPersist(commands=[]'));
   assert.ok(html.includes('async function financeSyncOutbox()'));
   assert.ok(html.includes("financeCommandSequence=0"));
-  assert.ok(html.includes("const bootstrapFinance=async()=>"));
-  assert.ok(html.includes("await bootstrapFinanceFromServer(financeLocalBefore)"));
-  assert.ok(html.includes("setTimeout(()=>bootstrapFinance(),financePriority?0:1800)"));
+  assert.equal(html.includes("const bootstrapFinance=async()=>"),false);
+  assert.equal(html.includes("await bootstrapFinanceFromServer(financeLocalBefore)"),false);
+  assert.equal(html.includes("setTimeout(()=>bootstrapFinance(),financePriority?0:1800)"),false);
   const runtimeStart=html.indexOf('function startAppRuntime(){');
   const runtime=html.slice(runtimeStart,runtimeStart+12000);
   assert.ok(runtime.includes("try{await bootstrapWarehouseFromServer()}catch(e){console.warn('initial warehouse bootstrap failed',e)}"));
@@ -64,7 +64,7 @@ test('fresh login opens Home Today while browser reload preserves the current ta
   const fn=html.slice(start,start+8000);
   assert.ok(fn.includes("freshLogin=sessionStorage.getItem(APP_FRESH_LOGIN_KEY)==='1'"));
   assert.ok(fn.includes("savedView=localStorage.getItem(ACTIVE_VIEW_KEY)||''"));
-  assert.ok(fn.includes("startupView=!freshLogin&&['home','products','prices','movement','purchases','reports','ads','settings','finance'].includes(savedView)?savedView:'home'"));
+  assert.ok(fn.includes("startupView=!freshLogin&&['home','products','prices','movement','purchases','reports','ads','settings'].includes(savedView)?savedView:'home'"));
   assert.ok(fn.includes("if(freshLogin){localStorage.setItem(ACTIVE_VIEW_KEY,'home');orderPeriodMode='today'"));
   assert.match(cloudSync,/orderPeriodMode=savedOrderPeriodUi\.mode/);
   assert.doesNotMatch(cloudSync,/Every fresh app start opens/);
@@ -80,7 +80,7 @@ test('startup does not duplicate the initial orders request',()=>{
   const immediate=html.slice(start,intervalAt>start?intervalAt:start+5000);
   assert.equal((immediate.match(/loadSharedOrderCache\(\{silent:true\}\)/g)||[]).length,1);
   assert.ok(immediate.indexOf('await bootstrapWarehouseFromServer()')<immediate.indexOf('loadSharedOrderCache({silent:true})'));
-  assert.ok(immediate.includes("setTimeout(()=>bootstrapFinance(),financePriority?0:1800)"));
+  assert.equal(immediate.includes("bootstrapFinance"),false);
   assert.ok(immediate.indexOf('hydrateHomeCache()')<immediate.indexOf('openView(startupView,false)'));
 });
 test('normal finance flow no longer uses snapshot PATCH',()=>{
@@ -103,10 +103,8 @@ test('finance reload is hydration-safe and re-renders after IndexedDB/server res
   assert.match(render,/Загружаю категории…/);
   const runtimeStart=html.indexOf('function startAppRuntime(){');
   const runtime=html.slice(runtimeStart,runtimeStart+12000);
-  assert.match(runtime,/financePriority=startupView==='finance'\|\|new URLSearchParams/);
-  assert.match(runtime,/financeSnapshotHasData\(financeLocalBefore\)\)\{financeHydrated=true;renderFinanceIfActive\(\)\}/);
-  assert.match(runtime,/await bootstrapFinanceFromServer\(financeLocalBefore\);financeHydrated=true;renderFinanceIfActive\(\)/);
-  assert.match(html,/onclick="financeRefresh\(\)">↻<\/button>/);
+  assert.doesNotMatch(runtime,/bootstrapFinance|startFinanceServerWatcher|financeConsumeSharedStatement/);
+  assert.doesNotMatch(html,/<section id="finance"|data-view="finance"/);
 });
 
 test('finance analytics mode period and anchor survive reloads',()=>{
@@ -223,8 +221,8 @@ test('statement import reveals its own period and account in the journal',()=>{
 });
 
 
-test('finance journal defaults to current month',()=>{
-  assert.match(html,/id="financePeriodFilter"[^>]*><option value="day">Сегодня<\/option><option value="month" selected>Этот месяц<\/option>/);
+test('retired finance journal has no warehouse screen',()=>{
+  assert.doesNotMatch(html,/<section id="finance"|id="financePeriodFilter"/);
 });
 
 
