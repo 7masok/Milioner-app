@@ -88,6 +88,13 @@ app.use(express.json({ limit: '7mb', strict: true }));
 
 const frontendRevalidateHeaders = { 'Cache-Control': 'public, max-age=0, must-revalidate' };
 app.get(['/', '/index.html'], (_req, res) => res.sendFile(path.join(repositoryRoot, 'index.html'), { headers: frontendRevalidateHeaders }));
+// Independent PWA entry. It starts only the finance engine, never warehouse
+// bootstrapping, stock sync, order refresh or marketplace compatibility modules.
+app.get('/finances', (_req, res) => res.redirect(302, '/finances/'));
+app.get(['/finances/', '/finances/index.html'], (_req, res) => res.sendFile(path.join(repositoryRoot, 'finances/index.html'), { headers: frontendRevalidateHeaders }));
+for (const file of ['runtime.js','core.js','start.js','base.css','app.css','sw.js','manifest.webmanifest','icon.svg','icon-192.png','icon-512.png']) {
+  app.get(`/finances/${file}`, (_req, res) => res.sendFile(path.join(repositoryRoot, 'finances', file), { headers: frontendRevalidateHeaders }));
+}
 app.get('/ozon-fbo-v1.js', async (_req,res,next)=>{
   try{
     const [rawBase,supplies]=await Promise.all([

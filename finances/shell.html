@@ -1,0 +1,16 @@
+<!doctype html><html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><title>Финансы</title><meta name="theme-color" content="#17392f"><link rel="manifest" href="/finances/manifest.webmanifest"><link rel="icon" href="/finances/icon.svg"><link rel="apple-touch-icon" href="/finances/icon-192.png"><link rel="stylesheet" href="/finances/base.css"><link rel="stylesheet" href="/finances/app.css"></head>
+<body class="auth-pending">
+<div id="loginGate" class="login-gate"><div class="login-card"><form class="auth-form login-bio" onsubmit="ownerAuthSubmit(event)"><h1>Вход в финансы</h1><input id="ownerPassword" type="password" autocomplete="current-password" placeholder="Код доступа" aria-label="Код доступа" autofocus><button id="ownerLoginButton" class="btn dark" type="submit">Войти</button><div id="ownerLoginError" class="login-error" role="alert"></div></form></div></div>
+<div class="app"><header><div><b>Финансы</b><small>История твоих денег</small></div><button id="installButton" class="btn" onclick="installFinanceApp()" hidden>Установить</button></header>
+<main><div id="appError" role="alert"></div>{{FINANCE_SECTION}}
+<section id="settings" class="view"><h2>Настройки</h2>
+<div class="settings-card"><h3>Резервная копия</h3><p class="muted">Счета, категории, все операции и история импорта в одном JSON-файле.</p><button id="financeExportButton" class="btn dark full" onclick="financeExportSnapshot()">Выгрузить финансы</button><div id="exportStatus" class="muted" role="status"></div><button class="btn full" onclick="financeShowServerBackups()">Серверные копии финансов</button></div>
+<div class="settings-card"><h3>Импорт истории</h3><button class="btn full" onclick="financeImportLegacyBackup()">Импортировать старую базу</button><div id="financeLegacyImportStatus" class="muted"></div></div>
+<div class="settings-card"><h3>На телефоне</h3><p class="muted">В меню браузера выбери «Установить приложение» или «Добавить на главный экран». Финансы откроются отдельным приложением со своей иконкой.</p></div>
+<div class="settings-card"><h3>Подключение</h3><p class="muted">Первая версия использует финансовую базу «Миллионера». Счета и операции в обоих приложениях общие.</p><button class="btn full" onclick="ownerLogout()">Выйти</button></div>
+</section></main>
+<nav><button class="active" data-app-view="finance" onclick="openView('finance')"><span>₸</span>Финансы</button><button data-app-view="settings" onclick="openView('settings')"><span>⚙</span>Настройки</button></nav>
+<div id="modal" class="modal" onclick="if(event.target===this)closeModal()"><div id="sheet" class="sheet"></div></div></div>
+<script src="/finances/runtime.js"></script><script src="/finances/core.js"></script>
+<script src="/finance-import-tools-v1.js"></script><script src="/finance-split-model.js"></script><script src="/finance-statement-transfers.js"></script><script src="/finance-edit-split-v1.js"></script>
+<script src="/finances/start.js"></script></body></html>
