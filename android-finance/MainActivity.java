@@ -4,17 +4,12 @@ import android.app.Activity;
 import android.content.Intent;
 import android.net.Uri;
 import android.os.Bundle;
-import android.os.Build;
 import android.provider.OpenableColumns;
 import android.database.Cursor;
 import android.webkit.*;
 import android.widget.Toast;
 import android.widget.FrameLayout;
 import android.graphics.Color;
-import android.view.View;
-import android.view.WindowInsets;
-import android.view.WindowInsetsController;
-import android.graphics.Insets;
 import java.io.*;
 import java.nio.charset.StandardCharsets;
 import java.util.*;
@@ -37,25 +32,11 @@ public class MainActivity extends Activity {
         super.onCreate(state);
         getWindow().setStatusBarColor(Color.WHITE);
         getWindow().setNavigationBarColor(Color.WHITE);
-        if(Build.VERSION.SDK_INT>=30){
-            getWindow().setDecorFitsSystemWindows(false);
-            getWindow().getInsetsController().setSystemBarsAppearance(WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS|WindowInsetsController.APPEARANCE_LIGHT_NAVIGATION_BARS,WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS|WindowInsetsController.APPEARANCE_LIGHT_NAVIGATION_BARS);
-        }else getWindow().getDecorView().setSystemUiVisibility(View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR|View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR|View.SYSTEM_UI_FLAG_LAYOUT_STABLE|View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN|View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION);
         FrameLayout content=new FrameLayout(this);content.setBackgroundColor(Color.WHITE);
         web=new WebView(this);
         content.addView(web,new FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT,FrameLayout.LayoutParams.MATCH_PARENT));
         setContentView(content);
-        // WebView owns its internal padding. Move its native frame below system bars.
-        content.setOnApplyWindowInsetsListener((v,insets)->{
-            if(Build.VERSION.SDK_INT>=30){
-                Insets bars=insets.getInsets(WindowInsets.Type.systemBars()|WindowInsets.Type.displayCutout());
-                v.setPadding(bars.left,bars.top,bars.right,bars.bottom);
-                return WindowInsets.CONSUMED;
-            }
-            v.setPadding(insets.getSystemWindowInsetLeft(),insets.getSystemWindowInsetTop(),insets.getSystemWindowInsetRight(),insets.getSystemWindowInsetBottom());
-            return insets.consumeSystemWindowInsets();
-        });
-        content.post(()->content.requestApplyInsets());
+        NativeChrome.install(getWindow(),content);
         WebSettings s=web.getSettings();
         s.setJavaScriptEnabled(true); s.setDomStorageEnabled(true);
         s.setAllowFileAccess(false); s.setAllowContentAccess(true);
