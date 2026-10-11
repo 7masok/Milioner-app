@@ -4,6 +4,7 @@ import { config } from './config.js';
 import { pool } from './db.js';
 import { credentialFor } from './connections.js';
 import { asyncRoute, requireTrustedOrigin, requireWritesEnabled } from './http.js';
+import { setWbDiscountBlock } from './wb-price-protection.js';
 
 const WB_PROMO_API = 'https://dp-calendar-api.wildberries.ru';
 const WB_PROMO_SLOT_MS = 60 * 60 * 1000 + 5_000;
@@ -211,6 +212,24 @@ async function wakePromoSync(market, now = Date.now()) {
       updated_at=excluded.updated_at`, [market, now]);
 }
 
+// Called inside the bulk price transaction; discovery does not invent a discount.
+export async function requestWbPromotionDiscovery(market,nmId,row,client=pool,now=Date.now()){
+  await setWbDiscountBlock(market,Number(nmId),false,client,now);
+  await client.query(`INSERT INTO wb_promo_preferences
+    (market,nm_id,enabled,base_discount,promotion_id,promotion_name,plan_price,plan_discount,status,last_error,updated_at)
+    VALUES($1,$2,true,$3,0,'',NULL,NULL,'idle','',$4)
+    ON CONFLICT(market,nm_id) DO UPDATE SET enabled=true,
+      base_discount=CASE WHEN NOT wb_promo_preferences.enabled THEN excluded.base_discount ELSE wb_promo_preferences.base_discount END,
+      promotion_id=0,promotion_name='',plan_price=NULL,plan_discount=NULL,status='idle',last_error='',updated_at=excluded.updated_at`,
+    [market,nmId,clampDiscount(row.discount),now]);
+  // Respect the persisted calendar cooldown and current phase, including 429 retry headers.
+  await client.query(`INSERT INTO wb_promo_sync_state
+    (market,next_sync_at,last_sync_at,last_error,updated_at,phase,payload)
+    VALUES($1,0,0,'',$2,'list','{}'::jsonb)
+    ON CONFLICT(market) DO UPDATE SET
+      next_sync_at=CASE WHEN wb_promo_sync_state.next_sync_at>$2 THEN wb_promo_sync_state.next_sync_at ELSE 0 END,
+      updated_at=excluded.updated_at`,[market,now]);
+}
 async function priceSnapshotRows(market, client = pool) {
   const result = await client.query('SELECT payload FROM wb_price_snapshots WHERE market=$1', [market]);
   const raw = result.rows[0]?.payload;
@@ -236,7 +255,7 @@ async function queuePromoDiscount(market, nmId, discount, promotionId = 0, clien
     ON CONFLICT(market,nm_id) DO UPDATE SET desired_price=NULL,desired_discount=excluded.desired_discount,
       status='pending',queued_at=excluded.queued_at,sent_at=0,upload_id=0,last_error='',
       updated_at=excluded.updated_at,source='promo',promotion_id=excluded.promotion_id
-    WHERE wb_price_update_queue.source='promo'`,
+    WHERE wb_price_update_queue.source='promo' AND wb_price_update_queue.status NOT IN ('sent','checking')`,
     [market, nmId, normalized, now, Number(promotionId) || 0]);
   return Number(result.rowCount || 0) > 0;
 }

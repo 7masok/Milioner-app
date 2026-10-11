@@ -283,7 +283,7 @@ function priceCard(row,index){
     ?'<span class="price-promo-badge '+(row.promoEnabled&&row.promoStatus==='participating'?'active':row.promoEnabled?'waiting':'off')+'"> · '+(
       row.promoEnabled&&row.promoStatus==='participating'?'В акции':
       row.promoEnabled&&row.promoStatus==='auto_only'?'Автоакции вручную':
-      row.promoEnabled?'Ждёт акцию':'Участие проверяйте в WB')+'</span>'
+      row.promoEnabled?'Подбирает условия акции':'Участие проверяйте в WB')+'</span>'
     :'';
   const night=(row.market==='WB'||row.market==='WB2')&&(row.nightPriceEnabled||row.nightPricePhase==='restoring')
     ?'<span class="price-night-badge"> · 🌙 '+pEsc(row.nightPriceStart||'04:00')+'–'+pEsc(row.nightPriceEnd||'06:00')+' · '+pMoney(row.nightPriceTarget,row.currency)+' · '+pEsc(({idle:'Запланировано',raising:'Устанавливается',active:'Установлена',restoring:'Возвращается',manual:'Ручная цена',locked:'Защита',off:'Выключено',error:'Ошибка'})[row.nightPricePhase]||'Запланировано')+(row.nightPriceError?' · '+pEsc(row.nightPriceError):'')+'</span>'
@@ -467,8 +467,8 @@ window.openPriceWorkbench=function(action='price',index=null){
   const title=action==='enter'?'Войти в акцию':action==='exit'?'Выйти из акции':'Обычная цена / скидка';
   showSheet('<h3>'+title+' · '+rows.length+'</h3>'+
     (action==='price'?'<div class="field"><label>Цена до скидки, ₽ · пусто = оставить свою</label><input id="priceWorkbenchPrice" type="number" min="1" step="1" oninput="priceWorkbenchPreview()"></div>':'')+
-    '<div class="field"><label>Скидка, % · '+(action==='price'?'пусто = оставить свою':action==='exit'?'0 = убрать скидку':'пусто = по известному порогу акции')+'</label><input id="priceWorkbenchDiscount" type="number" min="0" max="99" step="1" value="'+(action==='exit'?'0':'')+'" '+(action==='exit'?'readonly ':'')+'oninput="priceWorkbenchPreview()"></div>'+
-    (action==='exit'?'<div class="muted">Скидка 0% · постоянный блок включится для выбранных товаров.</div>':action==='enter'?'<div class="muted">Блок скидок будет снят для выбранных товаров.</div>':'')+
+    '<div class="field"><label>Скидка, % · '+(action==='price'?'пусто = оставить свою':action==='exit'?'0 = убрать скидку':'пусто = подобрать для каждого товара')+'</label><input id="priceWorkbenchDiscount" type="number" min="0" max="99" step="1" value="'+(action==='exit'?'0':'')+'" '+(action==='exit'?'readonly ':'')+'oninput="priceWorkbenchPreview()"></div>'+
+    (action==='exit'?'<div class="muted">Скидка 0% · постоянный блок включится для выбранных товаров.</div>':action==='enter'?'<div class="muted">Блок скидок будет снят. При пустом поле сервер найдёт условия акции для каждого товара.</div>':'')+
     '<div id="priceWorkbenchPreview" class="price-workbench-preview"></div><button id="priceWorkbenchApply" type="button" class="btn dark full" onclick="submitPriceWorkbench()">Применить к выбранным</button>');
   window.priceWorkbenchPreview();
 };
@@ -478,31 +478,33 @@ function workbenchChanges(){
   return ctx.rows.map(row=>{
     const price=rawPrice===''?pNum(row.syncSource==='manual'?row.price:(row.confirmedPrice??row.price)):Number(rawPrice);
     const plan=pNum(row.promoPlanPrice);
+    const automaticEntry=ctx.action==='enter'&&rawDiscount==='';
     let discount=rawDiscount===''?null:Number(rawDiscount),error='';
     if(discount===null&&ctx.action==='price')discount=pNum(row.syncSource==='manual'?row.discount:(row.confirmedDiscount??row.discount));
     if(ctx.action==='exit')discount=0;
-    if(discount===null&&plan>0&&price>0)discount=ctx.action==='enter'?Math.max(0,Math.ceil((1-plan/price)*100-1e-9)):Math.min(99,Math.ceil((1-plan/price)*100-1e-9)-1);
-    if(!(price>0)||!Number.isInteger(price)||!Number.isInteger(discount)||discount<0||discount>99)error='Укажите корректную цену / скидку';
-    if(discount===null)error='Нет порога акции · укажите скидку';
+    if(!automaticEntry&&discount===null&&plan>0&&price>0)discount=ctx.action==='enter'?Math.max(0,Math.ceil((1-plan/price)*100-1e-9)):Math.min(99,Math.ceil((1-plan/price)*100-1e-9)-1);
+    if(!(price>0)||!Number.isInteger(price)||(!automaticEntry&&(!Number.isInteger(discount)||discount<0||discount>99)))error='Укажите корректную цену / скидку';
+    if(discount===null&&!automaticEntry)error='Нет порога акции · укажите скидку';
     if(rawPrice!==''&&row.canEditPrice===false)error='Разные цены по размерам';
     if(ctx.action==='price'&&rawPrice===''&&rawDiscount==='')error='Укажите цену или скидку';
-    const final=price*(1-Number(discount)/100);
-    if(ctx.action==='enter'&&plan>0&&final>plan+1e-6)error='Скидки недостаточно';
+    const final=price*(1-Number(discount??row.confirmedDiscount??row.discount??0)/100);
+    if(ctx.action==='enter'&&!automaticEntry&&plan>0&&final>plan+1e-6)error='Скидки недостаточно';
     if(row.priceProtected&&ctx.action!=='exit')error='Включена защита';
     if(ctx.action==='price'&&row.promoBlocked&&discount>0)error='Снимите блок скидок или нажмите «В акцию»';
-    if(row.syncState==='sent'&&ctx.action!=='exit')error='Предыдущее изменение проверяется';
-    return {row,price,discount,final,error};
+    if(row.syncState==='sent'&&ctx.action!=='exit'&&!automaticEntry)error='Предыдущее изменение проверяется';
+    return {row,price,discount,final,error,automaticEntry};
   });
 }
 window.priceWorkbenchPreview=function(){
   const items=workbenchChanges(),el=document.getElementById('priceWorkbenchPreview');
-  if(el)el.innerHTML=items.map(item=>'<div class="item"><b>'+pEsc(item.row.name||item.row.sku)+'</b><div>'+pMoney(item.row.confirmedPrice??item.row.price,'RUB')+' → '+pMoney(item.price,'RUB')+' · скидка '+pEsc(item.discount??'—')+'% · итог '+pMoney(item.final,'RUB')+'</div>'+(item.error?'<div class="price-error">'+pEsc(item.error)+'</div>':!pNum(item.row.promoPlanPrice)&&priceWorkbench.action!=='price'?'<div class="muted">Порог неизвестен · статус участия проверьте в WB</div>':'')+'</div>').join('');
+  if(el)el.innerHTML=items.map(item=>'<div class="item"><b>'+pEsc(item.row.name||item.row.sku)+'</b><div>'+pMoney(item.row.confirmedPrice??item.row.price,'RUB')+' → '+pMoney(item.price,'RUB')+' · скидка '+(item.automaticEntry?'подбор для товара':pEsc(item.discount??'—')+'%')+' · '+(item.automaticEntry?'цена после подбора':('итог '+pMoney(item.final,'RUB')))+'</div>'+(item.error?'<div class="price-error">'+pEsc(item.error)+'</div>':item.automaticEntry?'<div class="muted">Порог и скидку найдёт сервер по условиям WB</div>':!pNum(item.row.promoPlanPrice)&&priceWorkbench.action!=='price'?'<div class="muted">Порог неизвестен · статус участия проверьте в WB</div>':'')+'</div>').join('');
   const button=document.getElementById('priceWorkbenchApply');if(button)button.disabled=!items.some(item=>!item.error)||priceWorkbenchBusy;
 };
 window.submitPriceWorkbench=async function(){
   const ctx=priceWorkbench;if(!ctx||priceWorkbenchBusy)return;
   const eligible=workbenchChanges().filter(item=>!item.error);if(!eligible.length)return;
-  if(!confirm('Сохранить изменения для '+eligible.length+' товаров? Они будут отправлены в ближайший сеанс WB.'))return;
+  const skipped=ctx.ids.length-eligible.length,automatic=eligible.some(item=>item.automaticEntry);
+  if(!confirm((automatic?'Подобрать скидку для '+eligible.length+' товаров по условиям акции?':'Сохранить изменения для '+eligible.length+' товаров? Они будут отправлены в ближайший сеанс WB.')+(skipped?' Пропущено: '+skipped+' — причины указаны в списке.':'')))return;
   priceWorkbenchBusy=true;window.priceWorkbenchPreview();
   try{
     const response=await fetch(MILLIONER_API+'/api/market-prices/update/bulk',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({market:ctx.market,action:ctx.action,remoteIds:eligible.map(item=>String(item.row.remoteId)),price:document.getElementById('priceWorkbenchPrice')?.value||null,discount:ctx.action==='exit'?0:document.getElementById('priceWorkbenchDiscount')?.value||null,confirm:true})});
@@ -510,7 +512,7 @@ window.submitPriceWorkbench=async function(){
     const applied=new Set((result.applied||[]).map(String));
     for(const id of applied)priceSelection(ctx.market).delete(id);
     closeModal();bumpPriceEpoch(ctx.market);
-    if(priceUi.market===ctx.market){await window.renderPrices(true);setPriceStatus('В очереди: '+applied.size+' · пропущено: '+(ctx.ids.length-applied.size),'ok');}
+    if(priceUi.market===ctx.market){await window.renderPrices(true);setPriceStatus('Поиск условий акции: '+(result.discovery?.length||0)+' · очередь скидок: '+(applied.size-(result.discovery?.length||0))+' · пропущено: '+(ctx.ids.length-applied.size),'ok');}
     if(result.skipped?.length)alert(result.skipped.map(item=>item.remoteId+': '+item.error).join('\n'));
   }catch(error){alert(priceErrorText(error));}
   finally{priceWorkbenchBusy=false;window.priceWorkbenchPreview();}

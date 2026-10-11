@@ -329,7 +329,7 @@ test('WB price rows expose persisted promotion state without browser calls to WB
 
 test('WB promotion state is visible on every collapsed card',()=>{
   assert.match(ui,/В акции/);
-  assert.match(ui,/Ждёт акцию/);
+  assert.match(ui,/Подбирает условия акции/);
   assert.match(ui,/Участие проверяйте в WB/);
   assert.match(ui,/price-promo-badge/);
   assert.match(html,/\.price-promo-badge\.off/);

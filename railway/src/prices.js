@@ -5,7 +5,7 @@ import { pool } from './db.js';
 import { credentialFor } from './connections.js';
 import { asyncRoute, requireTrustedOrigin, requireWritesEnabled } from './http.js';
 import { readWarehouseProducts } from './warehouse-products.js';
-import { decorateWbPromotionRows } from './wb-promotions.js';
+import { decorateWbPromotionRows, requestWbPromotionDiscovery } from './wb-promotions.js';
 import { decorateWbProtectionRows, protectionFor, syncWbPriceProtection, syncWbDiscountBlocks, setWbDiscountBlock, updateProtectionBaseline } from './wb-price-protection.js';
 import { decorateWbCardGroupRows } from './wb-card-groups.js';
 import { prepareWbPriceChange, nightUploadInFlight } from './wb-price-workbench.js';
@@ -1489,7 +1489,7 @@ pricesRouter.post('/market-prices/update/bulk', requireWritesEnabled, asyncRoute
     const prefs = await client.query('SELECT nm_id AS "nmId",plan_price AS "planPrice" FROM wb_promo_preferences WHERE market=$1', [market]);
     const prefByNm = new Map(prefs.rows.map(row => [String(row.nmId), row]));
     const queue = new Map((await wbPriceQueueRows(market, client)).map(row => [row.nmId, row]));
-    const applied = [], skipped = [];
+    const applied = [], skipped = [], discovery = [];
     for (const id of ids) {
       const row = rows.get(id);
       try {
@@ -1497,6 +1497,13 @@ pricesRouter.post('/market-prices/update/bulk', requireWritesEnabled, asyncRoute
         const protection = await protectionFor(market, Number(id), client);
         const exit = req.body.action === 'exit';
         if (protection.priceProtected && !exit) throw new Error('Включена защита цены');
+        const automaticEntry=req.body.action==='enter'&&(req.body.discount===null||req.body.discount===undefined||req.body.discount==='');
+        if(automaticEntry){
+          if(req.body.price!==null&&req.body.price!==undefined&&req.body.price!=='')throw new Error('Для акции меняется только скидка');
+          if(!(Number(row.price)>0))throw new Error('В снимке WB отсутствует цена товара');
+          await requestWbPromotionDiscovery(market,id,row,client,now);
+          applied.push(id);discovery.push(id);continue;
+        }
         const inFlight = ['sent', 'checking'].includes(queue.get(id)?.status);
         if (inFlight && !exit) throw new Error('Дождитесь проверки предыдущего изменения WB');
         const previous = queue.get(id);
@@ -1540,7 +1547,7 @@ pricesRouter.post('/market-prices/update/bulk', requireWritesEnabled, asyncRoute
       }
     }
     await client.query('COMMIT');
-    return res.json({ ok: true, market, queued: true, applied, skipped, count: applied.length });
+    return res.json({ ok: true, market, queued: true, applied, skipped, discovery, count: applied.length });
   } catch (error) {
     await client.query('ROLLBACK').catch(() => {});
     return sendPriceError(res, error);
