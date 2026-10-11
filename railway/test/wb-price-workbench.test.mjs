@@ -123,7 +123,7 @@ test('select all respects search, bulk requests capture the shop, and switching 
   ctx.priceClearSelection(); ctx.priceSearch('Брелок'); ctx.priceSelectAllVisible(true);
   assert.equal(element('priceSelectedCount').textContent, 'Выбрано 1');
   ctx.openPriceWorkbench('enter'); assert.match(sheet, /Войти в акцию · 1/);
-  assert.match(element('priceWorkbenchPreview').innerHTML, /35%/);
+  assert.match(element('priceWorkbenchPreview').innerHTML, /подбор для товара/);
   // Switching the current shop while the form remains open must not redirect its write.
   ctx.priceSetMarket('WB2'); await ctx.renderPrices();
   assert.equal(element('priceSelectedCount').textContent, '');
