@@ -23,6 +23,7 @@ public class MainActivity extends Activity {
     private WebView web;
     private ValueCallback<Uri[]> picker;
     private byte[] pendingFile;
+    private ChunkedFile transfer;
     private String pendingSaveStatus="exportStatus";
     private String pendingSaveLabel="Резервная копия";
     private volatile String sharedPdf;
@@ -80,31 +81,45 @@ public class MainActivity extends Activity {
             @Override public boolean onJsPrompt(WebView view,String url,String message,String defaultValue,JsPromptResult result){
                 if(!trusted(Uri.parse(url)) || !Uri.parse(url).getPath().equals("/finances/")){result.cancel();return true;}
                 if(message.equals("finance-take-pdf:")){String payload=sharedPdf;sharedPdf=null;result.confirm(payload==null?"":payload);return true;}
-                if(message.startsWith("finance-save:") || message.startsWith("finance-statement-save:")){
+                if(message.startsWith("finance-file-")){
                     try{
-                        if(message.length()>16000000)throw new IOException("Копия слишком большая");
-                        if(pendingFile!=null)throw new IOException("Сначала завершите сохранение предыдущего файла");
-                        boolean statement=message.startsWith("finance-statement-save:");
-                        JSONObject data=new JSONObject(message.substring(statement?23:13));
-                        byte[] bytes;String type="application/json";
-                        if(statement){
-                            type=data.getString("mime");
-                            if("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet".equals(type)){
-                                bytes=android.util.Base64.decode(data.getString("base64"),android.util.Base64.NO_WRAP);
-                                if(bytes.length<4 || bytes[0]!=80 || bytes[1]!=75 || bytes[2]!=3 || bytes[3]!=4)throw new IOException("Неверный Excel-файл");
-                            }else if("text/csv".equals(type))bytes=data.getString("text").getBytes(StandardCharsets.UTF_8);
-                            else throw new IOException("Неверный формат выписки");
+                        // Prompt IPC can truncate long strings: accept only short messages.
+                        if(message.length()>5000)throw new IllegalArgumentException("Не удалось передать файл. Повтори скачивание");
+                        int colon=message.indexOf(':');
+                        if(colon<0)throw new IllegalArgumentException("Неверная команда сохранения");
+                        String action=message.substring(13,colon);
+                        JSONObject data=new JSONObject(message.substring(colon+1));
+                        if("begin".equals(action)){
+                            if(pendingFile!=null)throw new IllegalArgumentException("Сначала завершите сохранение предыдущего файла");
+                            String name=data.getString("name").replaceAll("[^a-zA-Z0-9._-]","_");
+                            if(name.isEmpty()||name.length()>128)throw new IllegalArgumentException("Неверное имя файла");
+                            transfer=new ChunkedFile(name,data.getString("mime"),data.getInt("length"));
+                            result.confirm(transfer.id);
+                        }else if("abort".equals(action)){
+                            if(transfer!=null&&transfer.id.equals(data.getString("id")))transfer=null;
+                            result.confirm("ok");
                         }else{
-                            String text=data.getString("text");JSONObject backup=new JSONObject(text);
-                            if(!"luxar-finance-backup".equals(backup.optString("format")))throw new IOException("Неверный формат копии");
-                            bytes=text.getBytes(StandardCharsets.UTF_8);
+                            if(transfer==null)throw new IllegalArgumentException("Передача файла прервана. Повтори скачивание");
+                            String id=data.getString("id");
+                            if("chunk".equals(action)){
+                                transfer.append(id,data.getInt("index"),data.getString("data"));
+                                result.confirm("ok");
+                            }else if("finish".equals(action)){
+                                byte[] bytes=transfer.finish(id);
+                                boolean statement=!"application/json".equals(transfer.mime);
+                                if(!statement){
+                                    JSONObject backup=new JSONObject(new String(bytes,StandardCharsets.UTF_8));
+                                    if(!"luxar-finance-backup".equals(backup.optString("format")))throw new IllegalArgumentException("Неверный формат копии");
+                                }
+                                Intent i=new Intent(Intent.ACTION_CREATE_DOCUMENT);i.addCategory(Intent.CATEGORY_OPENABLE);i.setType(transfer.mime);
+                                i.putExtra(Intent.EXTRA_TITLE,transfer.name);
+                                startActivityForResult(i,SAVE);
+                                pendingFile=bytes;pendingSaveStatus=statement?"financeStatementStatus":"exportStatus";pendingSaveLabel=statement?"Выписка":"Резервная копия";
+                                transfer=null;result.confirm("ok");
+                            }else throw new IllegalArgumentException("Неверная команда сохранения");
                         }
-                        Intent i=new Intent(Intent.ACTION_CREATE_DOCUMENT);i.addCategory(Intent.CATEGORY_OPENABLE);i.setType(type);
-                        String name=data.optString("name",statement?"statement.csv":"finances.json").replaceAll("[^a-zA-Z0-9._-]","_");
-                        i.putExtra(Intent.EXTRA_TITLE,name);startActivityForResult(i,SAVE);
-                        pendingFile=bytes;pendingSaveStatus=statement?"financeStatementStatus":"exportStatus";pendingSaveLabel=statement?"Выписка":"Резервная копия";
-                        result.confirm("ok");
-                    }catch(Exception e){result.confirm("Не удалось сохранить: "+e.getMessage());}
+                    }catch(IllegalArgumentException e){result.confirm(e.getMessage());}
+                    catch(Exception e){result.confirm("Не удалось передать файл. Повтори скачивание.");}
                     return true;
                 }
                 return super.onJsPrompt(view,url,message,defaultValue,result);
@@ -163,5 +178,5 @@ public class MainActivity extends Activity {
     }
     private void offerShared(){if(!destroyed&&sharedPdf!=null)web.evaluateJavascript("if(typeof financeAppStarted!=='undefined' && financeAppStarted && typeof ownerSessionToken!=='undefined' && ownerSessionToken) financeConsumeSharedStatement();",null);}
     @Override public void onBackPressed(){web.evaluateJavascript("(()=>{if(document.getElementById('modal').classList.contains('open')){closeModal();return true;}if(document.getElementById('settings').classList.contains('active')){openView('finance');return true;}return false;})()",value->{if(!"true".equals(value))finish();});}
-    @Override protected void onDestroy(){destroyed=true;if(picker!=null)picker.onReceiveValue(null);web.destroy();super.onDestroy();}
+    @Override protected void onDestroy(){destroyed=true;transfer=null;pendingFile=null;if(picker!=null)picker.onReceiveValue(null);web.destroy();super.onDestroy();}
 }
