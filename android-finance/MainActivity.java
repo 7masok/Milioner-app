@@ -22,7 +22,7 @@ public class MainActivity extends Activity {
     private static final int PICK=11, SAVE=12;
     private WebView web;
     private ValueCallback<Uri[]> picker;
-    private String pendingBackup;
+    private byte[] pendingFile;
     private String pendingSaveStatus="exportStatus";
     private String pendingSaveLabel="Резервная копия";
     private volatile String sharedPdf;
@@ -83,21 +83,26 @@ public class MainActivity extends Activity {
                 if(message.startsWith("finance-save:") || message.startsWith("finance-statement-save:")){
                     try{
                         if(message.length()>16000000)throw new IOException("Копия слишком большая");
-                        if(pendingBackup!=null)throw new IOException("Сначала завершите сохранение предыдущего файла");
+                        if(pendingFile!=null)throw new IOException("Сначала завершите сохранение предыдущего файла");
                         boolean statement=message.startsWith("finance-statement-save:");
                         JSONObject data=new JSONObject(message.substring(statement?23:13));
-                        String text=data.getString("text"),type="application/json";
+                        byte[] bytes;String type="application/json";
                         if(statement){
                             type=data.getString("mime");
-                            if(!"text/csv".equals(type) && !"text/html".equals(type))throw new IOException("Неверный формат выписки");
+                            if("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet".equals(type)){
+                                bytes=android.util.Base64.decode(data.getString("base64"),android.util.Base64.NO_WRAP);
+                                if(bytes.length<4 || bytes[0]!=80 || bytes[1]!=75 || bytes[2]!=3 || bytes[3]!=4)throw new IOException("Неверный Excel-файл");
+                            }else if("text/csv".equals(type))bytes=data.getString("text").getBytes(StandardCharsets.UTF_8);
+                            else throw new IOException("Неверный формат выписки");
                         }else{
-                            JSONObject backup=new JSONObject(text);
+                            String text=data.getString("text");JSONObject backup=new JSONObject(text);
                             if(!"luxar-finance-backup".equals(backup.optString("format")))throw new IOException("Неверный формат копии");
+                            bytes=text.getBytes(StandardCharsets.UTF_8);
                         }
                         Intent i=new Intent(Intent.ACTION_CREATE_DOCUMENT);i.addCategory(Intent.CATEGORY_OPENABLE);i.setType(type);
                         String name=data.optString("name",statement?"statement.csv":"finances.json").replaceAll("[^a-zA-Z0-9._-]","_");
                         i.putExtra(Intent.EXTRA_TITLE,name);startActivityForResult(i,SAVE);
-                        pendingBackup=text;pendingSaveStatus=statement?"financeStatementStatus":"exportStatus";pendingSaveLabel=statement?"Выписка":"Резервная копия";
+                        pendingFile=bytes;pendingSaveStatus=statement?"financeStatementStatus":"exportStatus";pendingSaveLabel=statement?"Выписка":"Резервная копия";
                         result.confirm("ok");
                     }catch(Exception e){result.confirm("Не удалось сохранить: "+e.getMessage());}
                     return true;
@@ -111,7 +116,7 @@ public class MainActivity extends Activity {
     static boolean trusted(Uri u){return "https".equals(u.getScheme())&&HOST.equals(u.getHost())&&(u.getPort()==-1||u.getPort()==443);}
     static String assetPath(String p){
         if("/finances/".equals(p)||"/finances/index.html".equals(p))return "finances/index.html";
-        String[] files={"base.css","app.css","runtime.js","core.js","statements.js","start.js","android.js","icon.svg","icon-192.png","icon-512.png","manifest.webmanifest"};
+        String[] files={"base.css","app.css","runtime.js","core.js","excel-template.js","excel.js","statements.js","start.js","android.js","icon.svg","icon-192.png","icon-512.png","manifest.webmanifest"};
         for(String f:files)if(("/finances/"+f).equals(p))return "finances/"+f;
         String[] shared={"finance-kaspi-identity.js","finance-import-tools-v1.js","finance-split-model.js","finance-statement-transfers.js","finance-edit-split-v1.js"};
         for(String f:shared)if(("/"+f).equals(p))return f;
@@ -129,11 +134,11 @@ public class MainActivity extends Activity {
             if(uris!=null)for(Uri uri:uris)if(!"content".equals(uri.getScheme())){uris=null;break;}
             picker.onReceiveValue(uris);picker=null;
         }
-        if(request==SAVE){String text=pendingBackup;pendingBackup=null;
+        if(request==SAVE){byte[] bytes=pendingFile;pendingFile=null;
             String statusId=pendingSaveStatus,label=pendingSaveLabel;
             if(result!=RESULT_OK||data==null||data.getData()==null){status(statusId,"Сохранение отменено");return;}
-            Uri uri=data.getData();if(text==null||!"content".equals(uri.getScheme())){status(statusId,"Не удалось сохранить файл");return;}
-            new Thread(()->{try(OutputStream out=getContentResolver().openOutputStream(uri,"wt")){if(out==null)throw new IOException();out.write(text.getBytes(StandardCharsets.UTF_8));runOnUiThread(()->{status(statusId,label+" сохранена на телефон");toast("Файл сохранён");});}catch(Exception e){runOnUiThread(()->status(statusId,"Ошибка сохранения файла"));}}).start();
+            Uri uri=data.getData();if(bytes==null||!"content".equals(uri.getScheme())){status(statusId,"Не удалось сохранить файл");return;}
+            new Thread(()->{try(OutputStream out=getContentResolver().openOutputStream(uri,"wt")){if(out==null)throw new IOException();out.write(bytes);runOnUiThread(()->{status(statusId,label+" сохранена на телефон");toast("Файл сохранён");});}catch(Exception e){runOnUiThread(()->status(statusId,"Ошибка сохранения файла"));}}).start();
         }
     }
     @Override protected void onNewIntent(Intent intent){super.onNewIntent(intent);setIntent(intent);receivePdf(intent);}

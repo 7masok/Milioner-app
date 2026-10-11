@@ -18,7 +18,7 @@ for name in ['finance-kaspi-identity.js','finance-import-tools-v1.js','finance-s
 shutil.copy2(root / 'android.js', assets / 'finances' / 'android.js')
 html = (assets / 'finances' / 'index.html').read_text()
 html = html.replace('<script src="/finances/start.js">', '<script src="/finances/android.js"></script><script src="/finances/start.js">')
-html = html.replace('В меню браузера выбери «Установить приложение» или «Добавить на главный экран». Финансы откроются отдельным приложением со своей иконкой.', 'Android · версия 0.1.2. Выписку можно выбрать здесь или отправить PDF в «Финансы» через «Поделиться».')
+html = html.replace('В меню браузера выбери «Установить приложение» или «Добавить на главный экран». Финансы откроются отдельным приложением со своей иконкой.', 'Android · версия 0.1.3. Выписку можно выбрать здесь или отправить PDF в «Финансы» через «Поделиться».')
 (assets / 'finances' / 'index.html').write_text(html)
 (assets / 'finances' / 'start.js').write_text('initFinanceAuth();\n')
 runtime = (assets / 'finances' / 'runtime.js').read_text()
@@ -36,6 +36,7 @@ def run(*args): subprocess.run([str(a) for a in args],check=True)
 compiled = build / 'compiled.zip'
 run(tools / 'aapt2','compile','--dir',build / 'res','-o',compiled)
 unsigned = build / 'unsigned.apk'
+unsigned.unlink(missing_ok=True)
 run(tools / 'aapt2','link','-I',android,'--manifest',root / 'AndroidManifest.xml','-A',assets,'-o',unsigned,compiled)
 classes = build / 'classes'
 classes.mkdir(exist_ok=True)
@@ -48,7 +49,7 @@ run(tools / 'zipalign','-f','4',unsigned,aligned)
 key = Path(os.environ['FINANCE_SIGNING_KEY'])
 if not key.exists():
     run('keytool','-genkeypair','-keystore',key,'-storepass','android','-keypass','android','-alias','androiddebugkey','-dname','CN=Finance Development,O=LuXar,C=KZ','-keyalg','RSA','-keysize','2048','-validity','10000')
-apk = build / 'Finances-0.1.2.apk'
+apk = build / 'Finances-0.1.3.apk'
 run(tools / 'apksigner','sign','--ks',key,'--ks-pass','pass:android','--key-pass','pass:android','--out',apk,aligned)
 run(tools / 'apksigner','verify','--verbose',apk)
 run(tools / 'aapt','dump','badging',apk)

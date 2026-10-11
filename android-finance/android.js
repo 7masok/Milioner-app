@@ -1,6 +1,7 @@
 window.AndroidFinances={
   saveBackup:async(text,name)=>{const result=prompt('finance-save:'+JSON.stringify({text,name}));if(result!=='ok')throw Error(result||'Не удалось открыть сохранение файла.');},
   saveStatement:async(text,name,mime)=>{const result=prompt('finance-statement-save:'+JSON.stringify({text,name,mime}));if(result!=='ok')throw Error(result||'Не удалось открыть сохранение выписки.');},
+  saveExcel:async(base64,name)=>{const result=prompt('finance-statement-save:'+JSON.stringify({base64,name,mime:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'}));if(result!=='ok')throw Error(result||'Не удалось открыть сохранение Excel.');},
   consumeShared:async()=>{const raw=prompt('finance-take-pdf:');if(!raw)return false;const data=JSON.parse(raw);if(data.error){alert(data.error);return true;}const bytes=Uint8Array.from(atob(data.base64),c=>c.charCodeAt(0));openView('finance');await financeProcessStatementFile(new File([bytes],data.name,{type:'application/pdf'}),{shared:true});return true;}
 };
 financeConsumeSharedStatement=()=>AndroidFinances.consumeShared();

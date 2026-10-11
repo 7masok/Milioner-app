@@ -93,7 +93,7 @@ app.get(['/', '/index.html'], (_req, res) => res.sendFile(path.join(repositoryRo
 // bootstrapping, stock sync, order refresh or marketplace compatibility modules.
 app.get('/finances', (_req, res) => res.redirect(302, '/finances/'));
 app.get(['/finances/', '/finances/index.html'], (_req, res) => res.sendFile(path.join(repositoryRoot, 'finances/index.html'), { headers: frontendRevalidateHeaders }));
-for (const file of ['runtime.js','core.js','statements.js','start.js','base.css','app.css','sw.js','manifest.webmanifest','icon.svg','icon-192.png','icon-512.png']) {
+for (const file of ['runtime.js','core.js','excel-template.js','excel.js','statements.js','start.js','base.css','app.css','sw.js','manifest.webmanifest','icon.svg','icon-192.png','icon-512.png']) {
   app.get(`/finances/${file}`, (_req, res) => res.sendFile(path.join(repositoryRoot, 'finances', file), { headers: frontendRevalidateHeaders }));
 }
 app.get('/ozon-fbo-v1.js', async (_req,res,next)=>{

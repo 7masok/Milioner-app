@@ -66,12 +66,12 @@
     const amount = financeTransactionAmount(tx), currency = tx.currency || 'KZT', type = financeTransactionType(tx);
     if (type === 'transfer') {
       const rows = [];
-      if (account === 'all' || account === String(tx.accountId)) rows.push({incoming: 0, outgoing: amount, currency});
-      if (account === 'all' || account === String(tx.toAccountId)) rows.push({incoming: tx.toAmount == null ? amount : Math.abs(Number(tx.toAmount)), outgoing: 0, currency: tx.toCurrency || currency});
+      if (account === 'all' || account === String(tx.accountId)) rows.push({incoming: 0, outgoing: amount, currency, accountId: tx.accountId, counterAccountId: tx.toAccountId});
+      if (account === 'all' || account === String(tx.toAccountId)) rows.push({incoming: tx.toAmount == null ? amount : Math.abs(Number(tx.toAmount)), outgoing: 0, currency: tx.toCurrency || currency, accountId: tx.toAccountId, counterAccountId: tx.accountId});
       return rows;
     }
     const incoming = type === 'income' || type === 'transit_in' || (type === 'adjustment' && Number(tx.amount) >= 0);
-    return [{incoming: incoming ? amount : 0, outgoing: incoming ? 0 : amount, currency}];
+    return [{incoming: incoming ? amount : 0, outgoing: incoming ? 0 : amount, currency, accountId: tx.accountId}];
   }
   function totals(rows) {
     const amounts = new Map(), account = value(ids[2]) || 'all';
@@ -122,8 +122,27 @@
     lines.push([], columns, ...rows.map(record));
     return '\uFEFF' + lines.map(row => row.map(csvCell).join(';')).join('\r\n') + '\r\n';
   }
-  function html(rows, period) {
-    return '<!doctype html><html lang="ru"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Выписка</title><style>body{font:15px system-ui;margin:24px;color:#17251f}h1{font-size:24px}p{line-height:1.5}table{border-collapse:collapse;width:100%;font-size:13px}td,th{border:1px solid #d7ded9;padding:8px;text-align:left;overflow-wrap:anywhere}th{background:#eef5f0}.scroll{overflow:auto}@media print{body{margin:0}table{font-size:9px}td,th{padding:4px}thead{display:table-header-group}tr{break-inside:avoid}}</style><h1>Выписка</h1><p>' + esc(period.label) + '<br>' + esc(selectionLabel()) + '</p><p>' + esc(summary(rows)) + '</p><div class="scroll"><table><thead><tr>' + columns.map(c => '<th>' + esc(c) + '</th>').join('') + '</tr></thead><tbody>' + rows.map(tx => '<tr>' + record(tx).map(c => '<td>' + esc(c) + '</td>').join('') + '</tr>').join('') + '</tbody></table></div></html>';
+  function excel(rows, period) {
+    const hasNote = rows.some(tx => tx.note), hasTime = rows.some(tx => tx.statementTime), hasTransfer = rows.some(tx => financeTransactionType(tx) === 'transfer');
+    const hasDetached = rows.some(tx => tx.affectsBalance === false || tx.balanceDetached);
+    const columns = [{title:'Дата',width:14},{title:'Тип',width:20},{title:'Счёт',width:22},{title:'Категория',width:22},{title:'Название',width:48,wrap:true},{title:'Поступление',width:20},{title:'Списание',width:20},{title:'Валюта',width:12}];
+    if (hasNote) columns.push({title:'Комментарий',width:42,wrap:true});
+    if (hasTime) columns.push({title:'Время',width:14});
+    if (hasTransfer) columns.push({title:'Другой счёт',width:22});
+    if (hasDetached) columns.push({title:'Влияет на баланс',width:20});
+    const entries = [];
+    for (const tx of rows) {
+      const base = record(tx);
+      for (const flow of flows(tx, value(ids[2]) || 'all')) {
+        const row = [base[0],base[2],financeAccountName(flow.accountId,tx.accountName),base[5],base[6],flow.incoming,flow.outgoing,flow.currency];
+        if (hasNote) row.push(base[11]);
+        if (hasTime) row.push(base[1]);
+        if (hasTransfer) row.push(flow.counterAccountId ? financeAccountName(flow.counterAccountId) : '');
+        if (hasDetached) row.push(base[12]);
+        entries.push(row);
+      }
+    }
+    return FinanceExcel.build({period:period.label,selection:selectionLabel(),count:rows.length,columns,rows:entries,totals:totals(rows)});
   }
   window.financeSaveStatement = async function () {
     const status = el('financeStatementStatus'), button = el('financeStatementSave');
@@ -132,14 +151,17 @@
       if (!financeHydrated) throw Error('Дождись загрузки операций.');
       const period = bounds(), rows = financeFilteredTransactions();
       if (!rows.length) throw Error('По выбранным фильтрам операций нет.');
-      const isHtml = value('financeStatementFormat') === 'html';
-      const text = isHtml ? html(rows, period) : csv(rows, period), mime = isHtml ? 'text/html' : 'text/csv';
-      const name = 'statement-' + (period.start ? iso(new Date(period.start)) : 'all') + '-' + (period.end === Number.MAX_SAFE_INTEGER ? iso(new Date()) : iso(new Date(period.end - 1))) + (isHtml ? '.html' : '.csv');
-      if (window.AndroidFinances?.saveStatement) {
-        await window.AndroidFinances.saveStatement(text, name, mime);
+      const isExcel = value('financeStatementFormat') !== 'csv';
+      const content = isExcel ? excel(rows, period) : csv(rows, period), mime = isExcel ? 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' : 'text/csv';
+      const name = 'statement-' + (period.start ? iso(new Date(period.start)) : 'all') + '-' + (period.end === Number.MAX_SAFE_INTEGER ? iso(new Date()) : iso(new Date(period.end - 1))) + (isExcel ? '.xlsx' : '.csv');
+      if (isExcel && window.AndroidFinances?.saveExcel) {
+        await window.AndroidFinances.saveExcel(FinanceExcel.base64(content), name);
+        if (status) status.textContent = 'Выбери папку для сохранения.';
+      } else if (!isExcel && window.AndroidFinances?.saveStatement) {
+        await window.AndroidFinances.saveStatement(content, name, mime);
         if (status) status.textContent = 'Выбери папку для сохранения.';
       } else {
-        const url = URL.createObjectURL(new Blob([text], {type: mime + ';charset=utf-8'}));
+        const url = URL.createObjectURL(new Blob([content], {type: mime}));
         const link = document.createElement('a'); link.href = url; link.download = name; link.click();
         setTimeout(() => URL.revokeObjectURL(url), 10000);
         if (status) status.textContent = 'Выписка подготовлена: ' + rows.length + ' операций.';
