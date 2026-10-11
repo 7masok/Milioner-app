@@ -59,7 +59,7 @@ test('stock valuation uses sale plus covered reserve plus warehouse stock',()=>{
   assert.match(html,/function productValuationStockMap\(stats\)/);
   assert.match(html,/available\+coveredReserve\+warehouse/);
   assert.match(html,/atWarehouseCostMap=new Map\(\)/);
-  assert.match(html,/productMapAdd\(atWarehouseCostMap,key,qty\*Math\.max\(0,Number\(row\.landedUnitCost\)\|\|Number\(row\.unitCost\)\|\|0\)\)/);
+  assert.match(html,/productMapAdd\(atWarehouseCostMap,key,qty\*purchaseDisplayUnitCost\(row\)\)/);
   assert.match(html,/total\+=value\+Math\.max\(0,Number\(stats\?\.atWarehouseCostMap\?\.get\(key\)\)\|\|0\)/);
   assert.match(html,/Для расчёта: '\+Math\.round\(x\.stock\).*доступно \+ резерв \+ на складе/);
 });

@@ -17,6 +17,7 @@ function between(start,end){
 
 test('Products inventory snapshot is one-pass and drives all stock filters',()=>{
   const source=[
+    between('function purchaseDisplayUnitCost(','function productCardUnitCost('),
     between('function isBundleProduct(','function bundleComponents('),
     between('function bundleComponents(','function stockProducts('),
     between('function purchaseStatus(','const MIN_PURCHASE_COVER_DAYS='),
