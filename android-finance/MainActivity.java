@@ -23,6 +23,8 @@ public class MainActivity extends Activity {
     private WebView web;
     private ValueCallback<Uri[]> picker;
     private String pendingBackup;
+    private String pendingSaveStatus="exportStatus";
+    private String pendingSaveLabel="Резервная копия";
     private volatile String sharedPdf;
     private boolean destroyed;
 
@@ -78,18 +80,26 @@ public class MainActivity extends Activity {
             @Override public boolean onJsPrompt(WebView view,String url,String message,String defaultValue,JsPromptResult result){
                 if(!trusted(Uri.parse(url)) || !Uri.parse(url).getPath().equals("/finances/")){result.cancel();return true;}
                 if(message.equals("finance-take-pdf:")){String payload=sharedPdf;sharedPdf=null;result.confirm(payload==null?"":payload);return true;}
-                if(message.startsWith("finance-save:")){
+                if(message.startsWith("finance-save:") || message.startsWith("finance-statement-save:")){
                     try{
                         if(message.length()>16000000)throw new IOException("Копия слишком большая");
-                        if(pendingBackup!=null)throw new IOException("Сначала завершите сохранение предыдущей копии");
-                        JSONObject data=new JSONObject(message.substring(13));
-                        String text=data.getString("text");JSONObject backup=new JSONObject(text);
-                        if(!"luxar-finance-backup".equals(backup.optString("format")))throw new IOException("Неверный формат копии");
-                        pendingBackup=text;
-                        Intent i=new Intent(Intent.ACTION_CREATE_DOCUMENT);i.addCategory(Intent.CATEGORY_OPENABLE);i.setType("application/json");
-                        String name=data.optString("name","finances.json").replaceAll("[^a-zA-Z0-9._-]","_");
-                        i.putExtra(Intent.EXTRA_TITLE,name);startActivityForResult(i,SAVE);result.confirm("ok");
-                    }catch(Exception e){pendingBackup=null;result.confirm("Не удалось сохранить: "+e.getMessage());}
+                        if(pendingBackup!=null)throw new IOException("Сначала завершите сохранение предыдущего файла");
+                        boolean statement=message.startsWith("finance-statement-save:");
+                        JSONObject data=new JSONObject(message.substring(statement?23:13));
+                        String text=data.getString("text"),type="application/json";
+                        if(statement){
+                            type=data.getString("mime");
+                            if(!"text/csv".equals(type) && !"text/html".equals(type))throw new IOException("Неверный формат выписки");
+                        }else{
+                            JSONObject backup=new JSONObject(text);
+                            if(!"luxar-finance-backup".equals(backup.optString("format")))throw new IOException("Неверный формат копии");
+                        }
+                        Intent i=new Intent(Intent.ACTION_CREATE_DOCUMENT);i.addCategory(Intent.CATEGORY_OPENABLE);i.setType(type);
+                        String name=data.optString("name",statement?"statement.csv":"finances.json").replaceAll("[^a-zA-Z0-9._-]","_");
+                        i.putExtra(Intent.EXTRA_TITLE,name);startActivityForResult(i,SAVE);
+                        pendingBackup=text;pendingSaveStatus=statement?"financeStatementStatus":"exportStatus";pendingSaveLabel=statement?"Выписка":"Резервная копия";
+                        result.confirm("ok");
+                    }catch(Exception e){result.confirm("Не удалось сохранить: "+e.getMessage());}
                     return true;
                 }
                 return super.onJsPrompt(view,url,message,defaultValue,result);
@@ -101,7 +111,7 @@ public class MainActivity extends Activity {
     static boolean trusted(Uri u){return "https".equals(u.getScheme())&&HOST.equals(u.getHost())&&(u.getPort()==-1||u.getPort()==443);}
     static String assetPath(String p){
         if("/finances/".equals(p)||"/finances/index.html".equals(p))return "finances/index.html";
-        String[] files={"base.css","app.css","runtime.js","core.js","start.js","android.js","icon.svg","icon-192.png","icon-512.png","manifest.webmanifest"};
+        String[] files={"base.css","app.css","runtime.js","core.js","statements.js","start.js","android.js","icon.svg","icon-192.png","icon-512.png","manifest.webmanifest"};
         for(String f:files)if(("/finances/"+f).equals(p))return "finances/"+f;
         String[] shared={"finance-kaspi-identity.js","finance-import-tools-v1.js","finance-split-model.js","finance-statement-transfers.js","finance-edit-split-v1.js"};
         for(String f:shared)if(("/"+f).equals(p))return f;
@@ -110,7 +120,7 @@ public class MainActivity extends Activity {
     static String mime(String p){if(p.endsWith(".js"))return "application/javascript";if(p.endsWith(".css"))return "text/css";if(p.endsWith(".png"))return "image/png";if(p.endsWith(".svg"))return "image/svg+xml";if(p.endsWith(".webmanifest"))return "application/manifest+json";return "text/html";}
     static WebResourceResponse empty(int status){return new WebResourceResponse("text/plain","UTF-8",status,"Blocked",Collections.emptyMap(),new ByteArrayInputStream(new byte[0]));}
     private void toast(String text){Toast.makeText(this,text,Toast.LENGTH_LONG).show();}
-    private void status(String text){if(!destroyed)web.evaluateJavascript("document.getElementById('exportStatus').textContent="+JSONObject.quote(text),null);}
+    private void status(String id,String text){if(!destroyed)web.evaluateJavascript("(()=>{const el=document.getElementById("+JSONObject.quote(id)+");if(el)el.textContent="+JSONObject.quote(text)+";})()",null);}
     @Override protected void onActivityResult(int request,int result,Intent data){
         super.onActivityResult(request,result,data);
         if(request==PICK&&picker!=null){
@@ -120,9 +130,10 @@ public class MainActivity extends Activity {
             picker.onReceiveValue(uris);picker=null;
         }
         if(request==SAVE){String text=pendingBackup;pendingBackup=null;
-            if(result!=RESULT_OK||data==null||data.getData()==null){status("Сохранение отменено");return;}
-            Uri uri=data.getData();if(text==null||!"content".equals(uri.getScheme())){status("Не удалось сохранить копию");return;}
-            new Thread(()->{try(OutputStream out=getContentResolver().openOutputStream(uri,"wt")){if(out==null)throw new IOException();out.write(text.getBytes(StandardCharsets.UTF_8));runOnUiThread(()->{status("Резервная копия сохранена на телефон");toast("Копия сохранена");});}catch(Exception e){runOnUiThread(()->status("Ошибка сохранения копии"));}}).start();
+            String statusId=pendingSaveStatus,label=pendingSaveLabel;
+            if(result!=RESULT_OK||data==null||data.getData()==null){status(statusId,"Сохранение отменено");return;}
+            Uri uri=data.getData();if(text==null||!"content".equals(uri.getScheme())){status(statusId,"Не удалось сохранить файл");return;}
+            new Thread(()->{try(OutputStream out=getContentResolver().openOutputStream(uri,"wt")){if(out==null)throw new IOException();out.write(text.getBytes(StandardCharsets.UTF_8));runOnUiThread(()->{status(statusId,label+" сохранена на телефон");toast("Файл сохранён");});}catch(Exception e){runOnUiThread(()->status(statusId,"Ошибка сохранения файла"));}}).start();
         }
     }
     @Override protected void onNewIntent(Intent intent){super.onNewIntent(intent);setIntent(intent);receivePdf(intent);}

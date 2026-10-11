@@ -16,6 +16,9 @@ section = re.search(r'<section id="finance"[\s\S]*?</section>', source).group()
 section = section.replace('class="view"', 'class="view active"', 1)
 # Historical imports and server restore belong in Settings, outside daily work.
 section = re.sub(r'  <div class="finance-panel finance-import-panel">[\s\S]*?id="financeLegacyImportStatus"[^>]*>.*?</div></div>', '', section)
+section = section.replace('<option value="all">Всё время</option></select>', '<option value="all">Всё время</option><option value="custom">Свой период</option></select>', 1)
+statement_controls = '''<div id="financeCustomPeriod" class="finance-statement-dates" hidden><label>С<input id="financeStatementFrom" type="date" aria-label="Начало периода"></label><label>По<input id="financeStatementTo" type="date" aria-label="Конец периода"></label></div><div id="financeStatementSummary" class="finance-statement-summary" role="status"></div><div class="finance-statement-export"><select id="financeStatementFormat" aria-label="Формат выписки"><option value="csv">Таблица (CSV)</option><option value="html">Документ (HTML)</option></select><button id="financeStatementSave" class="btn dark" onclick="financeSaveStatement()" disabled>Скачать выписку</button></div><div id="financeStatementStatus" class="muted" role="status"></div>'''
+section = section.replace('<div id="financeTransactions"', statement_controls + '<div id="financeTransactions"', 1)
 (output / 'section.html').write_text(section)
 core = source[source.index('const FINANCE_DIRTY_KEY'):source.index('function render(){')]
 core = core.replace("'milioner-finance-cache-v1'", "'luxar-finance-cache-v1'")
