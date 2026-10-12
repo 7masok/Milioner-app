@@ -346,7 +346,7 @@ test('WB bulk promotion controls can select all visible rows and enable or disab
   assert.match(html,/\.price-bulk-actions\{display:grid;grid-template-columns:repeat\(4,minmax\(0,1fr\)\);gap:10px\}/);
   assert.match(html,/\.price-bulk-actions \.btn\{[^}]*min-height:42px/);
   assert.match(html,/@media\(max-width:420px\)\{\.price-bulk-tools\{[^}]*gap:9px[^}]*\}\.price-bulk-actions\{gap:9px\}\.price-bulk-actions \.btn\{[^}]*min-height:44px/);
-  assert.match(ui,/const priceSelected=\{WB:new Set\(\),WB2:new Set\(\)\}/);
+  assert.match(ui,/const priceSelected=\{Kaspi:new Set\(\),WB:new Set\(\),WB2:new Set\(\)\}/);
   assert.match(ui,/window\.priceSelectAllVisible=function\(checked\)/);
   assert.match(ui,/window\.priceSelectRow=function\(index,checked\)/);
   assert.match(ui,/window\.priceBulkPromo=async function\(enabled\)/);
