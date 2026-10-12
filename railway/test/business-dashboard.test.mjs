@@ -73,7 +73,8 @@ test('WB today business summary falls back to live buyouts instead of false zero
   assert.match(report, /businessWbLiveStats/);
   assert.match(report, /liveRevenue>0\|\|liveQty>0/);
   assert.match(report, /allMarketUnitProfit30/);
-  assert.match(report, /historyProfit\/historyQty/);
+  assert.match(report, /fees:null,ads,profit:null/);
+  assert.doesNotMatch(report, /historyProfit\/historyQty/);
   assert.match(report, /estimated:true,live:true/);
   assert.match(html, /let zeroCandidate=null/);
   assert.match(html, /hasBuyouts=.*buyoutCount/);
@@ -88,7 +89,7 @@ test('money formatting removes negative zero and unknown WB fields render as das
 });
 
 test('business dashboard assets are cache-busted and served', () => {
-  assert.match(html, /kaspi-report-v2\.js\?v=20261012-wb-operation-audit/);
+  assert.match(html, /kaspi-report-v2\.js\?v=20261013-wb-live-confidence/);
   assert.match(html, /business-dashboard-v1\.js\?v=20261008-business-week-swipe/);
   assert.match(html, /ozon-fbo-v1\.js\?v=20261008-ozon-order-history/);
   assert.match(server, /'business-dashboard-v1\.js'/);
@@ -159,5 +160,5 @@ test('report market selection is local UI state and does not restore stale WB2 f
   assert.match(report, /localStorage\.setItem\(REPORT_MARKET_UI_KEY,market\)/);
   assert.doesNotMatch(report, /reportMarket=\['all','Kaspi','WB','WB2'\]\.includes\(state\.settings\.reportMarket\)/);
   assert.doesNotMatch(report, /state\.settings\.reportMarket=market;try\{save\(\)\}/);
-  assert.match(html, /kaspi-report-v2\.js\?v=20261012-wb-operation-audit/);
+  assert.match(html, /kaspi-report-v2\.js\?v=20261013-wb-live-confidence/);
 });

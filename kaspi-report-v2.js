@@ -56,20 +56,10 @@ function businessWbLiveStats(model,live,market,days){
  const rows=(live?.products||[]).filter(x=>Math.max(0,Number(x?.qty)||0)>0),rowQty=rows.reduce((sum,x)=>sum+Math.max(0,Number(x?.qty)||0),0),qty=Math.max(0,Number(live?.buyoutCount)||rowQty),
    revenue=Math.max(0,Number(live?.buyoutSum)||rows.reduce((sum,x)=>sum+Math.max(0,Number(x?.buyoutSum??x?.retailAmount)||0),0)),
    costInfo=typeof wbLiveRealizedCostSummary==='function'?wbLiveRealizedCostSummary(market,days,live):{cost:0,complete:false},
-   unitMap=window.allMarketUnitProfit30 instanceof Map?window.allMarketUnitProfit30:null;
- let coveredQty=0,knownProfit=0;
- for(const x of rows){
-  const q=Math.max(0,Number(x?.qty)||0),pid=typeof wbLiveProductId==='function'?wbLiveProductId(market,x):'',stats=pid&&unitMap?unitMap.get(String(pid)):null,source=stats?.sources?.[market];
-  if(q>0&&source&&Number(source.qty)>0){knownProfit+=q*(Number(source.profit)||0)/Number(source.qty);coveredQty+=q}
- }
- if(unitMap&&qty>coveredQty){
-  let historyQty=0,historyProfit=0;
-  for(const stats of unitMap.values()){const source=stats?.sources?.[market];if(source&&Number(source.qty)>0){historyQty+=Number(source.qty)||0;historyProfit+=Number(source.profit)||0}}
-  if(historyQty>0){const missing=qty-coveredQty;knownProfit+=missing*(historyProfit/historyQty);coveredQty+=missing}
- }
- const profit=coveredQty>0?knownProfit:null,cost=costInfo.complete?Number(costInfo.cost)||0:null,ads=Number(model?.ads)||0,
-   fees=cost!==null&&profit!==null?Math.max(0,revenue-cost-ads-profit):null;
- return {qty,revenue,cost,fees,ads,profit,complete:false,financeAvailable:false,estimated:true,live:true,coverage:qty>0?Math.min(1,coveredQty/qty):0};
+   cost=costInfo.complete?Number(costInfo.cost)||0:null,ads=Number(model?.ads)||0;
+ // Historical unit profit is a forecast, not this day's confirmed WB settlement.
+ // Without current financial expenses neither fees nor net profit is known.
+ return {qty,revenue,cost,fees:null,ads,profit:null,complete:false,financeAvailable:false,estimated:true,live:true,awaitingFinance:true};
 }
 function resolvedWbReportStats(model,live,market,days){const products=Array.isArray(model?.products)?model.products:[],qty=products.reduce((sum,x)=>sum+Math.max(0,Number(x?.saleQty??x?.qty)||0),0),financeAvailable=Boolean(model?.financeAvailable),finance={qty,revenue:Number(model?.revenue)||0,cost:financeAvailable?Number(model?.cost)||0:null,fees:financeAvailable?Number(model?.expenses)||0:null,ads:Number(model?.ads)||0,profit:financeAvailable&&model?.profit!==null&&model?.profit!==undefined?Number(model.profit):null,complete:financeAvailable&&Boolean(model?.complete),financeAvailable,estimated:!financeAvailable||!Boolean(model?.complete),live:false,useLive:false},liveRevenue=Math.max(0,Number(live?.buyoutSum)||0),liveQty=Math.max(0,Number(live?.buyoutCount)||0),liveReady=Boolean(live)&&(liveRevenue>0||liveQty>0||(Array.isArray(live?.products)&&live.products.some(x=>Math.max(0,Number(x?.qty)||0)>0))),useLive=liveReady&&(!(finance.revenue>0)||!finance.financeAvailable||liveRevenue>finance.revenue+1);if(useLive&&typeof businessWbLiveStats==='function')return {...businessWbLiveStats(model,live,market,days),useLive:true};return finance}
 const businessMarketplaceSummaryCache=new Map();
