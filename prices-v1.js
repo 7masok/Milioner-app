@@ -6,7 +6,7 @@ const PRICE_MARKETS=['Kaspi','WB','WB2','Ozon'];
 const PRICE_CLIENT_TTL_MS=2*60*1000;
 let priceUi={market:'Kaspi',q:'',sort:'asc',hidden:{},groupFilter:'all',groupId:''};
 let priceExpanded=null;
-const priceSelected={WB:new Set(),WB2:new Set()};
+const priceSelected={Kaspi:new Set(),WB:new Set(),WB2:new Set()};
 try{
   const saved=JSON.parse(localStorage.getItem(PRICE_UI_KEY)||'{}')||{};
   if(PRICE_MARKETS.includes(saved.market))priceUi.market=saved.market;
@@ -74,6 +74,8 @@ function priceSelection(market=priceUi.market){
 function priceIsWbMarket(market=priceUi.market){
   return market==='WB'||market==='WB2';
 }
+function priceCanSelect(market=priceUi.market){return market==='Kaspi'||priceIsWbMarket(market)}
+function priceSelectionId(row){return priceIsWbMarket(row?.market)?String(row.remoteId||''):priceRowKey(row)}
 function priceGroupLabel(row){return String(row?.groupName||'').trim()||('Группа '+String(row?.groupImtId||''))}
 function priceMatchesGroup(row){
   if(!priceIsWbMarket(row?.market))return true;
@@ -118,9 +120,11 @@ function updatePriceBulkTools(indexed=priceVisibleRows()){
   const tools=document.getElementById('priceBulkTools'),all=document.getElementById('priceSelectAll'),count=document.getElementById('priceSelectedCount'),
     enable=document.getElementById('priceBulkEnablePromo'),disable=document.getElementById('priceBulkDisablePromo'),night=document.getElementById('priceBulkNight'),
     protection=document.getElementById('priceBulkProtection'),price=document.getElementById('priceBulkPrice');
-  const isWb=priceIsWbMarket(),selection=priceSelection(),visibleIds=indexed.map(({row})=>String(row.remoteId||'')).filter(Boolean),
+  const isWb=priceIsWbMarket(),selection=priceSelection(),visibleIds=indexed.filter(({row})=>!row.error).map(({row})=>priceSelectionId(row)).filter(Boolean),
     selectedVisible=visibleIds.filter(id=>selection.has(id)).length;
-  if(tools)tools.hidden=!isWb;
+  if(tools){tools.hidden=!priceCanSelect();tools.classList.toggle('kaspi',priceUi.market==='Kaspi');}
+  for(const button of [enable,disable,night,protection])if(button)button.hidden=!isWb;
+  if(price)price.textContent=isWb?'Цена / скидка':'Изменить цену';
   if(all){
     all.checked=Boolean(visibleIds.length)&&selectedVisible===visibleIds.length;
     all.indeterminate=selectedVisible>0&&selectedVisible<visibleIds.length;
@@ -292,8 +296,8 @@ function priceCard(row,index){
   const protection=row.priceProtected?'<span class="price-lock-badge"> · 🔒 '+pEsc(row.protectionReason||'Защита цены')+'</span>':'';
   const group=priceIsWbMarket(row.market)?'<span> · '+(row.grouped?(pEsc(priceGroupLabel(row))+' · '+Number(row.groupSize||0)):'Без группы')+'</span>':'';
   const expanded=Boolean(priceExpanded&&priceExpanded.market===priceUi.market&&priceExpanded.index===Number(index));
-  const selected=priceIsWbMarket(row.market)&&priceSelection(row.market).has(String(row.remoteId||''));
-  const selectBox=priceIsWbMarket(row.market)?'<label class="price-row-select" onclick="event.stopPropagation()"><input type="checkbox" '+(selected?'checked':'')+' onchange="priceSelectRow('+Number(index)+',this.checked)" aria-label="Выбрать товар"></label>':'';
+  const selected=priceCanSelect(row.market)&&priceSelection(row.market).has(priceSelectionId(row));
+  const selectBox=priceCanSelect(row.market)?'<label class="price-row-select" onclick="event.stopPropagation()"><input type="checkbox" '+(selected?'checked':'')+' onchange="priceSelectRow('+Number(index)+',this.checked)" aria-label="Выбрать товар"></label>':'';
   return '<div class="item price-item '+(!linked?'unlinked':'')+(expanded?' expanded':'')+(selected?' selected':'')+'" data-price-row="'+index+'">'+selectBox+
     '<button type="button" class="price-card-toggle" onclick="openPriceEditor('+index+')" aria-expanded="'+(expanded?'true':'false')+'">'+
       '<div class="price-item-head"><div class="grow"><div class="name">'+pEsc(row.name||row.sku||'Товар')+'</div>'+
@@ -424,8 +428,8 @@ window.renderPrices=async function(force=false){
 
 window.priceSetMarket=function(market){
   if(!PRICE_MARKETS.includes(market)||market===priceUi.market)return;
-  if(priceIsWbMarket(priceUi.market))priceSelection(priceUi.market).clear();
-  if(priceIsWbMarket(market))priceSelection(market).clear();
+  priceSelection(priceUi.market).clear();
+  priceSelection(market).clear();
   priceExpanded=null;priceUi.market=market;priceUi.groupFilter='all';priceUi.groupId='';rememberPriceUi();setPriceTabs();window.renderPrices(false);
 };
 window.priceSetGroupFilter=function(value){
@@ -441,16 +445,16 @@ window.priceToggleSort=function(){
   priceUi.sort=priceUi.sort==='desc'?'asc':'desc';rememberPriceUi();setPriceTabs();paintPrices();
 };
 window.priceSelectRow=function(index,checked){
-  const row=activeRows()[Number(index)];if(!row||!priceIsWbMarket(row.market))return;
-  const set=priceSelection(row.market),id=String(row.remoteId||'');if(!id)return;
+  const row=activeRows()[Number(index)];if(!row||row.error||!priceCanSelect(row.market))return;
+  const set=priceSelection(row.market),id=priceSelectionId(row);if(!id)return;
   if(checked)set.add(id);else set.delete(id);
   paintPrices();
 };
 window.priceSelectAllVisible=function(checked){
-  if(!priceIsWbMarket())return;
+  if(!priceCanSelect())return;
   const set=priceSelection();
   for(const {row} of priceVisibleRows()){
-    const id=String(row.remoteId||'');if(!id)continue;
+    const id=priceSelectionId(row);if(!id)continue;
     if(checked)set.add(id);else set.delete(id);
   }
   paintPrices();
@@ -460,6 +464,7 @@ window.priceClearSelection=function(){priceSelection().clear();paintPrices();};
 
 let priceWorkbench=null,nightWorkbench=null,priceWorkbenchBusy=false;
 window.openPriceWorkbench=function(action='price',index=null){
+  if(priceUi.market==='Kaspi'&&action==='price')return openKaspiPriceWorkbench(index);
   if(!priceIsWbMarket())return;
   const rows=index===null?selectedPriceRows():[activeRows()[Number(index)]].filter(Boolean);
   if(!rows.length)return;
@@ -475,6 +480,11 @@ window.openPriceWorkbench=function(action='price',index=null){
 function workbenchChanges(){
   const ctx=priceWorkbench;if(!ctx)return [];
   const rawPrice=document.getElementById('priceWorkbenchPrice')?.value||'',rawDiscount=document.getElementById('priceWorkbenchDiscount')?.value||'';
+  if(ctx.market==='Kaspi')return ctx.rows.map(row=>{
+    const price=Number(rawPrice),product=(state.products||[]).find(item=>String(item.id)===String(row.productId));
+    const error=!Number.isSafeInteger(price)||price<=0?'Введите целую цену больше 0':!product?'Товар не привязан к складу':'';
+    return {row,price,error};
+  });
   return ctx.rows.map(row=>{
     const price=rawPrice===''?pNum(row.syncSource==='manual'?row.price:(row.confirmedPrice??row.price)):Number(rawPrice);
     const plan=pNum(row.promoPlanPrice);
@@ -497,11 +507,14 @@ function workbenchChanges(){
 }
 window.priceWorkbenchPreview=function(){
   const items=workbenchChanges(),el=document.getElementById('priceWorkbenchPreview');
-  if(el)el.innerHTML=items.map(item=>'<div class="item"><b>'+pEsc(item.row.name||item.row.sku)+'</b><div>'+pMoney(item.row.confirmedPrice??item.row.price,'RUB')+' → '+pMoney(item.price,'RUB')+' · скидка '+(item.automaticEntry?'подбор для товара':pEsc(item.discount??'—')+'%')+' · '+(item.automaticEntry?'цена после подбора':('итог '+pMoney(item.final,'RUB')))+'</div>'+(item.error?'<div class="price-error">'+pEsc(item.error)+'</div>':item.automaticEntry?'<div class="muted">Порог и скидку найдёт сервер по условиям WB</div>':!pNum(item.row.promoPlanPrice)&&priceWorkbench.action!=='price'?'<div class="muted">Порог неизвестен · статус участия проверьте в WB</div>':'')+'</div>').join('');
+  if(el)el.innerHTML=items.map(item=>priceWorkbench.market==='Kaspi'
+    ?'<div class="item"><b>'+pEsc(item.row.name||item.row.sku)+'</b><div>'+pMoney(item.row.price,'KZT')+' → '+pMoney(item.price,'KZT')+'</div>'+(item.error?'<div class="price-error">'+pEsc(item.error)+'</div>':'')+'</div>'
+    :'<div class="item"><b>'+pEsc(item.row.name||item.row.sku)+'</b><div>'+pMoney(item.row.confirmedPrice??item.row.price,'RUB')+' → '+pMoney(item.price,'RUB')+' · скидка '+(item.automaticEntry?'подбор для товара':pEsc(item.discount??'—')+'%')+' · '+(item.automaticEntry?'цена после подбора':('итог '+pMoney(item.final,'RUB')))+'</div>'+(item.error?'<div class="price-error">'+pEsc(item.error)+'</div>':item.automaticEntry?'<div class="muted">Порог и скидку найдёт сервер по условиям WB</div>':!pNum(item.row.promoPlanPrice)&&priceWorkbench.action!=='price'?'<div class="muted">Порог неизвестен · статус участия проверьте в WB</div>':'')+'</div>').join('');
   const button=document.getElementById('priceWorkbenchApply');if(button)button.disabled=!items.some(item=>!item.error)||priceWorkbenchBusy;
 };
 window.submitPriceWorkbench=async function(){
   const ctx=priceWorkbench;if(!ctx||priceWorkbenchBusy)return;
+  if(ctx.market==='Kaspi')return submitKaspiPriceWorkbench(ctx);
   const eligible=workbenchChanges().filter(item=>!item.error);if(!eligible.length)return;
   const skipped=ctx.ids.length-eligible.length,automatic=eligible.some(item=>item.automaticEntry);
   if(!confirm((automatic?'Подобрать скидку для '+eligible.length+' товаров по условиям акции?':'Сохранить изменения для '+eligible.length+' товаров? Они будут отправлены в ближайший сеанс WB.')+(skipped?' Пропущено: '+skipped+' — причины указаны в списке.':'')))return;
@@ -517,6 +530,40 @@ window.submitPriceWorkbench=async function(){
   }catch(error){alert(priceErrorText(error));}
   finally{priceWorkbenchBusy=false;window.priceWorkbenchPreview();}
 };
+
+function openKaspiPriceWorkbench(index){
+  const rows=index===null?selectedPriceRows():[activeRows()[Number(index)]].filter(Boolean);
+  if(!rows.length)return;
+  priceWorkbench={market:'Kaspi',action:'price',rows:rows.map(row=>({...row})),ids:rows.map(priceSelectionId)};
+  showSheet('<h3>Изменить цену · Kaspi · '+rows.length+'</h3><div class="field"><label>Новая цена для выбранных, ₸</label><input id="priceWorkbenchPrice" type="number" min="1" step="1" inputmode="numeric" oninput="priceWorkbenchPreview()"></div><div id="priceWorkbenchPreview" class="price-workbench-preview"></div><button id="priceWorkbenchApply" type="button" class="btn dark full" onclick="submitPriceWorkbench()">Применить к выбранным</button>');
+  window.priceWorkbenchPreview();
+}
+async function submitKaspiPriceWorkbench(ctx){
+  if(typeof requireWarehouseEditReady!=='function'||!requireWarehouseEditReady())return;
+  const items=workbenchChanges(),eligible=items.filter(item=>!item.error);if(!eligible.length)return;
+  const skipped=items.filter(item=>item.error);
+  if(!confirm('Изменить цену Kaspi для '+eligible.length+' позиций на '+pMoney(eligible[0].price,'KZT')+'?'+(skipped.length?' Пропущено: '+skipped.length+' — причины указаны в списке.':'')))return;
+  priceWorkbenchBusy=true;window.priceWorkbenchPreview();
+  try{
+    const changes=new Map();
+    for(const item of eligible){
+      const product=(state.products||[]).find(row=>String(row.id)===String(item.row.productId));
+      if(!product)throw new Error('Товар склада не найден. Откройте выбор заново.');
+      changes.set(String(product.id),{product,price:item.price,previous:product.kaspiPrice});
+    }
+    for(const change of changes.values())change.product.kaspiPrice=change.price;
+    if(save()===false){for(const change of changes.values())change.product.kaspiPrice=change.previous;throw new Error('Склад пока доступен только для просмотра.');}
+    const pushed=typeof pushWarehouseToServer==='function'&&(await pushWarehouseToServer())===true;
+    if(!pushed)throw new Error('Сохранение цен не подтверждено сервером. Обновите данные и проверьте цены.');
+    for(const item of eligible)priceSelection(ctx.market).delete(priceSelectionId(item.row));
+    const cached=priceCache.get(ctx.market);
+    for(const row of cached?.rows||[]){const change=changes.get(String(row.productId));if(change){row.price=change.price;row.finalPrice=change.price;row.source='warehouse';}}
+    if(priceWorkbench===ctx){closeModal();priceWorkbench=null;}
+    if(priceUi.market===ctx.market){priceExpanded=null;paintPrices();setPriceStatus('Цены Kaspi сохранены: '+changes.size+' · XML обновлён'+(skipped.length?' · пропущено: '+skipped.length:''),'ok');}
+    if(skipped.length)alert(skipped.map(item=>(item.row.name||item.row.sku)+': '+item.error).join('\n'));
+  }catch(error){alert(priceErrorText(error));}
+  finally{priceWorkbenchBusy=false;window.priceWorkbenchPreview();}
+}
 
 async function remotePriceProtection(body){
   const response=await fetch(MILLIONER_API+'/api/market-prices/protection',{
@@ -586,7 +633,7 @@ window.savePriceGroupName=async function(){
   }catch(error){alert(priceErrorText(error))}finally{if(button)button.disabled=false}
 };
 function selectedPriceRows(){
-  const ids=priceSelection();return activeRows().filter(row=>ids.has(String(row.remoteId||'')));
+  const ids=priceSelection();return activeRows().filter(row=>!row.error&&ids.has(priceSelectionId(row)));
 }
 function groupPreviewRow(row){
   const image=row?.groupPhoto?'<img src="'+pEsc(row.groupPhoto)+'" alt="">':'<span class="thumb"></span>';
