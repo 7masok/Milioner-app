@@ -1,6 +1,7 @@
 import express from 'express';
 import { pool } from './db.js';
 import { asyncRoute } from './http.js';
+import { buildWbOperationAudit } from './wb-operation-audit.js';
 
 export const reportsRouter = express.Router();
 const ALMATY_OFFSET = 5 * 60 * 60 * 1000;
@@ -305,6 +306,29 @@ async function resolveWbAdvertising(selected, adRows = []) {
 
   return { rows: audited, byProduct, total, unmatched, autoRecovered };
 }
+
+// A separate, read-only report: existing warehouse/product analytics remain on their current model.
+reportsRouter.get('/wb-operation-audit', asyncRoute(async (req, res) => {
+  const selected = market(req.query.market);
+  if (!['WB', 'WB2'].includes(selected)) return res.status(400).json({ ok: false, error: 'market must be WB or WB2' });
+  if (Number(req.query.days) === 0 && !(Number(req.query.from) > 0 && Number(req.query.to) > Number(req.query.from))) {
+    return res.status(400).json({ ok: false, error: 'Проверьте даты периода' });
+  }
+  const { since, until } = requestPeriodBounds(req), daysList = [];
+  if (until - since > 366 * 86_400_000) return res.status(400).json({ ok: false, error: 'Выберите период не более года' });
+  for (let time = since; time < until; time += 86_400_000) daysList.push(dateKey(time));
+  const [finance, links, products, ads, history, sync] = await Promise.all([
+    pool.query('SELECT * FROM wb_finance_rows WHERE market=$1 AND rr_date >= $2 AND rr_date < $3 ORDER BY rr_date,rrd_id LIMIT 50001', [selected, since, until]),
+    pool.query('SELECT market,sku,product_id AS "productId" FROM product_links WHERE market=$1', [selected]),
+    pool.query('SELECT id,name,payload FROM warehouse_products'),
+    pool.query('SELECT day,advert_id AS "advertId",campaign,amount,nm_ids AS "nmIds",raw_json FROM wb_ad_costs WHERE market=$1 AND day=ANY($2::text[]) ORDER BY day,advert_id,upd_num', [selected, daysList]),
+    pool.query('SELECT MIN(rr_date) AS "firstDate",MAX(rr_date) AS "lastDate",MAX(updated_at) AS "updatedAt" FROM wb_finance_rows WHERE market=$1', [selected]),
+    pool.query('SELECT finished_at AS "finishedAt",finance_ok AS "financeOk",promotion_ok AS "promotionOk",error FROM wb_finance_sync_runs WHERE market=$1 ORDER BY id DESC LIMIT 1', [selected])
+  ]);
+  if (finance.rows.length > 50000) return res.status(422).json({ ok: false, error: 'Больше 50 000 операций. Выберите более короткий период.' });
+  const audit = buildWbOperationAudit({ market: selected, rows: finance.rows, links: links.rows, products: products.rows, adRows: ads.rows, since, until });
+  res.json({ ok: true, ...audit, history: history.rows[0] || null, sync: sync.rows[0] || null });
+}));
 
 reportsRouter.get('/wb-finance-products', asyncRoute(async (req, res) => {
   const selected = market(req.query.market);

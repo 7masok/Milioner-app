@@ -46,6 +46,7 @@ const frontendFiles = Object.freeze([
   'cloud-sync-v3.js',
   'wb-variants-v1.js',
   'kaspi-report-v2.js',
+  'wb-operation-audit-v1.js',
   'kaspi-ads-v2.js',
   'save-conflict-v1.js',
   'purchase-delete-v1.js',
