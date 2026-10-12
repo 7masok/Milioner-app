@@ -174,8 +174,14 @@ test('moved history is detached from future balance mutations',()=>{
   const adjustment=extractFunction('saveFinanceAdjustmentTransaction');
   assert.match(move,/next\.balanceDetached=true/);
   assert.match(move,/next\.affectsBalance=false/);
-  assert.match(save,/old\?\.balanceDetached\?false:true/);
-  assert.match(transfer,/old\?\.balanceDetached\?false:true/);
+  assert.match(save,/financeManualOperationDetails/);
+  assert.match(transfer,/financeManualOperationDetails/);
+  const run=new Function(extractFunction('financeOperationDay')+'\n'+extractFunction('financeManualOperationDetails')+`
+    const document={getElementById:id=>({value:'2024-04-07',checked:false})};
+    function alert(message){throw Error(message)}
+    return ['financeTransaction','financeTransfer'].map(prefix=>financeManualOperationDetails(prefix,{balanceDetached:true,affectsBalance:false,createdAt:1},2).affectsBalance);
+  `);
+  assert.deepEqual(run(),[false,false]);
   assert.match(adjustment,/old\?\.balanceDetached\?false:true/);
   assert.match(ledger,/next\.balanceDetached=true/);
   assert.match(ledger,/next\.affectsBalance=false/);

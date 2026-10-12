@@ -55,6 +55,8 @@ window.financeEditSplitEnable=function(){
   if(!editor||busy)return;
   const before=editor.before,draft=input();
   if(draft.amount!==Number(before.amount)||draft.accountId!==String(before.accountId)||draft.type!==before.type)return alert('Сначала сохраните изменение суммы, счёта или типа, затем откройте разбивку.');
+  const date=el('financeTransactionDate');
+  if(date&&date.value!==window.financeOperationDateValue(before))return alert('Сначала сохраните изменение даты, затем откройте разбивку.');
   if(before.refundOfId||window.financeTransactions().some(t=>String(t.refundOfId||'')===editor.id))return alert('У операции есть возврат. Разбивка недоступна.');
   if(before.source==='bank_statement'&&before.bankStatus==='blocked')return alert('Дождитесь проведения банковской операции.');
   const category=['transit_in','transit_out'].includes(before.type)?'__transit__':String(el('financeTransactionCategory')?.value||'');
@@ -63,11 +65,13 @@ window.financeEditSplitEnable=function(){
     render();
     el('financeEditSplitLaunch').hidden=true;
     for(const id of ['financeTransactionType','financeTransactionAccount','financeTransactionAmount','financeTransactionCategory'])el(id).disabled=true;
+    if(date)date.disabled=true;
   }catch(e){window.financeEditSplitDisable();alert('Не удалось открыть разбивку: '+String(e.message||e));}
 };
 window.financeEditSplitDisable=function(){
   if(!editor||busy)return;editor.parts=null;if(el('financeEditSplitBox'))el('financeEditSplitBox').innerHTML='';if(el('financeEditSplitLaunch'))el('financeEditSplitLaunch').hidden=false;
   for(const id of ['financeTransactionType','financeTransactionAccount','financeTransactionAmount','financeTransactionCategory'])el(id).disabled=false;
+  if(el('financeTransactionDate'))el('financeTransactionDate').disabled=false;
   if(saveButton())saveButton().disabled=false;
 };
 window.financeEditSplitCategory=function(i,value){if(editor?.parts?.[i])editor.parts[i].categoryId=String(value);updateStatus();};

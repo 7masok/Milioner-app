@@ -117,9 +117,11 @@ test('editor uses one durable local command, fills remainder, supports cancellat
   const helpers=app.slice(app.indexOf('const moneyFormatter='),app.indexOf('const prod='));
   runInNewContext(helpers+'\n'+app.split('\n').find(line=>line.startsWith('function financeMoney(')),ctx);
   assert.equal(ctx.esc,undefined);
+  runInNewContext(app.slice(app.indexOf('function financeOperationDay('),app.indexOf('function financeManualDateFields(')),ctx);
   runInNewContext(readFileSync(new URL('../../finance-split-model.js',import.meta.url),'utf8'),ctx);
   runInNewContext(readFileSync(new URL('../../finance-edit-split-v1.js',import.meta.url),'utf8'),ctx);
-  const open=()=>{element('financeTransactionType').value='expense';element('financeTransactionAccount').value='a';element('financeTransactionAmount').value='310000';element('financeTransactionCategory').value='c1';element('financeTransactionTitle').value='Платёж';ctx.openModal('financeTransaction','original');};
+  const open=()=>{element('financeTransactionDate').value=ctx.financeOperationDateValue(before);element('financeTransactionType').value='expense';element('financeTransactionAccount').value='a';element('financeTransactionAmount').value='310000';element('financeTransactionCategory').value='c1';element('financeTransactionTitle').value='Платёж';ctx.openModal('financeTransaction','original');};
+  open();element('financeTransactionDate').value='2024-04-07';ctx.financeEditSplitEnable();assert.match(alerts.at(-1),/Сначала сохраните изменение даты/);
   open();missingBox=true;ctx.financeEditSplitEnable();missingBox=false;
   assert.match(alerts.at(-1),/Не удалось открыть разбивку/);
   assert.equal(element('financeTransactionCategory').disabled,false);

@@ -18,7 +18,7 @@ for name in ['finance-kaspi-identity.js','finance-bcc-identity.js','finance-impo
 shutil.copy2(root / 'android.js', assets / 'finances' / 'android.js')
 html = (assets / 'finances' / 'index.html').read_text()
 html = html.replace('<script src="/finances/start.js">', '<script src="/finances/android.js"></script><script src="/finances/start.js">')
-html = html.replace('В меню браузера выбери «Установить приложение» или «Добавить на главный экран». Финансы откроются отдельным приложением со своей иконкой.', 'Android · версия 0.1.6. Выписку можно выбрать здесь или отправить PDF в «Финансы» через «Поделиться».')
+html = html.replace('В меню браузера выбери «Установить приложение» или «Добавить на главный экран». Финансы откроются отдельным приложением со своей иконкой.', 'Android · версия 0.1.7. Выписку можно выбрать здесь или отправить PDF в «Финансы» через «Поделиться».')
 (assets / 'finances' / 'index.html').write_text(html)
 (assets / 'finances' / 'start.js').write_text('initFinanceAuth();\n')
 runtime = (assets / 'finances' / 'runtime.js').read_text()
@@ -49,7 +49,7 @@ run(tools / 'zipalign','-f','4',unsigned,aligned)
 key = Path(os.environ['FINANCE_SIGNING_KEY'])
 if not key.exists():
     run('keytool','-genkeypair','-keystore',key,'-storepass','android','-keypass','android','-alias','androiddebugkey','-dname','CN=Finance Development,O=LuXar,C=KZ','-keyalg','RSA','-keysize','2048','-validity','10000')
-apk = build / 'Finances-0.1.6.apk'
+apk = build / 'Finances-0.1.7.apk'
 run(tools / 'apksigner','sign','--ks',key,'--ks-pass','pass:android','--key-pass','pass:android','--out',apk,aligned)
 run(tools / 'apksigner','verify','--verbose',apk)
 run(tools / 'aapt','dump','badging',apk)
