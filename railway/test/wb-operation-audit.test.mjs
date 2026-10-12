@@ -1,0 +1,163 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import vm from 'node:vm';
+import { buildWbOperationAudit } from '../src/wb-operation-audit.js';
+import { reportsRouter } from '../src/reports.js';
+import { pool } from '../src/db.js';
+
+const DAY = 86400000, START = Date.parse('2026-10-01T00:00:00+05:00');
+function row(rrdId, operation, raw = {}, extra = {}) {
+  return { market: 'WB', rrd_id: String(rrdId), rr_date: START, vendor_code: 'item', nm_id: '100', qty: 1, doc_type: 'Продажа',
+    operation, retail_amount: 0, for_pay: 0, acquiring_fee: 0, delivery_service: 0, paid_storage: 0, paid_acceptance: 0, deduction: 0, penalty: 0, rebill_logistic_cost: 0, additional_payment: 0,
+    raw_json: JSON.stringify({ sellerOperName: operation, currency: 'KZT', sku: 'barcode-a', srid: 'order-a', shkId: 'unit-a', ...raw }), ...extra };
+}
+const base = { market: 'WB', links: [{ market: 'WB', sku: 'barcode-a', productId: 'a' }, { market: 'WB', sku: 'barcode-b', productId: 'b' }], products: [{ id: 'a', name: 'Товар A' }, { id: 'b', name: 'Товар B' }], since: START, until: START + DAY };
+const build = rows => buildWbOperationAudit({ ...base, rows });
+
+test('an отказ and resale from WB stock has one sale, both delivery legs, and no warehouse mutations', () => {
+  const rows = [row(1, 'Логистика', { deliveryService: 100 }), row(2, 'Логистика', { deliveryService: 60, returnAmount: 1 }),
+    row(3, 'Продажа', { srid: 'order-b', retailAmount: 1000, forPay: 700, acquiringFee: 20, ppvzSalesCommission: 280 }),
+    row(4, 'Логистика', { srid: 'order-b', deliveryService: 90, warehouseName: 'Склад WB' })];
+  const before = JSON.stringify(rows), data = build(rows), t = data.totals[0];
+  assert.equal(t.saleQty, 1); assert.equal(t.returnQty, 0); assert.equal(t.delivery, 250); assert.equal(t.beforeAdsAndCost, 450);
+  assert.equal(t.commission, 280); assert.equal(t.acquiring, 20); assert.equal(data.orders.length, 2);
+  assert.equal(data.units.length, 1); assert.deepEqual(data.units[0].srids, ['order-a', 'order-b']);
+  assert.equal(JSON.stringify(rows), before); assert.equal(data.operations.some(x => 'cost' in x || 'stock' in x), false);
+});
+test('positive report return amounts reverse payout once; logistics remains an expense', () => {
+  const data = build([row(1, 'Продажа', { retailAmount: 1000, forPay: 700 }),
+    row(2, 'Возврат', { docTypeName: 'Возврат', retailAmount: 1000, forPay: 700, acquiringFee: 20 }),
+    row(3, 'Логистика', { docTypeName: 'Возврат', deliveryService: 60 }),
+    row(4, 'Продажа', { srid: 'order-b', retailAmount: 1200, forPay: 800 })]);
+  assert.equal(data.totals[0].saleQty, 2); assert.equal(data.totals[0].returnQty, 1);
+  assert.equal(data.totals[0].forPay, 800); assert.equal(data.totals[0].beforeAdsAndCost, 740);
+  const negative = build([row(5, 'Возврат', { docTypeName: 'Возврат', retailAmount: -1000, forPay: -700 })]);
+  assert.equal(negative.totals[0].forPay, -700);
+});
+test('cash WB Promotion charge and campaign spend are visible separately without double subtraction', () => {
+  const data = buildWbOperationAudit({ ...base, rows: [row(1, 'Продажа', { forPay: 700 }), row(2, 'Удержание', { deduction: 50, bonusTypeName: 'WB Продвижение' })],
+    adRows: [{ day: '2026-10-01', amount: 50, nmIds: ['100'], advertId: 'ad1' }] });
+  assert.equal(data.totals[0].settlement, 650); assert.equal(data.totals[0].beforeAdsAndCost, 700);
+  assert.equal(data.totals[0].promotionDeduction, 50); assert.equal(data.advertising[0].amount, 50);
+  assert.equal(data.advertising[0].productId, 'a'); assert.equal(data.advertising[0].currency, 'UNKNOWN');
+});
+test('size-specific barcode wins over shared article; shared logistics cannot be guessed for one size', () => {
+  const data = buildWbOperationAudit({ ...base, links: [...base.links, { sku: 'item', productId: 'parent' }, { sku: '100', productId: 'parent' }],
+    rows: [row(1, 'Продажа'), row(2, 'Продажа', { sku: 'barcode-b', shkId: 'unit-b' }), row(3, 'Логистика', { sku: '', srid: '', shkId: 0, deliveryService: 40 })],
+    adRows: [{ amount: 50, nmIds: ['100'] }] });
+  assert.deepEqual(data.operations.map(x => x.productId), ['a', 'b', '']);
+  assert.equal(data.advertising[0].productId, ''); assert.equal(data.advertising[0].reason, 'multiple_products');
+  assert.equal(data.reconciliation[0].balanced, true); assert.equal(data.products.length, 3);
+});
+test('advertising with two known sizes stays unallocated even when only one size sold this period', () => {
+  const data = buildWbOperationAudit({ ...base, products: [{ id: 'a', name: 'A', payload: { wbIdentity: { nmId: '100' } } }, { id: 'b', name: 'B', payload: { wbIdentity: { nmId: '100' } } }],
+    rows: [row(1, 'Продажа')], adRows: [{ amount: 20, nmIds: ['100'] }] });
+  assert.equal(data.advertising[0].productId, '');
+});
+test('multi-product or partially linked campaign is never spread over sales; ad-only products remain visible', () => {
+  const data = buildWbOperationAudit({ ...base, links: [...base.links, { sku: '200', productId: 'b' }], rows: [row(1, 'Продажа')],
+    adRows: [{ amount: 20, nmIds: ['100', '200'] }, { amount: 30, nmIds: ['100', 'unknown'] }, { amount: 40, nmIds: ['200'] }] });
+  assert.deepEqual(data.advertising.map(x => x.productId), ['', '', 'b']);
+  assert.equal(data.products.find(x => x.productId === 'b').rows.length, 0);
+  assert.equal(data.products.find(x => x.productId === 'b').advertising.length, 1);
+  assert.equal(data.totals[0].beforeAdsAndCost, 0);
+});
+test('only rrdId is deduplicated, later snapshot wins, order repeats retain legitimate logistics', () => {
+  const data = build([row(1, 'Логистика', { deliveryService: 10 }, { updated_at: 1 }), row(1, 'Логистика', { deliveryService: 15 }, { updated_at: 2 }), row(2, 'Логистика', { deliveryService: 30 })]);
+  assert.equal(data.rowCount, 2); assert.equal(data.duplicateRows, 1); assert.equal(data.totals[0].delivery, 45);
+});
+test('two pieces with the same barcode are not one physical unit or one order', () => {
+  const data = build([row(1, 'Продажа', { srid: 'one', shkId: 'one' }), row(2, 'Продажа', { srid: 'two', shkId: 'two' }), row(3, 'Логистика', { srid: '', shkId: 0 })]);
+  assert.equal(data.units.length, 2); assert.equal(data.orders.length, 3); assert.equal(data.coverage.unitRows, 2);
+});
+test('missing article can be recovered through an exact order/unit, but contradictory identities remain unlinked', () => {
+  const data = build([row(1, 'Продажа'), row(2, 'Логистика', { sku: '', vendorCode: '', nmId: '100', deliveryService: 40 }),
+    row(3, 'Логистика', { sku: '', vendorCode: '', nmId: '999', srid: 'order-a', shkId: 'unit-a' })]);
+  assert.equal(data.operations[1].productId, 'a'); assert.equal(data.operations[1].linkSource, 'order');
+  assert.equal(data.operations[2].productId, '');
+  assert.equal(data.reconciliation[0].balanced, true);
+});
+test('WB1/WB2 and the report-date window stay isolated, explicit zero raw money overrides obsolete parsed data', () => {
+  const data = build([row(1, 'Продажа', { forPay: '0', deliveryService: '0' }, { for_pay: 100, delivery_service: 20 }),
+    row(2, 'Продажа', { forPay: 99 }, { market: 'WB2' }), row(3, 'Продажа', { forPay: 99 }, { rr_date: START + DAY }), row(4, 'Продажа', { forPay: 99 }, { rr_date: START - 1 })]);
+  assert.equal(data.rowCount, 1); assert.equal(data.totals[0].forPay, 0); assert.equal(data.totals[0].delivery, 0);
+  assert.equal(data.totals[0].calculationDelta, -80);
+});
+test('currency buckets, negative logistics corrections and malformed money are not silently flattened', () => {
+  const data = build([row(1, 'Продажа', { currency: 'KZT', forPay: 700 }), row(2, 'Логистика', { currency: 'KZT', deliveryService: -10 }), row(3, 'Продажа', { currency: 'RUB', forPay: 100 }), row(4, 'Продажа', { currency: '', forPay: 40 })]);
+  assert.deepEqual(data.totals.map(x => [x.currency, x.beforeAdsAndCost]), [['KZT', 710], ['RUB', 100], ['UNKNOWN', 40]]);
+  assert.ok(data.reconciliation.every(x => x.balanced));
+  assert.throws(() => build([row(5, 'Продажа', { forPay: 'broken' })]), /Некорректная сумма WB/);
+  assert.throws(() => buildWbOperationAudit({ ...base, adRows: [{ amount: 'broken' }] }), /Некорректный расход рекламы/);
+});
+test('return operation still reverses payout when legacy data lacks document type', () => {
+  const data = build([row(1, 'Возврат', { forPay: 700 }, { doc_type: '' })]);
+  assert.equal(data.totals[0].forPay, -700); assert.equal(data.totals[0].returnQty, 1);
+});
+
+const handler = reportsRouter.stack.find(x => x.route?.path === '/wb-operation-audit').route.stack[0].handle;
+async function invoke(query, respond) {
+  const old = pool.query, calls = []; pool.query = async (sql, args) => { calls.push({ sql, args }); return { rows: respond(sql, args) }; };
+  let status = 200, result;
+  try { await handler({ query }, { status(code) { status = code; return this; }, json(data) { result = data; } }, error => { throw error; }); }
+  finally { pool.query = old; }
+  return { status, result, calls };
+}
+test('audit endpoint uses bounded parameterized cache reads, preserves custom Almaty dates and never writes/calls WB', async () => {
+  const result = await invoke({ market: 'WB1', days: '0', from: String(START), to: String(START + DAY) }, sql => sql.startsWith('SELECT *') ? [row(1, 'Продажа')] : sql.includes('warehouse_products') ? base.products : sql.includes('product_links') ? base.links : []);
+  assert.equal(result.status, 200); assert.equal(result.result.market, 'WB'); assert.equal(result.result.range.since, START);
+  assert.deepEqual(result.calls[0].args, ['WB', START, START + DAY]);
+  assert.ok(result.calls.every(x => /^SELECT /.test(x.sql)));
+  assert.deepEqual(result.calls.find(x => x.sql.includes('wb_ad_costs')).args, ['WB', ['2026-10-01']]);
+});
+test('invalid cabinet/range and oversized result never masquerade as successful empty data', async () => {
+  assert.equal((await invoke({ market: 'Kaspi' }, () => { throw Error('must not query'); })).status, 400);
+  assert.equal((await invoke({ market: 'WB', days: '0', from: '1', to: '0' }, () => { throw Error('must not query'); })).status, 400);
+  const result = await invoke({ market: 'WB', days: 1 }, sql => sql.startsWith('SELECT *') ? Array(50001).fill({}) : []);
+  assert.equal(result.status, 422); assert.equal(result.result.ok, false);
+});
+
+const ui = readFileSync(new URL('../../wb-operation-audit-v1.js', import.meta.url), 'utf8');
+function uiFixture() {
+  const elements = new Map(), listeners = new Map(), el = { dataset: {}, querySelector(selector) { if (!elements.has(selector)) elements.set(selector, { innerHTML: '', hidden: true, value: '' }); return elements.get(selector); }, querySelectorAll() { return []; }, addEventListener(name, fn) { listeners.set(name, fn); }, contains() { return true; } };
+  let current = null;
+  const context = { console, Intl, Date, Math, reportCustomBounds: () => ({ start: START, end: START + DAY }), MILLIONER_API: '', apiJson: async () => ({ ok: true, ...build([row(1, 'Продажа', { forPay: 700 })]) }), openStoreDetail: () => {}, alert: () => {},
+    document: { getElementById: () => current, createElement: () => ({}), head: { appendChild() {} } }, showSheet(html) { current = el; el.dataset.request = html.match(/data-request="([^"]+)"/)[1]; }, window: {} };
+  vm.runInNewContext(ui.replace(/\}\)\(\);\s*$/, 'window.fixture={operationHtml,draw,mount,get active(){return active}};})();'), context);
+  return { context, el, elements, listeners, close() { current = null; } };
+}
+test('audit UI escapes marketplace text, respects currencies and never labels an unverified result as net profit', () => {
+  const { context } = uiFixture(), r = build([row(1, '<img src=x onerror=attack>', { currency: 'RUB', forPay: 10, srid: '<unsafe>' })]).operations[0];
+  const html = context.window.fixture.operationHtml(r);
+  assert.ok(html.includes('&lt;img')); assert.ok(!html.includes('<img')); assert.ok(html.includes('&lt;unsafe&gt;')); assert.ok(html.includes(' ₽'));
+  assert.ok(html.includes('до рекламы и себестоимости')); assert.ok(!html.includes('Чистая прибыль'));
+});
+test('closing/navigating away while audit loads cannot overwrite another sheet', async () => {
+  const f = uiFixture();let resolve; f.context.apiJson = () => new Promise(r => { resolve = r; });
+  f.context.window.openWbOperationAudit('WB', 7); const summary = f.el.querySelector('[data-audit-summary]'); f.close(); resolve({ ok: true, ...build([row(1, 'Продажа')]) });
+  await new Promise(r => setImmediate(r));
+  assert.equal(summary.innerHTML, '');
+});
+test('audit UI paginates read-only products, preserves unknown/ad-only rows and opens order detail', async () => {
+  const f = uiFixture(), many = Array.from({ length: 25 }, (_, i) => row(i + 1, 'Продажа', { vendorCode: 'v' + i, nmId: 'n' + i, sku: 'b' + i }));
+  f.context.apiJson = async () => ({ ok: true, ...build(many) }); f.context.window.openWbOperationAudit('WB', 7); await new Promise(r => setImmediate(r));
+  const ctx = f.context.window.fixture.active;
+  assert.equal((f.elements.get('[data-audit-body]').innerHTML.match(/wb-audit-product/g) || []).length, 20);
+  assert.ok(f.elements.get('[data-audit-pager]').innerHTML.includes('1 / 2'));
+  ctx.page = 2; f.context.window.fixture.draw(ctx); assert.equal((f.elements.get('[data-audit-body]').innerHTML.match(/wb-audit-product/g) || []).length, 5);
+  ctx.mode = 'orders'; ctx.q = 'n0'; ctx.page = 1; f.context.window.fixture.draw(ctx);
+  assert.ok(f.elements.get('[data-audit-body]').innerHTML.includes('Заказ order-a'));
+  assert.ok(!/\b(save|pushWarehouseToServer|persistWarehouse|reconcileMarketplaceSales)\s*\(/.test(ui));
+});
+test('both report paths expose the audit and its script is served statically before owner startup', () => {
+  const html = readFileSync(new URL('../../index.html', import.meta.url), 'utf8');
+  const server = readFileSync(new URL('../src/server.js', import.meta.url), 'utf8');
+  const report = readFileSync(new URL('../../kaspi-report-v2.js', import.meta.url), 'utf8');
+  const tag = '<script src="./wb-operation-audit-v1.js?v=20261012"></script>';
+  assert.ok(html.includes(tag)); assert.ok(html.indexOf(tag) < html.lastIndexOf('initOwnerAuth()'));
+  assert.ok(html.includes('${head}${body}${auditButton}'));
+  assert.ok(report.includes("wbOperationAuditButton(market,days)"));
+  assert.ok(server.includes("'wb-operation-audit-v1.js'"));
+  assert.ok(server.indexOf("app.use('/api', requireAppSession)") < server.indexOf("app.use('/api', reportsRouter)"));
+});
