@@ -349,8 +349,8 @@ reportsRouter.get('/wb-operation-audit', asyncRoute(async (req, res) => {
 reportsRouter.get('/wb-unit-history', asyncRoute(async (req, res) => {
   const selected = market(req.query.market), shkId = String(req.query.shkId || '').trim(), nmId = String(req.query.nmId || '').trim();
   const productId = String(req.query.productId || '').trim();
-  if (!['WB', 'WB2'].includes(selected) || !/^\d{1,20}$/.test(shkId) || !/^\d{1,20}$/.test(nmId) || productId.length > 150) {
-    return res.status(400).json({ ok: false, error: 'Проверьте кабинет, ШК и nmId' });
+  if (!['WB', 'WB2'].includes(selected) || !/^\d{1,20}$/.test(shkId) || (nmId && !/^\d{1,20}$/.test(nmId)) || (!nmId && !productId) || productId.length > 150) {
+    return res.status(400).json({ ok: false, error: 'Проверьте кабинет, ШК и товар' });
   }
   // Read unknown-nm expense rows too; the pure audit recovers them only through an unambiguous unit.
   const finance = await pool.query(`SELECT * FROM wb_finance_rows WHERE market=$1
@@ -378,10 +378,11 @@ reportsRouter.get('/wb-unit-history', asyncRoute(async (req, res) => {
     purchaseRows: purchases.rows, saleCosts: costs.rows, since, until, allDates: true });
   const byId = new Map(audit.operations.map(x => [x.rrdId, x]));
   const units = audit.units.filter(u => u.shkId === shkId && (!productId || u.productKey === 'p:' + productId)
-    && u.rows.some(id => byId.get(id)?.nmId === nmId));
+    && (!nmId || u.rows.some(id => byId.get(id)?.nmId === nmId)));
   if (units.length > 1) return res.status(409).json({ ok: false, error: 'Неоднозначная привязка истории ШК. Нельзя объединить разные товары.' });
   const operations = units.length ? units[0].rows.map(id => byId.get(id)) : [];
-  res.json({ ok: true, scope: 'unit-history', market: selected, shkId, nmId, productId,
+  const resolvedNmId = nmId || operations.find(x => x.nmId)?.nmId || '';
+  res.json({ ok: true, scope: 'unit-history', market: selected, shkId, nmId: resolvedNmId, productId,
     operations, range: { since: operations.length ? Math.min(...operations.map(x => x.date)) : 0, until: operations.length ? Math.max(...operations.map(x => x.date)) + 1 : 1, timezone: 'Asia/Almaty' } });
 }));
 

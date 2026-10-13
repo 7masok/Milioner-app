@@ -187,6 +187,21 @@ export function buildWbOperationAudit({ market, rows = [], links = [], products 
       break;
     }
   }
+  const productNmIds = new Map();
+  for (const [nm, ids] of index.nmProducts) for (const pid of ids) {
+    const values = productNmIds.get(pid) || new Set(); values.add(nm); productNmIds.set(pid, values);
+  }
+  // A barcode-linked expense can still omit nmId. Exact sticker peers take
+  // precedence; otherwise require a single saved card identity in this cabinet.
+  for (const row of operations) {
+    if (row.nmId || !row.productId) continue;
+    const peers = byUnit.get(row.shkId) || [];
+    if (peers.some(x => x.productId !== row.productId || row.barcode && x.barcode && row.barcode !== x.barcode)) continue;
+    const peerIds = new Set(peers.map(x => x.nmId).filter(Boolean));
+    if (peerIds.size > 1) continue;
+    const knownIds = peerIds.size ? peerIds : productNmIds.get(row.productId) || new Set();
+    if (knownIds.size === 1 && /^\d{1,20}$/.test([...knownIds][0])) row.nmId = [...knownIds][0];
+  }
   const groups = new Map(), currencies = new Map(), orders = new Map(), units = new Map();
   const resolveCost = costResolver(index, purchaseRows, saleCosts, market);
   for (const row of operations) {
