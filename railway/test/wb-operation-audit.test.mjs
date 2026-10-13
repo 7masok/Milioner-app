@@ -149,14 +149,14 @@ function uiFixture() {
   let current = null;
   const context = { console, Intl, Date, Math, reportCustomBounds: () => ({ start: START, end: START + DAY }), MILLIONER_API: '', apiJson: async () => ({ ok: true, ...build([row(1, 'Продажа', { forPay: 700 })]) }), openStoreDetail: () => {}, alert: () => {},
     document: { getElementById: () => current, createElement: () => ({}), head: { appendChild() {} } }, showSheet(html) { markup=html;elements.clear();current = el; el.dataset.request = html.match(/data-request="([^"]+)"/)[1]; }, window: {} };
-  vm.runInNewContext(ui.replace(/\}\)\(\);\s*$/, 'window.fixture={operationHtml,historyHtml,draw,mount,get active(){return active}};})();'), context);
+  vm.runInNewContext(ui.replace(/\}\)\(\);\s*$/, 'window.fixture={operationHtml,historyHtml,unitSummaryHtml,draw,mount,get active(){return active}};})();'), context);
   return { context, el, elements, listeners, get markup(){return markup}, close() { current = null; } };
 }
 test('audit UI escapes marketplace text, respects currencies and never labels an unverified result as net profit', () => {
   const { context } = uiFixture(), r = build([row(1, '<img src=x onerror=attack>', { currency: 'RUB', forPay: 10, srid: '<unsafe>' })]).operations[0];
   const html = context.window.fixture.operationHtml(r);
   assert.ok(html.includes('&lt;img')); assert.ok(!html.includes('<img')); assert.ok(html.includes('&lt;unsafe&gt;')); assert.ok(html.includes(' ₽'));
-  assert.ok(html.includes('до рекламы и себестоимости')); assert.ok(!html.includes('Чистая прибыль'));
+  assert.ok(!html.includes('Прибыль')); assert.ok(!html.includes('Результат WB до рекламы и себестоимости'));
 });
 test('closing/navigating away while audit loads cannot overwrite another sheet', async () => {
   const f = uiFixture();let resolve; f.context.apiJson = () => new Promise(r => { resolve = r; });
@@ -179,7 +179,7 @@ test('both report paths expose product entry without a separate audit button, be
   const html = readFileSync(new URL('../../index.html', import.meta.url), 'utf8');
   const server = readFileSync(new URL('../src/server.js', import.meta.url), 'utf8');
   const report = readFileSync(new URL('../../kaspi-report-v2.js', import.meta.url), 'utf8');
-  const tag = '<script src="./wb-operation-audit-v1.js?v=20261013-unit-history"></script>';
+  const tag = '<script src="./wb-operation-audit-v1.js?v=20261013-unit-profit"></script>';
   assert.ok(html.includes(tag)); assert.ok(html.indexOf(tag) < html.lastIndexOf('initOwnerAuth()'));
   assert.ok(html.includes('async function openWbFinanceReport(market,days){return openStoreDetail(market,days)}'));
   assert.ok(report.includes('wbReportProductAuditAction(market,days,'));
@@ -351,8 +351,8 @@ test('cost returns reverse only once; unknown values and foreign currencies neve
   const data=buildWbOperationAudit({...base,rows:[row(1,'Продажа',{forPay:700}),row(2,'Возврат',{forPay:700}),row(3,'Продажа',{currency:'RUB',forPay:700}),row(4,'Продажа',{currency:'',forPay:700})],saleCosts:[{productId:'a',srid:'order-a',qty:1,cost:160}]});
   assert.deepEqual(data.operations.map(x=>x.costKzt),[160,-160,160,160]);assert.equal(data.operations[2].afterCostBeforeAds,null);assert.equal(data.operations[3].afterCostBeforeAds,null);
   const missing=build([row(5,'Продажа',{forPay:700})]).operations[0];assert.equal(missing.costKzt,null);assert.equal(missing.afterCostBeforeAds,null);
-  const f=uiFixture();assert.ok(f.context.window.fixture.operationHtml(missing).includes('<b>—</b>'));assert.ok(!f.context.window.fixture.operationHtml(missing).includes('После себестоимости'));
-  const foreign=f.context.window.fixture.operationHtml(data.operations[2]);assert.ok(foreign.includes('160 ₸'));assert.ok(!foreign.includes('После себестоимости'));assert.ok(!foreign.includes('540'));
+  const f=uiFixture();assert.ok(f.context.window.fixture.unitSummaryHtml([missing]).includes('>—</b>'));assert.ok(!f.context.window.fixture.operationHtml(missing).includes('Прибыль'));
+  const foreign=f.context.window.fixture.unitSummaryHtml([data.operations[2]]);assert.ok(foreign.includes('160 ₸'));assert.ok(!foreign.includes('После себестоимости'));assert.ok(!foreign.includes('540'));
 });
 test('opened physical unit shows cost once for its buyout and margin including both logistics legs', async () => {
   const f=uiFixture(),data=buildWbOperationAudit({...base,rows:[row(1,'Логистика',{deliveryService:100}),row(2,'Продажа',{srid:'second',forPay:700}),row(3,'Логистика',{srid:'second',deliveryService:90})],saleCosts:[{productId:'a',srid:'second',qty:1,cost:160}]});
@@ -401,11 +401,34 @@ test('expanding a sticker lazily loads full history, caches it, and preserves se
  const calls=[];f.context.apiJson=async url=>{calls.push(url);return url.includes('/wb-unit-history')?{ok:true,scope:'unit-history',market:'WB',shkId:'unit-a',nmId:'100',operations:full.operations,range:full.range}:{ok:true,...period}};
  f.context.window.openWbProductOperations('WB',1,{productId:'a'});await new Promise(r=>setImmediate(r));assert.equal(calls.length,1);
  const html=f.el.querySelector('[data-audit-body]').innerHTML;assert.ok(html.includes('Выручка за период'));assert.ok(html.includes('1 000 ₸'));const snapshot=JSON.stringify(f.context.window.fixture.active.data);
- const opened=expandUnit(f,period.units[0]);await new Promise(r=>setImmediate(r));assert.ok(opened.body.innerHTML.includes('553 ₸'));assert.ok(opened.body.innerHTML.includes('Все загруженные операции ШК'));assert.equal(calls.length,2);assert.ok(!calls[1].includes('days='));assert.equal(JSON.stringify(f.context.window.fixture.active.data),snapshot);
+ const opened=expandUnit(f,period.units[0]);await new Promise(r=>setImmediate(r));assert.ok(opened.body.innerHTML.includes('553 ₸'));assert.ok(opened.body.innerHTML.includes('Загруженные операции ШК'));assert.equal(calls.length,2);assert.ok(!calls[1].includes('days='));assert.equal(JSON.stringify(f.context.window.fixture.active.data),snapshot);
  expandUnit(f,period.units[0]);await new Promise(r=>setImmediate(r));assert.equal(calls.length,2);
 });
 test('closed sheets cannot receive delayed sticker history and wrong stickers are rejected with retry',async()=>{
  const f=uiFixture(),data=build([row(1,'Продажа')]);let resolve;
  f.context.apiJson=async url=>url.includes('/wb-unit-history')?new Promise(r=>{resolve=r}):{ok:true,...data};f.context.window.openWbProductOperations('WB',1,{productId:'a'});await new Promise(r=>setImmediate(r));const opened=expandUnit(f,data.units[0]),loading=opened.body.innerHTML;f.close();resolve({ok:true,scope:'unit-history',market:'WB',shkId:'unit-a',nmId:'100',operations:data.operations,range:data.range});await new Promise(r=>setImmediate(r));assert.equal(opened.body.innerHTML,loading);
  const g=uiFixture();g.context.apiJson=async url=>url.includes('/wb-unit-history')?{ok:true,scope:'unit-history',market:'WB',shkId:'other',nmId:'100',operations:[],range:data.range}:{ok:true,...data};g.context.window.openWbProductOperations('WB',1,{productId:'a'});await new Promise(r=>setImmediate(r));const error=expandUnit(g,data.units[0]);await new Promise(r=>setImmediate(r));assert.ok(error.body.innerHTML.includes('Повторить'));assert.ok(error.body.innerHTML.includes('другому товару или ШК'));
+});
+
+
+test('user screenshot has one clear 957.33 profit before ads, negative expenses, no intermediate sale profit',()=>{
+ const data=buildWbOperationAudit({...base,rows:[row(1,'Продажа',{retailPriceWithDisc:1857.26,retailAmount:1395.6,forPay:1297.02}),row(2,'Логистика',{deliveryService:164.76,bonusTypeName:'К клиенту при продаже'})],purchaseRows:[{productId:'a',qty:1,status:'received',landedUnitCost:174.92531647326632}]});
+ const f=uiFixture(),full=f.context.window.fixture.historyHtml({...data,operations:data.operations}),visible=full.split('<details class="wb-audit-timeline">')[0];
+ assert.ok(visible.includes('Прибыль до рекламы'));assert.ok(visible.includes('≈ 957,33 ₸'));assert.ok(visible.includes('+ 1 297,02 ₸'));assert.ok(visible.includes('-164,76 ₸'));assert.ok(visible.includes('-174,93 ₸'));
+ assert.equal((visible.match(/Логистика/g)||[]).length,1);assert.equal((full.match(/Прибыль до рекламы/g)||[]).length,1);assert.ok(!full.includes('1 122,09'));assert.ok(!full.includes('1 132,26'));assert.ok(!visible.includes('Хранение и приёмка'));assert.ok(!visible.includes('Поля WB'));assert.ok(!full.match(/<details[^>]*\sopen[ >]/));
+});
+test('history distinguishes spending from actual transport refund; does not force every movement negative',()=>{
+ const data=buildWbOperationAudit({...base,rows:[row(1,'Продажа',{forPay:500}),row(2,'Логистика',{deliveryService:100}),row(3,'Логистика',{deliveryService:-20,bonusTypeName:'Сторно доставки'})],saleCosts:[{productId:'a',srid:'order-a',qty:1,cost:100}]});
+ const f=uiFixture(),summary=f.context.window.fixture.unitSummaryHtml(data.operations),refund=f.context.window.fixture.operationHtml(data.operations[2]);
+ assert.ok(summary.includes('320 ₸'));assert.ok(summary.includes('-80 ₸'));assert.ok(refund.includes('+ 20 ₸'));assert.ok(refund.includes('Возврат / доплата'));assert.ok(!refund.includes('Прибыль'));assert.ok(refund.includes('<details class="wb-audit-fields">'));
+});
+test('unknown cost and foreign currency keep the prominent profit unknown, before-sale fees do not claim a realized profit',()=>{
+ const f=uiFixture(),missing=build([row(1,'Продажа',{forPay:700})]).operations;
+ const unknown=f.context.window.fixture.unitSummaryHtml(missing);assert.ok(unknown.includes('Прибыль до рекламы'));assert.ok(unknown.includes('>—</b>'));assert.ok(unknown.includes('Не хватает себестоимости'));
+ const delivery=build([row(2,'Логистика',{deliveryService:120})]).operations;
+ const pending=f.context.window.fixture.unitSummaryHtml(delivery);assert.ok(pending.includes('Результат до продажи'));assert.ok(pending.includes('-120 ₸'));assert.ok(!pending.includes('Прибыль до рекламы'));
+});
+test('rendering compact unit result never mutates rows or allocates product advertising to a physical piece',()=>{
+ const data=buildWbOperationAudit({...base,rows:[row(1,'Продажа',{forPay:500})],saleCosts:[{productId:'a',srid:'order-a',qty:1,cost:100}],adRows:[{nmIds:['100'],amount:200,currency:'KZT'}]});
+ const before=JSON.stringify(data),html=uiFixture().context.window.fixture.historyHtml(data);assert.equal(JSON.stringify(data),before);assert.ok(html.includes('400 ₸'));assert.ok(html.includes('Реклама учитывается по товару'));assert.ok(!html.includes('Чистая прибыль'));
 });
