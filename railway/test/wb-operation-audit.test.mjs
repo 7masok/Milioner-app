@@ -157,7 +157,7 @@ test('both report paths expose product entry without a separate audit button, be
   const report = readFileSync(new URL('../../kaspi-report-v2.js', import.meta.url), 'utf8');
   const tag = '<script src="./wb-operation-audit-v1.js?v=20261013-product-only"></script>';
   assert.ok(html.includes(tag)); assert.ok(html.indexOf(tag) < html.lastIndexOf('initOwnerAuth()'));
-  assert.ok(html.includes('wbReportProductAuditAttrs(market,periodDays,{...x,name})'));
+  assert.ok(html.includes('async function openWbFinanceReport(market,days){return openStoreDetail(market,days)}'));
   assert.ok(report.includes('wbReportProductAuditAction(market,days,'));
   assert.ok(!html.includes('wbOperationAuditButton'));
   assert.ok(!report.includes('wbOperationAuditButton'));
