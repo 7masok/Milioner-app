@@ -150,14 +150,95 @@ test('audit UI paginates read-only products, preserves unknown/ad-only rows and 
   assert.ok(f.elements.get('[data-audit-body]').innerHTML.includes('Заказ order-a'));
   assert.ok(!/\b(save|pushWarehouseToServer|persistWarehouse|reconcileMarketplaceSales)\s*\(/.test(ui));
 });
-test('both report paths expose the audit and its script is served statically before owner startup', () => {
+test('both report paths expose product entry without a separate audit button, before owner startup', () => {
   const html = readFileSync(new URL('../../index.html', import.meta.url), 'utf8');
   const server = readFileSync(new URL('../src/server.js', import.meta.url), 'utf8');
   const report = readFileSync(new URL('../../kaspi-report-v2.js', import.meta.url), 'utf8');
-  const tag = '<script src="./wb-operation-audit-v1.js?v=20261012"></script>';
+  const tag = '<script src="./wb-operation-audit-v1.js?v=20261013-product-entry"></script>';
   assert.ok(html.includes(tag)); assert.ok(html.indexOf(tag) < html.lastIndexOf('initOwnerAuth()'));
-  assert.ok(html.includes('${head}${body}${auditButton}'));
-  assert.ok(report.includes("wbOperationAuditButton(market,days)"));
+  assert.ok(html.includes('wbReportProductAuditAttrs(market,periodDays,{...x,name})'));
+  assert.ok(report.includes('wbReportProductAuditAction(market,days,'));
+  assert.ok(!html.includes('wbOperationAuditButton'));
+  assert.ok(!report.includes('wbOperationAuditButton'));
   assert.ok(server.includes("'wb-operation-audit-v1.js'"));
   assert.ok(server.indexOf("app.use('/api', requireAppSession)") < server.indexOf("app.use('/api', reportsRouter)"));
+});
+
+test('clicking a report product opens its units immediately and excludes other products', async () => {
+  const f = uiFixture();
+  f.context.apiJson = async () => ({ ok: true, ...build([row(1, 'Продажа'), row(2, 'Продажа', { sku: 'barcode-b', shkId: 'unit-b', srid: 'order-b' })]) });
+  f.context.window.openWbProductOperations('WB', 30, { productId: 'a', name: 'Товар A' });
+  await new Promise(r => setImmediate(r));
+  const ctx = f.context.window.fixture.active;
+  assert.equal(ctx.product, 'p:a'); assert.equal(ctx.mode, 'units'); assert.equal(ctx.days, 30);
+  assert.equal(f.elements.get('[data-audit-product]').value, 'p:a');
+  const body = f.elements.get('[data-audit-body]').innerHTML;
+  assert.ok(body.includes('unit-a')); assert.ok(!body.includes('unit-b'));
+});
+
+test('changing audit periods keeps the product and returns to the original report period', async () => {
+  const f = uiFixture(); let back;
+  f.context.openWbOperationAudit = f.context.window.openWbOperationAudit;
+  f.context.openStoreDetail = (market, days) => { back = { market, days }; };
+  f.context.window.openWbProductOperations('WB', -1, { productId: 'a', name: 'Товар A' });
+  await new Promise(r => setImmediate(r));
+  const click = dataset => f.listeners.get('click')({ target: { closest: () => ({ dataset }) } });
+  click({ auditDays: '7' }); await new Promise(r => setImmediate(r));
+  const ctx = f.context.window.fixture.active;
+  assert.equal(ctx.days, 7); assert.equal(ctx.product, 'p:a'); assert.equal(ctx.mode, 'units');
+  click({ auditAction: 'back' }); assert.deepEqual(back, { market: 'WB', days: -1 });
+});
+
+test('custom report dates are passed through and an absent product never opens all products', async () => {
+  const f = uiFixture(); let query;
+  f.context.apiJson = async url => { query = url; return { ok: true, ...build([row(1, 'Продажа')]) }; };
+  f.context.window.openWbProductOperations('WB', 0, { productId: 'absent', name: 'Нет продаж' });
+  await new Promise(r => setImmediate(r));
+  assert.ok(query.includes('&from=' + START + '&to=' + (START + DAY)));
+  assert.equal(f.context.window.fixture.active.product, 'p:absent');
+  assert.equal(f.elements.get('[data-audit-product]').value, 'p:absent');
+  assert.ok(f.elements.get('[data-audit-product]').innerHTML.includes('Нет продаж'));
+  assert.ok(!f.elements.get('[data-audit-body]').innerHTML.includes('unit-a'));
+});
+
+test('unlinked products use precise marketplace identity and ambiguous selection stays empty', async () => {
+  const f = uiFixture();
+  const data = build([row(1, 'Продажа'), row(2, 'Продажа', { sku: 'barcode-b', shkId: 'unit-b' })]);
+  f.context.apiJson = async () => ({ ok: true, ...data });
+  f.context.window.openWbProductOperations('WB', 7, { barcode: 'barcode-b', name: 'B' });
+  await new Promise(r => setImmediate(r));
+  assert.equal(f.context.window.fixture.active.product, 'p:b');
+  f.context.window.openWbProductOperations('WB', 7, { vendorCode: 'item', nmId: '100', name: 'Общая карточка' });
+  await new Promise(r => setImmediate(r));
+  assert.equal(f.context.window.fixture.active.product, '__selected_missing__');
+  assert.ok(!f.elements.get('[data-audit-body]').innerHTML.includes('unit-a'));
+  assert.ok(!f.elements.get('[data-audit-body]').innerHTML.includes('unit-b'));
+});
+
+test('report click actions safely quote identities and are available to keyboard users only for WB', () => {
+  const f = uiFixture(), item = { productId: 'id\";attack()', name: '<img src=x>' };
+  const action = f.context.window.wbReportProductAuditAction('WB2', 30, item);
+  let selected;
+  vm.runInNewContext(action, { openWbProductOperations: (...args) => { selected = args; } });
+  assert.equal(selected[0], 'WB2'); assert.equal(selected[1], 30); assert.equal(selected[2].productId, item.productId);
+  const attrs = f.context.window.wbReportProductAuditAttrs('WB2', 30, item);
+  assert.ok(attrs.includes('role="button" tabindex="0"'));
+  assert.ok(attrs.includes('onkeydown=')); assert.ok(attrs.includes('Enter')); assert.ok(!attrs.includes('<img'));
+  assert.equal(f.context.window.wbReportProductAuditAction('Kaspi', 30, item), '');
+});
+
+test('report product card carries the audit action to mouse and keyboard handlers', () => {
+  const report = readFileSync(new URL('../../kaspi-report-v2.js', import.meta.url), 'utf8');
+  const functions = ['paintWbSheet', 'paintStoreSheet'].map(name => report.split('\n').find(x => x.startsWith('function ' + name + '('))).join('\n');
+  const f = uiFixture(); let html;
+  const c = { ...f.context, wbReportProductAuditAction: f.context.window.wbReportProductAuditAction,
+    esc: x => String(x ?? '').replaceAll('"', '&quot;').replaceAll('<', '&lt;'), fmt: x => String(x),
+    wbLiveProductId: (_market, item) => item.productId, wbRealizedFifoCost: () => 100,
+    productNameById: () => 'Товар A', wbFinanceAvailabilityNote: () => '', storeTitle: () => 'WB 2', detailPeriodHtml: () => '', showSheet: value => { html = value; } };
+  vm.runInNewContext(functions, c);
+  c.paintWbSheet({ financeAvailable: true, complete: true, products: [{ productId: 'a', vendorCode: 'item', nmId: '100', qty: 1, retailAmount: 1000, netBeforeCost: 700 }],
+    revenue: 1000, adjustment: 0, expenses: 300, cost: 100, ads: 0, profit: 600 }, 'WB2', 30);
+  assert.ok(html.includes('openWbProductOperations'));
+  assert.ok(html.includes('onclick=')); assert.ok(html.includes('onkeydown='));
+  assert.ok(!html.includes('>Операции WB<'));
 });
