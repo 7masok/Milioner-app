@@ -327,7 +327,17 @@ reportsRouter.get('/wb-operation-audit', asyncRoute(async (req, res) => {
     pool.query('SELECT finished_at AS "finishedAt",finance_ok AS "financeOk",promotion_ok AS "promotionOk",error FROM wb_finance_sync_runs WHERE market=$1 ORDER BY id DESC LIMIT 1', [selected])
   ]);
   if (finance.rows.length > 50000) return res.status(422).json({ ok: false, error: 'Больше 50 000 операций. Выберите более короткий период.' });
-  const audit = buildWbOperationAudit({ market: selected, rows: finance.rows, links: links.rows, products: products.rows, adRows: ads.rows, since, until });
+  const [purchases, costs] = await Promise.all([
+    pool.query('SELECT product_id,qty,status,payload FROM warehouse_purchases WHERE status=ANY($1::text[]) LIMIT 50001', [['received', 'at_warehouse']]),
+    pool.query(`SELECT o.market,COALESCE(o.raw_json::jsonb->'order'->>'orderUid',o.raw_json::jsonb->>'orderUid',o.raw_json::jsonb->>'srid') AS srid,
+      s.product_id AS "productId",s.qty,s.payload->>'cost' AS cost,s.payload->>'stockShortage' AS "stockShortage"
+      FROM warehouse_sales s JOIN marketplace_order_lines o ON o.market=s.channel AND s.external_key=o.market||':'||o.order_id||':'||o.entry_id
+      WHERE s.channel=$1 AND COALESCE(o.raw_json::jsonb->'order'->>'orderUid',o.raw_json::jsonb->>'orderUid',o.raw_json::jsonb->>'srid') IN
+      (SELECT COALESCE(raw_json::jsonb->>'srid',raw_json::jsonb->>'orderUid',raw_json::jsonb->>'order_uid') FROM wb_finance_rows WHERE market=$1 AND rr_date >= $2 AND rr_date < $3)
+      LIMIT 50001`, [selected, since, until])
+  ]);
+  if (purchases.rows.length > 50000 || costs.rows.length > 50000) return res.status(422).json({ ok: false, error: 'Слишком много записей себестоимости. Выберите более короткий период.' });
+  const audit = buildWbOperationAudit({ market: selected, rows: finance.rows, links: links.rows, products: products.rows, adRows: ads.rows, purchaseRows: purchases.rows, saleCosts: costs.rows, since, until });
   res.json({ ok: true, ...audit, history: history.rows[0] || null, sync: sync.rows[0] || null });
 }));
 

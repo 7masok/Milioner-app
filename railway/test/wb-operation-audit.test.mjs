@@ -179,7 +179,7 @@ test('both report paths expose product entry without a separate audit button, be
   const html = readFileSync(new URL('../../index.html', import.meta.url), 'utf8');
   const server = readFileSync(new URL('../src/server.js', import.meta.url), 'utf8');
   const report = readFileSync(new URL('../../kaspi-report-v2.js', import.meta.url), 'utf8');
-  const tag = '<script src="./wb-operation-audit-v1.js?v=20261013-product-only"></script>';
+  const tag = '<script src="./wb-operation-audit-v1.js?v=20261013-cost-fees"></script>';
   assert.ok(html.includes(tag)); assert.ok(html.indexOf(tag) < html.lastIndexOf('initOwnerAuth()'));
   assert.ok(html.includes('async function openWbFinanceReport(market,days){return openStoreDetail(market,days)}'));
   assert.ok(report.includes('wbReportProductAuditAction(market,days,'));
@@ -317,4 +317,49 @@ test('product-only period changes stay compact and cannot reset to the entire pr
   assert.equal(f.el.querySelector('[data-audit-summary]'),null);
   click({auditMode:'products'});assert.equal(ctx.mode,'units');
   click({auditAction:'product',key:'p:b'});assert.equal(ctx.product,'p:a');
+});
+
+
+test('screenshot fees retain seller price, WB discount, VAT and actual KZT delivery without extra deductions', () => {
+  const data=build([row(1,'Продажа',{retailPriceWithDisc:'1852.67',retailAmount:'1482.14',forPay:'1396.56',ppvzSalesCommission:'68.67',vw:'68.6724137931034483',vwNds:'10.99',acquiringFee:'5.92',commissionPercent:24.3,spp:20}),row(2,'Логистика',{deliveryService:'164.35',bonusTypeName:'К клиенту при продаже'})]);
+  const r=data.operations[0];assert.equal(r.commissionVat,10.99);assert.equal(r.sellerUnitPrice,1852.67);assert.equal(r.commissionPercent,24.3);assert.equal(r.wbDiscountPercent,20);
+  assert.ok(Math.abs(data.totals[0].beforeAdsAndCost-1232.21)<1e-8);
+  const html=uiFixture().context.window.fixture.operationHtml(r);
+  for(const label of ['Цена продавца / шт.','кВВ: 24,3%','Скидка WB: 20%','НДС WB','10,99','Удержано из цены продавца','456,11'])assert.ok(html.includes(label),label);
+  assert.ok(uiFixture().context.window.fixture.operationHtml(data.operations[1]).includes('К клиенту при продаже'));
+  const returned=build([row(3,'Возврат',{ppvz_vw_nds:'10.99',ppvz_vw:'68.67'})]).operations[0];assert.equal(returned.commissionVat,-10.99);assert.equal(returned.wbReward,-68.67);
+});
+test('saved cost requires one matching cabinet/product/order and never consumes warehouse stock', () => {
+  const input={...base,rows:[row(1,'Продажа',{forPay:700}),row(2,'Логистика',{deliveryService:90})],saleCosts:[{market:'WB',srid:'order-a',productId:'a',qty:1,cost:160},{market:'WB2',srid:'order-a',productId:'a',qty:1,cost:999},{market:'WB',srid:'order-a',productId:'b',qty:1,cost:999}]};
+  const original=JSON.stringify(input),data=buildWbOperationAudit(input);assert.equal(data.operations[0].costKzt,160);assert.equal(data.operations[0].costSource,'saved_order');assert.equal(data.operations[0].costEstimated,false);
+  assert.equal(data.operations[1].costKzt,undefined);assert.equal(JSON.stringify(input),original);
+});
+test('unmatched FBO sale estimates weighted accepted landed cost; excludes transit and relocations', () => {
+  const data=buildWbOperationAudit({...base,rows:[row(1,'Продажа',{forPay:700})],purchaseRows:[
+    {productId:'a',qty:2,status:'received',unitCost:100,delivery:20},
+    {product_id:'a',qty:1,status:'at_warehouse',payload:{landedUnitCost:200,delivery:999}},
+    {productId:'a',qty:100,status:'to_me',landedUnitCost:1},
+    {productId:'a',qty:100,status:'received',landedUnitCost:1,relocation:true}]});
+  const r=data.operations[0];assert.equal(r.costKzt,140);assert.equal(r.costSource,'purchase_average');assert.equal(r.costEstimated,true);assert.equal(r.afterCostBeforeAds,560);
+});
+test('ambiguous, short and incomplete saved costs use an explicit estimate, never the first record', () => {
+  for(const saleCosts of [[{productId:'a',srid:'order-a',qty:1,cost:50},{productId:'a',srid:'order-a',qty:1,cost:60}], [{productId:'a',srid:'order-a',qty:0,cost:50}], [{productId:'a',srid:'order-a',qty:1,cost:50,stockShortage:1}], [{productId:'a',srid:'order-a',qty:1,cost:null}]]){
+    const r=buildWbOperationAudit({...base,products:[{id:'a',payload:{cost:100}}],rows:[row(1,'Продажа')],saleCosts}).operations[0];assert.equal(r.costKzt,100);assert.equal(r.costSource,'product_cost');assert.equal(r.costEstimated,true);
+  }
+});
+test('cost returns reverse only once; unknown values and foreign currencies never create a fake margin', () => {
+  const data=buildWbOperationAudit({...base,rows:[row(1,'Продажа',{forPay:700}),row(2,'Возврат',{forPay:700}),row(3,'Продажа',{currency:'RUB',forPay:700}),row(4,'Продажа',{currency:'',forPay:700})],saleCosts:[{productId:'a',srid:'order-a',qty:1,cost:160}]});
+  assert.deepEqual(data.operations.map(x=>x.costKzt),[160,-160,160,160]);assert.equal(data.operations[2].afterCostBeforeAds,null);assert.equal(data.operations[3].afterCostBeforeAds,null);
+  const missing=build([row(5,'Продажа',{forPay:700})]).operations[0];assert.equal(missing.costKzt,null);assert.equal(missing.afterCostBeforeAds,null);
+  const f=uiFixture();assert.ok(f.context.window.fixture.operationHtml(missing).includes('<b>—</b>'));assert.ok(!f.context.window.fixture.operationHtml(missing).includes('После себестоимости'));
+  const foreign=f.context.window.fixture.operationHtml(data.operations[2]);assert.ok(foreign.includes('160 ₸'));assert.ok(!foreign.includes('После себестоимости'));assert.ok(!foreign.includes('540'));
+});
+test('opened physical unit shows cost once for its buyout and margin including both logistics legs', async () => {
+  const f=uiFixture(),data=buildWbOperationAudit({...base,rows:[row(1,'Логистика',{deliveryService:100}),row(2,'Продажа',{srid:'second',forPay:700}),row(3,'Логистика',{srid:'second',deliveryService:90})],saleCosts:[{productId:'a',srid:'second',qty:1,cost:160}]});
+  f.context.apiJson=async()=>({ok:true,...data});f.context.window.openWbProductOperations('WB',1,{productId:'a',name:'A'});await new Promise(r=>setImmediate(r));
+  const body=f.el.querySelector('[data-audit-body]').innerHTML;assert.ok(body.includes('Себестоимость заказа'));assert.ok(body.includes('350 ₸'));assert.ok(!body.includes('Чистая прибыль'));assert.ok(!f.markup.includes('data-audit-summary'));
+});
+test('cost cache reads join exact saved external key and UID, scoped to cabinet and report window', async () => {
+  const out=await invoke({market:'WB',days:'0',from:String(START),to:String(START+DAY)},sql=>sql.startsWith('SELECT *')?[row(1,'Продажа',{forPay:700})]:sql.includes('FROM warehouse_sales')?[{market:'WB',srid:'order-a',productId:'a',qty:1,cost:160}]:sql.includes('warehouse_products')?base.products:sql.includes('product_links')?base.links:[]);
+  assert.equal(out.result.operations[0].costKzt,160);const call=out.calls.find(x=>x.sql.includes('FROM warehouse_sales'));assert.deepEqual(call.args,['WB',START,START+DAY]);assert.ok(call.sql.includes('s.external_key=o.market'));assert.ok(call.sql.includes("->'order'->>'orderUid'"));assert.ok(out.calls.every(x=>/^SELECT /.test(x.sql)));
 });
