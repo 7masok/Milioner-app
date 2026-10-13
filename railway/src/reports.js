@@ -356,9 +356,12 @@ reportsRouter.get('/wb-finance-products', asyncRoute(async (req, res) => {
     SUM(f.penalty) AS penalty,SUM(f.additional_payment) AS "additionalPayment",
     SUM(f.rebill_logistic_cost) AS rebill FROM wb_finance_rows f
     LEFT JOIN LATERAL (
-      SELECT pl.product_id FROM product_links pl
-      WHERE pl.market=f.market AND pl.sku IN (f.vendor_code,f.nm_id)
-      ORDER BY CASE WHEN pl.sku=f.vendor_code THEN 0 ELSE 1 END LIMIT 1
+      -- Finance lowercases articles and may append spaces; live sales and saved links preserve their case.
+      -- Resolve a unique stored identity, never an arbitrary first row or the warehouse display name.
+      SELECT MIN(pl.product_id) AS product_id FROM product_links pl
+      WHERE pl.market=f.market AND ((f.nm_id<>'' AND pl.sku=f.nm_id)
+        OR (btrim(f.vendor_code)<>'' AND lower(btrim(pl.sku))=lower(btrim(f.vendor_code))))
+      HAVING COUNT(DISTINCT pl.product_id)=1
     ) l ON TRUE
     WHERE f.market=$1 AND f.rr_date >= $2 AND f.rr_date < $3
     GROUP BY f.vendor_code,f.nm_id,l.product_id ORDER BY SUM(f.for_pay) DESC`, [selected, since, until]),
