@@ -11,7 +11,7 @@ function field(raw, names, fallback) {
   for (const name of names) if (raw[name] !== undefined && raw[name] !== null && text(raw[name]) !== '') return raw[name];
   return fallback;
 }
-const moneyFields = ['revenue', 'forPay', 'commission', 'acquiring', 'delivery', 'rebill', 'storage', 'acceptance', 'deduction', 'promotionDeduction', 'penalty', 'additionalPayment', 'settlement', 'beforeAdsAndCost', 'legacyBeforeAdsAndCost'];
+const moneyFields = ['revenue', 'forPay', 'commission', 'commissionVat', 'acquiring', 'delivery', 'rebill', 'storage', 'acceptance', 'deduction', 'promotionDeduction', 'penalty', 'additionalPayment', 'settlement', 'beforeAdsAndCost', 'legacyBeforeAdsAndCost'];
 function totals() { return { rows: 0, saleQty: 0, returnQty: 0, ...Object.fromEntries(moneyFields.map(key => [key, 0])) }; }
 function add(target, row) {
   target.rows++; target.saleQty += row.saleQty; target.returnQty += row.returnQty;
@@ -35,6 +35,7 @@ function normalized(row, market) {
   const allDeduction = amount(['deduction'], 'deduction'), promotionDeduction = bonus.includes('wb продвижение') ? allDeduction : 0;
   const commissionRaw = field(raw, ['ppvzSalesCommission', 'ppvz_sales_commission'], null);
   if (commissionRaw !== null && !Number.isFinite(Number(commissionRaw))) throw new Error('Некорректная комиссия WB: строка ' + id(row.rrd_id));
+  const optional = names => { const v = field(raw, names, null); if (v === null) return null; if (!Number.isFinite(Number(v))) throw new Error('Некорректное поле WB: строка ' + id(row.rrd_id)); return Number(v); };
   const result = {
     market, rrdId: id(row.rrd_id || field(raw, ['rrdId', 'rrd_id'], '')), reportId: id(row.report_id),
     date: number(row.rr_date), saleDate: number(row.sale_date), operation: operation || docType || 'Операция WB', docType,
@@ -48,6 +49,10 @@ function normalized(row, market) {
     revenue: signed(amount(['retailAmount', 'retail_amount'], 'retail_amount')),
     forPay: signed(amount(['forPay', 'ppvzForPay', 'ppvz_for_pay'], 'for_pay')),
     commission: commissionRaw === null ? null : signed(commissionRaw),
+    wbReward: field(raw, ['vw', 'ppvzVw', 'ppvz_vw'], null) === null ? null : signed(optional(['vw', 'ppvzVw', 'ppvz_vw'])),
+    commissionVat: field(raw, ['vwNds', 'ppvzVwNds', 'ppvz_vw_nds'], null) === null ? null : signed(optional(['vwNds', 'ppvzVwNds', 'ppvz_vw_nds'])),
+    commissionPercent: optional(['commissionPercent', 'commission_percent']), wbDiscountPercent: optional(['spp', 'ppvz_spp_prc']),
+    sellerUnitPrice: optional(['retailPriceWithDisc', 'retail_price_withdisc_rub']), logisticsType: text(field(raw, ['bonusTypeName', 'bonus_type_name'], '')),
     acquiring: signed(amount(['acquiringFee', 'acquiring_fee'], 'acquiring_fee')),
     delivery: amount(['deliveryService', 'deliveryRub', 'delivery_rub'], 'delivery_service'),
     rebill: amount(['rebillLogisticCost', 'rebill_logistic_cost'], 'rebill_logistic_cost'),
@@ -99,7 +104,50 @@ function linkProduct(row, index) {
 }
 function adNmIds(value) { const values = Array.isArray(value) ? value : (() => { try { return JSON.parse(value || '[]'); } catch { return []; } })(); return Array.isArray(values) ? [...new Set(values.map(id).filter(Boolean))] : []; }
 
-export function buildWbOperationAudit({ market, rows = [], links = [], products = [], adRows = [], since = 0, until = Infinity }) {
+// Saved order costs are read, never consumed again. A fallback is explicitly an estimate,
+// not FIFO for a physical sticker, and does not allocate campaign spend to that sticker.
+function costResolver(index, purchaseRows, saleCosts, market) {
+  const purchases = new Map(), saved = new Map();
+  const nonnegative = v => v !== null && v !== undefined && text(v) !== '' && Number.isFinite(Number(v)) && Number(v) >= 0 ? Number(v) : null;
+  for (const source of purchaseRows) {
+    const p = { ...object(source.payload), ...source }, qty = number(p.qty), pid = text(p.productId ?? p.product_id);
+    if (!pid || qty <= 0 || p.relocation || !['received', 'at_warehouse'].includes(p.status)) continue;
+    const landed = nonnegative(p.landedUnitCost), buy = nonnegative(p.buyTotal), unit = nonnegative(p.unitCost);
+    const cost = landed ?? (buy !== null ? buy / qty : unit);
+    const t = purchases.get(pid) || { qty: 0, value: 0, missing: false };
+    t.qty += qty; t.missing ||= cost === null;
+    t.value += qty * (cost ?? 0) + (landed === null ? Math.max(0, number(p.delivery)) : 0); purchases.set(pid, t);
+  }
+  for (const source of saleCosts) {
+    if (source.market && source.market !== market) continue;
+    const key = JSON.stringify([text(source.productId ?? source.product_id), id(source.srid)]);
+    const entries = saved.get(key) || []; entries.push(source); saved.set(key, entries);
+  }
+  function estimate(pid, seen = new Set()) {
+    if (seen.has(pid)) return null;
+    const p = index.catalog.get(pid); if (!p) return null;
+    const t = purchases.get(pid);
+    if (p.kind === 'bundle' && Array.isArray(p.components) && p.components.length) {
+      const next = new Set(seen); next.add(pid); let value = 0;
+      for (const part of p.components) { const cost = estimate(text(part.productId), next), qty = number(part.qty); if (!cost || qty <= 0) return null; value += cost.value * qty; }
+      return { value, source: 'purchase_average' };
+    }
+    if (t?.qty > 0 && !t.missing) return { value: t.value / t.qty, source: 'purchase_average' };
+    const cost = nonnegative(p.cost); return cost > 0 ? { value: cost, source: 'product_cost' } : null;
+  }
+  return row => {
+    const qty = row.saleQty - row.returnQty;
+    if (!qty) return;
+    const entries = row.productId && row.srid ? saved.get(JSON.stringify([row.productId, row.srid])) : null;
+    const s = entries?.length === 1 ? entries[0] : null, value = s && nonnegative(s.cost);
+    const known = value !== null && value !== undefined && number(s.qty) >= Math.abs(qty) && number(s.stockShortage) === 0;
+    const cost = known ? { value, source: 'saved_order' } : estimate(row.productId);
+    row.costKzt = cost ? cost.value * qty : null;
+    row.costSource = cost?.source || 'unknown'; row.costEstimated = Boolean(cost && !known);
+    row.afterCostBeforeAds = row.currency === 'KZT' && cost ? row.beforeAdsAndCost - row.costKzt : null;
+  };
+}
+export function buildWbOperationAudit({ market, rows = [], links = [], products = [], adRows = [], purchaseRows = [], saleCosts = [], since = 0, until = Infinity }) {
   if (!['WB', 'WB2'].includes(market)) throw new Error('market must be WB or WB2');
   const index = indexes(links.filter(x => !x.market || x.market === market), products, market), unique = new Map();
   let duplicateRows = 0;
@@ -138,10 +186,12 @@ export function buildWbOperationAudit({ market, rows = [], links = [], products 
     }
   }
   const groups = new Map(), currencies = new Map(), orders = new Map(), units = new Map();
+  const resolveCost = costResolver(index, purchaseRows, saleCosts, market);
   for (const row of operations) {
     row.productKey = row.productId ? 'p:' + row.productId : 'u:' + JSON.stringify([row.nmId, row.vendorCode, row.barcode]);
     const p = index.catalog.get(row.productId);
     row.productName = p?.name || row.title || row.vendorCode || ('WB ' + (row.nmId || 'без товара'));
+    resolveCost(row);
     row.orderKey = row.srid ? 'order:' + JSON.stringify([row.productKey, row.srid]) : 'row:' + row.rrdId;
     // Never use the shared product barcode as the identity of a physical unit.
     row.unitKey = row.shkId ? 'unit:' + JSON.stringify([row.productKey, row.nmId, row.shkId]) : '';
@@ -184,5 +234,5 @@ export function buildWbOperationAudit({ market, rows = [], links = [], products 
   return { market, range: { since, until, timezone: 'Asia/Almaty' }, rowCount: operations.length, duplicateRows, operations, products: productRows,
     orders: [...orders.values()], units: [...units.values()].map(unit => ({ ...unit, srids: [...unit.srids] })), totals: sums(currencies), advertising, reconciliation,
     coverage: { linkedRows: operations.filter(x => x.productId).length, orderRows: operations.filter(x => x.srid).length, unitRows: operations.filter(x => x.shkId).length },
-    basis: 'WB report operation date; forPay already includes commission and acquiring; no warehouse cost estimates' };
+    basis: 'WB report operation date; forPay already includes commission, VAT and acquiring; saved order costs or explicit KZT estimates; no per-unit ad allocation' };
 }
