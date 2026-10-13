@@ -2,11 +2,12 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
+import { wbFinancePeriodSql } from '../src/wb-finance-period.js';
 
 const ui = readFileSync(new URL('../../kaspi-report-v2.js', import.meta.url), 'utf8');
 const api = readFileSync(new URL('../src/reports.js', import.meta.url), 'utf8');
 const note = ui.slice(ui.indexOf('function wbFinanceAvailabilityNote('), ui.indexOf('function wbLiveCostCoverageNote('));
-const c = { esc: text => text.replaceAll('<', '&lt;') };
+const c = { wbFinancePeriodSql, esc: text => text.replaceAll('<', '&lt;') };
 vm.runInNewContext(note, c);
 const now = Date.parse('2026-10-13T01:40:00+05:00');
 const latest = Date.parse('2026-10-11T00:00:00Z');
@@ -56,7 +57,7 @@ test('summary endpoint reads finance history and retry metadata without calling 
   const source = api.slice(start, api.indexOf('\nfunction wbAdNmIds', start));
   let handler, payload;
   const queries = [];
-  const context = {
+  const context = { wbFinancePeriodSql,
     reportsRouter: { get: (_path, fn) => { handler = fn; } }, asyncRoute: fn => fn,
     market: x => x, requestPeriodBounds: () => ({ since: now - 86400000, until: now }), dateKey: () => '2026-10-12',
     pool: { async query(sql, params) {
