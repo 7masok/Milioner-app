@@ -179,7 +179,7 @@ test('both report paths expose product entry without a separate audit button, be
   const html = readFileSync(new URL('../../index.html', import.meta.url), 'utf8');
   const server = readFileSync(new URL('../src/server.js', import.meta.url), 'utf8');
   const report = readFileSync(new URL('../../kaspi-report-v2.js', import.meta.url), 'utf8');
-  const tag = '<script src="./wb-operation-audit-v1.js?v=20261013-unit-profit"></script>';
+  const tag = '<script src="./wb-operation-audit-v1.js?v=20261013-unit-expenses"></script>';
   assert.ok(html.includes(tag)); assert.ok(html.indexOf(tag) < html.lastIndexOf('initOwnerAuth()'));
   assert.ok(html.includes('async function openWbFinanceReport(market,days){return openStoreDetail(market,days)}'));
   assert.ok(report.includes('wbReportProductAuditAction(market,days,'));
@@ -412,10 +412,29 @@ test('closed sheets cannot receive delayed sticker history and wrong stickers ar
 
 
 test('user screenshot has one clear 957.33 profit before ads, negative expenses, no intermediate sale profit',()=>{
- const data=buildWbOperationAudit({...base,rows:[row(1,'Продажа',{retailPriceWithDisc:1857.26,retailAmount:1395.6,forPay:1297.02}),row(2,'Логистика',{deliveryService:164.76,bonusTypeName:'К клиенту при продаже'})],purchaseRows:[{productId:'a',qty:1,status:'received',landedUnitCost:174.92531647326632}]});
+ const data=buildWbOperationAudit({...base,rows:[row(1,'Продажа',{retailPriceWithDisc:1857.26,retailAmount:1395.6,forPay:1297.02,acquiringFee:68.08,ppvzSalesCommission:26.29,vw:-24.84,vwNds:-3.98}),row(2,'Логистика',{deliveryService:164.76,bonusTypeName:'К клиенту при продаже'})],purchaseRows:[{productId:'a',qty:1,status:'received',landedUnitCost:174.92531647326632}]});
  const f=uiFixture(),full=f.context.window.fixture.historyHtml({...data,operations:data.operations}),visible=full.split('<details class="wb-audit-timeline">')[0];
- assert.ok(visible.includes('Прибыль до рекламы'));assert.ok(visible.includes('≈ 957,33 ₸'));assert.ok(visible.includes('+ 1 297,02 ₸'));assert.ok(visible.includes('-164,76 ₸'));assert.ok(visible.includes('-174,93 ₸'));
+ assert.ok(visible.includes('Прибыль до рекламы'));assert.ok(visible.includes('≈ 957,33 ₸'));assert.ok(visible.includes('+ 1 857,26 ₸'));assert.ok(visible.includes('Комиссия WB · с НДС'));assert.ok(visible.includes('-492,16 ₸'));assert.ok(visible.includes('Эквайринг'));assert.ok(visible.includes('-68,08 ₸'));assert.ok(visible.includes('-164,76 ₸'));assert.ok(visible.includes('-174,93 ₸'));
+ assert.equal((visible.match(/Комиссия WB/g)||[]).length,1);assert.equal((visible.match(/Эквайринг/g)||[]).length,1);assert.ok(!visible.includes('1 297,02'));assert.ok(!visible.includes('26,29'));assert.ok(!visible.includes('Вознаграждение'));
+ const expected=1857.26-492.16-68.08-164.76-data.operations[0].costKzt;
+ assert.ok(Math.abs(expected-(data.operations.reduce((s,r)=>s+r.beforeAdsAndCost,0)-data.operations[0].costKzt))<1e-8);assert.equal(expected.toFixed(2),'957.33');
  assert.equal((visible.match(/Логистика/g)||[]).length,1);assert.equal((full.match(/Прибыль до рекламы/g)||[]).length,1);assert.ok(!full.includes('1 122,09'));assert.ok(!full.includes('1 132,26'));assert.ok(!visible.includes('Хранение и приёмка'));assert.ok(!visible.includes('Поля WB'));assert.ok(!full.match(/<details[^>]*\sopen[ >]/));
+});
+test('compact unit waterfall separates every nonzero fee and compensation without double counting payout',()=>{
+ const data=buildWbOperationAudit({...base,rows:[row(1,'Продажа',{retailPriceWithDisc:2000,forPay:1400,acquiringFee:40}),row(2,'Логистика',{deliveryService:100,rebillLogisticCost:25,paidStorage:5,paidAcceptance:7,penalty:11,deduction:13,additionalPayment:17}),row(3,'Компенсация',{forPay:19})],saleCosts:[{productId:'a',srid:'order-a',qty:1,cost:200}]});
+ const html=uiFixture().context.window.fixture.unitSummaryHtml(data.operations);
+ for(const [label,value] of [['Комиссия WB · с НДС','-560'],['Эквайринг','-40'],['Логистика · весь путь','-100'],['Перевыставленная логистика','-25'],['Хранение','-5'],['Приёмка','-7'],['Штрафы','-11'],['Удержания','-13'],['Доплаты','+ 17'],['Прочие выплаты WB','+ 19']]){
+  const match=html.match(new RegExp('<span class="grow muted">'+label+'</span><b>([^<]+)</b>'));assert.ok(match,label);assert.equal(match[1],value+' ₸');assert.equal(html.split(label).length-1,1);
+ }
+ const expected=2000-560-40-100-25-5-7-11-13+17+19-200;
+ assert.equal(expected,1075);assert.equal(data.operations.reduce((s,r)=>s+r.beforeAdsAndCost-(r.costKzt||0),0),expected);assert.ok(html.includes('1 075 ₸'));assert.ok(!html.includes('После комиссии WB'));assert.ok(!html.includes('1 400 ₸'));
+});
+test('sale returns restore commission and acquiring separately, retaining zero omission and negative fee corrections',()=>{
+ const data=buildWbOperationAudit({...base,rows:[row(1,'Возврат',{retailPriceWithDisc:1000,forPay:700,acquiringFee:30}),row(2,'Логистика',{deliveryService:100})],saleCosts:[{productId:'a',srid:'order-a',qty:1,cost:100}]});
+ const html=uiFixture().context.window.fixture.unitSummaryHtml(data.operations);
+ assert.ok(html.includes('-1 000 ₸'));assert.ok(html.includes('Комиссия WB · с НДС</span><b>+ 270 ₸'));assert.ok(html.includes('Эквайринг</span><b>+ 30 ₸'));assert.ok(html.includes('-700 ₸'));assert.ok(!html.includes('Хранение'));assert.ok(!html.includes('Приёмка'));assert.ok(!html.includes('Штрафы'));assert.ok(!html.includes('Удержания'));
+ const corrected=buildWbOperationAudit({...base,rows:[row(3,'Продажа',{retailPriceWithDisc:1000,forPay:1020,acquiringFee:-5})],saleCosts:[{productId:'a',srid:'order-a',qty:1,cost:100}]});
+ const summary=uiFixture().context.window.fixture.unitSummaryHtml(corrected.operations);assert.ok(summary.includes('Комиссия WB · с НДС</span><b>+ 15 ₸'));assert.ok(summary.includes('Эквайринг</span><b>+ 5 ₸'));assert.ok(summary.includes('920 ₸'));
 });
 test('history distinguishes spending from actual transport refund; does not force every movement negative',()=>{
  const data=buildWbOperationAudit({...base,rows:[row(1,'Продажа',{forPay:500}),row(2,'Логистика',{deliveryService:100}),row(3,'Логистика',{deliveryService:-20,bonusTypeName:'Сторно доставки'})],saleCosts:[{productId:'a',srid:'order-a',qty:1,cost:100}]});
