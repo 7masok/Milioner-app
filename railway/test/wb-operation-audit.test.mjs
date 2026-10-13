@@ -120,12 +120,13 @@ test('invalid cabinet/range and oversized result never masquerade as successful 
 
 const ui = readFileSync(new URL('../../wb-operation-audit-v1.js', import.meta.url), 'utf8');
 function uiFixture() {
-  const elements = new Map(), listeners = new Map(), el = { dataset: {}, querySelector(selector) { if (!elements.has(selector)) elements.set(selector, { innerHTML: '', hidden: true, value: '' }); return elements.get(selector); }, querySelectorAll() { return []; }, addEventListener(name, fn) { listeners.set(name, fn); }, contains() { return true; } };
+  let markup = '';
+  const elements = new Map(), listeners = new Map(), el = { dataset: {}, querySelector(selector) { const attribute=selector.match(/^\[([^=]+)\]$/)?.[1];if(attribute&&!markup.includes(attribute))return null;if (!elements.has(selector)) elements.set(selector, { innerHTML: '', hidden: true, value: '' }); return elements.get(selector); }, querySelectorAll() { return []; }, addEventListener(name, fn) { listeners.set(name, fn); }, contains() { return true; } };
   let current = null;
   const context = { console, Intl, Date, Math, reportCustomBounds: () => ({ start: START, end: START + DAY }), MILLIONER_API: '', apiJson: async () => ({ ok: true, ...build([row(1, 'Продажа', { forPay: 700 })]) }), openStoreDetail: () => {}, alert: () => {},
-    document: { getElementById: () => current, createElement: () => ({}), head: { appendChild() {} } }, showSheet(html) { current = el; el.dataset.request = html.match(/data-request="([^"]+)"/)[1]; }, window: {} };
+    document: { getElementById: () => current, createElement: () => ({}), head: { appendChild() {} } }, showSheet(html) { markup=html;elements.clear();current = el; el.dataset.request = html.match(/data-request="([^"]+)"/)[1]; }, window: {} };
   vm.runInNewContext(ui.replace(/\}\)\(\);\s*$/, 'window.fixture={operationHtml,draw,mount,get active(){return active}};})();'), context);
-  return { context, el, elements, listeners, close() { current = null; } };
+  return { context, el, elements, listeners, get markup(){return markup}, close() { current = null; } };
 }
 test('audit UI escapes marketplace text, respects currencies and never labels an unverified result as net profit', () => {
   const { context } = uiFixture(), r = build([row(1, '<img src=x onerror=attack>', { currency: 'RUB', forPay: 10, srid: '<unsafe>' })]).operations[0];
@@ -154,7 +155,7 @@ test('both report paths expose product entry without a separate audit button, be
   const html = readFileSync(new URL('../../index.html', import.meta.url), 'utf8');
   const server = readFileSync(new URL('../src/server.js', import.meta.url), 'utf8');
   const report = readFileSync(new URL('../../kaspi-report-v2.js', import.meta.url), 'utf8');
-  const tag = '<script src="./wb-operation-audit-v1.js?v=20261013-product-entry"></script>';
+  const tag = '<script src="./wb-operation-audit-v1.js?v=20261013-product-only"></script>';
   assert.ok(html.includes(tag)); assert.ok(html.indexOf(tag) < html.lastIndexOf('initOwnerAuth()'));
   assert.ok(html.includes('wbReportProductAuditAttrs(market,periodDays,{...x,name})'));
   assert.ok(report.includes('wbReportProductAuditAction(market,days,'));
@@ -171,7 +172,8 @@ test('clicking a report product opens its units immediately and excludes other p
   await new Promise(r => setImmediate(r));
   const ctx = f.context.window.fixture.active;
   assert.equal(ctx.product, 'p:a'); assert.equal(ctx.mode, 'units'); assert.equal(ctx.days, 30);
-  assert.equal(f.elements.get('[data-audit-product]').value, 'p:a');
+  assert.equal(f.el.querySelector('[data-audit-product]'), null);
+  assert.ok(f.markup.includes('<h3>Товар A</h3>'));
   const body = f.elements.get('[data-audit-body]').innerHTML;
   assert.ok(body.includes('unit-a')); assert.ok(!body.includes('unit-b'));
 });
@@ -196,8 +198,8 @@ test('custom report dates are passed through and an absent product never opens a
   await new Promise(r => setImmediate(r));
   assert.ok(query.includes('&from=' + START + '&to=' + (START + DAY)));
   assert.equal(f.context.window.fixture.active.product, 'p:absent');
-  assert.equal(f.elements.get('[data-audit-product]').value, 'p:absent');
-  assert.ok(f.elements.get('[data-audit-product]').innerHTML.includes('Нет продаж'));
+  assert.equal(f.el.querySelector('[data-audit-product]'), null);
+  assert.ok(f.markup.includes('Нет продаж'));
   assert.ok(!f.elements.get('[data-audit-body]').innerHTML.includes('unit-a'));
 });
 
@@ -241,4 +243,42 @@ test('report product card carries the audit action to mouse and keyboard handler
   assert.ok(html.includes('openWbProductOperations'));
   assert.ok(html.includes('onclick=')); assert.ok(html.includes('onkeydown='));
   assert.ok(!html.includes('>Операции WB<'));
+});
+
+test('product details omit store totals, reconciliation, product selectors and unnecessary controls', async () => {
+  const f = uiFixture();
+  f.context.apiJson = async () => ({ ok: true, ...build([row(1, 'Продажа', { forPay: 700 }), row(2, 'Продажа', { sku: 'barcode-b', forPay: 900000 })]) });
+  f.context.window.openWbProductOperations('WB', 30, { productId: 'a', name: 'Товар A' });
+  await new Promise(r => setImmediate(r));
+  for(const selector of ['[data-audit-summary]','[data-audit-product]','[data-audit-filter]','[data-audit-search]'])assert.equal(f.el.querySelector(selector),null);
+  assert.ok(!f.markup.includes('Сверка и привязки'));
+  assert.ok(!f.markup.includes('data-audit-mode="products"'));
+  assert.ok(!f.markup.includes('data-audit-action="refresh"'));
+  for(const mode of ['orders','units','ads'])assert.ok(f.markup.includes('data-audit-mode="'+mode+'"'));
+  assert.equal(f.elements.get('[data-audit-pager]').innerHTML,'');
+  assert.ok(!f.elements.get('[data-audit-body]').innerHTML.includes('900'));
+});
+
+test('product-only missing-unit count and advertising totals exclude other products', async () => {
+  const f=uiFixture();
+  const data=buildWbOperationAudit({...base,links:[...base.links,{sku:'200',productId:'b'}],rows:[
+    row(1,'Продажа'),row(2,'Логистика',{shkId:0}),row(3,'Продажа',{sku:'barcode-b',nmId:'200',shkId:0,srid:'b'}),row(4,'Логистика',{sku:'barcode-b',nmId:'200',shkId:0,srid:'b'})
+  ],adRows:[{amount:50,nmIds:['100']},{amount:900000,nmIds:['200']}]});
+  f.context.apiJson=async()=>({ok:true,...data});
+  f.context.window.openWbProductOperations('WB',30,{productId:'a',name:'A'});await new Promise(r=>setImmediate(r));
+  assert.ok(f.elements.get('[data-audit-body]').innerHTML.includes('Без ШК: 1 оп.'));
+  f.listeners.get('click')({target:{closest:()=>({dataset:{auditMode:'ads'}})}});
+  const html=f.elements.get('[data-audit-body]').innerHTML;
+  assert.ok(html.includes('Реклама товара'));assert.ok(!html.includes('Вся реклама'));assert.ok(!html.includes('900'));
+});
+
+test('product-only period changes stay compact and cannot reset to the entire product catalog', async () => {
+  const f=uiFixture();f.context.openWbOperationAudit=f.context.window.openWbOperationAudit;
+  f.context.window.openWbProductOperations('WB',30,{productId:'a',name:'A'});await new Promise(r=>setImmediate(r));
+  const click=dataset=>f.listeners.get('click')({target:{closest:()=>({dataset})}});
+  click({auditDays:'7'});await new Promise(r=>setImmediate(r));
+  const ctx=f.context.window.fixture.active;assert.equal(ctx.productOnly,true);assert.equal(ctx.product,'p:a');
+  assert.equal(f.el.querySelector('[data-audit-summary]'),null);
+  click({auditMode:'products'});assert.equal(ctx.mode,'units');
+  click({auditAction:'product',key:'p:b'});assert.equal(ctx.product,'p:a');
 });
