@@ -84,6 +84,30 @@ test('WB1/WB2 and the report-date window stay isolated, explicit zero raw money 
   assert.equal(data.rowCount, 1); assert.equal(data.totals[0].forPay, 0); assert.equal(data.totals[0].delivery, 0);
   assert.equal(data.totals[0].calculationDelta, -80);
 });
+
+test('finance lowercased seller article links to its stored product and physical units in the same cabinet', () => {
+  const data = buildWbOperationAudit({ market: 'WB2', since: START, until: START+DAY,
+    links: [{market:'WB2',sku:'Крылья ангела',productId:'wings'},{market:'WB',sku:'Крылья ангела',productId:'other'}],
+    products: [{id:'wings',name:'Крылья ангела',payload:{wb2Identity:{nmId:'1034505393'}}}],
+    rows: [row(1,'Продажа',{vendorCode:' крылья ангела ',nmId:'1034505393',sku:'2051307526180',shkId:'56878140264',forPay:700},{market:'WB2'}),
+      row(2,'Логистика',{vendorCode:'КРЫЛЬЯ АНГЕЛА',nmId:'1034505393',sku:'2051307526180',shkId:'56878140264',deliveryService:50},{market:'WB2'})] });
+  assert.equal(data.products.length,1); assert.equal(data.products[0].productId,'wings');
+  assert.ok(data.operations.every(x=>x.productId==='wings'));assert.equal(data.units.length,1);
+  assert.equal(data.units[0].rows.length,2);assert.equal(data.totals[0].beforeAdsAndCost,650);
+});
+
+test('case-insensitive seller article collisions never guess a product', () => {
+  const data = buildWbOperationAudit({...base,links:[{sku:'Item',productId:'a'},{sku:'ITEM',productId:'b'}],
+    rows:[row(1,'Продажа',{vendorCode:'item',sku:''})]});
+  assert.equal(data.operations[0].productId,'');assert.equal(data.operations[0].linkSource,'ambiguous');
+});
+
+test('article casing does not collapse sizes and exact barcodes keep priority', () => {
+  const data=buildWbOperationAudit({...base,links:[...base.links,{sku:'ITEM',productId:'parent'}],
+    products:[...base.products,{id:'a',payload:{wbIdentity:{nmId:'100'}}},{id:'b',payload:{wbIdentity:{nmId:'100'}}}],
+    rows:[row(1,'Продажа',{vendorCode:'item'}),row(2,'Логистика',{vendorCode:'item',sku:'',shkId:0,srid:''})]});
+  assert.equal(data.operations[0].productId,'a');assert.equal(data.operations[1].productId,'');
+});
 test('currency buckets, negative logistics corrections and malformed money are not silently flattened', () => {
   const data = build([row(1, 'Продажа', { currency: 'KZT', forPay: 700 }), row(2, 'Логистика', { currency: 'KZT', deliveryService: -10 }), row(3, 'Продажа', { currency: 'RUB', forPay: 100 }), row(4, 'Продажа', { currency: '', forPay: 40 })]);
   assert.deepEqual(data.totals.map(x => [x.currency, x.beforeAdsAndCost]), [['KZT', 710], ['RUB', 100], ['UNKNOWN', 40]]);
@@ -257,6 +281,18 @@ test('product details omit store totals, reconciliation, product selectors and u
   for(const mode of ['orders','units','ads'])assert.ok(f.markup.includes('data-audit-mode="'+mode+'"'));
   assert.equal(f.elements.get('[data-audit-pager]').innerHTML,'');
   assert.ok(!f.elements.get('[data-audit-body]').innerHTML.includes('900'));
+});
+
+test('report product click shows units built from lowercase finance articles instead of an empty result', async () => {
+  const data=buildWbOperationAudit({...base,links:[{sku:'Крылья ангела',productId:'wings'}],
+    products:[{id:'wings',name:'Крылья ангела',payload:{wbIdentity:{nmId:'100'}}}],
+    rows:[row(1,'Продажа',{vendorCode:'крылья ангела',sku:'wings-barcode',shkId:'56878140264'})]});
+  const f=uiFixture();f.context.apiJson=async()=>({ok:true,...data});
+  f.context.window.openWbProductOperations('WB',30,{productId:'wings',name:'Крылья ангела'});
+  await new Promise(r=>setImmediate(r));
+  const body=f.elements.get('[data-audit-body]').innerHTML;
+  assert.ok(body.includes('56878140264'));assert.ok(!body.includes('Нет загруженных операций'));
+  assert.equal(f.context.window.fixture.active.product,'p:wings');
 });
 
 test('product-only missing-unit count and advertising totals exclude other products', async () => {

@@ -1,5 +1,6 @@
 // Read-only audit of the persisted WB report. No warehouse/FIFO writes or upstream calls.
 const text = value => String(value ?? '').trim();
+const articleKey = value => text(value).toLocaleLowerCase('ru-RU');
 const number = value => Number.isFinite(Number(value)) ? Number(value) : 0;
 const id = value => { const s = text(value); return s === '0' ? '' : s; };
 function object(value) {
@@ -65,12 +66,13 @@ function normalized(row, market) {
   return result;
 }
 function indexes(links, products, market) {
-  const bySku = new Map(), catalog = new Map(), nmProducts = new Map();
+  const bySku = new Map(), byArticle = new Map(), catalog = new Map(), nmProducts = new Map();
   for (const source of products) { const p = { ...object(source.payload), ...source }; catalog.set(text(p.id), p); }
   for (const link of links) {
     const sku = id(link.sku), pid = text(link.productId ?? link.product_id);
     if (!sku || !pid) continue;
     const set = bySku.get(sku) || new Set(); set.add(pid); bySku.set(sku, set);
+    const articles = byArticle.get(articleKey(sku)) || new Set(); articles.add(pid); byArticle.set(articleKey(sku), articles);
   }
   const field = market === 'WB2' ? 'wb2' : 'wb';
   for (const p of catalog.values()) {
@@ -80,14 +82,16 @@ function indexes(links, products, market) {
     if (!nm) continue;
     const set = nmProducts.get(nm) || new Set(); set.add(text(p.id)); nmProducts.set(nm, set);
   }
-  return { bySku, catalog, nmProducts };
+  return { bySku, byArticle, catalog, nmProducts };
 }
 function linkProduct(row, index) {
   // A barcode is more specific than the common nmId/article of a card with sizes.
   const precise = row.barcode && index.bySku.get(row.barcode);
   if (precise?.size === 1) return { productId: [...precise][0], linkSource: 'barcode' };
   if (precise?.size > 1) return { productId: '', linkSource: 'ambiguous' };
-  const candidates = new Set([...(index.bySku.get(row.vendorCode) || []), ...(index.bySku.get(row.nmId) || [])]);
+  // Finance changes seller-article casing; normal report links already ignore that difference.
+  // Keep all matching IDs so conflicting links/sizes remain ambiguous instead of picking the first.
+  const candidates = new Set([...(index.byArticle.get(articleKey(row.vendorCode)) || []), ...(index.bySku.get(row.nmId) || [])]);
   // A shared card link must not silently collapse barcode-specific variants.
   const knownSizes = index.nmProducts.get(row.nmId);
   if (knownSizes?.size > 1 || row.barcode && knownSizes?.size === 1 && !candidates.has([...knownSizes][0])) return { productId: '', linkSource: 'ambiguous' };
