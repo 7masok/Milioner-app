@@ -149,7 +149,7 @@ function uiFixture() {
   let current = null;
   const context = { console, Intl, Date, Math, reportCustomBounds: () => ({ start: START, end: START + DAY }), MILLIONER_API: '', apiJson: async () => ({ ok: true, ...build([row(1, 'Продажа', { forPay: 700 })]) }), openStoreDetail: () => {}, alert: () => {},
     document: { getElementById: () => current, createElement: () => ({}), head: { appendChild() {} } }, showSheet(html) { markup=html;elements.clear();current = el; el.dataset.request = html.match(/data-request="([^"]+)"/)[1]; }, window: {} };
-  vm.runInNewContext(ui.replace(/\}\)\(\);\s*$/, 'window.fixture={operationHtml,historyHtml,unitSummaryHtml,draw,mount,get active(){return active}};})();'), context);
+  vm.runInNewContext(ui.replace(/\}\)\(\);\s*$/, 'window.fixture={operationHtml,historyHtml,unitSummaryHtml,periodMetricsHtml,draw,mount,get active(){return active}};})();'), context);
   return { context, el, elements, listeners, get markup(){return markup}, close() { current = null; } };
 }
 test('audit UI escapes marketplace text, respects currencies and never labels an unverified result as net profit', () => {
@@ -179,7 +179,7 @@ test('both report paths expose product entry without a separate audit button, be
   const html = readFileSync(new URL('../../index.html', import.meta.url), 'utf8');
   const server = readFileSync(new URL('../src/server.js', import.meta.url), 'utf8');
   const report = readFileSync(new URL('../../kaspi-report-v2.js', import.meta.url), 'utf8');
-  const tag = '<script src="./wb-operation-audit-v1.js?v=20261013-unit-expenses"></script>';
+  const tag = '<script src="./wb-operation-audit-v1.js?v=20261013-period-profit"></script>';
   assert.ok(html.includes(tag)); assert.ok(html.indexOf(tag) < html.lastIndexOf('initOwnerAuth()'));
   assert.ok(html.includes('async function openWbFinanceReport(market,days){return openStoreDetail(market,days)}'));
   assert.ok(report.includes('wbReportProductAuditAction(market,days,'));
@@ -450,4 +450,48 @@ test('unknown cost and foreign currency keep the prominent profit unknown, befor
 test('rendering compact unit result never mutates rows or allocates product advertising to a physical piece',()=>{
  const data=buildWbOperationAudit({...base,rows:[row(1,'Продажа',{forPay:500})],saleCosts:[{productId:'a',srid:'order-a',qty:1,cost:100}],adRows:[{nmIds:['100'],amount:200,currency:'KZT'}]});
  const before=JSON.stringify(data),html=uiFixture().context.window.fixture.historyHtml(data);assert.equal(JSON.stringify(data),before);assert.ok(html.includes('400 ₸'));assert.ok(html.includes('Реклама учитывается по товару'));assert.ok(!html.includes('Чистая прибыль'));
+});
+
+test('period revenue and profit stay together; opening full history cannot substitute tomorrow sale for today expense',async()=>{
+ const rows=[row(1,'Логистика',{shkId:'58490824571',rebillLogisticCost:7.19}),row(2,'Продажа',{shkId:'58490824571',retailPriceWithDisc:1687.05,forPay:1089.48},{rr_date:START+DAY}),row(3,'Логистика',{shkId:'58490824571',deliveryService:162.68,rebillLogisticCost:10.73},{rr_date:START+DAY})],options={...base,rows,purchaseRows:[{productId:'a',qty:1,status:'received',landedUnitCost:174.92531647326632}]};
+ const period=buildWbOperationAudit(options),full=buildWbOperationAudit({...options,allDates:true}),f=uiFixture();
+ f.context.apiJson=async url=>url.includes('/wb-unit-history')?{ok:true,scope:'unit-history',market:'WB',shkId:'58490824571',nmId:'100',productId:'a',operations:full.operations,range:full.range}:{ok:true,...period};
+ f.context.window.openWbProductOperations('WB',1,{productId:'a'});await new Promise(r=>setImmediate(r));
+ const summary=f.el.querySelector('[data-audit-body]').innerHTML;
+ assert.ok(summary.includes('wb-audit-period'));assert.ok(summary.includes('Выручка за период</span><b>0 ₸'));assert.ok(summary.includes('Прибыль за период · до рекламы'));assert.ok(summary.includes('-7,19 ₸'));assert.ok(!summary.includes('733,95'));
+ const opened=expandUnit(f,period.units[0]);await new Promise(r=>setImmediate(r));assert.ok(opened.body.innerHTML.includes('Прибыль до рекламы · весь путь'));assert.ok(opened.body.innerHTML.includes('733,95 ₸'));assert.equal(f.el.querySelector('[data-audit-body]').innerHTML,summary);
+});
+test('period profit uses known cost once, preserves unknown/foreign amounts and never allocates product ads',()=>{
+ const f=uiFixture(),known=buildWbOperationAudit({...base,rows:[row(1,'Продажа',{retailPriceWithDisc:1000,forPay:700}),row(2,'Логистика',{deliveryService:100})],saleCosts:[{productId:'a',srid:'order-a',qty:1,cost:200}],adRows:[{nmIds:['100'],currency:'KZT',amount:99}]});
+ const snapshot=JSON.stringify(known),html=f.context.window.fixture.periodMetricsHtml(known.operations);assert.ok(html.includes('1 000 ₸'));assert.ok(html.includes('400 ₸'));assert.ok(!html.includes('301 ₸'));assert.equal(JSON.stringify(known),snapshot);
+ const missing=f.context.window.fixture.periodMetricsHtml(build([row(3,'Продажа',{retailPriceWithDisc:1000,forPay:700})]).operations);assert.ok(missing.includes('>—</b>'));assert.ok(!missing.includes('700 ₸'));
+ const foreign=f.context.window.fixture.periodMetricsHtml(buildWbOperationAudit({...base,rows:[row(4,'Продажа',{currency:'RUB',forPay:700})],saleCosts:[{productId:'a',srid:'order-a',qty:1,cost:200}]}).operations);assert.ok(foreign.includes('>—</b>'));assert.ok(!foreign.includes('500'));
+});
+test('already linked expense recovers missing nm from exact sticker peer or cabinet product identity without changing source',()=>{
+ const rows=[row(1,'Логистика',{shkId:'58542540931',nmId:'',rebillLogisticCost:12},{nm_id:''}),row(2,'Продажа',{shkId:'58542540931',nmId:'100',forPay:700})],snapshot=JSON.stringify(rows);
+ const data=build(rows);assert.equal(data.operations[0].productId,'a');assert.equal(data.operations[0].nmId,'100');assert.equal(data.units.length,1);assert.equal(JSON.stringify(rows),snapshot);
+ const catalog=buildWbOperationAudit({...base,rows:rows.slice(0,1),products:[{id:'a',payload:{wbIdentity:{nmId:'123'},wb2Identity:{nmId:'456'}}}]});assert.equal(catalog.operations[0].nmId,'123');
+ const second=buildWbOperationAudit({...base,market:'WB2',links:[{market:'WB2',sku:'barcode-a',productId:'a'}],rows:[{...rows[0],market:'WB2'}],products:[{id:'a',payload:{wbIdentity:{nmId:'123'},wb2Identity:{nmId:'456'}}}]});assert.equal(second.operations[0].nmId,'456');
+});
+test('history opens missing-nm expense via exact product, keeps known expense if no card identity exists, and remains read-only',async()=>{
+ const expense=row(1,'Логистика',{shkId:'58542540931',nmId:'',rebillLogisticCost:12},{nm_id:''}),sale=row(2,'Продажа',{shkId:'58542540931',forPay:700});
+ for(const rows of [[expense,sale],[expense]]){
+  const out=await invokeHistory({market:'WB',shkId:'58542540931',productId:'a'},sql=>sql.startsWith('SELECT *')?rows:sql.includes('warehouse_products')?base.products:sql.includes('product_links')?base.links:[]);
+  assert.equal(out.status,200);assert.equal(out.result.operations.length,rows.length);assert.equal(out.result.nmId,rows.length===2?'100':'');assert.ok(out.result.operations.every(r=>r.productId==='a'));assert.ok(out.calls.every(x=>/^SELECT /.test(x.sql)));assert.deepEqual(out.calls[0].args,['WB','58542540931']);
+ }
+ assert.equal((await invokeHistory({market:'WB',shkId:'58542540931'},()=>{throw Error('query forbidden')})).status,400);
+});
+test('missing-nm history refuses multiple cards for one sticker instead of merging them or deleting the expense',async()=>{
+ const rows=[row(1,'Логистика',{shkId:'58542540931',nmId:'',rebillLogisticCost:12},{nm_id:''}),row(2,'Продажа',{shkId:'58542540931',nmId:'100'}),row(3,'Продажа',{shkId:'58542540931',nmId:'200'})];
+ const data=build(rows);assert.equal(data.operations[0].nmId,'');assert.equal(data.rowCount,3);
+ const out=await invokeHistory({market:'WB',shkId:'58542540931',productId:'a'},sql=>sql.startsWith('SELECT *')?rows:sql.includes('warehouse_products')?base.products:sql.includes('product_links')?base.links:[]);assert.equal(out.status,409);assert.ok(out.result.error.includes('Неоднозначная'));assert.ok(out.calls.every(x=>/^SELECT /.test(x.sql)));
+});
+test('UI opens a linked sticker without requiring first-row nmId, accepts canonical identity and rejects a wrong product',async()=>{
+ const period=build([row(1,'Логистика',{shkId:'58542540931',nmId:'',rebillLogisticCost:12},{nm_id:''})]),full=build([row(1,'Логистика',{shkId:'58542540931',nmId:'',rebillLogisticCost:12},{nm_id:''}),row(2,'Продажа',{shkId:'58542540931',forPay:700})]);
+ for(const wrong of [false,true]){
+  const f=uiFixture(),calls=[];f.context.apiJson=async url=>{calls.push(url);return url.includes('/wb-unit-history')?{ok:true,scope:'unit-history',market:'WB',shkId:'58542540931',nmId:'100',productId:wrong?'b':'a',operations:full.operations,range:full.range}:{ok:true,...period}};
+  f.context.window.openWbProductOperations('WB',1,{productId:'a'});await new Promise(r=>setImmediate(r));const opened=expandUnit(f,period.units[0]);await new Promise(r=>setImmediate(r));
+  assert.equal(calls.length,2);assert.ok(calls[1].includes('productId=a'));assert.ok(!calls[1].includes('nmId='));assert.ok(!opened.body.innerHTML.includes('Нет точного nmId'));
+  assert.ok(opened.body.innerHTML.includes(wrong?'Повторить':'История движения'));
+ }
 });
