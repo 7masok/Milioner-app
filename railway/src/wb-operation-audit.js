@@ -1,4 +1,5 @@
 import { wbFinancePeriodDate } from './wb-finance-period.js';
+import { allocateWbOrderAdvertising, wbOrderDay } from './wb-order-advertising.js';
 // Read-only audit of the persisted WB report. No warehouse/FIFO writes or upstream calls.
 const text = value => String(value ?? '').trim();
 const articleKey = value => text(value).toLocaleLowerCase('ru-RU');
@@ -12,7 +13,7 @@ function field(raw, names, fallback) {
   for (const name of names) if (raw[name] !== undefined && raw[name] !== null && text(raw[name]) !== '') return raw[name];
   return fallback;
 }
-const moneyFields = ['revenue', 'sellerRevenue', 'forPay', 'commission', 'commissionVat', 'acquiring', 'delivery', 'rebill', 'storage', 'acceptance', 'deduction', 'promotionDeduction', 'penalty', 'additionalPayment', 'settlement', 'beforeAdsAndCost', 'legacyBeforeAdsAndCost'];
+const moneyFields = ['revenue', 'sellerRevenue', 'forPay', 'commission', 'commissionVat', 'acquiring', 'delivery', 'rebill', 'storage', 'acceptance', 'deduction', 'promotionDeduction', 'penalty', 'additionalPayment', 'settlement', 'beforeAdsAndCost', 'legacyBeforeAdsAndCost', 'orderAdvertising'];
 function totals() { return { rows: 0, saleQty: 0, returnQty: 0, ...Object.fromEntries(moneyFields.map(key => [key, 0])) }; }
 function add(target, row) {
   target.rows++; target.saleQty += row.saleQty; target.returnQty += row.returnQty;
@@ -39,7 +40,7 @@ function normalized(row, market) {
   const optional = names => { const v = field(raw, names, null); if (v === null) return null; if (!Number.isFinite(Number(v))) throw new Error('Некорректное поле WB: строка ' + id(row.rrd_id)); return Number(v); };
   const result = {
     market, rrdId: id(row.rrd_id || field(raw, ['rrdId', 'rrd_id'], '')), reportId: id(row.report_id),
-    date: number(row.rr_date), saleDate: number(row.sale_date), operation: operation || docType || 'Операция WB', docType,
+    date: number(row.rr_date), saleDate: number(row.sale_date), orderDay: wbOrderDay(field(raw,['orderDt','order_dt','orderDate'],'')), operation: operation || docType || 'Операция WB', docType,
     kind: sale ? 'sale' : returned ? 'return' : /логист|достав/i.test(operation) ? 'logistics' : 'other',
     srid: id(field(raw, ['srid', 'orderUid', 'order_uid'], '')),
     shkId: id(field(raw, ['shkId', 'shk_id'], '')),
@@ -149,7 +150,7 @@ function costResolver(index, purchaseRows, saleCosts, market) {
     row.afterCostBeforeAds = row.currency === 'KZT' && cost ? row.beforeAdsAndCost - row.costKzt : null;
   };
 }
-export function buildWbOperationAudit({ market, rows = [], links = [], products = [], adRows = [], purchaseRows = [], saleCosts = [], since = 0, until = Infinity, allDates = false }) {
+export function buildWbOperationAudit({ market, rows = [], links = [], products = [], adRows = [], purchaseRows = [], saleCosts = [], since = 0, until = Infinity, allDates = false, orderRows = [], orderFinanceRows = [], allocationAdRows = null, allocationDays = null }) {
   if (!['WB', 'WB2'].includes(market)) throw new Error('market must be WB or WB2');
   const index = indexes(links.filter(x => !x.market || x.market === market), products, market), unique = new Map();
   let duplicateRows = 0;
@@ -202,9 +203,23 @@ export function buildWbOperationAudit({ market, rows = [], links = [], products 
     const knownIds = peerIds.size ? peerIds : productNmIds.get(row.productId) || new Set();
     if (knownIds.size === 1 && /^\d{1,20}$/.test([...knownIds][0])) row.nmId = [...knownIds][0];
   }
+  const financeOrders=orderFinanceRows.length?buildWbOperationAudit({market,rows:orderFinanceRows,links,products,allDates:true}).operations:operations;
+  const cachedOrders=orderRows.filter(o=>!o.market||o.market===market).map(o=>{
+    const raw=object(o.raw_json),identity=raw.identity||{},order=raw.order||raw;
+    const r={nmId:id(identity.nmId||order.nmId),barcode:id(identity.barcode||order.skus?.[0]),vendorCode:text(identity.article||order.article||o.sku)};
+    return {...r,...linkProduct(r,index),market,srid:id(order.orderUid||raw.orderUid||raw.srid||o.order_id||o.orderId),
+      cacheKey:JSON.stringify([o.order_id||o.orderId,o.entry_id||o.entryId]),orderDay:wbOrderDay(o.creation_date||o.creationDate||order.createdAt),qty:number(o.qty),source:'order_cache'};
+  });
+  const identityOrders=new Map();
+  for(const r of [...financeOrders,...cachedOrders]) {
+    if(!r.productId||!r.nmId)continue;
+    const ids=index.nmProducts.get(r.nmId)||new Set();ids.add(r.productId);index.nmProducts.set(r.nmId,ids);
+    const k=JSON.stringify([r.productId,r.srid]),values=identityOrders.get(k)||new Set();values.add(r.nmId);identityOrders.set(k,values);
+  }
+  for(const r of operations){const ids=identityOrders.get(JSON.stringify([r.productId,r.srid]));if(!r.nmId&&ids?.size===1&&/^\d{1,20}$/.test([...ids][0]))r.nmId=[...ids][0];}
   const groups = new Map(), currencies = new Map(), orders = new Map(), units = new Map();
   const resolveCost = costResolver(index, purchaseRows, saleCosts, market);
-  for (const row of operations) {
+  const register = row => {
     row.productKey = row.productId ? 'p:' + row.productId : 'u:' + JSON.stringify([row.nmId, row.vendorCode, row.barcode]);
     const p = index.catalog.get(row.productId);
     row.productName = p?.name || row.title || row.vendorCode || ('WB ' + (row.nmId || 'без товара'));
@@ -220,8 +235,9 @@ export function buildWbOperationAudit({ market, rows = [], links = [], products 
     const order = orders.get(row.orderKey) || { key: row.orderKey, productKey: row.productKey, srid: row.srid, rows: [] };
     order.rows.push(row.rrdId); orders.set(row.orderKey, order);
     if (row.unitKey) { const unit = units.get(row.unitKey) || { key: row.unitKey, productKey: row.productKey, shkId: row.shkId, rows: [], srids: new Set() }; unit.rows.push(row.rrdId); if (row.srid) unit.srids.add(row.srid); units.set(row.unitKey, unit); }
-  }
-  const advertising = adRows.filter(row => !row.market || row.market === market).map((row, n) => {
+  };
+  operations.forEach(register);
+  const normalizeAds = source => source.filter(row => !row.market || row.market === market).map((row, n) => {
     if (!Number.isFinite(Number(row.amount))) throw new Error('Некорректный расход рекламы WB');
     const nmIds = adNmIds(row.nmIds ?? row.nm_ids), candidates = new Set(); let missing = !nmIds.length;
     for (const nm of nmIds) {
@@ -235,13 +251,33 @@ export function buildWbOperationAudit({ market, rows = [], links = [], products 
     const result = { key: 'ad:' + n, day: text(row.day), advertId: text(row.advertId ?? row.advert_id), campaign: text(row.campaign),
       amount: number(row.amount), currency: text(field(adRaw, ['currency', 'currencyCode', 'currency_code'], row.currency)).toUpperCase() || 'UNKNOWN', nmIds, productId,
       reason: productId ? 'linked' : candidates.size > 1 ? 'multiple_products' : 'unlinked' };
-    if (productId) {
+    return result;
+  });
+  const advertising = normalizeAds(adRows);
+  for (const result of advertising) {
+    if (result.productId) {
+      const productId=result.productId;
       const key = 'p:' + productId, p = index.catalog.get(productId);
       const group = groups.get(key) || { key, productId, name: p?.name || 'Реклама WB', linked: true, rows: [], totals: new Map(), advertising: [] };
       group.advertising.push(result.key); groups.set(key, group);
     }
-    return result;
-  });
+  }
+  const ordersForAds=[...cachedOrders,...financeOrders.map(r=>({...r,qty:Math.max(1,r.saleQty||r.returnQty),source:'finance_order_date'}))];
+  const allocationAds=allocationAdRows===null?advertising:normalizeAds(allocationAdRows);
+  const allocation=allocateWbOrderAdvertising({market,orders:ordersForAds,finance:financeOrders,advertising:allocationAds,days:allocationDays});
+  const datedOrders=new Set(ordersForAds.filter(r=>r.orderDay&&r.srid).map(r=>JSON.stringify([r.productId,r.srid]))),advertisedProducts=new Set(allocationAds.filter(a=>a.amount!==0&&a.productId).map(a=>a.productId));
+  const operationOrders=new Map(),conflictingOrders=new Set(allocation.conflicts);
+  for(const r of operations){const k=JSON.stringify([r.productId,r.srid]),peers=operationOrders.get(k)||[];peers.push(r);operationOrders.set(k,peers);if(advertisedProducts.has(r.productId)&&(!datedOrders.has(k)||conflictingOrders.has(k)))r.adUnknown=true;}
+  for (const entry of allocation.entries) {
+    const date=Date.parse(entry.orderDay+'T00:00:00+05:00');
+    if (!allDates&&(date<since||date>=until)) continue;
+    if(!entry.shkId&&entry.amount!==0)for(const r of operationOrders.get(JSON.stringify([entry.productId,entry.srid]))||[])r.adUnknown=true;
+    const r={...entry,rrdId:'ad-order:'+JSON.stringify([entry.productId,entry.srid,entry.orderDay,entry.currency]),reportId:'',date,saleDate:0,
+      operation:'Реклама заказа',kind:'advertising',docType:'',vendorCode:entry.vendorCode||'',size:'',saleQty:0,returnQty:0,orderAdvertising:entry.amount,
+      ...Object.fromEntries(moneyFields.filter(k=>k!=='orderAdvertising').map(k=>[k,0])),adEstimated:true};
+    register(r);operations.push(r);
+  }
+  operations.sort((a,b)=>a.date-b.date||a.rrdId.localeCompare(b.rrdId));
   const sums = map => [...map].map(([currency, total]) => ({ currency, ...total, calculationDelta: total.beforeAdsAndCost - total.legacyBeforeAdsAndCost }));
   const productRows = [...groups.values()].map(g => ({ ...g, totals: sums(g.totals) }));
   const reconciliation = [...currencies].map(([currency, total]) => {
@@ -249,7 +285,7 @@ export function buildWbOperationAudit({ market, rows = [], links = [], products 
     return { currency, sourceSettlement: total.settlement, groupedSettlement: grouped, difference: total.settlement - grouped, balanced: Math.abs(total.settlement - grouped) < 0.005 };
   });
   return { market, range: { since, until, timezone: 'Asia/Almaty', businessTimezone: 'Europe/Moscow' }, rowCount: operations.length, duplicateRows, operations, products: productRows,
-    orders: [...orders.values()], units: [...units.values()].map(unit => ({ ...unit, srids: [...unit.srids] })), totals: sums(currencies), advertising, reconciliation,
+    orders: [...orders.values()], units: [...units.values()].map(unit => ({ ...unit, srids: [...unit.srids] })), totals: sums(currencies), advertising, advertisingAllocation:allocation.allocation, reconciliation,
     coverage: { linkedRows: operations.filter(x => x.productId).length, orderRows: operations.filter(x => x.srid).length, unitRows: operations.filter(x => x.shkId).length },
-    basis: 'WB Moscow event day (posting day for other charges); forPay already includes commission, VAT and acquiring; saved order costs or explicit KZT estimates; no per-unit ad allocation' };
+    basis: 'WB Moscow event day (posting day for other charges); forPay already includes commission, VAT and acquiring; saved order costs or explicit KZT estimates; daily product advertising allocated once to placed orders by Moscow creation day; cached-order estimate' };
 }

@@ -3,6 +3,7 @@ import { pool } from './db.js';
 import { asyncRoute } from './http.js';
 import { buildWbOperationAudit } from './wb-operation-audit.js';
 import { wbFinancePeriodSql } from './wb-finance-period.js';
+import { wbOrderDay } from './wb-order-advertising.js';
 
 export const reportsRouter = express.Router();
 const ALMATY_OFFSET = 5 * 60 * 60 * 1000;
@@ -33,6 +34,37 @@ function requestPeriodBounds(req) {
 
 function dateKey(timestamp) {
   return new Date(timestamp + ALMATY_OFFSET).toISOString().slice(0, 10);
+}
+
+// Cached placed orders include cancellations. Finance orderDt supplies orders from
+// WB stock; orderUid deduplication prevents counting their later sale a second time.
+async function readWbOrderAdvertisingInputs(selected, financeRows, requestedDays=[]) {
+  const days=new Set(requestedDays),srids=new Set();
+  for (const row of financeRows) {
+    let raw={};try{raw=typeof row.raw_json==='string'?JSON.parse(row.raw_json):row.raw_json||{}}catch{}
+    const day=wbOrderDay(raw.orderDt||raw.order_dt||raw.orderDate);if(day)days.add(day);
+    const srid=String(raw.srid||raw.orderUid||raw.order_uid||'').trim();if(srid)srids.add(srid);
+  }
+  if (!days.size&&!srids.size) return {orderRows:[],orderFinanceRows:[],allocationAdRows:[]};
+  const sorted=[...days].sort(),start=sorted.length?Date.parse(sorted[0]+'T00:00:00+03:00'):0,
+    end=sorted.length?Date.parse(sorted.at(-1)+'T00:00:00+03:00')+86400000:0;
+  const cached=await pool.query(`SELECT o.market,o.order_id,o.entry_id,o.creation_date,o.sku,o.qty,o.raw_json
+    FROM marketplace_order_lines o WHERE o.market=$1 AND
+    ((o.creation_date >= $2 AND o.creation_date < $3 AND to_char(to_timestamp(o.creation_date/1000.0) AT TIME ZONE 'Europe/Moscow','YYYY-MM-DD')=ANY($4::text[]))
+    OR COALESCE(o.raw_json::jsonb->'order'->>'orderUid',o.raw_json::jsonb->>'orderUid',o.raw_json::jsonb->>'srid')=ANY($5::text[]) OR o.order_id=ANY($5::text[]))
+    ORDER BY o.creation_date,o.order_id,o.entry_id LIMIT 50001`,[selected,start,end,[...days],[...srids]]);
+  if(cached.rows.length>50000)return {error:'Больше 50 000 заказов для распределения рекламы. Сократите период.'};
+  for(const row of cached.rows){const day=wbOrderDay(row.creation_date);if(day)days.add(day)}
+  if(!days.size)return {orderRows:cached.rows,orderFinanceRows:[],allocationAdRows:[]};
+  const prefixes=[...new Set([...days].flatMap(day=>[-1,0,1].map(shift=>new Date(Date.parse(day+'T12:00:00Z')+shift*86400000).toISOString().slice(0,10))))];
+  const [orders,ads]=await Promise.all([
+    pool.query(`SELECT f.* FROM wb_finance_rows f WHERE f.market=$1
+      AND substring(COALESCE(NULLIF(f.raw_json::jsonb->>'orderDt',''),NULLIF(f.raw_json::jsonb->>'order_dt',''),f.raw_json::jsonb->>'orderDate'),1,10)=ANY($2::text[])
+      ORDER BY f.rr_date,f.rrd_id LIMIT 50001`,[selected,prefixes]),
+    pool.query('SELECT day,advert_id AS "advertId",campaign,amount,nm_ids AS "nmIds",raw_json FROM wb_ad_costs WHERE market=$1 AND day=ANY($2::text[]) ORDER BY day,advert_id,upd_num LIMIT 50001',[selected,[...days].sort()])
+  ]);
+  if(orders.rows.length>50000||ads.rows.length>50000)return {error:'Слишком много строк для распределения рекламы. Сократите период.'};
+  return {orderRows:cached.rows,orderFinanceRows:orders.rows,allocationAdRows:ads.rows};
 }
 
 function kaspiBounds(days, from, to) {
@@ -341,7 +373,9 @@ reportsRouter.get('/wb-operation-audit', asyncRoute(async (req, res) => {
       LIMIT 50001`, [selected, since, until])
   ]);
   if (purchases.rows.length > 50000 || costs.rows.length > 50000) return res.status(422).json({ ok: false, error: 'Слишком много записей себестоимости. Выберите более короткий период.' });
-  const audit = buildWbOperationAudit({ market: selected, rows: finance.rows, links: links.rows, products: products.rows, adRows: ads.rows, purchaseRows: purchases.rows, saleCosts: costs.rows, since, until });
+  const allocationInputs=await readWbOrderAdvertisingInputs(selected,finance.rows,daysList);
+  if(allocationInputs.error)return res.status(422).json({ok:false,error:allocationInputs.error});
+  const audit = buildWbOperationAudit({ market: selected, rows: finance.rows, links: links.rows, products: products.rows, adRows: ads.rows, purchaseRows: purchases.rows, saleCosts: costs.rows, since, until,...allocationInputs,allocationDays:daysList });
   res.json({ ok: true, ...audit, history: history.rows[0] || null, sync: sync.rows[0] || null });
 }));
 
@@ -374,8 +408,10 @@ reportsRouter.get('/wb-unit-history', asyncRoute(async (req, res) => {
   if (purchases.rows.length > 50000 || costs.rows.length > 50000) return res.status(422).json({ ok: false, error: 'Слишком много записей себестоимости.' });
   const dates = finance.rows.map(x => Number(x.rr_date)).filter(x => Number.isFinite(x) && x > 0);
   const since = dates.length ? Math.min(...dates) : 0, until = dates.length ? Math.max(...dates) + 1 : 1;
+  const allocationInputs=await readWbOrderAdvertisingInputs(selected,finance.rows);
+  if(allocationInputs.error)return res.status(422).json({ok:false,error:allocationInputs.error});
   const audit = buildWbOperationAudit({ market: selected, rows: finance.rows, links: links.rows, products: products.rows,
-    purchaseRows: purchases.rows, saleCosts: costs.rows, since, until, allDates: true });
+    purchaseRows: purchases.rows, saleCosts: costs.rows, since, until, allDates: true,...allocationInputs });
   const byId = new Map(audit.operations.map(x => [x.rrdId, x]));
   const units = audit.units.filter(u => u.shkId === shkId && (!productId || u.productKey === 'p:' + productId)
     && (!nmId || u.rows.some(id => byId.get(id)?.nmId === nmId)));
