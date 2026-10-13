@@ -2,6 +2,7 @@ import express from 'express';
 import { pool } from './db.js';
 import { asyncRoute } from './http.js';
 import { buildWbOperationAudit } from './wb-operation-audit.js';
+import { wbFinancePeriodSql } from './wb-finance-period.js';
 
 export const reportsRouter = express.Router();
 const ALMATY_OFFSET = 5 * 60 * 60 * 1000;
@@ -200,14 +201,17 @@ reportsRouter.get('/wb-finance-summary', asyncRoute(async (req, res) => {
   if (!['WB', 'WB2'].includes(selected)) return res.status(400).json({ ok: false, error: 'market must be WB or WB2' });
   const days = Number(req.query.days || 1);
   const { since, until } = requestPeriodBounds(req);
-  const [finance, sync, lastSuccess, history] = await Promise.all([pool.query(`SELECT COUNT(*) AS "financeRowCount",COALESCE(SUM(retail_amount),0) AS "retailAmount",COALESCE(SUM(for_pay),0) AS "forPay",
-    COALESCE(SUM(acquiring_fee),0) AS acquiring,COALESCE(SUM(delivery_service),0) AS delivery,
+  const [finance, sync, lastSuccess, history] = await Promise.all([pool.query(`SELECT COUNT(*) AS "financeRowCount",COALESCE(SUM(CASE WHEN lower(COALESCE(NULLIF(btrim(operation),''),btrim(doc_type))) IN ('продажа','возврат') THEN
+      CASE WHEN lower(COALESCE(NULLIF(btrim(operation),''),btrim(doc_type)))='возврат' THEN -1 ELSE 1 END *
+      COALESCE(ABS(qty)*ABS(COALESCE(NULLIF(raw_json::jsonb->>'retailPriceWithDisc','')::double precision,NULLIF(raw_json::jsonb->>'retail_price_withdisc_rub','')::double precision)),ABS(retail_amount)) ELSE 0 END),0) AS "retailAmount",
+    COALESCE(SUM(retail_amount),0) AS "buyerAmount",COALESCE(SUM(CASE WHEN lower(COALESCE(NULLIF(btrim(operation),''),btrim(doc_type)))='возврат' THEN -ABS(for_pay) ELSE for_pay END),0) AS "forPay",
+    COALESCE(SUM(CASE WHEN lower(COALESCE(NULLIF(btrim(operation),''),btrim(doc_type)))='возврат' THEN -ABS(acquiring_fee) ELSE acquiring_fee END),0) AS acquiring,COALESCE(SUM(delivery_service),0) AS delivery,
     COALESCE(SUM(paid_storage),0) AS storage,COALESCE(SUM(paid_acceptance),0) AS acceptance,
     COALESCE(SUM(CASE WHEN lower(COALESCE(NULLIF(raw_json::jsonb->>'bonusTypeName',''),NULLIF(raw_json::jsonb->>'bonus_type_name',''),'')) LIKE '%wb продвижение%' THEN 0 ELSE deduction END),0) AS deduction,
     COALESCE(SUM(CASE WHEN lower(COALESCE(NULLIF(raw_json::jsonb->>'bonusTypeName',''),NULLIF(raw_json::jsonb->>'bonus_type_name',''),'')) LIKE '%wb продвижение%' THEN deduction ELSE 0 END),0) AS "promotionDeduction",
     COALESCE(SUM(penalty),0) AS penalty,
     COALESCE(SUM(additional_payment),0) AS "additionalPayment",COALESCE(SUM(rebill_logistic_cost),0) AS rebill
-    FROM wb_finance_rows WHERE market=$1 AND rr_date >= $2 AND rr_date < $3`, [selected, since, until]),
+    FROM wb_finance_rows WHERE market=$1 AND (${wbFinancePeriodSql()}) >= $2 AND (${wbFinancePeriodSql()}) < $3`, [selected, since, until]),
     pool.query('SELECT finished_at AS "finishedAt",finance_ok AS "financeOk",promotion_ok AS "promotionOk",finance_items AS "financeItems",ad_items AS "adItems",retry_at AS "retryAt",error FROM wb_finance_sync_runs WHERE market=$1 ORDER BY id DESC LIMIT 1',[selected]),
     pool.query('SELECT finished_at AS "lastSuccessAt",finance_items AS "lastSuccessItems" FROM wb_finance_sync_runs WHERE market=$1 AND finance_ok=1 AND finance_items>0 ORDER BY id DESC LIMIT 1',[selected]),
     pool.query('SELECT MAX(rr_date) AS "lastOperationAt" FROM wb_finance_rows WHERE market=$1',[selected])]);
@@ -217,8 +221,8 @@ reportsRouter.get('/wb-finance-summary', asyncRoute(async (req, res) => {
     COALESCE(SUM(CASE WHEN lower(payment_type) LIKE '%счет%' OR lower(payment_type) LIKE '%account%' THEN amount ELSE 0 END),0) AS "accountAdvertising"
     FROM wb_ad_costs WHERE market=$1 AND day = ANY($2::text[])`, [selected, daysList]) : { rows: [{}] };
   const row = { ...finance.rows[0], ...ads.rows[0] };
-  const wbCharges = Number(row.acquiring) + Number(row.delivery) + Number(row.storage) + Number(row.acceptance) + Number(row.deduction) + Number(row.penalty) + Number(row.rebill);
-  res.json({ ok: true, market: selected, days, range: { since, until, timezone: 'Asia/Almaty' }, sync: sync.rows[0] || null,
+  const wbCharges = Number(row.delivery) + Number(row.storage) + Number(row.acceptance) + Number(row.deduction) + Number(row.penalty) + Number(row.rebill);
+  res.json({ ok: true, market: selected, days, range: { since, until, timezone: 'Asia/Almaty', businessTimezone: 'Europe/Moscow' }, sync: sync.rows[0] || null,
     lastSuccess: lastSuccess.rows[0] || null, history: history.rows[0] || null, financeAvailable: Number(row.financeRowCount || 0) > 0, ...row,
     wbCharges, netBeforeCost: Number(row.forPay) - wbCharges + Number(row.additionalPayment) - Number(row.accountAdvertising) });
 }));
@@ -319,7 +323,7 @@ reportsRouter.get('/wb-operation-audit', asyncRoute(async (req, res) => {
   if (until - since > 366 * 86_400_000) return res.status(400).json({ ok: false, error: 'Выберите период не более года' });
   for (let time = since; time < until; time += 86_400_000) daysList.push(dateKey(time));
   const [finance, links, products, ads, history, sync] = await Promise.all([
-    pool.query('SELECT * FROM wb_finance_rows WHERE market=$1 AND rr_date >= $2 AND rr_date < $3 ORDER BY rr_date,rrd_id LIMIT 50001', [selected, since, until]),
+    pool.query(`SELECT * FROM wb_finance_rows WHERE market=$1 AND (${wbFinancePeriodSql()}) >= $2 AND (${wbFinancePeriodSql()}) < $3 ORDER BY rr_date,rrd_id LIMIT 50001`, [selected, since, until]),
     pool.query('SELECT market,sku,product_id AS "productId" FROM product_links WHERE market=$1', [selected]),
     pool.query('SELECT id,name,payload FROM warehouse_products'),
     pool.query('SELECT day,advert_id AS "advertId",campaign,amount,nm_ids AS "nmIds",raw_json FROM wb_ad_costs WHERE market=$1 AND day=ANY($2::text[]) ORDER BY day,advert_id,upd_num', [selected, daysList]),
@@ -333,12 +337,52 @@ reportsRouter.get('/wb-operation-audit', asyncRoute(async (req, res) => {
       s.product_id AS "productId",s.qty,s.payload->>'cost' AS cost,s.payload->>'stockShortage' AS "stockShortage"
       FROM warehouse_sales s JOIN marketplace_order_lines o ON o.market=s.channel AND s.external_key=o.market||':'||o.order_id||':'||o.entry_id
       WHERE s.channel=$1 AND COALESCE(o.raw_json::jsonb->'order'->>'orderUid',o.raw_json::jsonb->>'orderUid',o.raw_json::jsonb->>'srid') IN
-      (SELECT COALESCE(raw_json::jsonb->>'srid',raw_json::jsonb->>'orderUid',raw_json::jsonb->>'order_uid') FROM wb_finance_rows WHERE market=$1 AND rr_date >= $2 AND rr_date < $3)
+      (SELECT COALESCE(raw_json::jsonb->>'srid',raw_json::jsonb->>'orderUid',raw_json::jsonb->>'order_uid') FROM wb_finance_rows WHERE market=$1 AND (${wbFinancePeriodSql()}) >= $2 AND (${wbFinancePeriodSql()}) < $3)
       LIMIT 50001`, [selected, since, until])
   ]);
   if (purchases.rows.length > 50000 || costs.rows.length > 50000) return res.status(422).json({ ok: false, error: 'Слишком много записей себестоимости. Выберите более короткий период.' });
   const audit = buildWbOperationAudit({ market: selected, rows: finance.rows, links: links.rows, products: products.rows, adRows: ads.rows, purchaseRows: purchases.rows, saleCosts: costs.rows, since, until });
   res.json({ ok: true, ...audit, history: history.rows[0] || null, sync: sync.rows[0] || null });
+}));
+
+// A sticker drill-down is lifetime cached history, independent of report-period totals.
+reportsRouter.get('/wb-unit-history', asyncRoute(async (req, res) => {
+  const selected = market(req.query.market), shkId = String(req.query.shkId || '').trim(), nmId = String(req.query.nmId || '').trim();
+  const productId = String(req.query.productId || '').trim();
+  if (!['WB', 'WB2'].includes(selected) || !/^\d{1,20}$/.test(shkId) || !/^\d{1,20}$/.test(nmId) || productId.length > 150) {
+    return res.status(400).json({ ok: false, error: 'Проверьте кабинет, ШК и nmId' });
+  }
+  // Read unknown-nm expense rows too; the pure audit recovers them only through an unambiguous unit.
+  const finance = await pool.query(`SELECT * FROM wb_finance_rows WHERE market=$1
+    AND COALESCE(NULLIF(raw_json::jsonb->>'shkId',''),NULLIF(raw_json::jsonb->>'shk_id',''))=$2
+    ORDER BY rr_date,rrd_id LIMIT 5001`, [selected, shkId]);
+  if (finance.rows.length > 5000) return res.status(422).json({ ok: false, error: 'Больше 5 000 операций одного ШК. История не усечена.' });
+  const srids = [...new Set(finance.rows.map(x => {
+    const raw = typeof x.raw_json === 'string' ? JSON.parse(x.raw_json) : x.raw_json || {};
+    return String(raw.srid || raw.orderUid || raw.order_uid || '').trim();
+  }).filter(Boolean))];
+  const [links, products, purchases, costs] = await Promise.all([
+    pool.query('SELECT market,sku,product_id AS "productId" FROM product_links WHERE market=$1', [selected]),
+    pool.query('SELECT id,name,payload FROM warehouse_products'),
+    pool.query('SELECT product_id,qty,status,payload FROM warehouse_purchases WHERE status=ANY($1::text[]) LIMIT 50001', [['received', 'at_warehouse']]),
+    srids.length ? pool.query(`SELECT o.market,COALESCE(o.raw_json::jsonb->'order'->>'orderUid',o.raw_json::jsonb->>'orderUid',o.raw_json::jsonb->>'srid') AS srid,
+      s.product_id AS "productId",s.qty,s.payload->>'cost' AS cost,s.payload->>'stockShortage' AS "stockShortage"
+      FROM warehouse_sales s JOIN marketplace_order_lines o ON o.market=s.channel AND s.external_key=o.market||':'||o.order_id||':'||o.entry_id
+      WHERE s.channel=$1 AND COALESCE(o.raw_json::jsonb->'order'->>'orderUid',o.raw_json::jsonb->>'orderUid',o.raw_json::jsonb->>'srid')=ANY($2::text[])
+      LIMIT 50001`, [selected, srids]) : Promise.resolve({ rows: [] })
+  ]);
+  if (purchases.rows.length > 50000 || costs.rows.length > 50000) return res.status(422).json({ ok: false, error: 'Слишком много записей себестоимости.' });
+  const dates = finance.rows.map(x => Number(x.rr_date)).filter(x => Number.isFinite(x) && x > 0);
+  const since = dates.length ? Math.min(...dates) : 0, until = dates.length ? Math.max(...dates) + 1 : 1;
+  const audit = buildWbOperationAudit({ market: selected, rows: finance.rows, links: links.rows, products: products.rows,
+    purchaseRows: purchases.rows, saleCosts: costs.rows, since, until, allDates: true });
+  const byId = new Map(audit.operations.map(x => [x.rrdId, x]));
+  const units = audit.units.filter(u => u.shkId === shkId && (!productId || u.productKey === 'p:' + productId)
+    && u.rows.some(id => byId.get(id)?.nmId === nmId));
+  if (units.length > 1) return res.status(409).json({ ok: false, error: 'Неоднозначная привязка истории ШК. Нельзя объединить разные товары.' });
+  const operations = units.length ? units[0].rows.map(id => byId.get(id)) : [];
+  res.json({ ok: true, scope: 'unit-history', market: selected, shkId, nmId, productId,
+    operations, range: { since: operations.length ? Math.min(...operations.map(x => x.date)) : 0, until: operations.length ? Math.max(...operations.map(x => x.date)) + 1 : 1, timezone: 'Asia/Almaty' } });
 }));
 
 reportsRouter.get('/wb-finance-products', asyncRoute(async (req, res) => {
@@ -359,7 +403,10 @@ reportsRouter.get('/wb-finance-products', asyncRoute(async (req, res) => {
       NULLIF(f.raw_json::jsonb->>'commissionPercent',''),
       NULLIF(f.raw_json::jsonb->>'commission_percent','')) IS NOT NULL
       THEN ABS(f.retail_amount) ELSE 0 END) AS "commissionPctWeight",
-    SUM(f.retail_amount) AS "retailAmount",SUM(f.for_pay) AS "forPay",SUM(f.acquiring_fee) AS acquiring,
+    SUM(CASE WHEN lower(COALESCE(NULLIF(btrim(f.operation),''),btrim(f.doc_type))) IN ('продажа','возврат') THEN
+      CASE WHEN lower(COALESCE(NULLIF(btrim(f.operation),''),btrim(f.doc_type)))='возврат' THEN -1 ELSE 1 END *
+      COALESCE(ABS(f.qty)*ABS(COALESCE(NULLIF(f.raw_json::jsonb->>'retailPriceWithDisc','')::double precision,NULLIF(f.raw_json::jsonb->>'retail_price_withdisc_rub','')::double precision)),ABS(f.retail_amount)) ELSE 0 END) AS "retailAmount",
+    SUM(f.retail_amount) AS "buyerAmount",SUM(CASE WHEN lower(COALESCE(NULLIF(btrim(f.operation),''),btrim(f.doc_type)))='возврат' THEN -ABS(f.for_pay) ELSE f.for_pay END) AS "forPay",SUM(CASE WHEN lower(COALESCE(NULLIF(btrim(f.operation),''),btrim(f.doc_type)))='возврат' THEN -ABS(f.acquiring_fee) ELSE f.acquiring_fee END) AS acquiring,
     SUM(f.delivery_service) AS delivery,SUM(f.paid_storage) AS storage,SUM(f.paid_acceptance) AS acceptance,
     SUM(CASE WHEN lower(COALESCE(NULLIF(f.raw_json::jsonb->>'bonusTypeName',''),NULLIF(f.raw_json::jsonb->>'bonus_type_name',''),'')) LIKE '%wb продвижение%' THEN 0 ELSE f.deduction END) AS deduction,
     SUM(CASE WHEN lower(COALESCE(NULLIF(f.raw_json::jsonb->>'bonusTypeName',''),NULLIF(f.raw_json::jsonb->>'bonus_type_name',''),'')) LIKE '%wb продвижение%' THEN f.deduction ELSE 0 END) AS "promotionDeduction",
@@ -373,7 +420,7 @@ reportsRouter.get('/wb-finance-products', asyncRoute(async (req, res) => {
         OR (btrim(f.vendor_code)<>'' AND lower(btrim(pl.sku))=lower(btrim(f.vendor_code))))
       HAVING COUNT(DISTINCT pl.product_id)=1
     ) l ON TRUE
-    WHERE f.market=$1 AND f.rr_date >= $2 AND f.rr_date < $3
+    WHERE f.market=$1 AND (${wbFinancePeriodSql("f")}) >= $2 AND (${wbFinancePeriodSql("f")}) < $3
     GROUP BY f.vendor_code,f.nm_id,l.product_id ORDER BY SUM(f.for_pay) DESC`, [selected, since, until]),
     daysList.length
       ? pool.query('SELECT day,advert_id AS "advertId",campaign,payment_type AS "paymentType",amount,nm_ids AS "nmIds" FROM wb_ad_costs WHERE market=$1 AND day=ANY($2::text[])', [selected, daysList])
@@ -390,7 +437,7 @@ reportsRouter.get('/wb-finance-products', asyncRoute(async (req, res) => {
   }
   const consumedAdvertising = new Set();
   const products = rows.map(row => {
-    const wbCharges = Number(row.acquiring || 0) + Number(row.delivery || 0) + Number(row.storage || 0) + Number(row.acceptance || 0) + Number(row.deduction || 0) + Number(row.penalty || 0) + Number(row.rebill || 0);
+    const wbCharges = Number(row.delivery || 0) + Number(row.storage || 0) + Number(row.acceptance || 0) + Number(row.deduction || 0) + Number(row.penalty || 0) + Number(row.rebill || 0);
     const productId = String(row.productId || ''), key = productId ? 'p:' + productId : 'nm:' + String(row.nmId || '');
     const productAdvertising = productId && !consumedAdvertising.has(key) ? attribution.byProduct.get(productId) || 0 : 0;
     consumedAdvertising.add(key);
@@ -402,7 +449,7 @@ reportsRouter.get('/wb-finance-products', asyncRoute(async (req, res) => {
     return { ...row, wbCharges, wbExpenses, advertising: productAdvertising, avgDelivery, avgCommissionPct,
       netBeforeCost: Number(row.forPay || 0) - wbCharges + Number(row.additionalPayment || 0) - productAdvertising };
   });
-  res.json({ ok: true, market: selected, days, range: { since, until, timezone: 'Asia/Almaty' }, products,
+  res.json({ ok: true, market: selected, days, range: { since, until, timezone: 'Asia/Almaty', businessTimezone: 'Europe/Moscow' }, products,
     advertising: attribution.total, unmatchedAdvertising: attribution.unmatched, autoRecoveredAdvertising: attribution.autoRecovered });
 }));
 

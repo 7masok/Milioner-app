@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
+import { wbFinancePeriodSql } from '../src/wb-finance-period.js';
 
 const ui = readFileSync(new URL('../../kaspi-report-v2.js', import.meta.url), 'utf8');
 const server = readFileSync(new URL('../src/reports.js', import.meta.url), 'utf8');
@@ -21,7 +22,7 @@ async function endpoint(financeRows, adAmount = 173188) {
   let handler, response;
   const byProduct = new Map([['wings', adAmount]]);
   const c = { reportsRouter: { get: (_path, fn) => { handler = fn; } }, asyncRoute: fn => fn,
-    market: value => value, requestPeriodBounds: () => ({ since: 0, until: 86400000 }), dateKey: () => '2026-10-12',
+    wbFinancePeriodSql, market: value => value, requestPeriodBounds: () => ({ since: 0, until: 86400000 }), dateKey: () => '2026-10-12',
     pool: { async query(sql) { return { rows: sql.includes('FROM wb_finance_rows') ? financeRows : [] }; } },
     resolveWbAdvertising: async () => ({ byProduct, total: adAmount + 50, unmatched: 50, autoRecovered: adAmount,
       rows: [{ productId: 'wings', productName: 'Крылья ангела', nmIds: ['1034505393'] }] }) };

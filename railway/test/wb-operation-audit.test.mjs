@@ -149,7 +149,7 @@ function uiFixture() {
   let current = null;
   const context = { console, Intl, Date, Math, reportCustomBounds: () => ({ start: START, end: START + DAY }), MILLIONER_API: '', apiJson: async () => ({ ok: true, ...build([row(1, 'Продажа', { forPay: 700 })]) }), openStoreDetail: () => {}, alert: () => {},
     document: { getElementById: () => current, createElement: () => ({}), head: { appendChild() {} } }, showSheet(html) { markup=html;elements.clear();current = el; el.dataset.request = html.match(/data-request="([^"]+)"/)[1]; }, window: {} };
-  vm.runInNewContext(ui.replace(/\}\)\(\);\s*$/, 'window.fixture={operationHtml,draw,mount,get active(){return active}};})();'), context);
+  vm.runInNewContext(ui.replace(/\}\)\(\);\s*$/, 'window.fixture={operationHtml,historyHtml,draw,mount,get active(){return active}};})();'), context);
   return { context, el, elements, listeners, get markup(){return markup}, close() { current = null; } };
 }
 test('audit UI escapes marketplace text, respects currencies and never labels an unverified result as net profit', () => {
@@ -179,7 +179,7 @@ test('both report paths expose product entry without a separate audit button, be
   const html = readFileSync(new URL('../../index.html', import.meta.url), 'utf8');
   const server = readFileSync(new URL('../src/server.js', import.meta.url), 'utf8');
   const report = readFileSync(new URL('../../kaspi-report-v2.js', import.meta.url), 'utf8');
-  const tag = '<script src="./wb-operation-audit-v1.js?v=20261013-cost-fees"></script>';
+  const tag = '<script src="./wb-operation-audit-v1.js?v=20261013-unit-history"></script>';
   assert.ok(html.includes(tag)); assert.ok(html.indexOf(tag) < html.lastIndexOf('initOwnerAuth()'));
   assert.ok(html.includes('async function openWbFinanceReport(market,days){return openStoreDetail(market,days)}'));
   assert.ok(report.includes('wbReportProductAuditAction(market,days,'));
@@ -356,10 +356,56 @@ test('cost returns reverse only once; unknown values and foreign currencies neve
 });
 test('opened physical unit shows cost once for its buyout and margin including both logistics legs', async () => {
   const f=uiFixture(),data=buildWbOperationAudit({...base,rows:[row(1,'Логистика',{deliveryService:100}),row(2,'Продажа',{srid:'second',forPay:700}),row(3,'Логистика',{srid:'second',deliveryService:90})],saleCosts:[{productId:'a',srid:'second',qty:1,cost:160}]});
-  f.context.apiJson=async()=>({ok:true,...data});f.context.window.openWbProductOperations('WB',1,{productId:'a',name:'A'});await new Promise(r=>setImmediate(r));
-  const body=f.el.querySelector('[data-audit-body]').innerHTML;assert.ok(body.includes('Себестоимость заказа'));assert.ok(body.includes('350 ₸'));assert.ok(!body.includes('Чистая прибыль'));assert.ok(!f.markup.includes('data-audit-summary'));
+  f.context.apiJson=async url=>url.includes('/wb-unit-history')?{ok:true,scope:'unit-history',market:'WB',shkId:'unit-a',nmId:'100',operations:data.operations,range:data.range}:{ok:true,...data};f.context.window.openWbProductOperations('WB',1,{productId:'a',name:'A'});await new Promise(r=>setImmediate(r));
+  const opened=expandUnit(f,data.units[0]);await new Promise(r=>setImmediate(r));const body=opened.body.innerHTML;assert.ok(body.includes('Себестоимость заказа'));assert.ok(body.includes('350 ₸'));assert.ok(!body.includes('Чистая прибыль'));assert.ok(!f.markup.includes('data-audit-summary'));
 });
 test('cost cache reads join exact saved external key and UID, scoped to cabinet and report window', async () => {
   const out=await invoke({market:'WB',days:'0',from:String(START),to:String(START+DAY)},sql=>sql.startsWith('SELECT *')?[row(1,'Продажа',{forPay:700})]:sql.includes('FROM warehouse_sales')?[{market:'WB',srid:'order-a',productId:'a',qty:1,cost:160}]:sql.includes('warehouse_products')?base.products:sql.includes('product_links')?base.links:[]);
   assert.equal(out.result.operations[0].costKzt,160);const call=out.calls.find(x=>x.sql.includes('FROM warehouse_sales'));assert.deepEqual(call.args,['WB',START,START+DAY]);assert.ok(call.sql.includes('s.external_key=o.market'));assert.ok(call.sql.includes("->'order'->>'orderUid'"));assert.ok(out.calls.every(x=>/^SELECT /.test(x.sql)));
+});
+
+
+function expandUnit(f,group){
+ const body={innerHTML:''},details={open:true,dataset:{unitKey:group.key},querySelector:()=>body};
+ f.listeners.get('toggle')({target:details});return {body,details};
+}
+async function invokeHistory(query,respond){
+ const handler=reportsRouter.stack.find(x=>x.route?.path==='/wb-unit-history').route.stack[0].handle;
+ const old=pool.query,calls=[];pool.query=async(sql,args)=>{calls.push({sql,args});return {rows:respond(sql,args)}};let status=200,result;
+ try{await handler({query},{status(code){status=code;return this},json(x){result=x}},error=>{throw error})}finally{pool.query=old}
+ return {status,result,calls};
+}
+test('unit history reads older refusal deliveries and resale by exact cabinet/sticker; daily totals remain scoped',async()=>{
+ const old=START-20*DAY,rows=[row(1,'Логистика',{shkId:'57928048938',deliveryService:166.12},{rr_date:old}),row(2,'Логистика',{shkId:'57928048938',deliveryService:267.51},{rr_date:old}),row(3,'Продажа',{shkId:'57928048938',forPay:1395.4,retailPriceWithDisc:1850}),row(4,'Логистика',{shkId:'57928048938',deliveryService:120.34})];
+ const out=await invokeHistory({market:'WB',shkId:'57928048938',nmId:'100',productId:'a'},sql=>sql.startsWith('SELECT *')?rows:sql.includes('warehouse_products')?base.products:sql.includes('product_links')?base.links:[]);
+ assert.equal(out.status,200);assert.equal(out.result.scope,'unit-history');assert.equal(out.result.operations.length,4);assert.ok(Math.abs(out.result.operations.reduce((a,r)=>a+r.delivery,0)-553.97)<1e-8);
+ const daily=build(rows);assert.equal(daily.rowCount,2);assert.equal(daily.totals[0].delivery,120.34);assert.equal(daily.totals[0].sellerRevenue,1850);
+ assert.deepEqual(out.calls[0].args,['WB','57928048938']);assert.doesNotMatch(out.calls[0].sql,/rr_date >=|LIMIT 50001/);assert.ok(out.calls.every(x=>/^SELECT /.test(x.sql)));
+});
+test('history refuses malformed and ambiguous identities and oversized data rather than merging or truncating',async()=>{
+ assert.equal((await invokeHistory({market:'Kaspi',shkId:'1',nmId:'100'},()=>{throw Error('query forbidden')})).status,400);
+ assert.equal((await invokeHistory({market:'WB',shkId:'1 OR 1=1',nmId:'100'},()=>{throw Error('query forbidden')})).status,400);
+ assert.equal((await invokeHistory({market:'WB',shkId:'1',nmId:'100'},sql=>sql.startsWith('SELECT *')?Array(5001).fill({}):[])).status,422);
+ const data=[row(1,'Продажа',{shkId:'1',sku:'unknown',vendorCode:'first'}),row(2,'Продажа',{shkId:'1',sku:'unknown2',vendorCode:'second'})];
+ assert.equal((await invokeHistory({market:'WB',shkId:'1',nmId:'100'},sql=>sql.startsWith('SELECT *')?data:[])).status,409);
+});
+test('history keeps nm/product collisions separate and recovers missing nm expenses only for one known sticker',async()=>{
+ const rows=[row(1,'Продажа',{shkId:'1'}),row(2,'Логистика',{shkId:'1',sku:'',nmId:'',vendorCode:'',deliveryService:12},{nm_id:'',vendor_code:''}),row(3,'Продажа',{shkId:'1',sku:'barcode-b',nmId:'200'})];
+ const out=await invokeHistory({market:'WB',shkId:'1',nmId:'100',productId:'a'},sql=>sql.startsWith('SELECT *')?rows:sql.includes('warehouse_products')?base.products:sql.includes('product_links')?base.links:[]);
+ assert.equal(out.result.operations.length,1);assert.equal(out.result.operations[0].productId,'a');
+ const one=await invokeHistory({market:'WB',shkId:'1',nmId:'100',productId:'a'},sql=>sql.startsWith('SELECT *')?rows.slice(0,2):sql.includes('warehouse_products')?base.products:sql.includes('product_links')?base.links:[]);
+ assert.equal(one.result.operations.length,2);assert.equal(one.result.operations[1].nmId,'100');
+});
+test('expanding a sticker lazily loads full history, caches it, and preserves selected-date revenue',async()=>{
+ const f=uiFixture(),period=build([row(3,'Продажа',{forPay:700,retailPriceWithDisc:1000}),row(4,'Логистика',{deliveryService:120})]),full=buildWbOperationAudit({...base,allDates:true,rows:[row(1,'Логистика',{deliveryService:166},{rr_date:START-20*DAY}),row(2,'Логистика',{deliveryService:267},{rr_date:START-20*DAY}),row(3,'Продажа',{forPay:700}),row(4,'Логистика',{deliveryService:120})]});
+ const calls=[];f.context.apiJson=async url=>{calls.push(url);return url.includes('/wb-unit-history')?{ok:true,scope:'unit-history',market:'WB',shkId:'unit-a',nmId:'100',operations:full.operations,range:full.range}:{ok:true,...period}};
+ f.context.window.openWbProductOperations('WB',1,{productId:'a'});await new Promise(r=>setImmediate(r));assert.equal(calls.length,1);
+ const html=f.el.querySelector('[data-audit-body]').innerHTML;assert.ok(html.includes('Выручка за период'));assert.ok(html.includes('1 000 ₸'));const snapshot=JSON.stringify(f.context.window.fixture.active.data);
+ const opened=expandUnit(f,period.units[0]);await new Promise(r=>setImmediate(r));assert.ok(opened.body.innerHTML.includes('553 ₸'));assert.ok(opened.body.innerHTML.includes('Все загруженные операции ШК'));assert.equal(calls.length,2);assert.ok(!calls[1].includes('days='));assert.equal(JSON.stringify(f.context.window.fixture.active.data),snapshot);
+ expandUnit(f,period.units[0]);await new Promise(r=>setImmediate(r));assert.equal(calls.length,2);
+});
+test('closed sheets cannot receive delayed sticker history and wrong stickers are rejected with retry',async()=>{
+ const f=uiFixture(),data=build([row(1,'Продажа')]);let resolve;
+ f.context.apiJson=async url=>url.includes('/wb-unit-history')?new Promise(r=>{resolve=r}):{ok:true,...data};f.context.window.openWbProductOperations('WB',1,{productId:'a'});await new Promise(r=>setImmediate(r));const opened=expandUnit(f,data.units[0]),loading=opened.body.innerHTML;f.close();resolve({ok:true,scope:'unit-history',market:'WB',shkId:'unit-a',nmId:'100',operations:data.operations,range:data.range});await new Promise(r=>setImmediate(r));assert.equal(opened.body.innerHTML,loading);
+ const g=uiFixture();g.context.apiJson=async url=>url.includes('/wb-unit-history')?{ok:true,scope:'unit-history',market:'WB',shkId:'other',nmId:'100',operations:[],range:data.range}:{ok:true,...data};g.context.window.openWbProductOperations('WB',1,{productId:'a'});await new Promise(r=>setImmediate(r));const error=expandUnit(g,data.units[0]);await new Promise(r=>setImmediate(r));assert.ok(error.body.innerHTML.includes('Повторить'));assert.ok(error.body.innerHTML.includes('другому товару или ШК'));
 });

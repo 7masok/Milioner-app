@@ -1,3 +1,4 @@
+import { wbFinancePeriodDate } from './wb-finance-period.js';
 // Read-only audit of the persisted WB report. No warehouse/FIFO writes or upstream calls.
 const text = value => String(value ?? '').trim();
 const articleKey = value => text(value).toLocaleLowerCase('ru-RU');
@@ -11,7 +12,7 @@ function field(raw, names, fallback) {
   for (const name of names) if (raw[name] !== undefined && raw[name] !== null && text(raw[name]) !== '') return raw[name];
   return fallback;
 }
-const moneyFields = ['revenue', 'forPay', 'commission', 'commissionVat', 'acquiring', 'delivery', 'rebill', 'storage', 'acceptance', 'deduction', 'promotionDeduction', 'penalty', 'additionalPayment', 'settlement', 'beforeAdsAndCost', 'legacyBeforeAdsAndCost'];
+const moneyFields = ['revenue', 'sellerRevenue', 'forPay', 'commission', 'commissionVat', 'acquiring', 'delivery', 'rebill', 'storage', 'acceptance', 'deduction', 'promotionDeduction', 'penalty', 'additionalPayment', 'settlement', 'beforeAdsAndCost', 'legacyBeforeAdsAndCost'];
 function totals() { return { rows: 0, saleQty: 0, returnQty: 0, ...Object.fromEntries(moneyFields.map(key => [key, 0])) }; }
 function add(target, row) {
   target.rows++; target.saleQty += row.saleQty; target.returnQty += row.returnQty;
@@ -61,6 +62,7 @@ function normalized(row, market) {
     deduction: allDeduction - promotionDeduction, promotionDeduction,
     penalty: amount(['penalty'], 'penalty'), additionalPayment: amount(['additionalPayment', 'additional_payment'], 'additional_payment')
   };
+  result.sellerRevenue = sale || returned ? result.sellerUnitPrice !== null ? (sale ? qty : -qty) * Math.abs(result.sellerUnitPrice) : result.revenue : 0;
   const charges = result.delivery + result.rebill + result.storage + result.acceptance + result.deduction + result.penalty;
   // forPay already includes the commission/payment fees. The columns remain visible for audit only.
   result.beforeAdsAndCost = result.forPay - charges + result.additionalPayment;
@@ -147,12 +149,12 @@ function costResolver(index, purchaseRows, saleCosts, market) {
     row.afterCostBeforeAds = row.currency === 'KZT' && cost ? row.beforeAdsAndCost - row.costKzt : null;
   };
 }
-export function buildWbOperationAudit({ market, rows = [], links = [], products = [], adRows = [], purchaseRows = [], saleCosts = [], since = 0, until = Infinity }) {
+export function buildWbOperationAudit({ market, rows = [], links = [], products = [], adRows = [], purchaseRows = [], saleCosts = [], since = 0, until = Infinity, allDates = false }) {
   if (!['WB', 'WB2'].includes(market)) throw new Error('market must be WB or WB2');
   const index = indexes(links.filter(x => !x.market || x.market === market), products, market), unique = new Map();
   let duplicateRows = 0;
   for (const row of rows) {
-    if (row.market && row.market !== market || number(row.rr_date) < since || number(row.rr_date) >= until) continue;
+    if (row.market && row.market !== market || !allDates && (wbFinancePeriodDate(row) < since || wbFinancePeriodDate(row) >= until)) continue;
     const key = id(row.rrd_id);
     if (!key) throw new Error('WB report row has no rrdId');
     if (unique.has(key)) { duplicateRows++; if (number(row.updated_at) < number(unique.get(key).updated_at)) continue; }
@@ -231,8 +233,8 @@ export function buildWbOperationAudit({ market, rows = [], links = [], products 
     const grouped = productRows.reduce((sum, group) => sum + number(group.totals.find(x => x.currency === currency)?.settlement), 0);
     return { currency, sourceSettlement: total.settlement, groupedSettlement: grouped, difference: total.settlement - grouped, balanced: Math.abs(total.settlement - grouped) < 0.005 };
   });
-  return { market, range: { since, until, timezone: 'Asia/Almaty' }, rowCount: operations.length, duplicateRows, operations, products: productRows,
+  return { market, range: { since, until, timezone: 'Asia/Almaty', businessTimezone: 'Europe/Moscow' }, rowCount: operations.length, duplicateRows, operations, products: productRows,
     orders: [...orders.values()], units: [...units.values()].map(unit => ({ ...unit, srids: [...unit.srids] })), totals: sums(currencies), advertising, reconciliation,
     coverage: { linkedRows: operations.filter(x => x.productId).length, orderRows: operations.filter(x => x.srid).length, unitRows: operations.filter(x => x.shkId).length },
-    basis: 'WB report operation date; forPay already includes commission, VAT and acquiring; saved order costs or explicit KZT estimates; no per-unit ad allocation' };
+    basis: 'WB Moscow event day (posting day for other charges); forPay already includes commission, VAT and acquiring; saved order costs or explicit KZT estimates; no per-unit ad allocation' };
 }
