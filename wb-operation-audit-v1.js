@@ -7,7 +7,13 @@ const num=value=>Number.isFinite(Number(value))?Number(value):0;
 const amount=(value,currency='UNKNOWN')=>new Intl.NumberFormat('ru-RU',{maximumFractionDigits:2}).format(num(value))+(currency==='KZT'?' ₸':currency==='RUB'?' ₽':currency==='UNKNOWN'?'':(' '+escape(currency)));
 const date=value=>value?new Date(Number(value)).toLocaleDateString('ru-RU',{timeZone:'Asia/Almaty'}):'—';
 const title=market=>market==='WB2'?'WB 2':'WB 1';
-window.wbOperationAuditButton=function(market,days){return ['WB','WB2'].includes(market)?'<button type="button" class="btn full" style="margin-top:8px" onclick="openWbOperationAudit(\''+market+'\','+Number(days)+')">Операции WB</button>':''};
+window.wbReportProductAuditAction=function(market,days,item={}){
+ if(!['WB','WB2'].includes(market))return '';
+ const selected={productId:String(item.productId||''),vendorCode:String(item.vendorCode||''),nmId:String(item.nmId||''),barcode:String(item.barcode||''),name:String(item.name||item.title||item.vendorCode||'Товар WB')};
+ return 'openWbProductOperations('+JSON.stringify(market)+','+Number(days)+','+JSON.stringify(selected)+')';
+};
+window.wbReportProductAuditAttrs=function(market,days,item){const action=window.wbReportProductAuditAction(market,days,item);return action?'role="button" tabindex="0" onclick="'+escape(action)+'" onkeydown="'+escape("if(event.key==='Enter'||event.key===' '){event.preventDefault();"+action+"}")+'"':''};
+window.openWbProductOperations=function(market,days,item={}){window.openWbOperationAudit(market,days,Number(days)===0?reportCustomBounds():null,{item,product:item.productId?'p:'+item.productId:'',mode:'units'})};
 function bounds(days,range){
  if(Number(days)!==0)return '';
  const b=range||reportCustomBounds();
@@ -57,7 +63,10 @@ function mount(ctx){
  const comparisons=d.totals.map(x=>line('Разница с текущим расчётом до рекламы и себестоимости',x.calculationDelta,x.currency)).join('');
  el.querySelector('[data-audit-summary]').innerHTML=warnings.map(w=>'<div class="link-note">'+escape(w)+'</div>').join('')+'<div class="muted">'+date(d.range.since)+' — '+date(d.range.until-1)+' · '+d.rowCount+' загруженных оп. · выкупы: '+d.totals.reduce((sum,x)=>sum+num(x.saleQty),0)+' шт. · возвраты: '+d.totals.reduce((sum,x)=>sum+num(x.returnQty),0)+' шт.</div>'+totalsHtml(d.totals)+'<details class="item" style="margin-top:8px"><summary><b>Сверка и привязки</b></summary><div class="muted" style="margin-top:7px">Товар: '+d.coverage.linkedRows+'/'+d.rowCount+' · ID заказа: '+d.coverage.orderRows+'/'+d.rowCount+' · ШК: '+d.coverage.unitRows+'/'+d.rowCount+'</div>'+reconciliation+comparisons+'<div class="muted" style="margin-top:7px">Это сверка раскладки загруженных строк, а не подтверждение полного отчёта WB. Период — по дате финансовой операции. Комиссия и эквайринг уже входят в «К перечислению». Прибыль после рекламы и FIFO появится после проверки связей себестоимости.</div></details>';
  ctx.rows=new Map(d.operations.map(x=>[x.rrdId,x]));ctx.products=new Map(d.products.map(x=>[x.key,x]));
- el.querySelector('[data-audit-product]').innerHTML='<option value="">Все товары</option>'+d.products.map(x=>'<option value="'+escape(x.key)+'">'+escape(x.name)+(x.linked?'':' · без привязки')+'</option>').join('');
+ // An absent/ambiguous selected product must never silently open every store operation.
+ if(ctx.item&&!ctx.item.productId){const item=ctx.item,clean=x=>String(x||'').trim().toLocaleLowerCase('ru-RU'),keys=new Set(d.operations.filter(x=>item.barcode?x.barcode===item.barcode:item.nmId?x.nmId===item.nmId&&(!item.vendorCode||clean(x.vendorCode)===clean(item.vendorCode)):item.vendorCode&&clean(x.vendorCode)===clean(item.vendorCode)).map(x=>x.productKey));ctx.product=keys.size===1?[...keys][0]:'__selected_missing__'}
+ const missing=ctx.product&&!ctx.products.has(ctx.product)?'<option value="'+escape(ctx.product)+'">'+escape(ctx.item?.name||'Выбранный товар')+' · нет операций за период</option>':'';
+ el.querySelector('[data-audit-product]').innerHTML='<option value="">Все товары</option>'+missing+d.products.map(x=>'<option value="'+escape(x.key)+'">'+escape(x.name)+(x.linked?'':' · без привязки')+'</option>').join('');
  el.querySelector('[data-audit-controls]').hidden=false;draw(ctx);
 }
 async function load(ctx,refresh=false){const el=root(ctx);if(!el)return;const seq=ctx.loadSeq=(ctx.loadSeq||0)+1;el.querySelector('[data-audit-body]').innerHTML='<div class="empty">Загружаю операции…</div>';try{
@@ -66,21 +75,21 @@ async function load(ctx,refresh=false){const el=root(ctx);if(!el)return;const se
  else{data=await apiJson(MILLIONER_API+'/api/wb-operation-audit'+ctx.query);if(!data?.ok||!Array.isArray(data.operations))throw new Error('Некорректный ответ отчёта');cache.set(ctx.query,{at:Date.now(),data})}
  if(!root(ctx)||ctx.loadSeq!==seq)return;ctx.data=data;mount(ctx);
  }catch(error){const target=root(ctx);if(target&&ctx.loadSeq===seq)target.querySelector('[data-audit-body]').innerHTML='<div class="empty">Не удалось загрузить операции: '+escape(error.message||error)+'</div><button class="btn full" type="button" data-audit-action="refresh">Повторить</button>'}}
-window.openWbOperationAudit=function(market,days=30,range=null){
+window.openWbOperationAudit=function(market,days=30,range=null,selection=null){
  if(!['WB','WB2'].includes(market))return;
  const n=Number(days)===-1?-1:Number(days)===0?0:Math.max(1,Math.min(365,Math.round(Number(days)||30)));
- const back=root(active)?active.back:{market,days:n};
- const ctx={market,days:n,range,back,query:'?market='+market+'&days='+n+bounds(n,range),key:market+':'+Date.now()+':'+Math.random(),q:'',product:'',filter:'all',mode:'products',page:1};active=ctx;
+ const previous=root(active)&&active.market===market?active:null,back=previous?previous.back:{market,days:n},chosen=selection||previous||{};
+ const ctx={market,days:n,range,back,query:'?market='+market+'&days='+n+bounds(n,range),key:market+':'+Date.now()+':'+Math.random(),q:'',product:chosen.product||'',item:chosen.item||null,filter:'all',mode:chosen.mode||'products',page:1};active=ctx;
  showSheet('<div id="wbOperationAudit" data-request="'+escape(ctx.key)+'"><h3>Операции '+title(market)+'</h3><div class="period" style="flex-wrap:wrap">'+[[1,'Сегодня'],[-1,'Вчера'],[7,'7 дней'],[30,'30 дней']].map(([d,label])=>'<button type="button" class="chip '+(n===d?'active':'')+'" data-audit-days="'+d+'">'+label+'</button>').join('')+'</div><details style="margin:8px 0"><summary>Свой период</summary><div class="two"><div class="field"><label>С</label><input type="date" data-audit-from></div><div class="field"><label>По</label><input type="date" data-audit-to></div></div><button type="button" class="btn full" data-audit-action="range">Показать</button></details><div data-audit-summary></div><div data-audit-controls hidden><div class="field" style="margin-top:12px"><input data-audit-search placeholder="Товар, артикул, ШК или ID заказа" aria-label="Поиск операций WB"></div><div class="two"><select class="btn" data-audit-product aria-label="Товар"><option value="">Все товары</option></select><select class="btn" data-audit-filter aria-label="Привязка"><option value="all">Все операции</option><option value="unlinked">Без товара</option><option value="no_order">Без ID заказа</option></select></div><div class="integration-actions" style="margin:8px 0">'+[['products','Товары'],['orders','Заказы'],['units','По ШК'],['ads','Реклама']].map(([mode,label])=>'<button type="button" class="btn" data-audit-mode="'+mode+'">'+label+'</button>').join('')+'</div></div><div data-audit-body></div><div class="integration-actions" data-audit-pager></div><button type="button" class="btn full" style="margin-top:10px" data-audit-action="refresh">Обновить</button><button type="button" class="btn full" style="margin-top:8px" data-audit-action="back">Назад к отчёту</button></div>');
  const el=root(ctx);if(!el)return;
  el.addEventListener('input',event=>{if(event.target.matches('[data-audit-search]')){ctx.q=event.target.value;ctx.page=1;draw(ctx)}});
- el.addEventListener('change',event=>{if(event.target.matches('[data-audit-product]'))ctx.product=event.target.value;else if(event.target.matches('[data-audit-filter]'))ctx.filter=event.target.value;else return;ctx.page=1;draw(ctx)});
+ el.addEventListener('change',event=>{if(event.target.matches('[data-audit-product]')){ctx.product=event.target.value;ctx.item=null}else if(event.target.matches('[data-audit-filter]'))ctx.filter=event.target.value;else return;ctx.page=1;draw(ctx)});
  el.addEventListener('click',event=>{
   const button=event.target.closest('button');if(!button||!el.contains(button))return;
   if(button.dataset.auditDays){openWbOperationAudit(market,Number(button.dataset.auditDays));return}
   if(button.dataset.auditMode){ctx.mode=button.dataset.auditMode;ctx.page=1;draw(ctx);return}
   const action=button.dataset.auditAction;
-  if(action==='product'){ctx.product=button.dataset.key;ctx.mode='orders';ctx.page=1;draw(ctx)}
+  if(action==='product'){ctx.product=button.dataset.key;ctx.item=null;ctx.mode='orders';ctx.page=1;draw(ctx)}
   else if(action==='prev'||action==='next'){ctx.page+=action==='prev'?-1:1;draw(ctx)}
   else if(action==='refresh')load(ctx,true);
   else if(action==='back'){active=null;openStoreDetail(ctx.back.market,ctx.back.days)}
