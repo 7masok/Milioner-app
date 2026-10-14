@@ -179,7 +179,7 @@ test('both report paths expose product entry without a separate audit button, be
   const html = readFileSync(new URL('../../index.html', import.meta.url), 'utf8');
   const server = readFileSync(new URL('../src/server.js', import.meta.url), 'utf8');
   const report = readFileSync(new URL('../../kaspi-report-v2.js', import.meta.url), 'utf8');
-  const tag = '<script src="./wb-operation-audit-v1.js?v=20261013-order-ads"></script>';
+  const tag = '<script src="./wb-operation-audit-v1.js?v=20261014-period-sales"></script>';
   assert.ok(html.includes(tag)); assert.ok(html.indexOf(tag) < html.lastIndexOf('initOwnerAuth()'));
   assert.ok(html.includes('async function openWbFinanceReport(market,days){return openStoreDetail(market,days)}'));
   assert.ok(report.includes('wbReportProductAuditAction(market,days,'));
@@ -298,11 +298,11 @@ test('report product click shows units built from lowercase finance articles ins
 test('product-only missing-unit count and advertising totals exclude other products', async () => {
   const f=uiFixture();
   const data=buildWbOperationAudit({...base,links:[...base.links,{sku:'200',productId:'b'}],rows:[
-    row(1,'Продажа'),row(2,'Логистика',{shkId:0}),row(3,'Продажа',{sku:'barcode-b',nmId:'200',shkId:0,srid:'b'}),row(4,'Логистика',{sku:'barcode-b',nmId:'200',shkId:0,srid:'b'})
+    row(1,'Продажа'),row(2,'Продажа',{shkId:0}),row(3,'Продажа',{sku:'barcode-b',nmId:'200',shkId:0,srid:'b'}),row(4,'Логистика',{sku:'barcode-b',nmId:'200',shkId:0,srid:'b'}),row(5,'Логистика',{shkId:0})
   ],adRows:[{amount:50,nmIds:['100']},{amount:900000,nmIds:['200']}]});
   f.context.apiJson=async()=>({ok:true,...data});
   f.context.window.openWbProductOperations('WB',30,{productId:'a',name:'A'});await new Promise(r=>setImmediate(r));
-  assert.ok(f.elements.get('[data-audit-body]').innerHTML.includes('Без ШК: 1 оп.'));
+  assert.ok(f.elements.get('[data-audit-body]').innerHTML.includes('Продажи без ШК: 1 оп.'));
   f.listeners.get('click')({target:{closest:()=>({dataset:{auditMode:'ads'}})}});
   const html=f.elements.get('[data-audit-body]').innerHTML;
   assert.ok(html.includes('Реклама товара'));assert.ok(!html.includes('Вся реклама'));assert.ok(!html.includes('900'));
@@ -452,14 +452,61 @@ test('unattributed advertising keeps unit profit unknown without mutating source
  const before=JSON.stringify(data),html=uiFixture().context.window.fixture.historyHtml(data);assert.equal(JSON.stringify(data),before);assert.ok(html.includes('>—</b>'));assert.ok(html.includes('Не хватает связи с заказом'));assert.ok(!html.includes('Реклама учитывается по товару'));assert.ok(!html.includes('Чистая прибыль'));
 });
 
-test('period revenue and profit stay together; opening full history cannot substitute tomorrow sale for today expense',async()=>{
+test('period metrics stay scoped and tomorrow sale cannot admit an expense-only sticker today',async()=>{
  const rows=[row(1,'Логистика',{shkId:'58490824571',rebillLogisticCost:7.19}),row(2,'Продажа',{shkId:'58490824571',retailPriceWithDisc:1687.05,forPay:1089.48},{rr_date:START+DAY}),row(3,'Логистика',{shkId:'58490824571',deliveryService:162.68,rebillLogisticCost:10.73},{rr_date:START+DAY})],options={...base,rows,purchaseRows:[{productId:'a',qty:1,status:'received',landedUnitCost:174.92531647326632}]};
  const period=buildWbOperationAudit(options),full=buildWbOperationAudit({...options,allDates:true}),f=uiFixture();
  f.context.apiJson=async url=>url.includes('/wb-unit-history')?{ok:true,scope:'unit-history',market:'WB',shkId:'58490824571',nmId:'100',productId:'a',operations:full.operations,range:full.range}:{ok:true,...period};
  f.context.window.openWbProductOperations('WB',1,{productId:'a'});await new Promise(r=>setImmediate(r));
- const summary=f.el.querySelector('[data-audit-body]').innerHTML;
+ const summary=f.context.window.fixture.periodMetricsHtml(period.operations);
  assert.ok(summary.includes('wb-audit-period'));assert.ok(summary.includes('Выручка за период</span><b>0 ₸'));assert.ok(summary.includes('Прибыль за период · после рекламы'));assert.ok(summary.includes('-7,19 ₸'));assert.ok(!summary.includes('733,95'));
- const opened=expandUnit(f,period.units[0]);await new Promise(r=>setImmediate(r));assert.ok(opened.body.innerHTML.includes('Прибыль после рекламы · весь путь'));assert.ok(opened.body.innerHTML.includes('733,95 ₸'));assert.equal(f.el.querySelector('[data-audit-body]').innerHTML,summary);
+ const body=f.el.querySelector('[data-audit-body]').innerHTML;
+ assert.ok(body.includes('Нет продаж товара за выбранный период'));assert.ok(!body.includes('data-unit-key'));assert.ok(!body.includes('58490824571'));
+ const history=f.context.window.fixture.historyHtml(full);assert.ok(history.includes('Прибыль после рекламы · весь путь'));assert.ok(history.includes('733,95 ₸'));
+});
+test('period sticker list keeps sales and their expenses, hides expense/return/ad-only stickers, preserves other views',async()=>{
+ const rows=[row(1,'Продажа',{shkId:'sold',srid:'sold-order',retailPriceWithDisc:1000,forPay:700}),
+  row(2,'Логистика',{shkId:'sold',srid:'sold-order',deliveryService:120}),
+  row(3,'Логистика',{shkId:'expense-only',srid:'expense-order',deliveryService:90}),
+  row(4,'Возврат',{shkId:'return-only',srid:'return-order',retailPriceWithDisc:1000,forPay:700}),
+  row(5,'Продажа',{shkId:'sold-and-returned',srid:'returned-order',retailPriceWithDisc:1000,forPay:700}),
+  row(6,'Возврат',{shkId:'sold-and-returned',srid:'returned-order',retailPriceWithDisc:1000,forPay:700}),
+  row(7,'Продажа',{shkId:'other-product',srid:'other-order',sku:'barcode-b',retailPriceWithDisc:1000,forPay:700})];
+ const data=buildWbOperationAudit({...base,rows,saleCosts:[{productId:'a',srid:'sold-order',qty:1,cost:200}]});
+ // An allocated ad alone is another operation, never proof of a sale.
+ data.operations.push({...data.operations[0],rrdId:'ad-only',kind:'advertising',shkId:'ad-only',saleQty:0,sellerRevenue:0,forPay:0,beforeAdsAndCost:0,orderAdvertising:20});
+ data.units.push({key:'ad-only',shkId:'ad-only',rows:['ad-only']});
+ const before=JSON.stringify(data),f=uiFixture();f.context.apiJson=async()=>({ok:true,...data});
+ f.context.window.openWbProductOperations('WB',1,{productId:'a'});await new Promise(r=>setImmediate(r));
+ const ctx=f.context.window.fixture.active,body=f.el.querySelector('[data-audit-body]').innerHTML;
+ assert.ok(body.includes('ШК sold ·'));assert.ok(body.includes('2 оп. за период'));assert.ok(body.includes('380 ₸'));
+ assert.ok(body.includes('ШК sold-and-returned'));assert.ok(body.includes('Выручка за период</span><b>0 ₸'));
+ for(const hidden of ['expense-only','return-only','ad-only','other-product'])assert.ok(!body.includes('ШК '+hidden));
+ assert.equal((body.match(/data-unit-key=/g)||[]).length,2);assert.equal(JSON.stringify(data),before);
+ ctx.mode='orders';f.context.window.fixture.draw(ctx);
+ const orders=f.el.querySelector('[data-audit-body]').innerHTML;assert.ok(orders.includes('expense-order'));assert.ok(orders.includes('return-order'));
+ assert.equal(JSON.stringify(data),before);
+});
+test('sticker sale filter precedes pagination and recomputes on custom period changes using WB event dates',async()=>{
+ const rows=Array.from({length:25},(_,i)=>row(i+1,'Логистика',{shkId:'fee-'+i,srid:'fee-'+i,deliveryService:12}));
+ rows.push(...Array.from({length:21},(_,i)=>row(i+101,'Продажа',{shkId:'sale-'+i,srid:'sale-'+i,retailPriceWithDisc:1000})));
+ // Posting day is outside the period; the actual sale event is inside it.
+ rows.push(row(200,'Продажа',{shkId:'event-sale',srid:'event-sale',saleDt:'2026-10-01T12:00:00',retailPriceWithDisc:1000},{rr_date:START+3*DAY,sale_date:Date.parse('2026-10-01T12:00:00+03:00')}));
+ // Posting day is inside the period; the sale event is outside it.
+ rows.push(row(201,'Продажа',{shkId:'old-sale',srid:'old-sale',saleDt:'2026-09-30T12:00:00',retailPriceWithDisc:1000},{sale_date:Date.parse('2026-09-30T12:00:00+03:00')}));
+ const data=build(rows),f=uiFixture();f.context.apiJson=async()=>({ok:true,...data});
+ f.context.window.openWbProductOperations('WB',0,{productId:'a'});await new Promise(r=>setImmediate(r));
+ let ctx=f.context.window.fixture.active,body=f.el.querySelector('[data-audit-body]').innerHTML;
+ assert.equal((body.match(/data-unit-key=/g)||[]).length,20);assert.ok(!body.includes('ШК fee-'));assert.ok(!body.includes('old-sale'));
+ assert.ok(f.el.querySelector('[data-audit-pager]').innerHTML.includes('22 поз. · 1 / 2'));
+ ctx.page=2;f.context.window.fixture.draw(ctx);body=f.el.querySelector('[data-audit-body]').innerHTML;
+ assert.equal((body.match(/data-unit-key=/g)||[]).length,2);assert.ok(body.includes('event-sale'));
+ const next=buildWbOperationAudit({...base,rows:[row(300,'Логистика',{shkId:'event-sale',deliveryService:10},{rr_date:START+DAY})],since:START+DAY,until:START+2*DAY});
+ f.context.apiJson=async()=>({ok:true,...next});f.context.openWbOperationAudit=f.context.window.openWbOperationAudit;
+ f.el.querySelector('[data-audit-from]').value='2026-10-02';f.el.querySelector('[data-audit-to]').value='2026-10-02';
+ f.listeners.get('click')({target:{closest:()=>({dataset:{auditAction:'range'}})}});await new Promise(r=>setImmediate(r));
+ ctx=f.context.window.fixture.active;assert.equal(ctx.product,'p:a');assert.equal(ctx.page,1);
+ assert.ok(f.el.querySelector('[data-audit-body]').innerHTML.includes('Нет продаж товара за выбранный период'));
+ assert.equal(f.el.querySelector('[data-audit-pager]').innerHTML,'');
 });
 test('period profit uses known cost once, preserves unknown/foreign amounts and never allocates product ads',()=>{
  const f=uiFixture(),known=buildWbOperationAudit({...base,rows:[row(1,'Продажа',{retailPriceWithDisc:1000,forPay:700}),row(2,'Логистика',{deliveryService:100})],saleCosts:[{productId:'a',srid:'order-a',qty:1,cost:200}],adRows:[{nmIds:['100'],currency:'KZT',amount:99}]});
