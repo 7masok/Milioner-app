@@ -179,7 +179,7 @@ test('both report paths expose product entry without a separate audit button, be
   const html = readFileSync(new URL('../../index.html', import.meta.url), 'utf8');
   const server = readFileSync(new URL('../src/server.js', import.meta.url), 'utf8');
   const report = readFileSync(new URL('../../kaspi-report-v2.js', import.meta.url), 'utf8');
-  const tag = '<script src="./wb-operation-audit-v1.js?v=20261014-period-sales"></script>';
+  const tag = '<script src="./wb-operation-audit-v1.js?v=20261014-order-date"></script>';
   assert.ok(html.includes(tag)); assert.ok(html.indexOf(tag) < html.lastIndexOf('initOwnerAuth()'));
   assert.ok(html.includes('async function openWbFinanceReport(market,days){return openStoreDetail(market,days)}'));
   assert.ok(report.includes('wbReportProductAuditAction(market,days,'));
@@ -544,6 +544,38 @@ test('UI opens a linked sticker without requiring first-row nmId, accepts canoni
 });
 
 function placedOrders(count=25){return Array.from({length:count},(_,i)=>({market:'WB',order_id:String(i+1),entry_id:String(i+1),creation_date:START+8*3600000,sku:'item',qty:1,state:i%2?'cancelled':'new',raw_json:JSON.stringify({order:{orderUid:'placed-'+i,nmId:'100',skus:['barcode-a']},identity:{nmId:'100',barcode:'barcode-a',article:'item'}})}))}
+test('transport posting date does not conflict with real order date or suppress screenshot profit',async()=>{
+ const purchaseDate='2026-09-24T17:34:16Z',saleDay=Date.parse('2026-10-11T00:00:00+05:00');
+ const rows=[row(901,'Возмещение издержек по перевозке/по складским операциям с товаром',{shkId:'58347387921',orderDt:'2026-10-01T00:00:00Z',rebillLogisticCost:0.37,nmId:0},{nm_id:''}),
+  row(902,'Логистика',{shkId:'58347387921',orderDt:purchaseDate,deliveryService:164.76},{rr_date:saleDay}),
+  row(903,'Продажа',{shkId:'58347387921',orderDt:purchaseDate,retailPriceWithDisc:1857.26,forPay:1297.02,acquiringFee:68.08},{rr_date:saleDay})];
+ const options={...base,rows,orderFinanceRows:rows,allocationAdRows:[{day:'2026-09-24',nmIds:['100'],amount:200,currency:'KZT'},{day:'2026-10-01',nmIds:['100'],amount:50,currency:'KZT'}],purchaseRows:[{productId:'a',qty:1,status:'received',landedUnitCost:174.92531647326632}],since:saleDay,until:saleDay+DAY};
+ const before=JSON.stringify(options),data=buildWbOperationAudit(options);
+ assert.ok(data.operations.every(r=>r.orderDay==='2026-09-24'&&!r.adUnknown));
+ assert.equal(data.advertisingAllocation.find(x=>x.day==='2026-10-01').qty,0);
+ const full=buildWbOperationAudit({...options,allDates:true});
+ assert.equal(full.operations.filter(r=>r.kind==='advertising').length,1);assert.equal(full.operations.find(r=>r.kind==='advertising').orderDay,'2026-09-24');
+ assert.equal(full.operations.find(r=>r.kind==='advertising').orderAdvertising,200);assert.equal(full.totals[0].rebill,0.37);
+ const f=uiFixture();f.context.apiJson=async()=>({ok:true,...data});f.context.window.openWbProductOperations('WB',0,{productId:'a'});await new Promise(r=>setImmediate(r));
+ const body=f.el.querySelector('[data-audit-body]').innerHTML;assert.ok(body.includes('Заказ: 24.09.2026'));assert.ok(body.includes('≈ 957,33 ₸'));assert.ok(!body.includes('Заказ: 01.10.2026'));
+ assert.equal(JSON.stringify(options),before);
+});
+test('order date shown below sticker uses cached placement, not report day or conflicting finance fallback',async()=>{
+ const rows=[row(911,'Продажа',{srid:'placed-0',orderDt:'2026-10-02',retailPriceWithDisc:1000}),row(912,'Логистика',{srid:'placed-0',orderDt:'2026-10-02',deliveryService:100})],data=buildWbOperationAudit({...base,rows,orderRows:placedOrders(1)});
+ assert.ok(data.operations.every(r=>r.orderDay==='2026-10-01'));
+ const f=uiFixture();f.context.apiJson=async()=>({ok:true,...data});f.context.window.openWbProductOperations('WB',1,{productId:'a'});await new Promise(r=>setImmediate(r));
+ const body=f.el.querySelector('[data-audit-body]').innerHTML;assert.ok(body.includes('Заказ: 01.10.2026'));assert.ok(!body.includes('Заказ: 02.10.2026'));
+});
+test('sticker shows unknown or multiple sale order dates without substituting expense dates',async()=>{
+ for(const [rows,label] of [
+  [[row(921,'Продажа',{orderDt:''})],'Заказ: —'],
+  [[row(922,'Продажа',{orderDt:'2026-09-20',srid:'first'}),row(923,'Продажа',{orderDt:'2026-09-24',srid:'second'}),row(924,'Удержание',{orderDt:'2026-10-01',srid:'fee'})],'Заказы: 20.09.2026, 24.09.2026'],
+  [[row(925,'Продажа',{orderDt:'2026-09-20',srid:'same'}),row(926,'Продажа',{orderDt:'2026-09-24',srid:'same'})],'Заказ: —']
+ ]){
+  const f=uiFixture(),data=build(rows);f.context.apiJson=async()=>({ok:true,...data});f.context.window.openWbProductOperations('WB',1,{productId:'a'});await new Promise(r=>setImmediate(r));
+  const body=f.el.querySelector('[data-audit-body]').innerHTML;assert.ok(body.includes(label));assert.equal((body.match(/Заказ(?:ы)?: /g)||[]).length,1);
+ }
+});
 function orderAdExample(extra={}){
  const rows=[row(801,'Продажа',{srid:'placed-0',shkId:'58347387921',orderDt:'2026-10-01T06:00:00Z',retailPriceWithDisc:1857.26,retailAmount:1395.6,forPay:1297.02,acquiringFee:68.08},{rr_date:START+DAY}),row(802,'Логистика',{srid:'placed-0',shkId:'58347387921',orderDt:'2026-10-01T06:00:00Z',deliveryService:164.76},{rr_date:START+DAY})];
  const ads=[{day:'2026-10-01',nmIds:['100'],amount:5000,currency:'KZT'}];

@@ -50,5 +50,5 @@ export function allocateWbOrderAdvertising({market,orders=[],finance=[],advertis
     if (!days || days.includes(b.day)) allocation.push({...b,qty,perUnit:qty?b.amount/qty:null,allocated:assigned,unallocated:Math.abs(b.amount-assigned)<0.005?0:b.amount-assigned,
       reason:qty?'allocated':'no_orders',estimated:true});
   }
-  return {entries,allocation,conflicts:[...conflicts]};
+  return {entries,allocation,orders:[...placed.values()],conflicts:[...conflicts]};
 }
