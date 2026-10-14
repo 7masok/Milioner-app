@@ -37,7 +37,7 @@ function dateKey(timestamp) {
 }
 
 // Cached placed orders include cancellations. Finance orderDt supplies orders from
-// WB stock; orderUid deduplication prevents counting their later sale a second time.
+// WB stock; exact cached rid / finance srid prevents counting their later sale twice.
 async function readWbOrderAdvertisingInputs(selected, financeRows, requestedDays=[]) {
   const days=new Set(requestedDays),srids=new Set();
   for (const row of financeRows) {
@@ -51,7 +51,7 @@ async function readWbOrderAdvertisingInputs(selected, financeRows, requestedDays
   const cached=await pool.query(`SELECT o.market,o.order_id,o.entry_id,o.creation_date,o.sku,o.qty,o.raw_json
     FROM marketplace_order_lines o WHERE o.market=$1 AND
     ((o.creation_date >= $2 AND o.creation_date < $3 AND to_char(to_timestamp(o.creation_date/1000.0) AT TIME ZONE 'Europe/Moscow','YYYY-MM-DD')=ANY($4::text[]))
-    OR COALESCE(o.raw_json::jsonb->'order'->>'orderUid',o.raw_json::jsonb->>'orderUid',o.raw_json::jsonb->>'srid')=ANY($5::text[]) OR o.order_id=ANY($5::text[]))
+    OR COALESCE(NULLIF(o.raw_json::jsonb->'order'->>'rid',''),NULLIF(o.raw_json::jsonb->'order'->>'srid',''),NULLIF(o.raw_json::jsonb->>'rid',''),NULLIF(o.raw_json::jsonb->>'srid',''),NULLIF(o.raw_json::jsonb->'order'->>'orderUid',''),o.raw_json::jsonb->>'orderUid')=ANY($5::text[]) OR o.order_id=ANY($5::text[]))
     ORDER BY o.creation_date,o.order_id,o.entry_id LIMIT 50001`,[selected,start,end,[...days],[...srids]]);
   if(cached.rows.length>50000)return {error:'Больше 50 000 заказов для распределения рекламы. Сократите период.'};
   for(const row of cached.rows){const day=wbOrderDay(row.creation_date);if(day)days.add(day)}
@@ -365,10 +365,10 @@ reportsRouter.get('/wb-operation-audit', asyncRoute(async (req, res) => {
   if (finance.rows.length > 50000) return res.status(422).json({ ok: false, error: 'Больше 50 000 операций. Выберите более короткий период.' });
   const [purchases, costs] = await Promise.all([
     pool.query('SELECT product_id,qty,status,payload FROM warehouse_purchases WHERE status=ANY($1::text[]) LIMIT 50001', [['received', 'at_warehouse']]),
-    pool.query(`SELECT o.market,COALESCE(o.raw_json::jsonb->'order'->>'orderUid',o.raw_json::jsonb->>'orderUid',o.raw_json::jsonb->>'srid') AS srid,
+    pool.query(`SELECT o.market,COALESCE(NULLIF(o.raw_json::jsonb->'order'->>'rid',''),NULLIF(o.raw_json::jsonb->'order'->>'srid',''),NULLIF(o.raw_json::jsonb->>'rid',''),NULLIF(o.raw_json::jsonb->>'srid',''),NULLIF(o.raw_json::jsonb->'order'->>'orderUid',''),o.raw_json::jsonb->>'orderUid') AS srid,
       s.product_id AS "productId",s.qty,s.payload->>'cost' AS cost,s.payload->>'stockShortage' AS "stockShortage"
       FROM warehouse_sales s JOIN marketplace_order_lines o ON o.market=s.channel AND s.external_key=o.market||':'||o.order_id||':'||o.entry_id
-      WHERE s.channel=$1 AND COALESCE(o.raw_json::jsonb->'order'->>'orderUid',o.raw_json::jsonb->>'orderUid',o.raw_json::jsonb->>'srid') IN
+      WHERE s.channel=$1 AND COALESCE(NULLIF(o.raw_json::jsonb->'order'->>'rid',''),NULLIF(o.raw_json::jsonb->'order'->>'srid',''),NULLIF(o.raw_json::jsonb->>'rid',''),NULLIF(o.raw_json::jsonb->>'srid',''),NULLIF(o.raw_json::jsonb->'order'->>'orderUid',''),o.raw_json::jsonb->>'orderUid') IN
       (SELECT COALESCE(raw_json::jsonb->>'srid',raw_json::jsonb->>'orderUid',raw_json::jsonb->>'order_uid') FROM wb_finance_rows WHERE market=$1 AND (${wbFinancePeriodSql()}) >= $2 AND (${wbFinancePeriodSql()}) < $3)
       LIMIT 50001`, [selected, since, until])
   ]);
@@ -404,10 +404,10 @@ async function readWbUnitHistoryBatch(selected,requests){
     pool.query('SELECT market,sku,product_id AS "productId" FROM product_links WHERE market=$1', [selected]),
     pool.query('SELECT id,name,payload FROM warehouse_products'),
     pool.query('SELECT product_id,qty,status,payload FROM warehouse_purchases WHERE status=ANY($1::text[]) LIMIT 50001', [['received', 'at_warehouse']]),
-    srids.length ? pool.query(`SELECT o.market,COALESCE(o.raw_json::jsonb->'order'->>'orderUid',o.raw_json::jsonb->>'orderUid',o.raw_json::jsonb->>'srid') AS srid,
+    srids.length ? pool.query(`SELECT o.market,COALESCE(NULLIF(o.raw_json::jsonb->'order'->>'rid',''),NULLIF(o.raw_json::jsonb->'order'->>'srid',''),NULLIF(o.raw_json::jsonb->>'rid',''),NULLIF(o.raw_json::jsonb->>'srid',''),NULLIF(o.raw_json::jsonb->'order'->>'orderUid',''),o.raw_json::jsonb->>'orderUid') AS srid,
       s.product_id AS "productId",s.qty,s.payload->>'cost' AS cost,s.payload->>'stockShortage' AS "stockShortage"
       FROM warehouse_sales s JOIN marketplace_order_lines o ON o.market=s.channel AND s.external_key=o.market||':'||o.order_id||':'||o.entry_id
-      WHERE s.channel=$1 AND COALESCE(o.raw_json::jsonb->'order'->>'orderUid',o.raw_json::jsonb->>'orderUid',o.raw_json::jsonb->>'srid')=ANY($2::text[])
+      WHERE s.channel=$1 AND COALESCE(NULLIF(o.raw_json::jsonb->'order'->>'rid',''),NULLIF(o.raw_json::jsonb->'order'->>'srid',''),NULLIF(o.raw_json::jsonb->>'rid',''),NULLIF(o.raw_json::jsonb->>'srid',''),NULLIF(o.raw_json::jsonb->'order'->>'orderUid',''),o.raw_json::jsonb->>'orderUid')=ANY($2::text[])
       LIMIT 50001`, [selected, srids]) : Promise.resolve({ rows: [] })
   ]);
   if (purchases.rows.length > 50000 || costs.rows.length > 50000) return {status:422,ok:false,error:'Слишком много записей себестоимости.'};

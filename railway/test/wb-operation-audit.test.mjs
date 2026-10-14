@@ -42,6 +42,51 @@ test('cash WB Promotion charge and campaign spend are visible separately without
   assert.equal(data.totals[0].promotionDeduction, 50); assert.equal(data.advertising[0].amount, 50);
   assert.equal(data.advertising[0].productId, 'a'); assert.equal(data.advertising[0].currency, 'UNKNOWN');
 });
+
+function billedAd(updNum,extra={}) {
+ const raw={updNum,updTime:'2026-10-01T04:40:00.024821+03:00',updSum:489,paymentType:'Баланс',currency:'KZT',...extra};
+ return {market:'WB',day:'2026-10-01',advertId:'40274739',amount:raw.updSum,nmIds:['100'],raw_json:raw};
+}
+test('provisional zero document and its exact numbered advertising entry count once in both tabs and order allocation',()=>{
+ const sale=row(1100,'Продажа',{shkId:'58347387921',srid:'placed-0',orderDt:'2026-10-01T06:00:00Z',forPay:1297.02}),rows=[sale];
+ for(const adRows of [[billedAd(0),billedAd(316853389)],[billedAd(316853389),billedAd(0)]]){
+  const before=JSON.stringify(adRows),data=buildWbOperationAudit({...base,rows,orderFinanceRows:rows,orderRows:placedOrders(27),adRows,allocationAdRows:adRows});
+  assert.equal(data.advertising.length,1);assert.equal(data.advertising[0].amount,489);assert.equal(data.advertisingAllocation[0].amount,489);assert.equal(data.advertisingAllocation[0].qty,27);
+  assert.equal(data.operations.find(r=>r.kind==='advertising'&&r.shkId==='58347387921').orderAdvertising,18.11);assert.equal(JSON.stringify(adRows),before);
+ }
+});
+test('advertising dedup keeps different real documents, days, precise timestamps, payments, amounts, cards and currencies',()=>{
+ const original=billedAd(0),real=billedAd(316853389),total=adRows=>buildWbOperationAudit({...base,adRows}).advertising.reduce((sum,r)=>sum+r.amount,0);
+ for(const changed of [
+  billedAd(316853389,{updTime:'2026-10-01T04:40:00.024822+03:00'}),billedAd(316853389,{paymentType:'Счёт'}),
+  billedAd(316853389,{updSum:490}),billedAd(316853389,{currency:'RUB'}),{...real,advertId:'another'},
+  {...real,day:'2026-10-02'},{...real,nmIds:['200']},{...real,raw_json:{...real.raw_json,updTime:null}}
+ ])assert.equal(total([original,changed]),489+changed.amount);
+ assert.equal(total([billedAd(316853389),billedAd(316853390)]),978);
+ assert.equal(total([original,billedAd(316853389),billedAd(316853390)]),1467);
+ assert.equal(total([original]),489);assert.equal(total([{...original,raw_json:{}},real]),978);
+ const foreign={...real,market:'WB2'};assert.equal(total([original,foreign]),489);
+});
+test('cached rid matches finance srid; transaction orderUid never counts the same piece again or merges siblings',()=>{
+ const cached=placedOrders(2).map((r,i)=>({...r,raw_json:JSON.stringify({order:{orderUid:'shared-transaction',rid:'finance-piece-'+i,nmId:'100',skus:['barcode-a']}})}));
+ const rows=[row(1110,'Продажа',{srid:'finance-piece-0',shkId:'58347387921',orderDt:'2026-10-02',forPay:500}),row(1111,'Продажа',{srid:'finance-piece-1',shkId:'57802435097',orderDt:'2026-10-02',forPay:500})];
+ const options={...base,rows,orderFinanceRows:rows,orderRows:cached,adRows:[billedAd(0),billedAd(316853389)],allDates:true},before=JSON.stringify(options),data=buildWbOperationAudit(options);
+ assert.equal(data.advertisingAllocation[0].qty,2);assert.equal(data.advertisingAllocation[0].amount,489);
+ const ads=data.operations.filter(r=>r.kind==='advertising');assert.equal(ads.length,2);assert.deepEqual(ads.map(r=>[r.srid,r.shkId,r.orderAdvertising]),[['finance-piece-0','58347387921',244.5],['finance-piece-1','57802435097',244.5]]);
+ assert.ok(data.operations.every(r=>r.orderDay==='2026-10-01'&&!r.adUnknown));assert.equal(JSON.stringify(options),before);
+ const fbo=row(1112,'Продажа',{srid:'fbo-only',shkId:'99999999',orderDt:'2026-10-01',forPay:500});
+ const extra=buildWbOperationAudit({...options,rows:[...rows,fbo],orderFinanceRows:[...rows,fbo]});assert.equal(extra.advertisingAllocation[0].qty,3);assert.equal(extra.operations.filter(r=>r.kind==='advertising').reduce((s,r)=>s+r.orderAdvertising,0),489);
+});
+test('screenshot unit uses one 489 charge, 15 placed pieces and saved 168.54 cost, yielding the same 930.75 in both views',()=>{
+ const rid='eQ.i35b84508501e63b5c771d8200cdcd368.0.0',orderDay='2026-09-24T17:34:16Z',shkId='58347387921';
+ const rows=[row(1120,'Возмещение издержек по перевозке/по складским операциям с товаром',{shkId,srid:rid,rebillLogisticCost:0.37}),row(1121,'Логистика',{shkId,srid:rid,orderDt:orderDay,deliveryService:164.76}),row(1122,'Продажа',{shkId,srid:rid,orderDt:orderDay,forPay:1297.02,retailPriceWithDisc:1857.26,acquiringFee:68.08})];
+ const orderRows=placedOrders(15).map((r,i)=>({...r,creation_date:Date.parse(orderDay),raw_json:JSON.stringify({order:{orderUid:'transaction-'+i,rid:i===0?rid:'piece-'+i,nmId:'100',skus:['barcode-a']}})}));
+ const adRows=[0,316853389].map(n=>({...billedAd(n,{updTime:'2026-09-24T04:40:00.024821+03:00'}),day:'2026-09-24'}));
+ const data=buildWbOperationAudit({...base,rows,orderFinanceRows:rows,orderRows,adRows,saleCosts:[{productId:'a',srid:rid,qty:1,cost:168.53509096789844,stockShortage:0}],allDates:true});
+ assert.equal(data.advertisingAllocation[0].qty,15);assert.equal(data.advertisingAllocation[0].amount,489);
+ const unit=data.operations.filter(r=>r.shkId===shkId),f=uiFixture(),top=f.context.window.fixture.periodMetricsHtml(unit.filter(r=>r.kind!=='advertising'),unit,'Весь путь'),inside=f.context.window.fixture.unitSummaryHtml(unit);
+ assert.deepEqual(formulaValues(top),['963,35 ₸','32,6 ₸','≈ 930,75 ₸']);assert.ok(inside.includes('≈ 930,75 ₸'));assert.ok(inside.includes('Себестоимость заказа'));assert.ok(inside.includes('-168,54 ₸'));assert.ok(!inside.includes('174,93'));assert.ok(unit.every(r=>!r.adUnknown));
+});
 test('size-specific barcode wins over shared article; shared logistics cannot be guessed for one size', () => {
   const data = buildWbOperationAudit({ ...base, links: [...base.links, { sku: 'item', productId: 'parent' }, { sku: '100', productId: 'parent' }],
     rows: [row(1, 'Продажа'), row(2, 'Продажа', { sku: 'barcode-b', shkId: 'unit-b' }), row(3, 'Логистика', { sku: '', srid: '', shkId: 0, deliveryService: 40 })],
