@@ -179,7 +179,7 @@ test('both report paths expose product entry without a separate audit button, be
   const html = readFileSync(new URL('../../index.html', import.meta.url), 'utf8');
   const server = readFileSync(new URL('../src/server.js', import.meta.url), 'utf8');
   const report = readFileSync(new URL('../../kaspi-report-v2.js', import.meta.url), 'utf8');
-  const tag = '<script src="./wb-operation-audit-v1.js?v=20261014-ad-formula"></script>';
+  const tag = '<script src="./wb-operation-audit-v1.js?v=20261014-unit-lifetime"></script>';
   assert.ok(html.includes(tag)); assert.ok(html.indexOf(tag) < html.lastIndexOf('initOwnerAuth()'));
   assert.ok(html.includes('async function openWbFinanceReport(market,days){return openStoreDetail(market,days)}'));
   assert.ok(report.includes('wbReportProductAuditAction(market,days,'));
@@ -381,8 +381,8 @@ function expandUnit(f,group){
  const body={innerHTML:''},details={open:true,dataset:{unitKey:group.key},querySelector:()=>body};
  f.listeners.get('toggle')({target:details});return {body,details};
 }
-async function invokeHistory(query,respond){
- const handler=reportsRouter.stack.find(x=>x.route?.path==='/wb-unit-history').route.stack[0].handle;
+async function invokeHistory(query,respond,path='/wb-unit-history'){
+ const handler=reportsRouter.stack.find(x=>x.route?.path===path).route.stack[0].handle;
  const old=pool.query,calls=[];pool.query=async(sql,args)=>{calls.push({sql,args});return {rows:respond(sql,args)}};let status=200,result;
  try{await handler({query},{status(code){status=code;return this},json(x){result=x}},error=>{throw error})}finally{pool.query=old}
  return {status,result,calls};
@@ -490,7 +490,8 @@ test('period sticker list keeps sales and their expenses, hides expense/return/a
  const before=JSON.stringify(data),f=uiFixture();f.context.apiJson=async()=>({ok:true,...data});
  f.context.window.openWbProductOperations('WB',1,{productId:'a'});await new Promise(r=>setImmediate(r));
  const ctx=f.context.window.fixture.active,body=f.el.querySelector('[data-audit-body]').innerHTML;
- assert.ok(body.includes('ШК sold ·'));assert.ok(body.includes('2 оп. за период'));assert.ok(body.includes('380 ₸'));
+ assert.ok(body.includes('ШК sold ·'));assert.ok(body.includes('2 оп. за период'));assert.ok(body.includes('Загружаю расходы и рекламу'));
+ assert.ok(f.context.window.fixture.periodMetricsHtml(data.operations.filter(r=>r.shkId==='sold')).includes('380 ₸'));
  assert.ok(body.includes('ШК sold-and-returned'));assert.ok(body.includes('Выручка за период</span><b>0 ₸'));
  for(const hidden of ['expense-only','return-only','ad-only','other-product'])assert.ok(!body.includes('ШК '+hidden));
  assert.equal((body.match(/data-unit-key=/g)||[]).length,2);assert.equal(JSON.stringify(data),before);
@@ -527,13 +528,65 @@ test('period profit uses known cost once, preserves unknown/foreign amounts and 
  const foreign=f.context.window.fixture.periodMetricsHtml(buildWbOperationAudit({...base,rows:[row(4,'Продажа',{currency:'RUB',forPay:700})],saleCosts:[{productId:'a',srid:'order-a',qty:1,cost:200}]}).operations);assert.ok(foreign.includes('>—</b>'));assert.ok(!foreign.includes('500'));
 });
 function formulaValues(html){return ['before','advertising','result'].map(name=>html.match(new RegExp('class="wb-audit-term wb-audit-'+name+'"[^>]*><span[^>]*>[^<]*</span><b[^>]*>([^<]*)</b>'))?.[1].replaceAll('\u00a0',' '))}
-test('collapsed sticker displays before-ads minus ads equals result without fetching or expanding history',async()=>{
+function renderedUnitsFixture(){
+ const f=uiFixture(),nodes=new Map();let lastBody='';
+ f.el.querySelectorAll=selector=>{
+  if(selector!=='[data-unit-key]')return [];
+  const html=f.el.querySelector('[data-audit-body]').innerHTML;
+  if(html!==lastBody){lastBody=html;nodes.clear();for(const match of html.matchAll(/data-unit-key="([^"]+)"/g)){
+   const key=match[1].replaceAll('&quot;','"').replaceAll('&amp;','&'),metrics={innerHTML:''},content={innerHTML:''},details={open:false,dataset:{unitKey:key},querySelector:s=>s==='[data-unit-metrics]'?metrics:s==='[data-shk-history-content]'?content:null};
+   nodes.set(key,{details,metrics,content});
+  }}return [...nodes.values()].map(n=>n.details);
+ };
+ return {...f,nodes};
+}
+test('visible collapsed units prefetch lifetime advertising and old logistics in one batch; expansion reuses identical profit',async()=>{
+ const sale=row(970,'Продажа',{shkId:'58347387921',srid:'placed-0',orderDt:'2026-09-24T06:00:00Z',retailPriceWithDisc:1500,forPay:1000});
+ const old=row(971,'Логистика',{shkId:'58347387921',srid:'placed-0',orderDt:'2026-09-24T06:00:00Z',deliveryService:100},{rr_date:START-7*DAY});
+ const options={...base,rows:[old,sale],orderFinanceRows:[old,sale],saleCosts:[{productId:'a',srid:'placed-0',qty:1,cost:100}],allocationAdRows:[{day:'2026-09-24',nmIds:['100'],amount:500,currency:'KZT'}]};
+ const period=buildWbOperationAudit(options),full=buildWbOperationAudit({...options,allDates:true}),f=renderedUnitsFixture(),calls=[];let resolve;
+ f.context.apiJson=async url=>{calls.push(url);return url.includes('/wb-unit-histories')?new Promise(r=>{resolve=r}):{ok:true,...period}};
+ f.context.window.openWbProductOperations('WB',1,{productId:'a'});await new Promise(r=>setImmediate(r));
+ const ctx=f.context.window.fixture.active,node=f.nodes.get(period.units[0].key),initial=f.el.querySelector('[data-audit-body]').innerHTML;
+ assert.deepEqual(formulaValues(initial),['—','—','—']);assert.equal(calls.length,2);assert.ok(!node.details.open);
+ const query=new URL(calls[1],'https://example.test').searchParams;assert.equal(query.get('market'),'WB');assert.deepEqual(JSON.parse(query.get('units')),[{shkId:'58347387921',nmId:'100',productId:'a'}]);assert.ok(!query.has('days'));
+ node.details.open=true;f.listeners.get('toggle')({target:node.details});assert.equal(calls.length,2);
+ resolve({ok:true,scope:'unit-histories',market:'WB',histories:[{ok:true,scope:'unit-history',market:'WB',shkId:'58347387921',nmId:'100',productId:'a',operations:full.operations,range:full.range}]});await new Promise(r=>setImmediate(r));
+ assert.deepEqual(formulaValues(node.metrics.innerHTML),['800 ₸','500 ₸','≈ 300 ₸']);assert.ok(node.metrics.innerHTML.includes('1 500 ₸'));assert.ok(node.metrics.innerHTML.includes('Весь путь'));assert.ok(node.content.innerHTML.includes('≈ 300 ₸'));assert.equal(ctx.histories.size,1);
+ f.listeners.get('toggle')({target:node.details});assert.equal(calls.length,2);assert.deepEqual(formulaValues(node.metrics.innerHTML),['800 ₸','500 ₸','≈ 300 ₸']);
+});
+test('batch prefetch stays bounded to sold visible page and cannot update a closed sheet',async()=>{
+ const rows=Array.from({length:21},(_,i)=>row(980+i,'Продажа',{shkId:String(10000+i),srid:'order-'+i}));rows.push(row(1020,'Логистика',{shkId:'99999',deliveryService:20}));
+ const data=build(rows),f=renderedUnitsFixture(),calls=[];let resolve;
+ f.context.apiJson=async url=>{calls.push(url);return url.includes('/wb-unit-histories')?new Promise(r=>{resolve=r}):{ok:true,...data}};
+ f.context.window.openWbProductOperations('WB',1,{productId:'a'});await new Promise(r=>setImmediate(r));
+ const units=JSON.parse(new URL(calls[1],'https://example.test').searchParams.get('units'));assert.equal(units.length,20);assert.ok(units.every(u=>u.shkId!=='99999'));assert.equal(f.nodes.size,20);
+ const nodes=[...f.nodes.values()],ctx=f.context.window.fixture.active;f.close();resolve({ok:true,scope:'unit-histories',market:'WB',histories:units.map(u=>({ok:true,scope:'unit-history',market:'WB',...u,operations:data.operations.filter(r=>r.shkId===u.shkId),range:data.range}))});await new Promise(r=>setImmediate(r));
+ assert.equal(ctx.histories.size,0);assert.ok(nodes.every(n=>n.metrics.innerHTML===''));assert.equal(ctx.historyPending.size,0);
+});
+test('wrong batch identity remains unknown and offers retry instead of invented zero advertising',async()=>{
+ const data=build([row(1030,'Продажа',{shkId:'58347387921',forPay:1000})]),f=renderedUnitsFixture();
+ f.context.apiJson=async url=>url.includes('/wb-unit-histories')?{ok:true,scope:'unit-histories',market:'WB',histories:[{ok:true,scope:'unit-history',market:'WB',shkId:'other',nmId:'100',operations:data.operations,range:data.range}]}:{ok:true,...data};
+ f.context.window.openWbProductOperations('WB',1,{productId:'a'});await new Promise(r=>setImmediate(r));
+ const node=f.nodes.get(data.units[0].key);assert.deepEqual(formulaValues(node.metrics.innerHTML),['—','—','—']);assert.ok(node.metrics.innerHTML.includes('Повторить'));assert.equal(f.context.window.fixture.active.histories.size,0);
+});
+test('batch history matches single-unit lifetime with older order-day ads, parameterized cached reads and input bounds',async()=>{
+ const rows=[row(1040,'Продажа',{shkId:'58347387921',srid:'placed-0',orderDt:'2026-09-24T06:00:00Z',forPay:1000}),row(1041,'Логистика',{shkId:'58347387921',srid:'placed-0',orderDt:'2026-09-24T06:00:00Z',deliveryService:100},{rr_date:START-7*DAY}),row(1042,'Продажа',{shkId:'57802435097',srid:'placed-1',orderDt:'2026-09-24T06:00:00Z',forPay:900})];
+ const respond=(sql,args)=>sql.startsWith('SELECT *')?rows.filter(r=>{const ids=Array.isArray(args[1])?args[1]:[args[1]];return ids.includes(JSON.parse(r.raw_json).shkId)}):sql.includes('FROM wb_ad_costs')?[{day:'2026-09-24',nmIds:['100'],amount:100,currency:'KZT'}]:sql.includes('FROM wb_finance_rows')?rows:sql.includes('warehouse_products')?base.products:sql.includes('product_links')?base.links:[];
+ const units=[{shkId:'58347387921',nmId:'100',productId:'a'},{shkId:'57802435097',nmId:'100',productId:'a'}],batch=await invokeHistory({market:'WB',units:JSON.stringify(units)},respond,'/wb-unit-histories');
+ assert.equal(batch.status,200);assert.equal(batch.result.histories.length,2);assert.match(batch.calls[0].sql,/ANY\(\$2::text\[\]\)/);assert.deepEqual(batch.calls[0].args,['WB',units.map(u=>u.shkId)]);assert.ok(batch.calls.every(c=>/^SELECT /.test(c.sql)));
+ for(let i=0;i<units.length;i++){const single=await invokeHistory({market:'WB',...units[i]},respond);assert.deepEqual(batch.result.histories[i],single.result);assert.equal(single.result.operations.find(r=>r.kind==='advertising').orderAdvertising,50)}
+ for(const invalid of [null,[],Array(21).fill(units[0]),[{shkId:'1 OR 1=1',nmId:'100'}],[null]])assert.equal((await invokeHistory({market:'WB',units:JSON.stringify(invalid)},()=>{throw Error('must not query')},'/wb-unit-histories')).status,400);
+});
+test('collapsed sticker shows unknown lifetime amounts until history arrives, preserving period revenue',async()=>{
  const rows=[row(950,'Продажа',{srid:'placed-0',orderDt:'2026-10-01T06:00:00Z',retailPriceWithDisc:1500,forPay:1000})];
  const data=buildWbOperationAudit({...base,rows,orderFinanceRows:rows,orderRows:placedOrders(1),saleCosts:[{productId:'a',srid:'placed-0',qty:1,cost:100}],allocationAdRows:[{day:'2026-10-01',nmIds:['100'],amount:500,currency:'KZT'}]}),before=JSON.stringify(data),f=uiFixture(),calls=[];
  f.context.apiJson=async url=>{calls.push(url);return {ok:true,...data}};
  f.context.window.openWbProductOperations('WB',1,{productId:'a'});await new Promise(r=>setImmediate(r));
  const body=f.el.querySelector('[data-audit-body]').innerHTML,summary=body.slice(body.indexOf('<summary>'),body.indexOf('</summary>'));
- assert.deepEqual(formulaValues(summary),['900 ₸','500 ₸','≈ 400 ₸']);
+ assert.deepEqual(formulaValues(summary),['—','—','—']);assert.ok(summary.includes('1 500 ₸'));
+ const ctx=f.context.window.fixture.active;ctx.histories.set(data.units[0].key,{operations:data.operations,range:data.range});f.context.window.fixture.draw(ctx);
+ const loaded=f.el.querySelector('[data-audit-body]').innerHTML;assert.deepEqual(formulaValues(loaded),['900 ₸','500 ₸','≈ 400 ₸']);
  for(const label of ['Без рекламы','Реклама','Результат'])assert.ok(summary.includes('>'+label+'</span>'));
  assert.ok(summary.includes('>−</span>'));assert.ok(summary.includes('>=</span>'));assert.ok(!body.match(/<details[^>]*\sopen[ >]/));assert.equal(calls.length,1);assert.ok(!calls[0].includes('unit-history'));
  assert.equal(JSON.stringify(data),before);
@@ -611,7 +664,8 @@ test('transport posting date does not conflict with real order date or suppress 
  assert.equal(full.operations.filter(r=>r.kind==='advertising').length,1);assert.equal(full.operations.find(r=>r.kind==='advertising').orderDay,'2026-09-24');
  assert.equal(full.operations.find(r=>r.kind==='advertising').orderAdvertising,200);assert.equal(full.totals[0].rebill,0.37);
  const f=uiFixture();f.context.apiJson=async()=>({ok:true,...data});f.context.window.openWbProductOperations('WB',0,{productId:'a'});await new Promise(r=>setImmediate(r));
- const body=f.el.querySelector('[data-audit-body]').innerHTML;assert.ok(body.includes('Заказ: 24.09.2026'));assert.ok(body.includes('≈ 957,33 ₸'));assert.ok(!body.includes('Заказ: 01.10.2026'));
+ const ctx=f.context.window.fixture.active;ctx.histories.set(data.units[0].key,{operations:full.operations,range:full.range});f.context.window.fixture.draw(ctx);
+ const body=f.el.querySelector('[data-audit-body]').innerHTML;assert.ok(body.includes('Заказ: 24.09.2026'));assert.ok(body.includes('≈ 756,96 ₸'));assert.ok(body.includes('200 ₸'));assert.ok(!body.includes('Заказ: 01.10.2026'));
  assert.equal(JSON.stringify(options),before);
 });
 test('order date shown below sticker uses cached placement, not report day or conflicting finance fallback',async()=>{

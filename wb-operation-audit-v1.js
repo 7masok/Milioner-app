@@ -39,13 +39,16 @@ function unitResult(rows,t){
  const profit=before!==null&&adKnown?before-num(t.orderAdvertising):null;
  return {realized,known,estimated:estimated||ads.some(r=>r.adEstimated),costEstimated:estimated,cost,before,profit,adKnown};
 }
-function periodMetricsHtml(rows){return summed(rows).map(t=>{
- const {before,profit,estimated,costEstimated,adKnown}=unitResult(rows,t),ads=adKnown?num(t.orderAdvertising):null;
+function periodMetricsHtml(rows,resultRows=rows,scope=''){return summed(resultRows?.length?resultRows:rows).map(t=>{
+ const loaded=Boolean(resultRows?.length),calculation=unitResult(resultRows||[],t),{estimated,costEstimated}=calculation,before=loaded?calculation.before:null,profit=loaded?calculation.profit:null,ads=loaded&&calculation.adKnown?num(t.orderAdvertising):null,period=summed(rows).find(x=>x.currency===t.currency);
  const value=profit===null?'—':(estimated?'≈ ':'')+amount(profit,t.currency),beforeValue=before===null?'—':(costEstimated?'≈ ':'')+amount(before,t.currency),adValue=ads===null?'—':amount(Math.abs(ads),t.currency);
  const colour=profit===null?'var(--text)':profit<0?'var(--bad)':'var(--ok)',adColour=ads===null||ads===0?'var(--text)':ads<0?'var(--ok)':'var(--bad)';
  const metric=(label,value,className,colour='var(--text)')=>'<div class="wb-audit-term '+className+'"><span class="muted">'+label+'</span><b style="color:'+colour+'">'+value+'</b></div>';
- return '<div class="wb-audit-period"><div class="wb-audit-period-revenue"><span class="muted">Выручка за период</span><b>'+amount(t.sellerRevenue,t.currency)+'</b></div><div class="wb-audit-calculation" aria-label="Расчёт прибыли за выбранный период">'+metric('Без рекламы',beforeValue,'wb-audit-before')+'<span class="wb-audit-operator">'+(ads!==null&&ads<0?'+':'−')+'</span>'+metric('Реклама',adValue,'wb-audit-advertising',adColour)+'<span class="wb-audit-operator">=</span>'+metric('Результат',value,'wb-audit-result',colour)+'</div></div>';
+ return '<div class="wb-audit-period"><div class="wb-audit-period-revenue"><span class="muted">Выручка за период</span><b>'+amount(period?.sellerRevenue||0,t.currency)+'</b></div>'+(scope?'<div class="muted wb-audit-scope">'+scope+'</div>':'')+'<div class="wb-audit-calculation" aria-label="Расчёт прибыли '+(scope?'за весь путь':'за выбранный период')+'">'+metric('Без рекламы',beforeValue,'wb-audit-before')+'<span class="wb-audit-operator">'+(ads!==null&&ads<0?'+':'−')+'</span>'+metric('Реклама',adValue,'wb-audit-advertising',adColour)+'<span class="wb-audit-operator">=</span>'+metric('Результат',value,'wb-audit-result',colour)+'</div></div>';
  }).join('')}
+function unitMetricsHtml(rows,saved,error=''){
+ return periodMetricsHtml(rows,saved?.operations||null,'Весь путь')+(!saved?(error?'<div class="muted" style="margin-top:6px">'+escape(error)+'</div><button type="button" class="btn" data-audit-action="unit-retry">Повторить</button>':'<div class="muted" style="margin-top:6px">Загружаю расходы и рекламу…</div>'):'');
+}
 function unitSummaryHtml(rows,scope='весь путь'){return summed(rows).map(t=>{
  const {realized,known,estimated,costEstimated,cost,profit,adKnown}=unitResult(rows,t);
  const label=(realized.length?'Прибыль после рекламы':'Результат до продажи')+' · '+scope,value=profit===null?'—':(estimated?'≈ ':'')+amount(profit,t.currency),colour=profit===null?'var(--text)':profit<0?'var(--bad)':'var(--ok)';
@@ -72,21 +75,57 @@ async function loadUnitHistory(ctx,group,details,refresh=false){
  const el=root(ctx),target=details.querySelector('[data-shk-history-content]');if(!el||!target)return;
  const first=group.rows.map(id=>ctx.rows.get(id)).find(r=>r?.nmId)||ctx.rows.get(group.rows[0]);if(!first||!first.nmId&&!first.productId){target.innerHTML='<div class="empty">Не удалось связать ШК с товаром</div>';return}
  const query='?market='+encodeURIComponent(ctx.market)+'&shkId='+encodeURIComponent(group.shkId)+(first.nmId?'&nmId='+encodeURIComponent(first.nmId):'')+(first.productId?'&productId='+encodeURIComponent(first.productId):'');
+ if(!refresh&&ctx.histories.has(group.key)){target.innerHTML=historyHtml(ctx.histories.get(group.key));updateUnitView(ctx,group);return}
+ if(!refresh&&ctx.historyPending.has(group.key)){target.innerHTML='<div class="muted">Загружаю весь путь ШК…</div>';return}
  const token={};details.historyRequest=token;target.innerHTML='<div class="empty">Загружаю весь путь ШК…</div>';
  try{
   let entry=unitHistoryCache.get(query);
-  if(refresh||!entry||Date.now()-entry.at>=120000){const promise=apiJson(MILLIONER_API+'/api/wb-unit-history'+query).then(data=>{if(!data?.ok||data.scope!=='unit-history'||!Array.isArray(data.operations)||data.market!==ctx.market||String(data.shkId)!==String(group.shkId)||first.nmId&&String(data.nmId)!==String(first.nmId)||first.productId&&data.productId!==undefined&&data.productId!==first.productId||data.operations.some(r=>String(r.shkId)!==String(group.shkId)||String(r.nmId||'')!==String(data.nmId||'')||first.productId&&r.productId!==first.productId))throw Error('История относится к другому товару или ШК');return data}).catch(error=>{if(unitHistoryCache.get(query)?.promise===promise)unitHistoryCache.delete(query);throw error});entry={at:Date.now(),promise};unitHistoryCache.set(query,entry)}
+  if(refresh||!entry||Date.now()-entry.at>=120000){const promise=apiJson(MILLIONER_API+'/api/wb-unit-history'+query).then(data=>{validHistory(data,unitRequest(ctx,group),ctx.market);return data}).catch(error=>{if(unitHistoryCache.get(query)?.promise===promise)unitHistoryCache.delete(query);throw error});entry={at:Date.now(),promise};unitHistoryCache.set(query,entry)}
   const data=await entry.promise;
   if(!root(ctx)||details.historyRequest!==token||!el.contains(details))return;
-  ctx.histories.set(group.key,data);target.innerHTML=historyHtml(data);
- }catch(error){if(root(ctx)&&details.historyRequest===token&&el.contains(details))target.innerHTML='<div class="empty">Не удалось загрузить историю ШК: '+escape(error.message||error)+'</div><button type="button" class="btn full" data-audit-action="unit-retry">Повторить</button>'}
+  ctx.histories.set(group.key,data);ctx.historyErrors.delete(group.key);target.innerHTML=historyHtml(data);updateUnitView(ctx,group);
+ }catch(error){if(root(ctx)&&details.historyRequest===token&&el.contains(details)){ctx.historyErrors.set(group.key,String(error.message||error));updateUnitView(ctx,group);target.innerHTML='<div class="empty">Не удалось загрузить историю ШК: '+escape(error.message||error)+'</div><button type="button" class="btn full" data-audit-action="unit-retry">Повторить</button>'}}
+}
+function unitRequest(ctx,group){
+ const rows=group.rows.map(id=>ctx.rows.get(id)).filter(Boolean),first=rows.find(r=>r.nmId)||rows[0];
+ if(!first||!first.nmId&&!first.productId)throw Error('Не удалось связать ШК с товаром');
+ return {shkId:String(group.shkId),nmId:String(first.nmId||''),productId:String(first.productId||'')};
+}
+function validHistory(data,request,market){
+ if(!data?.ok||data.scope!=='unit-history'||data.market!==market||String(data.shkId)!==request.shkId||request.nmId&&String(data.nmId)!==request.nmId||request.productId&&data.productId!==undefined&&data.productId!==request.productId||!Array.isArray(data.operations)||data.operations.some(r=>String(r.shkId)!==request.shkId||String(r.nmId||'')!==String(data.nmId||'')||request.productId&&r.productId!==request.productId))throw Error(data?.error||'История относится к другому товару или ШК');
+ if(!data.operations.length)throw Error('История ШК ещё не загружена');
+ return data;
+}
+function updateUnitView(ctx,group){
+ const el=root(ctx);if(!el)return;
+ const details=[...el.querySelectorAll('[data-unit-key]')].find(x=>x.dataset.unitKey===group.key);if(!details)return;
+ const saved=ctx.histories.get(group.key),rows=group.rows.map(id=>ctx.rows.get(id)).filter(Boolean),metrics=details.querySelector('[data-unit-metrics]'),content=details.querySelector('[data-shk-history-content]');
+ if(metrics)metrics.innerHTML=unitMetricsHtml(rows,saved,ctx.historyErrors.get(group.key));
+ if(saved&&content)content.innerHTML=historyHtml(saved);
+}
+async function loadVisibleUnitHistories(ctx,groups){
+ const el=root(ctx);if(!el||ctx.mode!=='units')return;
+ const visible=new Set([...el.querySelectorAll('[data-unit-key]')].map(x=>x.dataset.unitKey));
+ const pending=groups.filter(g=>visible.has(g.key)&&!ctx.histories.has(g.key)&&!ctx.historyPending.has(g.key)&&!ctx.historyErrors.has(g.key)).slice(0,PAGE_SIZE);
+ if(!pending.length)return;
+ const requests=[];
+ for(const group of pending){try{requests.push({group,request:unitRequest(ctx,group)});ctx.historyPending.add(group.key)}catch(error){ctx.historyErrors.set(group.key,error.message);updateUnitView(ctx,group)}}
+ if(!requests.length)return;
+ try{
+  const query='?market='+encodeURIComponent(ctx.market)+'&units='+encodeURIComponent(JSON.stringify(requests.map(x=>x.request)));
+  const data=await apiJson(MILLIONER_API+'/api/wb-unit-histories'+query);
+  if(!root(ctx))return;
+  if(!data?.ok||data.scope!=='unit-histories'||data.market!==ctx.market||!Array.isArray(data.histories)||data.histories.length!==requests.length)throw Error(data?.error||'Некорректный ответ истории ШК');
+  requests.forEach(({group,request},index)=>{try{ctx.histories.set(group.key,validHistory(data.histories[index],request,ctx.market));ctx.historyErrors.delete(group.key)}catch(error){ctx.historyErrors.set(group.key,error.message)}});
+ }catch(error){if(root(ctx))for(const {group} of requests)ctx.historyErrors.set(group.key,String(error.message||error))}
+ finally{for(const {group} of requests){ctx.historyPending.delete(group.key);if(root(ctx))updateUnitView(ctx,group)}}
 }
 function unitOrderDateHtml(rows){
  const sales=rows.filter(r=>num(r.saleQty)>0),days=[...new Set(sales.map(r=>/^20\d{2}-\d{2}-\d{2}$/.test(r.orderDay||'')?r.orderDay:''))].sort();
  const labels=days.map(day=>day?day.split('-').reverse().join('.'):'—');
  return '<div class="muted" style="margin-top:3px">'+(labels.length>1?'Заказы: ':'Заказ: ')+(labels.join(', ')||'—')+'</div>';
 }
-function groupHtml(group,ctx,unit=false){const rows=group.rows.map(id=>ctx.rows.get(id)).filter(Boolean),first=rows[0];if(!first)return '';const saved=ctx.histories?.get(group.key),periodRevenue=periodMetricsHtml(rows);return '<details class="item wb-audit-group"'+(unit?' data-unit-key="'+escape(group.key)+'"':'')+'><summary><b>'+escape(first.productName)+'</b><div class="muted" style="overflow-wrap:anywhere">'+escape(unit?'ШК '+group.shkId:(group.srid?'Заказ '+group.srid:'Без ID заказа · строка '+first.rrdId))+' · '+rows.length+' оп.'+(unit?' за период':'')+'</div>'+(unit?unitOrderDateHtml(rows)+periodRevenue:'')+'</summary>'+(unit?'<div data-shk-history-content>'+(saved?historyHtml(saved):'<div class="muted">Раскройте ШК, чтобы увидеть весь путь</div>')+'</div>':unitSummaryHtml(rows,'за период')+rows.map(operationHtml).join(''))+'</details>'}
+function groupHtml(group,ctx,unit=false){const rows=group.rows.map(id=>ctx.rows.get(id)).filter(Boolean),first=rows[0];if(!first)return '';const saved=ctx.histories?.get(group.key),periodRevenue=unitMetricsHtml(rows,saved,ctx.historyErrors?.get(group.key));return '<details class="item wb-audit-group"'+(unit?' data-unit-key="'+escape(group.key)+'"':'')+'><summary><b>'+escape(first.productName)+'</b><div class="muted" style="overflow-wrap:anywhere">'+escape(unit?'ШК '+group.shkId:(group.srid?'Заказ '+group.srid:'Без ID заказа · строка '+first.rrdId))+' · '+rows.length+' оп.'+(unit?' за период':'')+'</div>'+(unit?unitOrderDateHtml(rows)+'<div data-unit-metrics>'+periodRevenue+'</div>':'')+'</summary>'+(unit?'<div data-shk-history-content>'+(saved?historyHtml(saved):'<div class="muted">Раскройте ШК, чтобы увидеть весь путь</div>')+'</div>':unitSummaryHtml(rows,'за период')+rows.map(operationHtml).join(''))+'</details>'}
 
 function matches(row,ctx){const q=ctx.q.trim().toLocaleLowerCase('ru-RU');return (!ctx.product||row.productKey===ctx.product)&&(!q||[row.productName,row.vendorCode,row.nmId,row.barcode,row.shkId,row.srid,row.operation].some(v=>String(v||'').toLocaleLowerCase('ru-RU').includes(q)))&&(ctx.filter!=='unlinked'||!row.productId)&&(ctx.filter!=='no_order'||!row.srid)}
 function adsSummary(rows,productOnly=false){const buckets=new Map();for(const x of rows){const t=buckets.get(x.currency)||{currency:x.currency,total:0,linked:0};t.total+=num(x.amount);if(x.productId)t.linked+=num(x.amount);buckets.set(x.currency,t)}return [...buckets.values()].map(t=>'<div class="item" style="margin-top:8px">'+currencyNote(t.currency)+(productOnly?line('Реклама товара',t.total,t.currency):line('Вся реклама',t.total,t.currency)+line('По товарам',t.linked,t.currency)+line('Без привязки',t.total-t.linked,t.currency))+'</div>').join('')}
@@ -114,6 +153,7 @@ function draw(ctx){
  pager.innerHTML=ctx.productOnly&&pages===1?'':'<span class="muted">'+entries.length+' поз. · '+ctx.page+' / '+pages+'</span><button type="button" class="btn" data-audit-action="prev" '+(ctx.page===1?'disabled':'')+'>←</button><button type="button" class="btn" data-audit-action="next" '+(ctx.page===pages?'disabled':'')+'>→</button>';
  el.querySelectorAll('[data-audit-mode]').forEach(b=>b.classList.toggle('dark',b.dataset.auditMode===ctx.mode));
  const product=el.querySelector('[data-audit-product]');if(product)product.value=ctx.product;
+ if(ctx.mode==='units')void loadVisibleUnitHistories(ctx,entries.slice((ctx.page-1)*PAGE_SIZE,ctx.page*PAGE_SIZE));
 }
 function mount(ctx){
  const el=root(ctx);if(!el)return;const d=ctx.data;
@@ -145,7 +185,7 @@ window.openWbOperationAudit=function(market,days=30,range=null,selection=null){
  if(!['WB','WB2'].includes(market))return;
  const n=Number(days)===-1?-1:Number(days)===0?0:Math.max(1,Math.min(365,Math.round(Number(days)||30)));
  const previous=root(active)&&active.market===market?active:null,back=previous?previous.back:{market,days:n},chosen=selection||previous||{};
- const ctx={market,days:n,range,back,query:'?market='+market+'&days='+n+bounds(n,range),key:market+':'+Date.now()+':'+Math.random(),q:'',product:chosen.product||'',item:chosen.item||null,filter:'all',mode:chosen.mode||'products',productOnly:Boolean(chosen.productOnly),histories:new Map(),page:1};if(ctx.productOnly&&!['units','ads'].includes(ctx.mode))ctx.mode='units';active=ctx;
+ const ctx={market,days:n,range,back,query:'?market='+market+'&days='+n+bounds(n,range),key:market+':'+Date.now()+':'+Math.random(),q:'',product:chosen.product||'',item:chosen.item||null,filter:'all',mode:chosen.mode||'products',productOnly:Boolean(chosen.productOnly),histories:new Map(),historyErrors:new Map(),historyPending:new Set(),page:1};if(ctx.productOnly&&!['units','ads'].includes(ctx.mode))ctx.mode='units';active=ctx;
  const selectors=ctx.productOnly?'':'<div class="field" style="margin-top:12px"><input data-audit-search placeholder="Товар, артикул, ШК или ID заказа" aria-label="Поиск операций WB"></div><div class="two"><select class="btn" data-audit-product aria-label="Товар"><option value="">Все товары</option></select><select class="btn" data-audit-filter aria-label="Привязка"><option value="all">Все операции</option><option value="unlinked">Без товара</option><option value="no_order">Без ID заказа</option></select></div>';
  const modes=ctx.productOnly?[['units','По ШК'],['ads','Реклама']]:[['products','Товары'],['orders','Заказы'],['units','По ШК'],['ads','Реклама']];
  showSheet('<div id="wbOperationAudit" data-request="'+escape(ctx.key)+'"><h3>'+escape(ctx.productOnly?(ctx.item?.name||'Товар WB'):'Операции '+title(market))+'</h3>'+(ctx.productOnly?'<div class="muted">'+title(market)+' · <span data-audit-period></span></div>':'')+'<div class="period" style="flex-wrap:wrap">'+[[1,'Сегодня'],[-1,'Вчера'],[7,'7 дней'],[30,'30 дней']].map(([d,label])=>'<button type="button" class="chip '+(n===d?'active':'')+'" data-audit-days="'+d+'">'+label+'</button>').join('')+'</div><details style="margin:8px 0"><summary>Свой период</summary><div class="two"><div class="field"><label>С</label><input type="date" data-audit-from></div><div class="field"><label>По</label><input type="date" data-audit-to></div></div><button type="button" class="btn full" data-audit-action="range">Показать</button></details>'+(ctx.productOnly?'':'<div data-audit-summary></div>')+'<div data-audit-controls hidden>'+selectors+'<div class="integration-actions" style="margin:8px 0">'+modes.map(([mode,label])=>'<button type="button" class="btn" data-audit-mode="'+mode+'">'+label+'</button>').join('')+'</div></div><div data-audit-body></div><div class="integration-actions" data-audit-pager></div>'+(ctx.productOnly?'':'<button type="button" class="btn full" style="margin-top:10px" data-audit-action="refresh">Обновить</button>')+'<button type="button" class="btn full" style="margin-top:8px" data-audit-action="back">Назад к отчёту</button></div>');
@@ -158,7 +198,7 @@ window.openWbOperationAudit=function(market,days=30,range=null,selection=null){
   if(button.dataset.auditDays){openWbOperationAudit(market,Number(button.dataset.auditDays));return}
   if(button.dataset.auditMode){if(ctx.productOnly&&!['units','ads'].includes(button.dataset.auditMode))return;ctx.mode=button.dataset.auditMode;ctx.page=1;draw(ctx);return}
   const action=button.dataset.auditAction;
-  if(action==='unit-retry'){const details=button.closest('[data-unit-key]'),group=ctx.units?.get(details?.dataset.unitKey);if(group)void loadUnitHistory(ctx,group,details,true)}
+  if(action==='unit-retry'){event.preventDefault?.();event.stopPropagation?.();const details=button.closest('[data-unit-key]'),group=ctx.units?.get(details?.dataset.unitKey);if(group)void loadUnitHistory(ctx,group,details,true)}
   else if(action==='product'){if(ctx.productOnly)return;ctx.product=button.dataset.key;ctx.item=null;ctx.mode='orders';ctx.page=1;draw(ctx)}
   else if(action==='prev'||action==='next'){ctx.page+=action==='prev'?-1:1;draw(ctx)}
   else if(action==='refresh')load(ctx,true);
@@ -169,5 +209,5 @@ window.openWbOperationAudit=function(market,days=30,range=null,selection=null){
  if(b){const iso=value=>new Date(Number(value)+5*3600000).toISOString().slice(0,10);from.value=iso(b.start??b.since);to.value=iso((b.end??b.until)-1)}
  void load(ctx);
 };
-const style=document.createElement('style');style.textContent='#wbOperationAudit .wb-audit-group{margin-top:8px;overflow-wrap:anywhere}#wbOperationAudit .wb-audit-product{border:0;background:none;color:inherit;font:inherit;text-align:left;width:100%;padding:0;cursor:pointer}#wbOperationAudit summary{cursor:pointer;list-style-position:inside}#wbOperationAudit .wb-audit-operation{border-top:1px solid var(--line);padding:10px 0;margin-top:8px}#wbOperationAudit select{width:100%;min-width:0;overflow:hidden}#wbOperationAudit .row b{white-space:nowrap}#wbOperationAudit input{min-width:0;max-width:100%}#wbOperationAudit .wb-audit-period{margin-top:10px}#wbOperationAudit .wb-audit-period-revenue{display:flex;align-items:baseline;justify-content:space-between;gap:8px;margin-bottom:10px}#wbOperationAudit .wb-audit-period .muted{font-size:12px}#wbOperationAudit .wb-audit-period b{font-size:17px;overflow-wrap:anywhere;min-width:0}#wbOperationAudit .wb-audit-calculation{display:grid;grid-template-columns:minmax(0,1fr) auto minmax(0,1fr) auto minmax(0,1fr);gap:6px;align-items:stretch}#wbOperationAudit .wb-audit-term{display:flex;flex-direction:column;justify-content:space-between;gap:5px;min-width:0}#wbOperationAudit .wb-audit-operator{align-self:end;padding-bottom:2px;font-size:18px;color:var(--muted)}#wbOperationAudit .wb-audit-unit-total{margin-top:10px}#wbOperationAudit .wb-audit-profit{padding-bottom:10px;margin-bottom:8px;border-bottom:1px solid var(--line);font-weight:750}#wbOperationAudit .wb-audit-profit b{font-size:22px}#wbOperationAudit .wb-audit-timeline{margin-top:12px}#wbOperationAudit .wb-audit-fields{margin-top:8px;color:var(--muted)}';document.head.appendChild(style);
+const style=document.createElement('style');style.textContent='#wbOperationAudit .wb-audit-group{margin-top:8px;overflow-wrap:anywhere}#wbOperationAudit .wb-audit-product{border:0;background:none;color:inherit;font:inherit;text-align:left;width:100%;padding:0;cursor:pointer}#wbOperationAudit summary{cursor:pointer;list-style-position:inside}#wbOperationAudit .wb-audit-operation{border-top:1px solid var(--line);padding:10px 0;margin-top:8px}#wbOperationAudit select{width:100%;min-width:0;overflow:hidden}#wbOperationAudit .row b{white-space:nowrap}#wbOperationAudit input{min-width:0;max-width:100%}#wbOperationAudit .wb-audit-period{margin-top:10px}#wbOperationAudit .wb-audit-period-revenue{display:flex;align-items:baseline;justify-content:space-between;gap:8px;margin-bottom:10px}#wbOperationAudit .wb-audit-period .muted{font-size:12px}#wbOperationAudit .wb-audit-period b{font-size:17px;overflow-wrap:anywhere;min-width:0}#wbOperationAudit .wb-audit-scope{margin-bottom:6px}#wbOperationAudit .wb-audit-calculation{display:grid;grid-template-columns:minmax(0,1fr) auto minmax(0,1fr) auto minmax(0,1fr);gap:6px;align-items:stretch}#wbOperationAudit .wb-audit-term{display:flex;flex-direction:column;justify-content:space-between;gap:5px;min-width:0}#wbOperationAudit .wb-audit-operator{align-self:end;padding-bottom:2px;font-size:18px;color:var(--muted)}#wbOperationAudit .wb-audit-unit-total{margin-top:10px}#wbOperationAudit .wb-audit-profit{padding-bottom:10px;margin-bottom:8px;border-bottom:1px solid var(--line);font-weight:750}#wbOperationAudit .wb-audit-profit b{font-size:22px}#wbOperationAudit .wb-audit-timeline{margin-top:12px}#wbOperationAudit .wb-audit-fields{margin-top:8px;color:var(--muted)}';document.head.appendChild(style);
 })();
