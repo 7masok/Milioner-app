@@ -544,6 +544,26 @@ test('UI opens a linked sticker without requiring first-row nmId, accepts canoni
 });
 
 function placedOrders(count=25){return Array.from({length:count},(_,i)=>({market:'WB',order_id:String(i+1),entry_id:String(i+1),creation_date:START+8*3600000,sku:'item',qty:1,state:i%2?'cancelled':'new',raw_json:JSON.stringify({order:{orderUid:'placed-'+i,nmId:'100',skus:['barcode-a']},identity:{nmId:'100',barcode:'barcode-a',article:'item'}})}))}
+test('screenshot transport expense with its own numeric reference retains expense without hiding known sale profit',()=>{
+ const saleDay=Date.parse('2026-10-11T00:00:00+05:00'),shkId='57802435097';
+ const rows=[row(931,'Логистика',{shkId,srid:'real-order',orderDt:'2026-10-07',deliveryService:274.7},{rr_date:saleDay}),
+  row(932,'Продажа',{shkId,srid:'real-order',orderDt:'2026-10-07',retailPriceWithDisc:1857.89,forPay:1343.53},{rr_date:saleDay}),
+  row(933,'Возмещение издержек по перевозке/по складским операциям с товаром',{shkId,srid:'10667740',orderDt:'2026-10-11',rebillLogisticCost:13.27},{rr_date:saleDay})];
+ const source={...base,rows,orderFinanceRows:rows,allocationAdRows:[{day:'2026-10-07',nmIds:['100'],amount:200,currency:'KZT'},{day:'2026-10-11',nmIds:['100'],amount:50,currency:'KZT'}],purchaseRows:[{productId:'a',qty:1,status:'received',landedUnitCost:174.92531647326632}],since:saleDay,until:saleDay+DAY},before=JSON.stringify(source);
+ const data=buildWbOperationAudit(source),fee=data.operations.find(r=>r.srid==='10667740');
+ assert.ok(!fee.adUnknown);assert.equal(fee.orderDay,'');assert.equal(data.operations.length,3);assert.equal(data.totals[0].rebill,13.27);
+ assert.ok(data.operations.filter(r=>r.kind==='sale'||r.kind==='logistics').every(r=>r.orderDay==='2026-10-07'&&!r.adUnknown));
+ const html=uiFixture().context.window.fixture.periodMetricsHtml(data.operations);assert.ok(html.includes('≈ 880,63 ₸'));
+ const full=buildWbOperationAudit({...source,allDates:true}),allocation=full.advertisingAllocation.find(a=>a.day==='2026-10-07');
+ assert.equal(allocation.qty,1);assert.equal(full.operations.filter(r=>r.kind==='advertising').length,1);assert.equal(full.operations.find(r=>r.kind==='advertising').orderAdvertising,200);
+ assert.ok(uiFixture().context.window.fixture.historyHtml(full).includes('-13,27 ₸'));assert.equal(JSON.stringify(source),before);
+});
+test('cost-only posting cannot supply a missing real order date or bypass an actual advertising ambiguity',()=>{
+ const rows=[row(941,'Продажа',{srid:'unknown-real-order',orderDt:'',forPay:700}),row(942,'Возмещение издержек по перевозке/по складским операциям с товаром',{srid:'numeric-fee',orderDt:'2026-10-01',rebillLogisticCost:13.27})];
+ const data=buildWbOperationAudit({...base,rows,orderFinanceRows:rows,allocationAdRows:[{day:'2026-10-01',nmIds:['100'],amount:200,currency:'KZT'}],purchaseRows:[{productId:'a',qty:1,status:'received',landedUnitCost:100}]});
+ assert.equal(data.operations.find(r=>r.kind==='sale').adUnknown,true);assert.ok(!data.operations.find(r=>r.kind==='other').adUnknown);
+ assert.ok(uiFixture().context.window.fixture.periodMetricsHtml(data.operations).includes('>—</b>'));assert.equal(data.advertisingAllocation[0].qty,0);
+});
 test('transport posting date does not conflict with real order date or suppress screenshot profit',async()=>{
  const purchaseDate='2026-09-24T17:34:16Z',saleDay=Date.parse('2026-10-11T00:00:00+05:00');
  const rows=[row(901,'Возмещение издержек по перевозке/по складским операциям с товаром',{shkId:'58347387921',orderDt:'2026-10-01T00:00:00Z',rebillLogisticCost:0.37,nmId:0},{nm_id:''}),

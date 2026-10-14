@@ -264,12 +264,13 @@ export function buildWbOperationAudit({ market, rows = [], links = [], products 
   }
   // Cost-only postings can carry the posting day as orderDt (for example
   // re-billed transport). They are expenses, not evidence of order placement.
-  const ordersForAds=[...cachedOrders,...financeOrders.filter(r=>['sale','return','logistics'].includes(r.kind)).map(r=>({...r,qty:Math.max(1,r.saleQty||r.returnQty),source:'finance_order_date'}))];
+  const orderEvidence=r=>['sale','return','logistics'].includes(r.kind);
+  const ordersForAds=[...cachedOrders,...financeOrders.filter(orderEvidence).map(r=>({...r,qty:Math.max(1,r.saleQty||r.returnQty),source:'finance_order_date'}))];
   const allocationAds=allocationAdRows===null?advertising:normalizeAds(allocationAdRows);
   const allocation=allocateWbOrderAdvertising({market,orders:ordersForAds,finance:financeOrders,advertising:allocationAds,days:allocationDays});
   const placedOrders=new Map(allocation.orders.map(r=>[JSON.stringify([r.productId,r.srid]),r])),datedOrders=new Set(placedOrders.keys()),advertisedProducts=new Set(allocationAds.filter(a=>a.amount!==0&&a.productId).map(a=>a.productId));
   const operationOrders=new Map(),conflictingOrders=new Set(allocation.conflicts);
-  for(const r of operations){const k=JSON.stringify([r.productId,r.srid]),peers=operationOrders.get(k)||[];peers.push(r);operationOrders.set(k,peers);r.orderDay=placedOrders.get(k)?.orderDay||'';if(advertisedProducts.has(r.productId)&&(!datedOrders.has(k)||conflictingOrders.has(k)))r.adUnknown=true;}
+  for(const r of operations){const k=JSON.stringify([r.productId,r.srid]),peers=operationOrders.get(k)||[];peers.push(r);operationOrders.set(k,peers);r.orderDay=placedOrders.get(k)?.orderDay||'';if(orderEvidence(r)&&advertisedProducts.has(r.productId)&&(!datedOrders.has(k)||conflictingOrders.has(k)))r.adUnknown=true;}
   for (const entry of allocation.entries) {
     const date=Date.parse(entry.orderDay+'T00:00:00+05:00');
     if (!allDates&&(date<since||date>=until)) continue;
