@@ -107,6 +107,31 @@ function linkProduct(row, index) {
 }
 function adNmIds(value) { const values = Array.isArray(value) ? value : (() => { try { return JSON.parse(value || '[]'); } catch { return []; } })(); return Array.isArray(values) ? [...new Set(values.map(id).filter(Boolean))] : []; }
 
+// A provisional updNum=0 can remain in the cache after the same billing entry
+// receives its document number. Suppress only an exact, uniquely confirmed match
+// in this read-only calculation; never merge distinct numbered charges.
+function advertisingWithoutProvisionalDuplicates(rows) {
+  const identified = rows.map(row => {
+    const raw = object(row.raw_json), document = text(field(raw, ['updNum', 'upd_num'], row.upd_num));
+    const time = text(field(raw, ['updTime', 'upd_time'], ''));
+    const payment = text(field(raw, ['paymentType', 'payment_type'], row.paymentType ?? row.payment_type));
+    const currency = text(field(raw, ['currency', 'currencyCode', 'currency_code'], row.currency)).toUpperCase();
+    const advertId = text(row.advertId ?? row.advert_id), day = text(row.day);
+    const amount = Number(row.amount), rawAmount = field(raw, ['updSum', 'upd_sum', 'amount'], null);
+    const valid = /^\d+$/.test(document) && /^20\d{2}-\d{2}-\d{2}T/.test(time) && Number.isFinite(Date.parse(time))
+      && payment && currency && currency !== 'UNKNOWN' && advertId && day && Number.isFinite(amount)
+      && rawAmount !== null && Number(rawAmount) === amount;
+    return { row, document, signature: valid ? JSON.stringify([row.market || '', day, advertId, time, amount, payment, currency,
+      adNmIds(row.nmIds ?? row.nm_ids).sort()]) : '' };
+  });
+  const documents = new Map();
+  for (const entry of identified) {
+    if (!entry.signature || /^0+$/.test(entry.document)) continue;
+    const ids = documents.get(entry.signature) || new Set(); ids.add(entry.document); documents.set(entry.signature, ids);
+  }
+  return identified.filter(entry => !entry.signature || !/^0+$/.test(entry.document) || documents.get(entry.signature)?.size !== 1).map(entry => entry.row);
+}
+
 // Saved order costs are read, never consumed again. A fallback is explicitly an estimate,
 // not FIFO for a physical sticker, and does not allocate campaign spend to that sticker.
 function costResolver(index, purchaseRows, saleCosts, market) {
@@ -207,7 +232,7 @@ export function buildWbOperationAudit({ market, rows = [], links = [], products 
   const cachedOrders=orderRows.filter(o=>!o.market||o.market===market).map(o=>{
     const raw=object(o.raw_json),identity=raw.identity||{},order=raw.order||raw;
     const r={nmId:id(identity.nmId||order.nmId),barcode:id(identity.barcode||order.skus?.[0]),vendorCode:text(identity.article||order.article||o.sku)};
-    return {...r,...linkProduct(r,index),market,srid:id(order.orderUid||raw.orderUid||raw.srid||o.order_id||o.orderId),
+    return {...r,...linkProduct(r,index),market,srid:id(order.rid||order.srid||raw.rid||raw.srid||order.orderUid||raw.orderUid||o.order_id||o.orderId),
       cacheKey:JSON.stringify([o.order_id||o.orderId,o.entry_id||o.entryId]),orderDay:wbOrderDay(o.creation_date||o.creationDate||order.createdAt),qty:number(o.qty),source:'order_cache'};
   });
   const identityOrders=new Map();
@@ -237,7 +262,7 @@ export function buildWbOperationAudit({ market, rows = [], links = [], products 
     if (row.unitKey) { const unit = units.get(row.unitKey) || { key: row.unitKey, productKey: row.productKey, shkId: row.shkId, rows: [], srids: new Set() }; unit.rows.push(row.rrdId); if (row.srid) unit.srids.add(row.srid); units.set(row.unitKey, unit); }
   };
   operations.forEach(register);
-  const normalizeAds = source => source.filter(row => !row.market || row.market === market).map((row, n) => {
+  const normalizeAds = source => advertisingWithoutProvisionalDuplicates(source.filter(row => !row.market || row.market === market)).map((row, n) => {
     if (!Number.isFinite(Number(row.amount))) throw new Error('Некорректный расход рекламы WB');
     const nmIds = adNmIds(row.nmIds ?? row.nm_ids), candidates = new Set(); let missing = !nmIds.length;
     for (const nm of nmIds) {
