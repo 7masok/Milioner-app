@@ -179,7 +179,7 @@ test('both report paths expose product entry without a separate audit button, be
   const html = readFileSync(new URL('../../index.html', import.meta.url), 'utf8');
   const server = readFileSync(new URL('../src/server.js', import.meta.url), 'utf8');
   const report = readFileSync(new URL('../../kaspi-report-v2.js', import.meta.url), 'utf8');
-  const tag = '<script src="./wb-operation-audit-v1.js?v=20261014-two-tabs"></script>';
+  const tag = '<script src="./wb-operation-audit-v1.js?v=20261014-ad-formula"></script>';
   assert.ok(html.includes(tag)); assert.ok(html.indexOf(tag) < html.lastIndexOf('initOwnerAuth()'));
   assert.ok(html.includes('async function openWbFinanceReport(market,days){return openStoreDetail(market,days)}'));
   assert.ok(report.includes('wbReportProductAuditAction(market,days,'));
@@ -470,7 +470,7 @@ test('period metrics stay scoped and tomorrow sale cannot admit an expense-only 
  f.context.apiJson=async url=>url.includes('/wb-unit-history')?{ok:true,scope:'unit-history',market:'WB',shkId:'58490824571',nmId:'100',productId:'a',operations:full.operations,range:full.range}:{ok:true,...period};
  f.context.window.openWbProductOperations('WB',1,{productId:'a'});await new Promise(r=>setImmediate(r));
  const summary=f.context.window.fixture.periodMetricsHtml(period.operations);
- assert.ok(summary.includes('wb-audit-period'));assert.ok(summary.includes('Выручка за период</span><b>0 ₸'));assert.ok(summary.includes('Прибыль за период · после рекламы'));assert.ok(summary.includes('-7,19 ₸'));assert.ok(!summary.includes('733,95'));
+ assert.ok(summary.includes('wb-audit-period'));assert.ok(summary.includes('Выручка за период</span><b>0 ₸'));assert.ok(summary.includes('Без рекламы'));assert.ok(summary.includes('Реклама'));assert.ok(summary.includes('Результат'));assert.ok(summary.includes('-7,19 ₸'));assert.ok(!summary.includes('733,95'));
  const body=f.el.querySelector('[data-audit-body]').innerHTML;
  assert.ok(body.includes('Нет продаж товара за выбранный период'));assert.ok(!body.includes('data-unit-key'));assert.ok(!body.includes('58490824571'));
  const history=f.context.window.fixture.historyHtml(full);assert.ok(history.includes('Прибыль после рекламы · весь путь'));assert.ok(history.includes('733,95 ₸'));
@@ -525,6 +525,28 @@ test('period profit uses known cost once, preserves unknown/foreign amounts and 
  const snapshot=JSON.stringify(known),html=f.context.window.fixture.periodMetricsHtml(known.operations);assert.ok(html.includes('1 000 ₸'));assert.ok(html.includes('>—</b>'));assert.ok(!html.includes('301 ₸'));assert.equal(JSON.stringify(known),snapshot);
  const missing=f.context.window.fixture.periodMetricsHtml(build([row(3,'Продажа',{retailPriceWithDisc:1000,forPay:700})]).operations);assert.ok(missing.includes('>—</b>'));assert.ok(!missing.includes('700 ₸'));
  const foreign=f.context.window.fixture.periodMetricsHtml(buildWbOperationAudit({...base,rows:[row(4,'Продажа',{currency:'RUB',forPay:700})],saleCosts:[{productId:'a',srid:'order-a',qty:1,cost:200}]}).operations);assert.ok(foreign.includes('>—</b>'));assert.ok(!foreign.includes('500'));
+});
+function formulaValues(html){return ['before','advertising','result'].map(name=>html.match(new RegExp('class="wb-audit-term wb-audit-'+name+'"[^>]*><span[^>]*>[^<]*</span><b[^>]*>([^<]*)</b>'))?.[1].replaceAll('\u00a0',' '))}
+test('collapsed sticker displays before-ads minus ads equals result without fetching or expanding history',async()=>{
+ const rows=[row(950,'Продажа',{srid:'placed-0',orderDt:'2026-10-01T06:00:00Z',retailPriceWithDisc:1500,forPay:1000})];
+ const data=buildWbOperationAudit({...base,rows,orderFinanceRows:rows,orderRows:placedOrders(1),saleCosts:[{productId:'a',srid:'placed-0',qty:1,cost:100}],allocationAdRows:[{day:'2026-10-01',nmIds:['100'],amount:500,currency:'KZT'}]}),before=JSON.stringify(data),f=uiFixture(),calls=[];
+ f.context.apiJson=async url=>{calls.push(url);return {ok:true,...data}};
+ f.context.window.openWbProductOperations('WB',1,{productId:'a'});await new Promise(r=>setImmediate(r));
+ const body=f.el.querySelector('[data-audit-body]').innerHTML,summary=body.slice(body.indexOf('<summary>'),body.indexOf('</summary>'));
+ assert.deepEqual(formulaValues(summary),['900 ₸','500 ₸','≈ 400 ₸']);
+ for(const label of ['Без рекламы','Реклама','Результат'])assert.ok(summary.includes('>'+label+'</span>'));
+ assert.ok(summary.includes('>−</span>'));assert.ok(summary.includes('>=</span>'));assert.ok(!body.match(/<details[^>]*\sopen[ >]/));assert.equal(calls.length,1);assert.ok(!calls[0].includes('unit-history'));
+ assert.equal(JSON.stringify(data),before);
+});
+test('collapsed ad formula preserves known zero, real refund sign and unknown costs/advertising',()=>{
+ const f=uiFixture(),baseRows=buildWbOperationAudit({...base,rows:[row(960,'Продажа',{forPay:1000})],saleCosts:[{productId:'a',srid:'order-a',qty:1,cost:100}]}).operations;
+ const render=rows=>f.context.window.fixture.periodMetricsHtml(rows);
+ assert.deepEqual(formulaValues(render(baseRows)),['900 ₸','0 ₸','900 ₸']);
+ const ad={kind:'advertising',currency:'KZT',saleQty:0,returnQty:0,beforeAdsAndCost:0,orderAdvertising:-50};
+ const refund=render([...baseRows,ad]);assert.deepEqual(formulaValues(refund),['900 ₸','50 ₸','950 ₸']);assert.ok(refund.includes('>+</span>'));assert.ok(!refund.includes('>−</span>'));
+ const unknownAd=render(baseRows.map(r=>({...r,adUnknown:true})));assert.deepEqual(formulaValues(unknownAd),['900 ₸','—','—']);
+ const unknownCost=render([...baseRows.map(r=>({...r,costKzt:null})),{...ad,orderAdvertising:500}]);assert.deepEqual(formulaValues(unknownCost),['—','500 ₸','—']);
+ const mixed=render([...baseRows,{...ad,currency:'RUB',orderAdvertising:500}]);assert.ok(mixed.includes('900 ₸'));assert.ok(!mixed.includes('400 ₸'));assert.ok(formulaValues(mixed).includes('—'));
 });
 test('already linked expense recovers missing nm from exact sticker peer or cabinet product identity without changing source',()=>{
  const rows=[row(1,'Логистика',{shkId:'58542540931',nmId:'',rebillLogisticCost:12},{nm_id:''}),row(2,'Продажа',{shkId:'58542540931',nmId:'100',forPay:700})],snapshot=JSON.stringify(rows);
