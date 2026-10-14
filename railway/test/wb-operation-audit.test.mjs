@@ -179,7 +179,7 @@ test('both report paths expose product entry without a separate audit button, be
   const html = readFileSync(new URL('../../index.html', import.meta.url), 'utf8');
   const server = readFileSync(new URL('../src/server.js', import.meta.url), 'utf8');
   const report = readFileSync(new URL('../../kaspi-report-v2.js', import.meta.url), 'utf8');
-  const tag = '<script src="./wb-operation-audit-v1.js?v=20261014-order-date"></script>';
+  const tag = '<script src="./wb-operation-audit-v1.js?v=20261014-two-tabs"></script>';
   assert.ok(html.includes(tag)); assert.ok(html.indexOf(tag) < html.lastIndexOf('initOwnerAuth()'));
   assert.ok(html.includes('async function openWbFinanceReport(market,days){return openStoreDetail(market,days)}'));
   assert.ok(report.includes('wbReportProductAuditAction(market,days,'));
@@ -278,7 +278,8 @@ test('product details omit store totals, reconciliation, product selectors and u
   assert.ok(!f.markup.includes('Сверка и привязки'));
   assert.ok(!f.markup.includes('data-audit-mode="products"'));
   assert.ok(!f.markup.includes('data-audit-action="refresh"'));
-  for(const mode of ['orders','units','ads'])assert.ok(f.markup.includes('data-audit-mode="'+mode+'"'));
+  for(const mode of ['units','ads'])assert.ok(f.markup.includes('data-audit-mode="'+mode+'"'));
+  assert.ok(!f.markup.includes('data-audit-mode="orders"'));
   assert.equal(f.elements.get('[data-audit-pager]').innerHTML,'');
   assert.ok(!f.elements.get('[data-audit-body]').innerHTML.includes('900'));
 });
@@ -303,6 +304,7 @@ test('product-only missing-unit count and advertising totals exclude other produ
   f.context.apiJson=async()=>({ok:true,...data});
   f.context.window.openWbProductOperations('WB',30,{productId:'a',name:'A'});await new Promise(r=>setImmediate(r));
   assert.ok(f.elements.get('[data-audit-body]').innerHTML.includes('Продажи без ШК: 1 оп.'));
+  assert.ok(!f.elements.get('[data-audit-body]').innerHTML.includes('доступны в «Заказах»'));
   f.listeners.get('click')({target:{closest:()=>({dataset:{auditMode:'ads'}})}});
   const html=f.elements.get('[data-audit-body]').innerHTML;
   assert.ok(html.includes('Реклама товара'));assert.ok(!html.includes('Вся реклама'));assert.ok(!html.includes('900'));
@@ -316,7 +318,17 @@ test('product-only period changes stay compact and cannot reset to the entire pr
   const ctx=f.context.window.fixture.active;assert.equal(ctx.productOnly,true);assert.equal(ctx.product,'p:a');
   assert.equal(f.el.querySelector('[data-audit-summary]'),null);
   click({auditMode:'products'});assert.equal(ctx.mode,'units');
+  click({auditMode:'orders'});assert.equal(ctx.mode,'units');
+  click({auditMode:'ads'});assert.equal(ctx.mode,'ads');
+  click({auditMode:'units'});assert.equal(ctx.mode,'units');
   click({auditAction:'product',key:'p:b'});assert.equal(ctx.product,'p:a');
+});
+test('old product orders selection opens physical units while generic audit keeps its orders mode',async()=>{
+ const f=uiFixture();
+ f.context.window.openWbOperationAudit('WB',7,null,{product:'p:a',item:{productId:'a',name:'A'},productOnly:true,mode:'orders'});await new Promise(r=>setImmediate(r));
+ assert.equal(f.context.window.fixture.active.mode,'units');assert.equal(f.context.window.fixture.active.product,'p:a');assert.ok(!f.markup.includes('data-audit-mode="orders"'));
+ f.context.window.openWbOperationAudit('WB',7,null,{product:'p:a',productOnly:false,mode:'orders'});await new Promise(r=>setImmediate(r));
+ assert.equal(f.context.window.fixture.active.mode,'orders');assert.ok(f.markup.includes('data-audit-mode="orders"'));assert.ok(f.el.querySelector('[data-audit-body]').innerHTML.includes('Заказ order-a'));
 });
 
 
