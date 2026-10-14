@@ -379,18 +379,23 @@ reportsRouter.get('/wb-operation-audit', asyncRoute(async (req, res) => {
   res.json({ ok: true, ...audit, history: history.rows[0] || null, sync: sync.rows[0] || null });
 }));
 
-// A sticker drill-down is lifetime cached history, independent of report-period totals.
-reportsRouter.get('/wb-unit-history', asyncRoute(async (req, res) => {
-  const selected = market(req.query.market), shkId = String(req.query.shkId || '').trim(), nmId = String(req.query.nmId || '').trim();
-  const productId = String(req.query.productId || '').trim();
-  if (!['WB', 'WB2'].includes(selected) || !/^\d{1,20}$/.test(shkId) || (nmId && !/^\d{1,20}$/.test(nmId)) || (!nmId && !productId) || productId.length > 150) {
-    return res.status(400).json({ ok: false, error: 'Проверьте кабинет, ШК и товар' });
-  }
+// Periods select sold stickers; both folded and expanded cards use their same cached lifetime history.
+function unitHistoryRequest(value={}){
+ value=value&&typeof value==='object'&&!Array.isArray(value)?value:{};
+ return {shkId:String(value.shkId||'').trim(),nmId:String(value.nmId||'').trim(),productId:String(value.productId||'').trim()};
+}
+function validUnitHistoryRequest({shkId,nmId,productId}){
+ return /^\d{1,20}$/.test(shkId)&&(!nmId||/^\d{1,20}$/.test(nmId))&&(nmId||productId)&&productId.length<=150;
+}
+async function readWbUnitHistoryBatch(selected,requests){
   // Read unknown-nm expense rows too; the pure audit recovers them only through an unambiguous unit.
-  const finance = await pool.query(`SELECT * FROM wb_finance_rows WHERE market=$1
+  const shkIds=[...new Set(requests.map(r=>r.shkId))];
+  const finance = requests.length===1 ? await pool.query(`SELECT * FROM wb_finance_rows WHERE market=$1
     AND COALESCE(NULLIF(raw_json::jsonb->>'shkId',''),NULLIF(raw_json::jsonb->>'shk_id',''))=$2
-    ORDER BY rr_date,rrd_id LIMIT 5001`, [selected, shkId]);
-  if (finance.rows.length > 5000) return res.status(422).json({ ok: false, error: 'Больше 5 000 операций одного ШК. История не усечена.' });
+    ORDER BY rr_date,rrd_id LIMIT 5001`, [selected, requests[0].shkId]) : await pool.query(`SELECT * FROM wb_finance_rows WHERE market=$1
+    AND COALESCE(NULLIF(raw_json::jsonb->>'shkId',''),NULLIF(raw_json::jsonb->>'shk_id',''))=ANY($2::text[])
+    ORDER BY rr_date,rrd_id LIMIT 50001`, [selected, shkIds]);
+  if (finance.rows.length > (requests.length===1?5000:50000)) return {status:422,ok:false,error:requests.length===1?'Больше 5 000 операций одного ШК. История не усечена.':'Больше 50 000 операций. История не усечена.'};
   const srids = [...new Set(finance.rows.map(x => {
     const raw = typeof x.raw_json === 'string' ? JSON.parse(x.raw_json) : x.raw_json || {};
     return String(raw.srid || raw.orderUid || raw.order_uid || '').trim();
@@ -405,21 +410,42 @@ reportsRouter.get('/wb-unit-history', asyncRoute(async (req, res) => {
       WHERE s.channel=$1 AND COALESCE(o.raw_json::jsonb->'order'->>'orderUid',o.raw_json::jsonb->>'orderUid',o.raw_json::jsonb->>'srid')=ANY($2::text[])
       LIMIT 50001`, [selected, srids]) : Promise.resolve({ rows: [] })
   ]);
-  if (purchases.rows.length > 50000 || costs.rows.length > 50000) return res.status(422).json({ ok: false, error: 'Слишком много записей себестоимости.' });
+  if (purchases.rows.length > 50000 || costs.rows.length > 50000) return {status:422,ok:false,error:'Слишком много записей себестоимости.'};
   const dates = finance.rows.map(x => Number(x.rr_date)).filter(x => Number.isFinite(x) && x > 0);
   const since = dates.length ? Math.min(...dates) : 0, until = dates.length ? Math.max(...dates) + 1 : 1;
   const allocationInputs=await readWbOrderAdvertisingInputs(selected,finance.rows);
-  if(allocationInputs.error)return res.status(422).json({ok:false,error:allocationInputs.error});
+  if(allocationInputs.error)return {status:422,ok:false,error:allocationInputs.error};
   const audit = buildWbOperationAudit({ market: selected, rows: finance.rows, links: links.rows, products: products.rows,
     purchaseRows: purchases.rows, saleCosts: costs.rows, since, until, allDates: true,...allocationInputs });
   const byId = new Map(audit.operations.map(x => [x.rrdId, x]));
-  const units = audit.units.filter(u => u.shkId === shkId && (!productId || u.productKey === 'p:' + productId)
-    && (!nmId || u.rows.some(id => byId.get(id)?.nmId === nmId)));
-  if (units.length > 1) return res.status(409).json({ ok: false, error: 'Неоднозначная привязка истории ШК. Нельзя объединить разные товары.' });
-  const operations = units.length ? units[0].rows.map(id => byId.get(id)) : [];
-  const resolvedNmId = nmId || operations.find(x => x.nmId)?.nmId || '';
-  res.json({ ok: true, scope: 'unit-history', market: selected, shkId, nmId: resolvedNmId, productId,
-    operations, range: { since: operations.length ? Math.min(...operations.map(x => x.date)) : 0, until: operations.length ? Math.max(...operations.map(x => x.date)) + 1 : 1, timezone: 'Asia/Almaty' } });
+  const histories=requests.map(({shkId,nmId,productId})=>{
+    const count=finance.rows.filter(row=>{const raw=typeof row.raw_json==='string'?JSON.parse(row.raw_json):row.raw_json||{};return String(raw.shkId||raw.shk_id||'')===shkId}).length;
+    if(count>5000)return {ok:false,shkId,nmId,productId,error:'Больше 5 000 операций одного ШК. История не усечена.',status:422};
+    const units = audit.units.filter(u => u.shkId === shkId && (!productId || u.productKey === 'p:' + productId)
+      && (!nmId || u.rows.some(id => byId.get(id)?.nmId === nmId)));
+    if (units.length > 1) return {ok:false,shkId,nmId,productId,error:'Неоднозначная привязка истории ШК. Нельзя объединить разные товары.',status:409};
+    const operations = units.length ? units[0].rows.map(id => byId.get(id)) : [];
+    const resolvedNmId = nmId || operations.find(x => x.nmId)?.nmId || '';
+    return {ok:true,scope:'unit-history',market:selected,shkId,nmId:resolvedNmId,productId,operations,
+      range:{since:operations.length?Math.min(...operations.map(x=>x.date)):0,until:operations.length?Math.max(...operations.map(x=>x.date))+1:1,timezone:'Asia/Almaty'}};
+  });
+  return {ok:true,histories};
+}
+reportsRouter.get('/wb-unit-history',asyncRoute(async(req,res)=>{
+ const selected=market(req.query.market),request=unitHistoryRequest(req.query);
+ if(!['WB','WB2'].includes(selected)||!validUnitHistoryRequest(request))return res.status(400).json({ok:false,error:'Проверьте кабинет, ШК и товар'});
+ const result=await readWbUnitHistoryBatch(selected,[request]);
+ if(!result.ok)return res.status(result.status).json({ok:false,error:result.error});
+ const history=result.histories[0];return res.status(history.status||200).json(history);
+}));
+reportsRouter.get('/wb-unit-histories',asyncRoute(async(req,res)=>{
+ const selected=market(req.query.market);let values;try{values=JSON.parse(String(req.query.units||''))}catch{}
+ if(!['WB','WB2'].includes(selected)||!Array.isArray(values)||!values.length||values.length>20)return res.status(400).json({ok:false,error:'Выберите от 1 до 20 ШК'});
+ const requests=values.map(unitHistoryRequest);
+ if(!requests.every(validUnitHistoryRequest))return res.status(400).json({ok:false,error:'Проверьте кабинет, ШК и товар'});
+ const result=await readWbUnitHistoryBatch(selected,requests);
+ if(!result.ok)return res.status(result.status).json({ok:false,error:result.error});
+ res.json({ok:true,scope:'unit-histories',market:selected,histories:result.histories});
 }));
 
 reportsRouter.get('/wb-finance-products', asyncRoute(async (req, res) => {
