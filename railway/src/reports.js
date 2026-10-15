@@ -5,6 +5,8 @@ import { buildWbOperationAudit } from './wb-operation-audit.js';
 import { wbFinancePeriodSql } from './wb-finance-period.js';
 import { wbOrderDay } from './wb-order-advertising.js';
 import { reconcileWbReportProducts } from './wb-report-reconciliation.js';
+import { config } from './config.js';
+import { credentialFor } from './connections.js';
 
 export const reportsRouter = express.Router();
 const ALMATY_OFFSET = 5 * 60 * 60 * 1000;
@@ -162,13 +164,13 @@ reportsRouter.get('/products', asyncRoute(async (_req, res) => {
 
 reportsRouter.get('/market-status', asyncRoute(async (_req, res) => {
   const result = [];
-  for (const selected of ['Kaspi', 'WB', 'WB2', 'Ozon']) {
+  for (const selected of (config.storeProfile==='WB3'?['WB']:['Kaspi', 'WB', 'WB2', 'Ozon'])) {
     const [latest, success, count] = await Promise.all([
       pool.query('SELECT * FROM sync_runs WHERE market=$1 ORDER BY id DESC LIMIT 1', [selected]),
       pool.query('SELECT MAX(finished_at) AS "lastSuccessAt" FROM sync_runs WHERE market=$1 AND ok=1', [selected]),
       pool.query('SELECT COUNT(*)::bigint AS n FROM marketplace_order_lines WHERE market=$1', [selected])
     ]);
-    const configured = selected === 'Kaspi' ? true : selected === 'WB' ? Boolean(process.env.WB_TOKEN) : selected === 'WB2' ? Boolean(process.env.WB_TOKEN_2) : false;
+    const configured = config.storeProfile==='WB3'?Boolean(await credentialFor('WB')):selected === 'Kaspi' ? true : selected === 'WB' ? Boolean(process.env.WB_TOKEN) : selected === 'WB2' ? Boolean(process.env.WB_TOKEN_2) : false;
     const lastAttempt = Number(latest.rows[0]?.started_at || 0);
     result.push({ market: selected, configured, latest: latest.rows[0] || null,
       lastSuccessAt: Number(success.rows[0]?.lastSuccessAt || 0) || null, orderLines: Number(count.rows[0]?.n || 0),

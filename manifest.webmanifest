@@ -1,13 +1,13 @@
 {
-  "name": "Склад",
-  "short_name": "Склад",
-  "description": "Управление складом и продажами",
+  "name": "Инферно · склад",
+  "short_name": "Инферно",
+  "description": "Склад магазина Инферно",
   "lang": "ru",
   "start_url": "/",
   "scope": "/",
   "display": "standalone",
   "background_color": "#f5f6f8",
-  "theme_color": "#111111",
+  "theme_color": "#b33c12",
   "icons": [
     {
       "src": "/app-icon.svg",
@@ -21,5 +21,6 @@
       "type": "image/svg+xml",
       "purpose": "any maskable"
     }
-  ]
+  ],
+  "id": "/inferno"
 }

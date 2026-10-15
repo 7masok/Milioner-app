@@ -21,7 +21,7 @@ test('warehouse startup never starts finance hydration, watcher or statement imp
 });
 test('installed PWA retires old statement shares without reading or deleting data',async()=>{
  const manifest=JSON.parse(fs.readFileSync(new URL('../../manifest.webmanifest',import.meta.url),'utf8'));
- assert.equal(manifest.name,'Склад');assert.equal(manifest.share_target,undefined);
+ assert.equal(manifest.name,'Инферно · склад');assert.equal(manifest.share_target,undefined);
  const handlers={};vm.runInNewContext(fs.readFileSync(new URL('../../sw.js',import.meta.url),'utf8'),{self:{location:{origin:'https://warehouse.example'},addEventListener:(name,fn)=>handlers[name]=fn},URL,Response,Promise});
  let response;handlers.fetch({request:{method:'POST',url:'https://warehouse.example/share/finance-statement',formData(){throw Error('must not read statement')}},respondWith:r=>response=r});
  const redirect=await response;assert.equal(redirect.status,303);assert.equal(redirect.headers.get('location'),'https://warehouse.example/');

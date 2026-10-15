@@ -17,6 +17,7 @@ import { stockRouter, kaspiFeedHandler } from './stock.js';
 import { hydrateWarehouseProducts } from './warehouse-products.js';
 import { startKaspiSyncLoop, syncKaspiOrders } from './kaspi-sync.js';
 import { startWbSyncLoop, syncWbOrders } from './wb-sync.js';
+import { startWb3OrderHistoryLoop, syncWb3OrderHistory } from './wb3-orders.js';
 import { syncWbStockMarket, validateWbStockLinks } from './wb-stock-sync.js';
 import { authConfig, login, requireAppSession, webauthnLoginOptions, webauthnLoginVerify, webauthnRegisterOptions, webauthnRegisterVerify, listWebauthnCredentials, deleteWebauthnCredential } from './auth.js';
 import { configuredWbConnectionIds, connectionsRouter } from './connections.js';
@@ -38,6 +39,7 @@ const repositoryRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url))
 const frontendFiles = Object.freeze([
   'wb3-env.js',
   'wb3-profile.js',
+  'wb3-orders-v1.js',
   'manifest.webmanifest',
   'sw.js',
   'app-icon.svg',
@@ -220,6 +222,15 @@ app.post('/api/wb-sync-now', requireTrustedOrigin, async (req, res, next) => {
   } catch (error) { next(error); }
 });
 
+app.post('/api/wb3/sync', requireTrustedOrigin, async (_req,res,next)=>{
+  if(config.storeProfile!=='WB3')return res.sendStatus(404);
+  try{
+    const [fbs,history]=await Promise.allSettled([syncWbOrders('WB'),syncWb3OrderHistory()]);
+    const value=result=>result.status==='fulfilled'?result.value:{ok:false,error:String(result.reason?.message||result.reason)};
+    res.json({ok:true,fbs:value(fbs),history:value(history)});
+  }catch(error){next(error);}
+});
+
 
 // The warehouse is the only source of truth. A stock update is allowed only
 // after every linked article has a unique WB characteristic mapping; otherwise
@@ -334,6 +345,7 @@ const server = app.listen(config.port, '0.0.0.0', () => {
   setTimeout(()=>logWbHourlyOrders(30),7000).unref();
   if(config.storeProfile!=='WB3'){startOzonSyncLoop();startKaspiSyncLoop();}
   startWbSyncLoop();
+  startWb3OrderHistoryLoop();
   startWbPriceSyncLoop();
   startWbPromotionLoop();
   startWbAdsLimitLoop();

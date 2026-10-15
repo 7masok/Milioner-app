@@ -3,10 +3,10 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
-<meta name="theme-color" content="#111111">
+<meta name="theme-color" content="#b33c12">
 <link rel="manifest" href="/manifest.webmanifest">
-<meta name="application-name" content="Склад">
-<title>Склад — MVP</title>
+<meta name="application-name" content="Инферно">
+<title>Инферно · склад</title>
 <style>
 :root{--bg:#f5f6f8;--card:#fff;--text:#17181a;--muted:#74777c;--line:#e6e7e9;--accent:#111;--ok:#25a244;--warn:#b76b00;--bad:#c62828}
 *{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font-family:system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
@@ -82,10 +82,10 @@ body:has(#home.active) .fab{bottom:138px;background:#0b9b54}
 </style>
 </head>
 <body class="auth-pending">
-<div id="loginGate" class="login-gate"><div class="login-card"><form class="auth-form login-bio" onsubmit="ownerAuthSubmit(event)"><h1>Вход в склад</h1><input id="ownerPassword" type="password" autocomplete="current-password" placeholder="Код доступа" aria-label="Код доступа" autofocus><button id="ownerLoginButton" class="btn dark" type="submit">Войти</button></form></div></div>
+<div id="loginGate" class="login-gate"><div class="login-card"><form class="auth-form login-bio" onsubmit="ownerAuthSubmit(event)"><h1>Инферно</h1><input id="ownerPassword" type="password" autocomplete="current-password" placeholder="Код доступа" aria-label="Код доступа" autofocus><button id="ownerLoginButton" class="btn dark" type="submit">Войти</button></form></div></div>
 <div class="app">
 <header>
-  <div class="headrow"><div class="title">Склад</div><div class="head-actions"><button id="aiAssistantButton" type="button" class="ai-head-btn" onclick="window.openAiAssistant?.()">GPT</button><button id="stockAlertBell" type="button" class="btn stock-alert-button" aria-label="Предупреждения по остаткам" title="Предупреждения по остаткам" onclick="window.openStockAlerts?.()"><svg class="stock-alert-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9"></path><path d="M10 21h4"></path></svg><span id="stockAlertCount" class="stock-alert-count" hidden>0</span></button><button id="syncNowButton" class="btn" onclick="syncNow()" aria-label="Обновить"><span class="sync-now-icon" aria-hidden="true">↻</span></button></div></div>
+  <div class="headrow"><div class="title">Инферно</div><div class="head-actions"><button id="aiAssistantButton" type="button" class="ai-head-btn" onclick="window.openAiAssistant?.()">GPT</button><button id="stockAlertBell" type="button" class="btn stock-alert-button" aria-label="Предупреждения по остаткам" title="Предупреждения по остаткам" onclick="window.openStockAlerts?.()"><svg class="stock-alert-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9"></path><path d="M10 21h4"></path></svg><span id="stockAlertCount" class="stock-alert-count" hidden>0</span></button><button id="syncNowButton" class="btn" onclick="syncNow()" aria-label="Обновить"><span class="sync-now-icon" aria-hidden="true">↻</span></button></div></div>
   <div class="sync sync-compact" data-compact-built="1"><div class="compact-market-stack">
     <button class="compact-market-row" id="kaspiStatusRow" type="button"><span id="dotKaspi" class="dot warn"></span><b>Kaspi</b><span id="lastSync" class="compact-market-time">—</span></button>
     <button class="compact-market-row" id="wb1StatusRow" type="button"><span id="dotWB1" class="dot off"></span><b>WB1</b><span id="wb1Sync" class="compact-market-time">—</span></button>
@@ -127,7 +127,7 @@ body:has(#home.active) .fab{bottom:138px;background:#0b9b54}
   <div class="settings-block">
     <div class="settings-block-head"><div><div class="section-kicker">ОСНОВА</div><h3>Склад</h3></div></div>
     <div class="setting-grid">
-      <div class="mini-setting"><span>Название склада</span><b>Склад</b></div>
+      <div class="mini-setting"><span>Название склада</span><b>Инферно</b></div>
       <div class="mini-setting"><span>Валюта</span><b>₸</b></div>
       <label class="mini-setting toggle-setting"><span>Автобэкап раз в сутки</span><input id="autoBackup" type="checkbox" checked></label>
     </div>
@@ -1834,6 +1834,7 @@ function enhanceArrivalProductSearch(){}
 <script src="./business-dashboard-v1.js?v=20261008-business-week-swipe"></script>
 <script src="./prices-v1.js?v=20261012-kaspi-bulk-price"></script>
 <script src="./wb3-profile.js"></script>
+<script src="./wb3-orders-v1.js"></script>
 <script>initOwnerAuth();</script>
 </body>
 </html>

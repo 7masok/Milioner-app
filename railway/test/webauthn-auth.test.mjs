@@ -12,7 +12,7 @@ test('login screen is minimal and uses the access code directly', () => {
   const end = html.indexOf('<div class="app">', start);
   const login = html.slice(start, end);
   assert.ok(start >= 0 && end > start);
-  assert.match(login, /<h1>Вход в склад<\/h1>/);
+  assert.match(login, /<h1>Инферно<\/h1>/);
   assert.match(login, /id="ownerPassword"/);
   assert.match(login, /placeholder="Код доступа"/);
   assert.match(login, /id="ownerLoginButton"/);
