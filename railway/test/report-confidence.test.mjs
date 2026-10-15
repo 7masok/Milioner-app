@@ -6,7 +6,7 @@ const source=readFileSync(new URL('../../kaspi-report-v2.js',import.meta.url),'u
 const line=name=>source.split('\n').find(x=>x.startsWith('function '+name+'(')||x.startsWith('async function '+name+'('));
 const allReport=()=>line('resolvedWbReportStats')+'\n'+line('paintCombined')+'\n'+line('loadAllReports');
 test('linked WB product without a cost is not classified as complete',()=>{
- const c={wbLiveProductId:()=>1,wbRealizedFifoCost:()=>0};vm.runInNewContext(line('wbCostFromProducts'),c);
+ const c={wbLiveProductId:()=>1,wbRealizedFifoCost:()=>0};vm.runInNewContext(line('wbReportProductCost')+'\n'+line('wbCostFromProducts'),c);
  assert.equal(c.wbCostFromProducts('WB',25,[{qty:3}]).complete,false);
 });
 test('Kaspi estimated fees always make profit approximate',()=>{

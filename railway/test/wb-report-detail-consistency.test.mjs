@@ -20,7 +20,7 @@ function fixture(model,live){
   wbReportProductAuditAction:()=> 'openWbProductOperations()',
   warmWb:()=>model,loadWbModel:async()=>model,ensureWbLiveOverview:async()=>live,showSheet:x=>{sheet=x}
  };
- const functions=[liveStats,line('resolvedWbReportStats'),line('paintStoreSheet'),line('paintWbSheet'),liveSheet,line('renderWbCompact'),
+ const functions=[line('wbReportProductCost'),line('wbReportAmount'),liveStats,line('resolvedWbReportStats'),line('paintStoreSheet'),line('paintWbSheet'),liveSheet,line('renderWbCompact'),
   report.split('\n').find(x=>x.startsWith('window.openStoreDetail='))].join('\n');
  vm.runInNewContext(functions,c);
  return {c,elements,get sheet(){return sheet}};
