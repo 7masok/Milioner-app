@@ -208,5 +208,9 @@ connectionsRouter.put('/connections/:id', asyncRoute(async (req, res) => {
   const label = String(req.body?.label || existing.rows[0]?.label || slot?.label || id).trim().slice(0, 80) || id;
   await pool.query("INSERT INTO marketplace_credentials(id,provider,label,encrypted_token,enabled,created_at,updated_at,last_tested_at,last_test_ok,last_error) VALUES($1,$2,$3,$4,1,$5,$5,$5,1,'') ON CONFLICT(id) DO UPDATE SET provider=EXCLUDED.provider,label=EXCLUDED.label,encrypted_token=EXCLUDED.encrypted_token,enabled=1,updated_at=EXCLUDED.updated_at,last_tested_at=EXCLUDED.last_tested_at,last_test_ok=1,last_error=''", [id, provider, label, encryptToken(storedToken), now]);
   cache.delete(id);
+  if(config.storeProfile==='WB3'&&id==='WB'){
+    await pool.query("UPDATE wb_stock_snapshots SET next_allowed_at=0,last_error='' WHERE market='WB'");
+    await pool.query("UPDATE wb3_order_history_sync SET next_allowed_at=0,last_error=''");
+  }
   res.json({ ok:true, id, label, configured:true, managedInSite:true, updatedAt:now, lastTestedAt:now, lastTestOk:true });
 }));
