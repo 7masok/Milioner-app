@@ -48,6 +48,9 @@ async function syncSource(source,token) {
       }
       const normalized=rows.map(row=>normalizeHistory(row,source,currency));
       await client.query('BEGIN');
+      // The two independent API sources can discover the same SRID at once.
+      // Serialize insertion too: FOR UPDATE cannot lock a row that does not exist.
+      await client.query("SELECT pg_advisory_xact_lock(hashtext('inferno:order-history-write'))");
       for(const row of normalized){
         const old=(await client.query('SELECT payload FROM wb3_order_history WHERE srid=$1 FOR UPDATE',[row.srid])).rows[0]?.payload;
         const merged=mergeHistory(old,row);
