@@ -299,7 +299,7 @@ test('report click actions safely quote identities and are available to keyboard
   assert.equal(f.context.window.wbReportProductAuditAction('Kaspi', 30, item), '');
 });
 
-test('report product card carries the audit action to mouse and keyboard handlers', () => {
+test('report product card expands natively and keeps the unit audit on a keyboard-accessible button', () => {
   const report = readFileSync(new URL('../../kaspi-report-v2.js', import.meta.url), 'utf8');
   const functions = ['wbReportProductCost','wbReportAmount','paintWbSheet', 'paintStoreSheet'].map(name => report.split('\n').find(x => x.startsWith('function ' + name + '('))).join('\n');
   const f = uiFixture(); let html;
@@ -311,7 +311,10 @@ test('report product card carries the audit action to mouse and keyboard handler
   c.paintWbSheet({ financeAvailable: true, complete: true, products: [{ productId: 'a', vendorCode: 'item', nmId: '100', qty: 1, retailAmount: 1000, netBeforeCost: 700 }],
     revenue: 1000, adjustment: 0, expenses: 300, cost: 100, ads: 0, profit: 600 }, 'WB2', 30);
   assert.ok(html.includes('openWbProductOperations'));
-  assert.ok(html.includes('onclick=')); assert.ok(html.includes('onkeydown='));
+  assert.match(html, /<details[^>]*data-wb-period-breakdown/);
+  const summary=html.match(/<summary[^>]*>([\s\S]*?)<\/summary>/)[0];
+  assert.ok(!summary.includes('onclick='));
+  assert.match(html, /<button type="button"[^>]*onclick="[^"]*openWbProductOperations[^"]*">По ШК<\/button>/);
   assert.ok(!html.includes('>Операции WB<'));
 });
 
