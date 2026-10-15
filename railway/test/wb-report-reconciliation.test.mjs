@@ -14,7 +14,7 @@ function row(id,operation,shkId,raw={},day=START){return {market:'WB',rrd_id:Str
 const financeRows=[row(1,'Продажа','58488258887',{quantity:1,retailPriceWithDisc:1687.05,forPay:1101.1,acquiringFee:62.66}),row(2,'Логистика','58488258887',{deliveryService:162.68}),
  row(3,'Логистика','58150723719',{srid:'old-a',deliveryService:163.94}),row(4,'Логистика','58150723719',{srid:'old-a',deliveryService:264}),
  row(5,'Логистика','58469770241',{srid:'old-b',deliveryService:162.68}),row(6,'Логистика','58469770241',{srid:'old-b',deliveryService:261.96})];
-const reportRow={productId:'knife',vendorCode:'складной нож с',nmId:'955111652',qty:1,saleQty:1,returnQty:0,retailAmount:1687.05,forPay:1101.1,delivery:1015.26,netBeforeCost:85.84,wbExpenses:1601.21,advertising:0};
+const reportRow={productId:'knife',vendorCode:'складной нож с',nmId:'955111652',qty:1,saleQty:1,returnQty:0,retailAmount:1687.05,forPay:1101.1,acquiring:62.66,delivery:1015.26,netBeforeCost:85.84,wbExpenses:1601.21,advertising:0};
 const saleCosts=[{market:'WB',productId:'knife',srid:rid,qty:1,cost,stockShortage:0}];
 const options={market:'WB',reportRows:[reportRow],financeRows,links,products,purchaseRows:[],saleCosts};
 
@@ -58,4 +58,33 @@ test('main card and store cost use 272.30, label period loss, and show other-uni
  f.c.paintWbSheet({financeAvailable:true,complete:true,revenue:1687.05,cost,expenses:1601.21,ads:0,adjustment:0,profit:85.84-cost,products:[product]},'WB',0);
  const text=f.sheet.replaceAll('\u00a0',' ');assert.ok(text.includes('272,3 ₸'));assert.ok(text.includes('-186,46 ₸'));assert.ok(text.includes('Прибыль за период'));assert.ok(text.includes('Расходы за период'));assert.ok(text.includes('В т. ч. по другим ШК: 852,58 ₸ · 2 ШК'));assert.ok(!text.includes('300 ₸'));
  const unknown={...product,realizedCostKzt:null};f.c.paintWbSheet({financeAvailable:true,complete:false,products:[unknown]},'WB',0);assert.ok(f.sheet.includes('Себестоимость</span><b>—'));assert.ok(f.sheet.includes('Прибыль за период</div><b>—'));
+});
+
+
+test('expanded period calculation reconciles every charge without subtracting commission or acquiring twice',()=>{
+ const [product]=reconcileWbReportProducts(options),f=ui();let view;
+ f.c.paintStoreSheet=(_m,_d,v)=>{view=v};
+ const cases=[
+  product,
+  {...product,rebill:13.13,storage:4,acceptance:5,penalty:6,deduction:7,additionalPayment:20,advertising:100,promotionDeduction:100,netBeforeCost:85.84-13.13-4-5-6-7+20-100},
+  {...product,qty:-1,saleQty:0,returnQty:1,retailAmount:-1687.05,forPay:-1101.1,acquiring:-62.66,delivery:-162.68,realizedCostKzt:-cost,netBeforeCost:-1101.1+162.68},
+ ];
+ for(const p of cases){
+  f.c.paintWbSheet({financeAvailable:true,complete:true,products:[p]},'WB2',0);
+  const card=view.products[0],lines=card.breakdown;
+  const parse=t=>Number(t.replace(/[^0-9,.−-]/g,'').replace('−','-').replace(',','.'));
+  assert.ok(Math.abs(lines.reduce((s,r)=>s+parse(r.text),0)-parse(card.profit))<0.011);
+  assert.equal(lines.filter(r=>r.label==='Реклама').length,1);
+  assert.ok(!lines.some(r=>r.label.includes('Продвижение')));
+  assert.equal(lines.find(r=>r.label==='Комиссия WB · с НДС').text,((p.retailAmount-p.forPay-p.acquiring)<0?'+ ':'')+f.c.wbReportAmount(-(p.retailAmount-p.forPay-p.acquiring)));
+ }
+ f.c.paintWbSheet({financeAvailable:true,products:[{...product,realizedCostKzt:null}]},'WB',1);
+ assert.equal(view.products[0].breakdown.find(r=>r.label==='Себестоимость').text,'—');assert.equal(view.products[0].profit,'—');
+ f.c.paintWbSheet({financeAvailable:true,products:[{...product,realizedCostEstimated:true}]},'WB',7);
+ assert.match(view.products[0].breakdown.find(r=>r.label==='Себестоимость').text,/^≈ /);assert.match(view.products[0].profit,/^≈ /);
+});
+
+test('period disclosure is WB-only and does not change other marketplace card actions',()=>{
+ const f=ui();f.c.paintStoreSheet('Kaspi',1,{products:[{name:'Kaspi',qty:1,sales:'100 ₸',profit:'50 ₸',cost:'20 ₸',fees:'30 ₸',ads:'0 ₸',action:'openLegacy()'}]});
+ assert.ok(!f.sheet.includes('data-wb-period-breakdown'));assert.ok(f.sheet.includes('onclick="openLegacy()"'));assert.ok(f.sheet.includes('onkeydown='));
 });
