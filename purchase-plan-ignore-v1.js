@@ -27,7 +27,8 @@ function ignoredEntries(){
 }
 
 purchaseRecommendations=function(){
-  const rows=originalPurchaseRecommendations();
+  const rows=window.WB3_ONLY&&typeof window.wb3PurchaseRecommendations==='function'
+    ?window.wb3PurchaseRecommendations():originalPurchaseRecommendations();
   const all=Array.isArray(rows)?rows:[];
   const ignored=ignoredMap();
   lastVisibleRecommendations=all.filter(x=>!ignored[String(x?.productId)]?.hidden);
@@ -113,6 +114,7 @@ function decoratePurchasePlan(){
     manager.innerHTML=`<div class="row"><b>Скрытые</b><button type="button" class="btn" style="margin-left:auto" onclick="openIgnoredPurchasePlanProducts()">Показать · ${hidden.length}</button></div>`;
     root.appendChild(manager);
   }
+  if(window.WB3_ONLY&&typeof window.wb3DecoratePurchasePlan==='function')window.wb3DecoratePurchasePlan(root,visible);
 }
 
 renderPurchasePlan=function(){
