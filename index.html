@@ -169,6 +169,7 @@ body:has(#home.active) .fab{bottom:138px;background:#0b9b54}
 </section>
 </main>
 <button class="fab" aria-label="Добавить" onclick="openModal('menu')"><span class="fab-plus">+</span></button><nav><button class="active" data-view="home"><span>⌂</span>Главная</button><button data-view="products"><span>▦</span>Товары</button><button data-view="prices"><span>₸</span>Цены</button><button data-view="movement"><span>↕</span>Движение</button><button data-view="purchases"><span>□</span>Закупки</button><button data-view="reports"><span>◒</span>Отчёты</button><button data-view="ads"><span>◉</span>Реклама</button><button data-view="settings"><span>⚙</span>Настройки</button></nav><div id="modal" class="modal" onclick="if(event.target===this)closeModal()"><div class="sheet" id="sheet"></div></div></div>
+<script src="./wb3-env.js"></script>
 <script>
 const KEY='sklad_mvp_v2';
 const REPORT_PERIOD_UI_KEY=KEY+'_report_period_ui';
@@ -1832,6 +1833,7 @@ function enhanceArrivalProductSearch(){}
 <script src="./ozon-fbo-v1.js?v=20261008-ozon-order-history"></script>
 <script src="./business-dashboard-v1.js?v=20261008-business-week-swipe"></script>
 <script src="./prices-v1.js?v=20261012-kaspi-bulk-price"></script>
+<script src="./wb3-profile.js"></script>
 <script>initOwnerAuth();</script>
 </body>
 </html>

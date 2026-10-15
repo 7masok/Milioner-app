@@ -36,6 +36,8 @@ assertRuntimeConfig();
 const app = express();
 const repositoryRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const frontendFiles = Object.freeze([
+  'wb3-env.js',
+  'wb3-profile.js',
   'manifest.webmanifest',
   'sw.js',
   'app-icon.svg',
@@ -330,8 +332,7 @@ const server = app.listen(config.port, '0.0.0.0', () => {
   console.log(`millioner Railway API listening on ${config.port}`);
   setTimeout(()=>verifyBackupRestoreReadiness(),4000).unref();
   setTimeout(()=>logWbHourlyOrders(30),7000).unref();
-  startOzonSyncLoop();
-  startKaspiSyncLoop();
+  if(config.storeProfile!=='WB3'){startOzonSyncLoop();startKaspiSyncLoop();}
   startWbSyncLoop();
   startWbPriceSyncLoop();
   startWbPromotionLoop();

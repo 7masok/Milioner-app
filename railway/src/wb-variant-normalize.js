@@ -27,6 +27,7 @@ export function normalizeWbCard(card) {
     sizes.push({ size: String(size?.techSize || size?.wbSize || size?.origName || '').trim() || 'Без размера', chrtId, barcode: barcodes[0], barcodes, amount: null });
   }
   return {
+    ...(card.photos?.[0]?{photo:String(card.photos[0].c246x328||card.photos[0].big||''),subjectName:String(card.subjectName||'')}:{}),
     nmId: String(card?.nmID ?? card?.nmId ?? '').trim(),
     vendorCode: String(card?.vendorCode || '').trim(),
     title: String(card?.title || card?.subject || card?.object || card?.vendorCode || '').trim(),

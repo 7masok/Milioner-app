@@ -36,6 +36,7 @@ function decryptToken(value) {
 }
 
 export async function credentialFor(id, fallback = '') {
+  if(config.storeProfile==='WB3'&&id!=='WB')return '';
   const slot = BUILTIN_CONNECTIONS[id];
   const hit = cache.get(id);
   if (hit && hit.expiresAt > Date.now()) return hit.token;
@@ -53,6 +54,7 @@ export async function credentialFor(id, fallback = '') {
 }
 
 export async function configuredWbConnectionIds() {
+  if(config.storeProfile==='WB3')return ['WB'];
   const result = await pool.query("SELECT id FROM marketplace_credentials WHERE provider='WB' AND enabled=1 AND encrypted_token IS NOT NULL AND encrypted_token<>'' ORDER BY created_at,id");
   const ids = new Set(['WB', 'WB2']);
   for (const row of result.rows) ids.add(String(row.id));
@@ -112,14 +114,15 @@ async function testToken(provider, token, clientId = '') {
 }
 
 connectionsRouter.use(requireConfiguredSession);
+connectionsRouter.use((req,res,next)=>{if(config.storeProfile==='WB3'&&(req.method==='POST'&&req.path==='/connections'||req.path.startsWith('/connections/')&&req.path!=='/connections/WB'))return res.status(403).json({ok:false,error:'Этот склад работает только с WB 3'});next();});
 
 connectionsRouter.get('/connections', asyncRoute(async (_req, res) => {
   const result = await pool.query('SELECT id,provider,label,encrypted_token,enabled,created_at,updated_at,last_tested_at,last_test_ok,last_error FROM marketplace_credentials ORDER BY created_at,id');
   const saved = new Map(result.rows.map(row => [row.id, row]));
-  const connections = Object.entries(BUILTIN_CONNECTIONS).map(([id, slot]) => {
+  const connections = Object.entries(BUILTIN_CONNECTIONS).filter(([id])=>config.storeProfile!=='WB3'||id==='WB').map(([id, slot]) => {
     const row = saved.get(id);
     return {
-      id, provider:slot.provider, label:String(row?.label || slot.label), builtin:true, enabled:row ? Boolean(Number(row.enabled)) : true,
+      id, provider:slot.provider, label:String(row?.label || (config.storeProfile==='WB3'?'WB 3':slot.label)), builtin:true, enabled:row ? Boolean(Number(row.enabled)) : true,
       configured:Boolean(row?.encrypted_token || String(slot.env() || '').trim()),
       managedInSite:Boolean(row?.encrypted_token), updatedAt:Number(row?.updated_at || 0),
       lastTestedAt:Number(row?.last_tested_at || 0), lastTestOk:Boolean(Number(row?.last_test_ok || 0)),
@@ -127,7 +130,7 @@ connectionsRouter.get('/connections', asyncRoute(async (_req, res) => {
     };
   });
   for (const row of result.rows) {
-    if (BUILTIN_CONNECTIONS[row.id]) continue;
+    if (BUILTIN_CONNECTIONS[row.id]||config.storeProfile==='WB3') continue;
     connections.push({
       id:String(row.id), provider:String(row.provider), label:String(row.label), builtin:false,
       enabled:Boolean(Number(row.enabled)), configured:Boolean(row.encrypted_token), managedInSite:Boolean(row.encrypted_token),
@@ -138,7 +141,7 @@ connectionsRouter.get('/connections', asyncRoute(async (_req, res) => {
   res.json({
     ok:true,
     connections,
-    providers:[
+    providers:config.storeProfile==='WB3'?[{id:'WB',label:'Wildberries 3',canAdd:false}]:[
       { id:'WB', label:'Wildberries', canAdd:true, hint:'Можно добавить несколько кабинетов' },
       { id:'KASPI', label:'Kaspi', canAdd:false, hint:'Основной кабинет уже создан' },
       { id:'OZON', label:'Ozon ФБО', canAdd:true, hint:'Подключение кабинета по Client ID и API-ключу' },

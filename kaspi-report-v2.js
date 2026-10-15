@@ -7,7 +7,9 @@ const baseSheet=renderMarketplaceReportSheet;
 const orderCache=new Map(),wbModelCache=new Map(),kaspiBuiltCache=new Map(),ozonSummaryCache=new Map();
 let renderSeq=0;
 const REPORT_MARKET_UI_KEY='milioner_report_market_v1',REPORT_MARKETS=['all','Kaspi','WB','WB2','Ozon'];
+if(window.WB3_ONLY)REPORT_MARKETS.splice(0,REPORT_MARKETS.length,'WB');
 let reportMarket=(()=>{try{const saved=localStorage.getItem(REPORT_MARKET_UI_KEY);return REPORT_MARKETS.includes(saved)?saved:'all'}catch{return 'all'}})();
+if(window.WB3_ONLY)reportMarket='WB';
 state.settings.reportMarket=reportMarket;
 const money=n=>new Intl.NumberFormat('ru-RU',{maximumFractionDigits:2}).format(Number(n)||0)+' ₸';
 const cancelStatuses=new Set(['CANCELLED','CANCELLING','RETURNED','KASPI_DELIVERY_RETURN_REQUESTED']);
@@ -110,7 +112,7 @@ window.refreshProductPeriodStats=function(spec={days:30,key:'30'},{force=false}=
  if(!force){const cached=productPeriodStatsCache.get(key);if(cached?.data&&Date.now()-cached.at<60000)return Promise.resolve(cached.data);if(productPeriodStatsJobs.has(key))return productPeriodStatsJobs.get(key)}
  const job=(async()=>{
   try{
-   const [kaspiSnapshot,wb1,wb2,ozon]=await Promise.all([loadKaspiOrders(days,{force,range}),loadWbModel('WB',days,{range}),loadWbModel('WB2',days,{range}),loadOzonSummary(days,{range})]);
+   const [kaspiSnapshot,wb1,wb2,ozon]=await Promise.all([window.WB3_ONLY?Promise.resolve({orders:[],returns:[]}):loadKaspiOrders(days,{force,range}),loadWbModel('WB',days,{range}),window.WB3_ONLY?Promise.resolve({market:'WB2',products:[]}):loadWbModel('WB2',days,{range}),window.WB3_ONLY?Promise.resolve({products:[]}):loadOzonSummary(days,{range})]);
    if(ozon?.missing)throw new Error('Ozon finance is not ready for the selected product period');
    const totals=new Map((state.products||[]).map(p=>[String(p.id),{qty:0,profit:0,ads:0,sources:{}}])),
      add=(pid,qty,profit,source,ads=0)=>{pid=String(pid||'');qty=Math.max(0,Number(qty)||0);if(!pid)return;const row=totals.get(pid)||{qty:0,profit:0,ads:0,sources:{}};const profitValue=Number(profit)||0,adValue=Math.max(0,Number(ads)||0);row.qty+=qty;row.profit+=profitValue;row.ads+=adValue;if(source){const part=row.sources[source]||{qty:0,profit:0,ads:0};part.qty+=qty;part.profit+=profitValue;part.ads+=adValue;row.sources[source]=part}totals.set(pid,row)},

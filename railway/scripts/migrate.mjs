@@ -2,7 +2,8 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { pool } from '../src/db.js';
-import { assertRuntimeConfig } from '../src/config.js';
+import { assertRuntimeConfig, config } from '../src/config.js';
+import { instanceMigrationSql } from '../src/instance-migrations.js';
 
 assertRuntimeConfig();
 
@@ -21,7 +22,7 @@ try {
   const applied = new Set((await client.query('SELECT version FROM schema_migrations')).rows.map(row => row.version));
   for (const file of files) {
     if (applied.has(file)) continue;
-    const sql = await fs.readFile(path.join(migrationsDir, file), 'utf8');
+    const sql = instanceMigrationSql(file,await fs.readFile(path.join(migrationsDir, file), 'utf8'),config.storeProfile);
     await client.query('BEGIN');
     try {
       await client.query(sql);
@@ -33,6 +34,8 @@ try {
       throw error;
     }
   }
+  if(config.storeProfile==='WB3')await client.query(`INSERT INTO warehouse_state(id,payload,revision,updated_at) VALUES(1,$1,0,$2) ON CONFLICT(id) DO NOTHING`,[JSON.stringify({products:[],purchases:[],sales:[],movements:[],reservations:[],settings:{name:'WB 3',selectedOrderMarket:'WB',selectedWbAccount:'WB'}}),Date.now()]);
+
 } finally {
   await client.query('SELECT pg_advisory_unlock($1)', [730019]).catch(() => {});
   client.release();

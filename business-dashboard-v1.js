@@ -3,6 +3,7 @@
 if(typeof window==='undefined')return;
 
 const BUSINESS_SUPPORTED_MARKETS=new Set(['Kaspi','WB','WB2','Ozon']);
+if(window.WB3_ONLY){BUSINESS_SUPPORTED_MARKETS.clear();BUSINESS_SUPPORTED_MARKETS.add('WB');}
 const BUSINESS_PERIODS=new Set(['day','week','month']);
 const BUSINESS_WEEKDAYS=['Пн','Вт','Ср','Чт','Пт','Сб','Вс'];
 const BUSINESS_METRICS=new Set(['orders','buyouts','orderProfit','buyoutProfit']);

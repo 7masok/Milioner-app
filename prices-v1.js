@@ -3,8 +3,10 @@
 
 const PRICE_UI_KEY=(typeof KEY==='string'?KEY:'sklad_mvp_v2')+'_prices_ui_v1';
 const PRICE_MARKETS=['Kaspi','WB','WB2','Ozon'];
+if(window.WB3_ONLY)PRICE_MARKETS.splice(0,PRICE_MARKETS.length,'WB');
 const PRICE_CLIENT_TTL_MS=2*60*1000;
 let priceUi={market:'Kaspi',q:'',sort:'asc',hidden:{},groupFilter:'all',groupId:''};
+if(window.WB3_ONLY)priceUi.market='WB';
 let priceExpanded=null;
 const priceSelected={Kaspi:new Set(),WB:new Set(),WB2:new Set()};
 try{

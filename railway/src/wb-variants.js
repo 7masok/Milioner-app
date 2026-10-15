@@ -109,6 +109,8 @@ async function readStocks(token, warehouseId, chrtIds) {
   return actual;
 }
 
+wbVariantsRouter.get('/wb3/catalog',requireTrustedOrigin,asyncRoute(async(req,res)=>{if(config.storeProfile!=='WB3')return res.status(404).json({ok:false});const token=await credentialFor('WB');if(!token)return res.status(409).json({ok:false,error:'Добавь API-ключ WB 3 в настройках'});const cards=await fetchCatalog(token,'WB');res.json({ok:true,cards});}));
+
 wbVariantsRouter.get('/wb-variants', requireTrustedOrigin, asyncRoute(async (req, res) => {
   const market = String(req.query.market || 'WB').trim().toUpperCase() === 'WB1' ? 'WB' : String(req.query.market || 'WB').trim().toUpperCase();
   if (!/^WB(?:[2-9]\d*|1\d+)?$/.test(market)) return res.status(400).json({ ok: false, error: 'market must be a WB connection id' });
