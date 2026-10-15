@@ -22,6 +22,7 @@ async function endpoint(financeRows, adAmount = 173188) {
   let handler, response;
   const byProduct = new Map([['wings', adAmount]]);
   const c = { reportsRouter: { get: (_path, fn) => { handler = fn; } }, asyncRoute: fn => fn,
+    readWbReportReconciliation:async(_market,_since,_until,products)=>({products}),
     wbFinancePeriodSql, market: value => value, requestPeriodBounds: () => ({ since: 0, until: 86400000 }), dateKey: () => '2026-10-12',
     pool: { async query(sql) { return { rows: sql.includes('FROM wb_finance_rows') ? financeRows : [] }; } },
     resolveWbAdvertising: async () => ({ byProduct, total: adAmount + 50, unmatched: 50, autoRecovered: adAmount,
@@ -58,7 +59,7 @@ function paint(model) {
     wbRealizedFifoCost: (_pid, _market, _days, qty) => qty * 100,
     productNameById: (_pid, fallback) => fallback, wbFinanceAvailabilityNote: () => '',
     paintStoreSheet: (_market, _days, view) => { painted = view; } };
-  vm.runInNewContext(line('paintWbSheet'), c);
+  vm.runInNewContext(line('wbReportProductCost')+'\n'+line('wbReportAmount')+'\n'+line('paintWbSheet'), c);
   c.paintWbSheet({ complete: true, financeAvailable: true, revenue: 1000, expenses: 200, cost: 100,
     ads: 300, profit: 400, adjustment: 0, unmatchedAdvertising: 0, ...model }, 'WB2', 30);
   return painted;

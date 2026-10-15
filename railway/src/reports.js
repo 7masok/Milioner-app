@@ -4,6 +4,7 @@ import { asyncRoute } from './http.js';
 import { buildWbOperationAudit } from './wb-operation-audit.js';
 import { wbFinancePeriodSql } from './wb-finance-period.js';
 import { wbOrderDay } from './wb-order-advertising.js';
+import { reconcileWbReportProducts } from './wb-report-reconciliation.js';
 
 export const reportsRouter = express.Router();
 const ALMATY_OFFSET = 5 * 60 * 60 * 1000;
@@ -448,6 +449,27 @@ reportsRouter.get('/wb-unit-histories',asyncRoute(async(req,res)=>{
  res.json({ok:true,scope:'unit-histories',market:selected,histories:result.histories});
 }));
 
+async function readWbReportReconciliation(selected,since,until,reportRows){
+ const finance=await pool.query(`SELECT f.* FROM wb_finance_rows f WHERE f.market=$1 AND (${wbFinancePeriodSql('f')}) >= $2 AND (${wbFinancePeriodSql('f')}) < $3 ORDER BY rr_date,rrd_id LIMIT 50001`,[selected,since,until]);
+ if(finance.rows.length>50000)return {error:'Больше 50 000 операций. Выберите более короткий период.'};
+  const srids = [...new Set(finance.rows.map(x => {
+    const raw = typeof x.raw_json === 'string' ? JSON.parse(x.raw_json) : x.raw_json || {};
+    return String(raw.srid || raw.orderUid || raw.order_uid || '').trim();
+  }).filter(Boolean))];
+  const [links, products, purchases, costs] = await Promise.all([
+    pool.query('SELECT market,sku,product_id AS "productId" FROM product_links WHERE market=$1', [selected]),
+    pool.query('SELECT id,name,payload FROM warehouse_products'),
+    pool.query('SELECT product_id,qty,status,payload FROM warehouse_purchases WHERE status=ANY($1::text[]) LIMIT 50001', [['received', 'at_warehouse']]),
+    srids.length ? pool.query(`SELECT o.market,COALESCE(NULLIF(o.raw_json::jsonb->'order'->>'rid',''),NULLIF(o.raw_json::jsonb->'order'->>'srid',''),NULLIF(o.raw_json::jsonb->>'rid',''),NULLIF(o.raw_json::jsonb->>'srid',''),NULLIF(o.raw_json::jsonb->'order'->>'orderUid',''),o.raw_json::jsonb->>'orderUid') AS srid,
+      s.product_id AS "productId",s.qty,s.payload->>'cost' AS cost,s.payload->>'stockShortage' AS "stockShortage"
+      FROM warehouse_sales s JOIN marketplace_order_lines o ON o.market=s.channel AND s.external_key=o.market||':'||o.order_id||':'||o.entry_id
+      WHERE s.channel=$1 AND COALESCE(NULLIF(o.raw_json::jsonb->'order'->>'rid',''),NULLIF(o.raw_json::jsonb->'order'->>'srid',''),NULLIF(o.raw_json::jsonb->>'rid',''),NULLIF(o.raw_json::jsonb->>'srid',''),NULLIF(o.raw_json::jsonb->'order'->>'orderUid',''),o.raw_json::jsonb->>'orderUid')=ANY($2::text[])
+      LIMIT 50001`, [selected, srids]) : Promise.resolve({ rows: [] })
+  ]);
+  if (purchases.rows.length > 50000 || costs.rows.length > 50000) return {error:'Слишком много записей себестоимости.'};
+ return {products:reconcileWbReportProducts({market:selected,reportRows,financeRows:finance.rows,links:links.rows,products:products.rows,purchaseRows:purchases.rows,saleCosts:costs.rows})};
+}
+
 reportsRouter.get('/wb-finance-products', asyncRoute(async (req, res) => {
   const selected = market(req.query.market);
   if (!['WB', 'WB2'].includes(selected)) return res.status(400).json({ ok: false, error: 'market must be WB or WB2' });
@@ -512,7 +534,9 @@ reportsRouter.get('/wb-finance-products', asyncRoute(async (req, res) => {
     return { ...row, wbCharges, wbExpenses, advertising: productAdvertising, avgDelivery, avgCommissionPct,
       netBeforeCost: Number(row.forPay || 0) - wbCharges + Number(row.additionalPayment || 0) - productAdvertising };
   });
-  res.json({ ok: true, market: selected, days, range: { since, until, timezone: 'Asia/Almaty', businessTimezone: 'Europe/Moscow' }, products,
+  const reconciled=await readWbReportReconciliation(selected,since,until,products);
+  if(reconciled.error)return res.status(422).json({ok:false,error:reconciled.error});
+  res.json({ ok: true, market: selected, days, range: { since, until, timezone: 'Asia/Almaty', businessTimezone: 'Europe/Moscow' }, products:reconciled.products,
     advertising: attribution.total, unmatchedAdvertising: attribution.unmatched, autoRecoveredAdvertising: attribution.autoRecovered });
 }));
 

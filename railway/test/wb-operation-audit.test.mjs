@@ -188,6 +188,7 @@ test('invalid cabinet/range and oversized result never masquerade as successful 
 });
 
 const ui = readFileSync(new URL('../../wb-operation-audit-v1.js', import.meta.url), 'utf8');
+function soldCardsOnly(html){return html.replace(/<details[^>]*data-other-unit-expenses[\s\S]*?<\/details>/g,'')}
 function uiFixture() {
   let markup = '';
   const elements = new Map(), listeners = new Map(), el = { dataset: {}, querySelector(selector) { const attribute=selector.match(/^\[([^=]+)\]$/)?.[1];if(attribute&&!markup.includes(attribute))return null;if (!elements.has(selector)) elements.set(selector, { innerHTML: '', hidden: true, value: '' }); return elements.get(selector); }, querySelectorAll() { return []; }, addEventListener(name, fn) { listeners.set(name, fn); }, contains() { return true; } };
@@ -224,7 +225,7 @@ test('both report paths expose product entry without a separate audit button, be
   const html = readFileSync(new URL('../../index.html', import.meta.url), 'utf8');
   const server = readFileSync(new URL('../src/server.js', import.meta.url), 'utf8');
   const report = readFileSync(new URL('../../kaspi-report-v2.js', import.meta.url), 'utf8');
-  const tag = '<script src="./wb-operation-audit-v1.js?v=20261014-unit-lifetime"></script>';
+  const tag = '<script src="./wb-operation-audit-v1.js?v=20261015-report-reconciliation"></script>';
   assert.ok(html.includes(tag)); assert.ok(html.indexOf(tag) < html.lastIndexOf('initOwnerAuth()'));
   assert.ok(html.includes('async function openWbFinanceReport(market,days){return openStoreDetail(market,days)}'));
   assert.ok(report.includes('wbReportProductAuditAction(market,days,'));
@@ -300,7 +301,7 @@ test('report click actions safely quote identities and are available to keyboard
 
 test('report product card carries the audit action to mouse and keyboard handlers', () => {
   const report = readFileSync(new URL('../../kaspi-report-v2.js', import.meta.url), 'utf8');
-  const functions = ['paintWbSheet', 'paintStoreSheet'].map(name => report.split('\n').find(x => x.startsWith('function ' + name + '('))).join('\n');
+  const functions = ['wbReportProductCost','wbReportAmount','paintWbSheet', 'paintStoreSheet'].map(name => report.split('\n').find(x => x.startsWith('function ' + name + '('))).join('\n');
   const f = uiFixture(); let html;
   const c = { ...f.context, wbReportProductAuditAction: f.context.window.wbReportProductAuditAction,
     esc: x => String(x ?? '').replaceAll('"', '&quot;').replaceAll('<', '&lt;'), fmt: x => String(x),
@@ -517,7 +518,7 @@ test('period metrics stay scoped and tomorrow sale cannot admit an expense-only 
  const summary=f.context.window.fixture.periodMetricsHtml(period.operations);
  assert.ok(summary.includes('wb-audit-period'));assert.ok(summary.includes('Выручка за период</span><b>0 ₸'));assert.ok(summary.includes('Без рекламы'));assert.ok(summary.includes('Реклама'));assert.ok(summary.includes('Результат'));assert.ok(summary.includes('-7,19 ₸'));assert.ok(!summary.includes('733,95'));
  const body=f.el.querySelector('[data-audit-body]').innerHTML;
- assert.ok(body.includes('Нет продаж товара за выбранный период'));assert.ok(!body.includes('data-unit-key'));assert.ok(!body.includes('58490824571'));
+ assert.ok(body.includes('Нет продаж товара за выбранный период'));assert.ok(!body.includes('data-unit-key'));assert.ok(!soldCardsOnly(body).includes('58490824571'));
  const history=f.context.window.fixture.historyHtml(full);assert.ok(history.includes('Прибыль после рекламы · весь путь'));assert.ok(history.includes('733,95 ₸'));
 });
 test('period sticker list keeps sales and their expenses, hides expense/return/ad-only stickers, preserves other views',async()=>{
@@ -538,11 +539,20 @@ test('period sticker list keeps sales and their expenses, hides expense/return/a
  assert.ok(body.includes('ШК sold ·'));assert.ok(body.includes('2 оп. за период'));assert.ok(body.includes('Загружаю расходы и рекламу'));
  assert.ok(f.context.window.fixture.periodMetricsHtml(data.operations.filter(r=>r.shkId==='sold')).includes('380 ₸'));
  assert.ok(body.includes('ШК sold-and-returned'));assert.ok(body.includes('Выручка за период</span><b>0 ₸'));
- for(const hidden of ['expense-only','return-only','ad-only','other-product'])assert.ok(!body.includes('ШК '+hidden));
+ for(const hidden of ['expense-only','return-only','ad-only','other-product'])assert.ok(!soldCardsOnly(body).includes('ШК '+hidden));
  assert.equal((body.match(/data-unit-key=/g)||[]).length,2);assert.equal(JSON.stringify(data),before);
  ctx.mode='orders';f.context.window.fixture.draw(ctx);
  const orders=f.el.querySelector('[data-audit-body]').innerHTML;assert.ok(orders.includes('expense-order'));assert.ok(orders.includes('return-order'));
  assert.equal(JSON.stringify(data),before);
+});
+test('knife detail explains other stickers expenses separately while the sold list keeps only the bought unit',async()=>{
+ const rows=[row(1140,'Продажа',{shkId:'58488258887',forPay:1101.1}),row(1141,'Логистика',{shkId:'58488258887',deliveryService:162.68}),
+  row(1142,'Логистика',{shkId:'58150723719',deliveryService:163.94}),row(1143,'Логистика',{shkId:'58150723719',deliveryService:264}),
+  row(1144,'Логистика',{shkId:'58469770241',deliveryService:162.68}),row(1145,'Логистика',{shkId:'58469770241',deliveryService:261.96})];
+ const data=build(rows),f=uiFixture();f.context.apiJson=async()=>({ok:true,...data});f.context.window.openWbProductOperations('WB',1,{productId:'a'});await new Promise(r=>setImmediate(r));
+ const body=f.el.querySelector('[data-audit-body]').innerHTML;assert.ok(body.includes('Другие расходы периода · 2 ШК'));assert.ok(body.includes('-427,94 ₸'));assert.ok(body.includes('-424,64 ₸'));
+ assert.equal((body.match(/data-unit-key=/g)||[]).length,1);assert.ok(soldCardsOnly(body).includes('ШК 58488258887'));assert.ok(!soldCardsOnly(body).includes('58150723719'));assert.ok(!soldCardsOnly(body).includes('58469770241'));
+ const ctx=f.context.window.fixture.active;ctx.mode='ads';f.context.window.fixture.draw(ctx);assert.ok(!f.el.querySelector('[data-audit-body]').innerHTML.includes('data-other-unit-expenses'));
 });
 test('sticker sale filter precedes pagination and recomputes on custom period changes using WB event dates',async()=>{
  const rows=Array.from({length:25},(_,i)=>row(i+1,'Логистика',{shkId:'fee-'+i,srid:'fee-'+i,deliveryService:12}));
@@ -554,7 +564,7 @@ test('sticker sale filter precedes pagination and recomputes on custom period ch
  const data=build(rows),f=uiFixture();f.context.apiJson=async()=>({ok:true,...data});
  f.context.window.openWbProductOperations('WB',0,{productId:'a'});await new Promise(r=>setImmediate(r));
  let ctx=f.context.window.fixture.active,body=f.el.querySelector('[data-audit-body]').innerHTML;
- assert.equal((body.match(/data-unit-key=/g)||[]).length,20);assert.ok(!body.includes('ШК fee-'));assert.ok(!body.includes('old-sale'));
+ assert.equal((body.match(/data-unit-key=/g)||[]).length,20);assert.ok(!soldCardsOnly(body).includes('ШК fee-'));assert.ok(!body.includes('old-sale'));
  assert.ok(f.el.querySelector('[data-audit-pager]').innerHTML.includes('22 поз. · 1 / 2'));
  ctx.page=2;f.context.window.fixture.draw(ctx);body=f.el.querySelector('[data-audit-body]').innerHTML;
  assert.equal((body.match(/data-unit-key=/g)||[]).length,2);assert.ok(body.includes('event-sale'));
