@@ -84,7 +84,7 @@ test('expanded period calculation reconciles every charge without subtracting co
  assert.match(view.products[0].breakdown.find(r=>r.label==='Себестоимость').text,/^≈ /);assert.match(view.products[0].profit,/^≈ /);
 });
 
-test('period disclosure is WB-only and does not change other marketplace card actions',()=>{
+test('cards without supplied breakdown keep existing marketplace actions',()=>{
  const f=ui();f.c.paintStoreSheet('Kaspi',1,{products:[{name:'Kaspi',qty:1,sales:'100 ₸',profit:'50 ₸',cost:'20 ₸',fees:'30 ₸',ads:'0 ₸',action:'openLegacy()'}]});
  assert.ok(!f.sheet.includes('data-wb-period-breakdown'));assert.ok(f.sheet.includes('onclick="openLegacy()"'));assert.ok(f.sheet.includes('onkeydown='));
 });
