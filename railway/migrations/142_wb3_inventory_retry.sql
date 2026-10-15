@@ -1,0 +1,1 @@
+ALTER TABLE wb_stock_snapshots ADD COLUMN IF NOT EXISTS next_allowed_at BIGINT NOT NULL DEFAULT 0;

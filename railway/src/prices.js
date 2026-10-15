@@ -301,6 +301,7 @@ async function wbToken(market) {
 }
 
 async function syncWbWarehouseStocksMaybe(market, token, now = Date.now()) {
+  if(config.storeProfile==='WB3')return; // Inferno uses its independent inventory loop.
   const current = await pool.query('SELECT fetched_at AS "fetchedAt" FROM wb_stock_snapshots WHERE market=$1', [market]).catch(() => ({ rows: [] }));
   if (Number(current.rows[0]?.fetchedAt || 0) > now - 25 * 60 * 1000) return;
   const snapshot = await wbPriceSnapshot(market);

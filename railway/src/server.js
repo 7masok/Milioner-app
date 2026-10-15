@@ -18,6 +18,7 @@ import { hydrateWarehouseProducts } from './warehouse-products.js';
 import { startKaspiSyncLoop, syncKaspiOrders } from './kaspi-sync.js';
 import { startWbSyncLoop, syncWbOrders } from './wb-sync.js';
 import { startWb3OrderHistoryLoop, syncWb3OrderHistory } from './wb3-orders.js';
+import { startWb3InventoryLoop, syncWb3Inventory, readWb3Inventory } from './wb3-inventory.js';
 import { syncWbStockMarket, validateWbStockLinks } from './wb-stock-sync.js';
 import { authConfig, login, requireAppSession, webauthnLoginOptions, webauthnLoginVerify, webauthnRegisterOptions, webauthnRegisterVerify, listWebauthnCredentials, deleteWebauthnCredential } from './auth.js';
 import { configuredWbConnectionIds, connectionsRouter } from './connections.js';
@@ -225,10 +226,15 @@ app.post('/api/wb-sync-now', requireTrustedOrigin, async (req, res, next) => {
 app.post('/api/wb3/sync', requireTrustedOrigin, async (_req,res,next)=>{
   if(config.storeProfile!=='WB3')return res.sendStatus(404);
   try{
-    const [fbs,history]=await Promise.allSettled([syncWbOrders('WB'),syncWb3OrderHistory()]);
+    const [fbs,history,inventory]=await Promise.allSettled([syncWbOrders('WB'),syncWb3OrderHistory(),syncWb3Inventory()]);
     const value=result=>result.status==='fulfilled'?result.value:{ok:false,error:String(result.reason?.message||result.reason)};
-    res.json({ok:true,fbs:value(fbs),history:value(history)});
+    res.json({ok:true,fbs:value(fbs),history:value(history),inventory:value(inventory)});
   }catch(error){next(error);}
+});
+
+app.get('/api/wb3/inventory',requireTrustedOrigin,async(_req,res,next)=>{
+ if(config.storeProfile!=='WB3')return res.sendStatus(404);
+ try{res.json(await readWb3Inventory());}catch(error){next(error);}
 });
 
 
@@ -346,6 +352,7 @@ const server = app.listen(config.port, '0.0.0.0', () => {
   if(config.storeProfile!=='WB3'){startOzonSyncLoop();startKaspiSyncLoop();}
   startWbSyncLoop();
   startWb3OrderHistoryLoop();
+  startWb3InventoryLoop();
   startWbPriceSyncLoop();
   startWbPromotionLoop();
   startWbAdsLimitLoop();

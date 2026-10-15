@@ -8,13 +8,30 @@ const css=document.createElement('style');css.textContent=`
 .wb3-product-photo{width:42px;height:52px;object-fit:cover;border-radius:8px;flex:none;margin-right:9px;background:#f3f3f3}#productList .item.row{align-items:flex-start}#productList .name{white-space:normal;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical}
 `;
 document.head.appendChild(css);
-const wb3StockByNm=new Map();let wb3StockReady=false;
+let wb3Inventory={items:{},sizes:{},fetchedAt:0,error:''};let wb3StockReady=false,wb3StockTimer=null;
 function productNm(p){return String(p?.variantNmId||p?.wbVariant?.nmId||p?.wbIdentity?.nmId||p?.nmId||'');}
-function fboQty(p){const nm=productNm(p);if(!wb3StockReady||!nm||!wb3StockByNm.has(nm))return null;if(p.variantGroupId)return 0;const peers=(state.products||[]).filter(x=>!x.variantGroupId&&productNm(x)===nm);return peers.length===1?wb3StockByNm.get(nm):null;}
-const originalStats=buildProductRenderStats;buildProductRenderStats=function(){const stats=originalStats();stats.fboMap=new Map((stats.products||[]).map(p=>[String(p.id),fboQty(p)||0]));return stats;};
-async function loadWb3Stock(){try{const r=await fetch(MILLIONER_API+'/api/market-prices?market=WB',{cache:'no-store'}),data=await r.json();if(!r.ok||!data.ok)return;wb3StockByNm.clear();for(const row of data.rows||[])if(row.wbStockKnown)wb3StockByNm.set(String(row.remoteId),Math.max(0,Number(row.wbAvailable)||0));wb3StockReady=Number(data.wbStockFetchedAt)>0;if(typeof invalidateProductRenderStats==='function')invalidateProductRenderStats();if(document.getElementById('products')?.classList.contains('active'))renderProducts(false);decorate();}catch{}}
+function fboQty(p){
+ if(!wb3StockReady)return null;if(p.variantGroupId)return 0;
+ const nm=productNm(p),chrt=String(p?.wbVariant?.chrtId||p?.wbIdentity?.chrtId||'');if(!nm)return null;
+ const size=chrt?wb3Inventory.sizes?.[nm+':'+chrt]:null;if(size)return Number(size.quantity)||0;
+ const peers=(state.products||[]).filter(x=>!x.variantGroupId&&productNm(x)===nm);
+ if(chrt&&Object.keys(wb3Inventory.sizes||{}).some(key=>key.startsWith(nm+':')))return 0;
+ return peers.length===1?Number(wb3Inventory.items?.[nm]?.quantity)||0:null;
+}
+const originalStats=buildProductRenderStats;buildProductRenderStats=function(){const stats=originalStats();stats.fboReady=wb3StockReady;stats.fboMap=new Map((stats.products||[]).map(p=>[String(p.id),fboQty(p)||0]));return stats;};
+async function loadWb3Stock(){try{
+ const r=await fetch(MILLIONER_API+'/api/wb3/inventory',{cache:'no-store'}),data=await r.json();if(!r.ok||!data.ok)throw new Error(data.error||'Не удалось загрузить остатки WB');
+ wb3Inventory=data;wb3StockReady=Number(data.fetchedAt)>0;window.WB3_inventory=data;
+ if(typeof invalidateProductRenderStats==='function')invalidateProductRenderStats();
+ if(document.getElementById('products')?.classList.contains('active'))renderProducts(false);decorate();
+ }catch(error){wb3Inventory.error=String(error.message||error);decorate();}}
+window.refreshWb3Stock=loadWb3Stock;
 const originalProductCard=productCard;
-productCard=function(p,...args){let html=originalProductCard(p,...args);const fbo=fboQty(p);html=html.replace(/FBO Ozon: [^<]*/g,'FBO WB: '+(fbo===null?'—':fbo+' шт.'));if(/^https:\/\//i.test(String(p?.photo||'')))html=html.replace(/(<div class="item[^>]*>)/,'$1<img class="wb3-product-photo" src="'+esc(p.photo)+'" alt="" loading="lazy" referrerpolicy="no-referrer">');return html;};
+productCard=function(p,...args){let html=originalProductCard(p,...args);const fbo=fboQty(p);
+ html=html.replace('В продаже:','У меня:');
+ html=html.replace('<div class="product-stock-secondary">','<div class="product-stock-secondary"><span style="color:#6f42c1">FBO WB: '+(fbo===null?'не загружено':fbo+' шт.')+'</span>');
+ if(/^https:\/\//i.test(String(p?.photo||'')))html=html.replace(/(<div class="item[^>]*>)/,'$1<img class="wb3-product-photo" src="'+esc(p.photo)+'" alt="" loading="lazy" referrerpolicy="no-referrer">');return html;};
+const oldFboFilter=toggleProductFboFilter;toggleProductFboFilter=function(){if(!wb3StockReady)return alert(wb3Inventory.error||'Остатки WB ещё загружаются');return oldFboFilter();};
 const originalOpenProduct=openProduct;
 openProduct=function(pid,market='',days=null){return originalOpenProduct(pid,market&&unwanted.includes(market)?'WB':market,days);};
 const oldAdd=openAddStore;openAddStore=function(){selectStore('WB');openView('settings');};
@@ -24,12 +41,19 @@ selectedOrderMarket='WB';selectedWbAccount='WB';state.settings.selectedOrderMark
 try{localStorage.setItem('milioner_report_market_v1','WB');localStorage.setItem(KEY+'_prices_ui_v1',JSON.stringify({...JSON.parse(localStorage.getItem(KEY+'_prices_ui_v1')||'{}'),market:'WB'}));}catch{}
 const oldMarket=selectOrderMarket;selectOrderMarket=function(){return oldMarket('WB');};
 const oldWb=selectWbAccount;selectWbAccount=function(){return oldWb('WB');};
-const oldAuth=startOwnerRuntimeAfterAuth;startOwnerRuntimeAfterAuth=function(){selectedOrderMarket='WB';selectedWbAccount='WB';state.settings.selectedOrderMarket='WB';state.settings.selectedWbAccount='WB';oldAuth();loadWb3Stock();setInterval(loadWb3Stock,120000);};
+const oldAuth=startOwnerRuntimeAfterAuth;startOwnerRuntimeAfterAuth=function(){selectedOrderMarket='WB';selectedWbAccount='WB';state.settings.selectedOrderMarket='WB';state.settings.selectedWbAccount='WB';oldAuth();loadWb3Stock();if(!wb3StockTimer)wb3StockTimer=setInterval(loadWb3Stock,120000);};
 const oldRender=render;render=function(...args){selectedOrderMarket='WB';selectedWbAccount='WB';return oldRender(...args);};
 window.wb3ImportCatalog=async function(){if(!requireWarehouseEditReady())return;const button=document.getElementById('wb3CatalogImport');if(button){button.disabled=true;button.textContent='Загружаю…';}try{const response=await fetch(MILLIONER_API+'/api/wb3/catalog',{cache:'no-store'}),data=await response.json();if(!response.ok||!data.ok)throw new Error(data.error||'Не удалось получить товары');const cards=data.cards||[],draft=[];for(const card of cards)for(const size of card.sizes||[]){const found=(state.products||[]).find(p=>String(p?.wbVariant?.chrtId||'')===String(size.chrtId)||String(p.wb||'')===String(size.barcode)||(card.sizes.length===1&&String(p.wb||'')===String(card.vendorCode)));if(found)continue;draft.push({id:id(),name:card.title+(card.sizes.length>1?' · '+size.size:''),category:card.subjectName||'',photo:card.photo||'',kind:'simple',wb:card.sizes.length>1?String(size.barcode):String(card.vendorCode),kaspi:'',wb2:'',ozon:'',stock:0,cost:0,min:0,createdAt:Date.now(),wbVariant:{market:'WB',nmId:String(card.nmId),vendorCode:String(card.vendorCode),chrtId:Number(size.chrtId),barcode:String(size.barcode),barcodes:size.barcodes||[],size:String(size.size)},wbIdentity:{nmId:String(card.nmId),chrtId:Number(size.chrtId)}});}if(!draft.length){alert('Все товары уже добавлены');return;}if(!confirm('Добавить '+draft.length+' товаров из WB?\nСкладской остаток и закупки сохранятся. Начальное количество укажи через инвентаризацию.'))return;state.products.push(...draft);save();render();alert('Добавлено товаров: '+draft.length);}catch(e){alert(String(e.message||e));}finally{if(button){button.disabled=false;button.textContent='Загрузить товары из WB';}}};
 function decorate(){
  document.title='Инферно · склад';
- const fboCard=document.getElementById('productFboCard');if(fboCard){const label=fboCard.querySelector('.label');if(label&&label.textContent!=='На FBO WB')label.textContent='На FBO WB';fboCard.setAttribute('aria-label','Товары на FBO WB');const count=document.getElementById('productFboQty'),value=wb3StockReady?[...wb3StockByNm.values()].reduce((n,x)=>n+x,0)+' шт.':'—';if(count&&count.textContent!==value)count.textContent=value;}
+ const stockQty=document.getElementById('productStockQty');if(stockQty?.previousElementSibling&&stockQty.previousElementSibling.textContent!=='У меня')stockQty.previousElementSibling.textContent='У меня';
+ const fboCard=document.getElementById('productFboCard');if(fboCard){
+ const label=fboCard.querySelector('.label');if(label&&label.textContent!=='На FBO WB')label.textContent='На FBO WB';fboCard.setAttribute('aria-label','Товары на FBO WB');
+ const count=document.getElementById('productFboQty'),total=Number(wb3Inventory.total??Object.values(wb3Inventory.items||{}).reduce((n,x)=>n+(Number(x.quantity)||0),0)),value=wb3StockReady?total+' шт.':'Не загружено';if(count&&count.textContent!==value)count.textContent=value;
+ let note=document.getElementById('wb3StockStatus');if(!note){note=document.createElement('div');note.id='wb3StockStatus';note.className='muted';note.style.cssText='font-size:11px;margin-top:5px';fboCard.append(note);}
+ const info=wb3Inventory.error|| (wb3Inventory.loading?'Загружаю…':wb3Inventory.fetchedAt?'Обновлено '+new Date(wb3Inventory.fetchedAt).toLocaleTimeString('ru-RU',{hour:'2-digit',minute:'2-digit',timeZone:'Asia/Almaty'}):'');if(note.textContent!==info)note.textContent=info;
+ }
+
  for(const label of document.querySelectorAll('#wb1StatusRow b,#reportMarketTitle'))if(/^WB\s*1$/.test(label.textContent.trim()))label.textContent='WB 3';
  for(const selector of ['[data-price-market="WB"]','[data-report-market="WB"]','[data-market="WB"]'])for(const el of document.querySelectorAll(selector))if(el.textContent.trim()!=='WB 3')el.textContent='WB 3';
  for(const el of document.querySelectorAll('[data-market="Kaspi"],[data-market="Ozon"],[data-wb-account="WB2"],[data-price-market="Kaspi"],[data-price-market="WB2"],[data-price-market="Ozon"],[data-report-market="Kaspi"],[data-report-market="WB2"],[data-report-market="Ozon"],[data-report-market="all"]'))el.hidden=true;
