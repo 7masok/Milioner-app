@@ -711,7 +711,7 @@ function financeStatementRefundSource(ref,currentAccountId,context=null){
     if(parts&&part===null||!parts&&part!==null)return null;
     const categoryId=parts?String(parts[part]?.categoryId||''):String(document.getElementById('financeStatementCategory-'+index)?.value||'');
     const amount=parts?Math.abs(Number(parts[part]?.amount)||0):Math.abs(Number(raw.amount)||0);
-    if(categoryId==='__transit__'||!categoryId||!amount)return null;
+    if(categoryId==='__transit__'||!amount)return null;
     const tx={id:ref,type:'expense',title:String(raw.title||'Платёж')+(parts?' · часть '+(part+1):''),date:financeStatementDateRu(raw.date),dateIso:raw.date,amount,currency:String(financeStatementDraft?.statement?.currency||'KZT').toUpperCase(),accountId:currentAccountId,categoryId,category:financeCategoryName(categoryId,'')};
     return {ref,tx,source:'draft',draftIndex:index,part};
   }
@@ -746,27 +746,53 @@ function financeStatementRefundCandidates(row,currentAccountId,index=-1){
     const remaining=financeStatementRefundRemaining(source,currentAccountId,index,context);if(remaining<amount||amount<=0)continue;
     out.push({...source,remaining:remaining/100});
   }
-  return out.sort((a,b)=>(Number(b.tx.accountId===currentAccountId)-Number(a.tx.accountId===currentAccountId))||financeTransactionTime(b.tx)-financeTransactionTime(a.tx));
+  return out.sort((a,b)=>(Number(b.source==='draft')-Number(a.source==='draft'))||(Number(b.tx.accountId===currentAccountId)-Number(a.tx.accountId===currentAccountId))||financeTransactionTime(b.tx)-financeTransactionTime(a.tx));
 }
 function financeStatementRefundSelect(tx,index,currentAccountId){
   if(String(tx?.type)!=='income')return'';
-  return '<div style="margin-top:10px;padding-top:10px;border-top:1px solid #eceff1"><label style="display:block;margin-bottom:6px;font-size:13px;color:var(--muted)">Поступление</label><select id="financeStatementRefundMode-'+index+'" class="select" onchange="financeStatementRefundChanged('+index+')"><option value="">Обычное поступление</option><option value="refund">Возврат</option></select><input id="financeStatementRefund-'+index+'" type="hidden" value=""><div id="financeStatementRefundPicker-'+index+'" class="finance-refund-picker" hidden><label for="financeStatementRefundSearch-'+index+'">Исходный платёж</label><input id="financeStatementRefundSearch-'+index+'" type="search" placeholder="Поиск по названию, категории или дате" oninput="financeStatementRefundChanged('+index+')"><select id="financeStatementRefundSource-'+index+'" onchange="financeStatementRefundSourceChanged('+index+')"><option value="">Выберите платёж</option></select></div><div id="financeStatementRefundHint-'+index+'" class="finance-statement-suggestion muted">Для возврата выберите исходный платёж — можно вернуть часть суммы.</div></div>';
+  return '<div style="margin-top:10px;padding-top:10px;border-top:1px solid #eceff1"><label style="display:block;margin-bottom:6px;font-size:13px;color:var(--muted)">Поступление</label><select id="financeStatementRefundMode-'+index+'" class="select" onchange="financeStatementRefundChanged('+index+')"><option value="">Обычное поступление</option><option value="refund">Возврат</option></select><input id="financeStatementRefund-'+index+'" type="hidden" value=""><div id="financeStatementRefundPicker-'+index+'" class="finance-refund-picker" hidden><label for="financeStatementRefundSearch-'+index+'">Исходный платёж</label><input id="financeStatementRefundSearch-'+index+'" type="search" placeholder="Сумма, название, категория или дата" oninput="financeStatementRefundChanged('+index+')"><select hidden aria-hidden="true" id="financeStatementRefundSource-'+index+'" onchange="financeStatementRefundSourceChanged('+index+')"><option value="">Выберите платёж</option></select><div id="financeStatementRefundList-'+index+'" class="finance-refund-list" aria-label="Исходные платежи"></div></div><div id="financeStatementRefundHint-'+index+'" class="finance-statement-suggestion muted">Для возврата выберите исходный платёж — можно вернуть часть суммы.</div></div>';
 }
 function financeStatementRefundSourceChanged(index){
   const hidden=document.getElementById('financeStatementRefund-'+index);if(hidden)hidden.value=String(document.getElementById('financeStatementRefundSource-'+index)?.value||'');
   financeStatementRefundChanged(index);
+}
+function financeStatementRefundPick(index,ref){
+  const select=document.getElementById('financeStatementRefundSource-'+index);
+  if(select)select.value=String(ref||'');
+  financeStatementRefundSourceChanged(index);
+}
+function financeStatementRefundMatches(candidate,query){
+  const q=String(query||'').trim();if(!q)return true;
+  const amounts=[financeTransactionAmount(candidate.tx),candidate.remaining];
+  const compact=q.replace(/\s/g,'').replace(',','.');
+  if(/^\d+(?:\.\d{1,2})?$/.test(compact))return amounts.some(n=>n===Number(compact)||String(n).includes(compact));
+  const label=[candidate.tx.date,candidate.tx.title,candidate.tx.category,financeAccountName(candidate.tx.accountId),...amounts.map(String)].join(' ');
+  return financeStatementNormalizeText(q).split(' ').filter(Boolean).every(token=>financeStatementNormalizeText(label).includes(token));
+}
+function financeStatementRefundRenderList(index,candidates,previous,query){
+  const list=document.getElementById('financeStatementRefundList-'+index);if(!list)return;
+  const filtered=candidates.filter(c=>financeStatementRefundMatches(c,query));
+  list.innerHTML=['draft','existing'].map(source=>{
+    const rows=filtered.filter(c=>c.source===source);if(!rows.length)return '';
+    return '<div class="finance-refund-group">'+(source==='draft'?'Из этой выписки':'Уже импортированные')+' · '+rows.length+'</div>'+rows.map(c=>{
+      const selected=c.ref===previous,amount=financeMoney(financeTransactionAmount(c.tx),c.tx.currency||'KZT');
+      const details=[c.tx.date,c.tx.category||'Без категории',financeAccountName(c.tx.accountId)].filter(Boolean).join(' · ');
+      return '<button type="button" class="finance-refund-option'+(selected?' selected':'')+'" aria-pressed="'+selected+'" data-ref="'+esc(c.ref)+'" onclick="financeStatementRefundPick('+index+',this.dataset.ref)"><span class="finance-refund-option-top"><b>'+esc(amount)+'</b><span>'+(selected?'Выбрано':'Выбрать')+'</span></span><span class="finance-refund-option-title">'+esc(c.tx.title)+'</span><small>'+esc(details)+'</small>'+(Math.round(c.remaining*100)!==Math.round(financeTransactionAmount(c.tx)*100)?'<small>Доступно для возврата: '+esc(financeMoney(c.remaining,c.tx.currency||'KZT'))+'</small>':'')+'</button>';
+    }).join('');
+  }).join('')||'<div class="finance-refund-empty">'+(candidates.length?'По этому запросу ничего не найдено.':'Подходящих покупок пока нет. Отметьте покупку в выписке; сумма должна быть не меньше возврата.')+'</div>';
 }
 function financeStatementRefundChanged(index){
   const mode=String(document.getElementById('financeStatementRefundMode-'+index)?.value||''),hidden=document.getElementById('financeStatementRefund-'+index),transfer=document.getElementById('financeStatementTransfer-'+index),category=document.getElementById('financeStatementCategory-'+index),button=document.getElementById('financeStatementCategoryButton-'+index),hint=document.getElementById('financeStatementRefundHint-'+index),row=financeStatementDraft?.transactions?.[index],account=String(document.getElementById('financeStatementAccount')?.value||''),active=mode==='refund',picker=document.getElementById('financeStatementRefundPicker-'+index),select=document.getElementById('financeStatementRefundSource-'+index),search=document.getElementById('financeStatementRefundSearch-'+index);
   const previous=String(hidden?.value||'');let original=null;
   if(picker)picker.hidden=!active;if(select)select.disabled=!active;
   if(active){
-    const candidates=financeStatementRefundCandidates(row,account,index),q=financeStatementNormalizeText(search?.value||'');
+    const candidates=financeStatementRefundCandidates(row,account,index),q=String(search?.value||'');
     original=candidates.find(c=>c.ref===previous)||null;
     const label=c=>[c.tx.date,c.tx.title,c.tx.category,financeAccountName(c.tx.accountId),'доступно '+financeMoney(c.remaining,c.tx.currency||'KZT')].filter(Boolean).join(' · ');
-    if(select){select.innerHTML='<option value="">Выберите платёж</option>'+candidates.filter(c=>c.ref===previous||!q||financeStatementNormalizeText(label(c)).includes(q)).map(c=>'<option value="'+esc(c.ref)+'">'+esc(label(c))+'</option>').join('');select.value=original?original.ref:'';}
+    if(select){select.innerHTML='<option value="">Выберите платёж</option>'+candidates.filter(c=>c.ref===previous||financeStatementRefundMatches(c,q)).map(c=>'<option value="'+esc(c.ref)+'">'+esc(label(c))+'</option>').join('');select.value=original?original.ref:'';}
+    financeStatementRefundRenderList(index,candidates,original?.ref||'',q);
     if(hidden)hidden.value=original?original.ref:'';if(transfer)transfer.value='';if(category)category.value='';
-    if(hint)hint.innerHTML=original?'Возврат '+financeMoney(Number(row.amount)||0,original.tx.currency||'KZT')+' уменьшит расход <b>'+esc(original.tx.category||original.tx.title||'Платёж')+'</b>. После возврата останется '+financeMoney(original.remaining-Math.abs(Number(row.amount)||0),original.tx.currency||'KZT')+'.':candidates.length?'Выберите исходный платёж. Возврат уменьшит его расход и не попадёт в доходы.':'Нет платежей с достаточной невозвращённой суммой в этой валюте. Проверьте выбранные расходы выписки.';
+    if(hint)hint.innerHTML=original?'Возврат '+financeMoney(Number(row.amount)||0,original.tx.currency||'KZT')+' уменьшит расход <b>'+esc(original.tx.category||original.tx.title||'Платёж')+'</b>. После возврата останется '+financeMoney(original.remaining-Math.abs(Number(row.amount)||0),original.tx.currency||'KZT')+'.'+(!original.tx.categoryId?' Выберите категорию у исходной покупки перед импортом.':''):candidates.length?'Выберите исходный платёж. Возврат уменьшит его расход и не попадёт в доходы.':'Нет платежей с достаточной невозвращённой суммой в этой валюте. Проверьте выбранные расходы выписки.';
   }else{
     if(hidden)hidden.value='';if(select)select.value='';if(search)search.value='';
     if(hint)hint.textContent='Для возврата выберите исходный платёж — можно вернуть часть суммы.';
@@ -783,6 +809,7 @@ function financeStatementValidateRefunds(account){
     if(financeStatementExactDuplicate(rows[index],account))continue;
     const ref=String(document.getElementById('financeStatementRefund-'+index)?.value||''),source=financeStatementRefundSource(ref,account,context);
     if(!financeStatementRefundEligible(source,rows[index]))return 'Выберите действующий исходный платёж для каждого возврата.';
+    if(source.source==='draft'&&!source.tx.categoryId)return 'Выберите категорию у исходной покупки для возврата.';
     if(Math.round(Math.abs(Number(rows[index].amount)||0)*100)>financeStatementRefundRemaining(source,account,index,context))return 'Сумма возвратов превышает невозвращённую сумму исходного платежа.';
   }
   return '';

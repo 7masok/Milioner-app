@@ -16,7 +16,7 @@ function harness(rows=[incoming()],history=[purchase()],balance=0){
   for(let i=0;i<rows.length;i++){
     const n=create();n.className='finance-statement-use';n.dataset.index=String(i);n.checked=true;
     element('financeStatementCategory-'+i,rows[i].type==='expense'?'c1':'');element('financeStatementCategoryButton-'+i);
-    for(const name of ['Transfer','Refund','RefundMode','RefundPicker','RefundHint','RefundSource','RefundSearch','SplitLaunch','SplitBox','SplitStatus'])element('financeStatement'+name+'-'+i);
+    for(const name of ['Transfer','Refund','RefundMode','RefundPicker','RefundList','RefundHint','RefundSource','RefundSearch','SplitLaunch','SplitBox','SplitStatus'])element('financeStatement'+name+'-'+i);
   }
   for(const id of ['financeStatementSelectedCount','financeStatementExpenseTotal','financeStatementIncomeTotal','financeStatementExcludedCount'])element(id);
   const c={Date,Intl,console,document:{getElementById:id=>nodes.find(n=>n.id===id),createElement:create,querySelector:s=>query(s)[0],querySelectorAll:query,body:create(),head:create()},localStorage:{getItem(){return null}},setTimeout(){},showSheet(){},closeModal(){},alert:s=>alerts.push(s),navigator:{onLine:false}};c.window=c;vm.createContext(c);
@@ -62,4 +62,41 @@ test('manual list supports older and other-account expenses, search, and rejects
   h.mode(0);const html=h.node('financeStatementRefundSource-0').innerHTML;assert.match(html,/value="purchase"/);assert.match(html,/value="other-account"/);assert.doesNotMatch(html,/value="(?:usd|future|transfer)"/);
   h.node('financeStatementRefundSearch-0').value='нет такого';h.c.financeStatementRefundChanged(0);assert.doesNotMatch(h.node('financeStatementRefundSource-0').innerHTML,/value="purchase"/);
   h.node('financeStatementRefundSearch-0').value='Байстор';h.c.financeStatementRefundChanged(0);assert.match(h.node('financeStatementRefundSource-0').innerHTML,/value="purchase"/);
+});
+
+test('search accepts compact, spaced and decimal amounts; draft purchase is visible before category assignment',async()=>{
+  const h=harness([incoming(),{...purchase(),date:'2026-10-16',bankOperationKey:'new-purchase',statementFingerprint:'new-fp'}],[] ,59300);
+  h.node('financeStatementCategory-1').value='';h.mode(0);
+  assert.match(h.node('financeStatementRefundList-0').innerHTML,/Из этой выписки/);
+  assert.match(h.node('financeStatementRefundList-0').innerHTML,/data-ref="draft:1"/);
+  for(const query of ['59300','59 300','59\u00a0300','59300,00','16.10.2026','EDONKZ']){
+    h.node('financeStatementRefundSearch-0').value=query;h.c.financeStatementRefundChanged(0);
+    assert.match(h.node('financeStatementRefundList-0').innerHTML,/data-ref="draft:1"/,query);
+  }
+  h.c.financeStatementRefundPick(0,'draft:1');await h.c.financeImportStatementDraft();
+  assert.equal(h.rows().length,0);assert.match(h.alerts.at(-1),/категорию у исходной покупки/);
+  h.c.financeStatementChooseCategory(1,'c1');assert.equal(h.node('financeStatementRefund-0').value,'draft:1');
+  await h.c.financeImportStatementDraft();assert.equal(h.rows().length,2);assert.equal(h.balance(),10500);
+  const p=h.rows().find(r=>r.type==='expense'),r=h.rows().find(r=>r.refundOfId);assert.equal(r.refundOfId,p.id);assert.equal(r.refundCategoryId,'c1');
+});
+test('current PDF purchases stay first and update when selected or turned into transfers',()=>{
+  const h=harness([incoming(),{...purchase(),date:'2026-10-16',bankOperationKey:'new-key'}],[purchase({id:'saved',date:'15.10.2026',amount:80000,title:'Другая покупка'})]);h.mode(0);
+  let html=h.node('financeStatementRefundList-0').innerHTML;
+  assert.ok(html.indexOf('Из этой выписки')>=0);assert.ok(html.indexOf('Из этой выписки')<html.indexOf('Уже импортированные'));
+  h.check(1).checked=false;h.c.financeStatementUpdateSummary();assert.doesNotMatch(h.node('financeStatementRefundList-0').innerHTML,/data-ref="draft:1"/);
+  h.check(1).checked=true;h.c.financeStatementUpdateSummary();assert.match(h.node('financeStatementRefundList-0').innerHTML,/data-ref="draft:1"/);
+  h.node('financeStatementTransfer-1').value='b';h.c.financeStatementUpdateSummary();assert.doesNotMatch(h.node('financeStatementRefundList-0').innerHTML,/data-ref="draft:1"/);
+});
+test('50000 split as 10000, 20000 and 20000 with 15000 return reduces only the selected 20000 part',async()=>{
+  const h=harness([{...purchase({amount:50000}),date:'2026-10-16',bankOperationKey:'split-key'},incoming({amount:15000})],[],50000);
+  h.c.financeStatementEnableSplit(0);h.c.financeStatementSplitAmountChanged(0,0,'10000');h.c.financeStatementAddSplitPart(0);
+  h.c.financeStatementSplitCategoryChanged(0,1,'c1');h.c.financeStatementSplitAmountChanged(0,1,'20000');
+  h.c.financeStatementSplitCategoryChanged(0,2,'c2');h.c.financeStatementSplitAmountChanged(0,2,'20000');
+  h.mode(1);h.node('financeStatementRefundSearch-1').value='20 000';h.c.financeStatementRefundChanged(1);
+  assert.match(h.node('financeStatementRefundList-1').innerHTML,/data-ref="draft:0:part:2"/);
+  h.c.financeStatementRefundPick(1,'draft:0:part:2');await h.c.financeImportStatementDraft();
+  assert.equal(h.rows().length,4);assert.equal(h.balance(),15000);
+  const refund=h.rows().find(r=>r.refundOfId),source=h.rows().find(r=>r.id===refund.refundOfId);
+  assert.equal(source.amount,20000);assert.equal(source.categoryId,'c2');assert.equal(refund.refundCategoryId,'c2');
+  assert.equal(h.rows().reduce((sum,r)=>sum+(h.c.financeAnalyticsEntry(r)?.amount||0),0),35000);
 });

@@ -5,6 +5,7 @@ if(typeof window.financeStatementCategorySelect!=='function'||typeof window.fina
 
 const splitState=new Map();
 let splitImportExpanded=false;
+let refreshingRefunds=false;
 window.financeStatementRefundDraftParts=index=>splitImportExpanded?null:(splitFor(index)?.parts.map(part=>({...part}))||null);
 const originalCategorySelect=window.financeStatementCategorySelect;
 const originalCategoryPickerRender=window.financeStatementRenderCategoryPicker;
@@ -89,8 +90,9 @@ function updateSplitStatus(index){
   try{window.financeStatementUpdateSummary()}catch{}
 }
 function refreshRefundPickers(){
-  if(splitImportExpanded)return;
-  (currentDraft()?.transactions||[]).forEach((row,index)=>{if(row.type==='income'&&document.getElementById('financeStatementRefundMode-'+index)?.value==='refund')window.financeStatementRefundChanged(index);});
+  if(splitImportExpanded||refreshingRefunds)return;
+  refreshingRefunds=true;
+  try{(currentDraft()?.transactions||[]).forEach((row,index)=>{if(row.type==='income'&&document.getElementById('financeStatementRefundMode-'+index)?.value==='refund')window.financeStatementRefundChanged(index);});}finally{refreshingRefunds=false;}
 }
 function fillSplitRemainder(index){
   const state=splitFor(index);if(!state||!state.parts.length)return;
@@ -219,6 +221,7 @@ window.financeStatementSaveQuickCategory=async function(index,splitPart=-1){
 
 const originalSummary=window.financeStatementUpdateSummary;
 window.financeStatementUpdateSummary=function(){
+  refreshRefundPickers();
   if(!splitState.size)return originalSummary();
   const rows=currentDraft()?.transactions||[];
   let income=0,expense=0,excluded=0,selected=0;
