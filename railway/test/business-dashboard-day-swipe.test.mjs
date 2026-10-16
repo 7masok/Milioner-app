@@ -226,3 +226,11 @@ test('moving between months keeps every day of the requested range when the boun
 test('a recently generated server day with obsolete source revision still rebuilds instead of being trusted locally',async()=>{
  const seed=sharedFixture();await seed.window.renderBusinessDashboard();const stale=sharedFixture(),fetch=stale.ctx.fetch;stale.ctx.fetch=async(url,options)=>{if(!options&&url.includes('business-dashboard-days'))return{ok:true,json:async()=>({ok:true,version:'calendar-v2',sourceRevision:'d'.repeat(64),days:[...seed.stored.values()].map(day=>({day,generatedAt:today+20*60000,fresh:false}))})};return fetch(url,options)};await stale.window.renderBusinessDashboard();assert.equal(stale.loads,1);
 });
+
+test('first month build yields to actual UI tasks, permits switching day before completion and reads local financial sales once',async()=>{
+ const f=sharedFixture();let yielded=0,salesReads=0,dayJob,switchedWhileBuilding=false,done=false;
+ const read=f.ctx.financialSales;f.ctx.financialSales=()=>{salesReads++;return read()};
+ f.window.setTimeout=fn=>setImmediate(()=>{yielded++;if(yielded===2){dayJob=f.window.setBusinessDashboardPeriod('day');switchedWhileBuilding=!done&&f.element('businessPeriodTitle').textContent!=='Месяц'}fn()});
+ const month=f.window.setBusinessDashboardPeriod('month');await month;done=true;await dayJob;
+ assert.equal(switchedWhileBuilding,true);assert.ok(yielded>30);assert.equal(salesReads,1);assert.equal(f.loads,1);assert.match(f.element('businessValueLabel').textContent,/сегодня/);assert.equal(f.api.businessDays.get(today).data.orders.amount,1000);
+});
