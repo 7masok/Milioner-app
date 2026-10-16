@@ -88,3 +88,18 @@ test('cards without supplied breakdown keep existing marketplace actions',()=>{
  const f=ui();f.c.paintStoreSheet('Kaspi',1,{products:[{name:'Kaspi',qty:1,sales:'100 ₸',profit:'50 ₸',cost:'20 ₸',fees:'30 ₸',ads:'0 ₸',action:'openLegacy()'}]});
  assert.ok(!f.sheet.includes('data-wb-period-breakdown'));assert.ok(f.sheet.includes('onclick="openLegacy()"'));assert.ok(f.sheet.includes('onkeydown='));
 });
+
+test('daily reconciliation assigns saved sale and restored return cost to financial dates only once',()=>{
+ const sale=row(20,'Продажа','58488258887',{quantity:1,forPay:1101.1,saleDt:'2026-10-11T23:30:00'},START+DAY);sale.sale_date=START+DAY+1.5*3600000;
+ const returned=row(21,'Возврат','58488258887',{quantity:1,forPay:1101.1},START+DAY),fee=row(22,'Логистика','old',{srid:'other',deliveryService:10},START+2*DAY);
+ const rows=[{...reportRow,day:'2026-10-11'}, {...reportRow,day:'2026-10-12',saleQty:0,returnQty:1,qty:-1}, {...reportRow,day:'2026-10-13',saleQty:0,returnQty:0,qty:0}];
+ const result=reconcileWbReportProducts({...options,daily:true,financeRows:[sale,returned,fee],reportRows:rows});
+ assert.deepEqual(result.map(r=>r.realizedCostKzt),[cost,-cost,0]);assert.equal(result.reduce((n,r)=>n+r.realizedCostKzt,0),0);assert.equal(result[2].otherUnitExpenses,10);
+});
+test('daily finance endpoint reads the whole range once, groups by financial day and returns explicit empty dates',async()=>{
+ const handler=reportsRouter.stack.find(x=>x.route?.path==='/wb-finance-products').route.stack[0].handle,old=pool.query,calls=[];let result;
+ pool.query=async(sql,args)=>{calls.push({sql,args});return{rows:sql.startsWith('SELECT to_char')?[{...reportRow,day:'2026-10-11',financeRowCount:6}]:sql.startsWith('SELECT f.*')?financeRows:sql.includes('FROM warehouse_sales')?saleCosts:sql.includes('FROM warehouse_products')?products:sql.includes('FROM product_links')?links:[]}};
+ try{await handler({query:{market:'WB',days:'0',from:String(START),to:String(START+3*DAY),daily:'1'}},{json(x){result=x}},e=>{throw e})}finally{pool.query=old}
+ assert.equal(result.daily.length,3);assert.equal(result.daily[0].products[0].realizedCostKzt,cost);assert.equal(result.daily[0].summary.financeRowCount,6);assert.equal(result.daily[1].summary.financeAvailable,false);assert.equal(result.daily[1].summary.retailAmount,0);assert.equal(calls.filter(c=>c.sql.startsWith('SELECT f.*')).length,1);
+ const grouped=calls.find(c=>c.sql.startsWith('SELECT to_char'));assert.match(grouped.sql,/GROUP BY to_char/);assert.match(grouped.sql,/sale_date-7200000/);assert.deepEqual(grouped.args,['WB',START,START+3*DAY]);assert.ok(calls.every(c=>c.sql.startsWith('SELECT ')));
+});

@@ -25,7 +25,7 @@ function fixture(saved={},loader=null){
  }};
  const ctx={window,Date:Clock,Intl,Map,Set,console,state,financialSales:()=>sales,groupMarketplaceOrders:rows=>rows,marketplaceLifecycleStage:()=>'',MILLIONER_API:'https://fixture.invalid',apiJson:async url=>{requests.push({orderHistoryUrl:url});return {ok:true,orders:state.kaspiOrderFeed.map((row,i)=>({...row,entryId:String(i),orderId:String(i)}))}},fmt:n=>String(n)+' ₸',localStorage:{getItem:k=>storage.get(k),setItem:(k,v)=>storage.set(k,v)},document:{readyState:'loading',getElementById:id=>elements.get(id)||null,querySelectorAll:()=>[],addEventListener(){}},setTimeout() {}};
  vm.createContext(ctx);
- vm.runInContext(source.replace(/\}\)\(\);\s*$/, "window.testApi={businessDayBounds,businessSelectedDayOffset,businessWeekBounds,businessSelectedWeekOffset,businessMonthBounds,businessSelectedMonthOffset,businessBuildModel,businessInstallDaySwipe,businessModels,businessPaintTabs,businessRememberModel,businessModelMeta};})();"),ctx);
+ vm.runInContext(source.replace(/\}\)\(\);\s*$/, "window.testApi={businessDayBounds,businessSelectedDayOffset,businessWeekBounds,businessSelectedWeekOffset,businessMonthBounds,businessSelectedMonthOffset,businessBuildModel,businessInstallDaySwipe,businessModels,businessPaintTabs,businessRememberModel,businessModelMeta,businessModelFromDays,businessDays};})();"),ctx);
  const chart=element('businessChart');window.testApi.businessInstallDaySwipe();
  const touch=(x,y,id=1)=>({clientX:x,clientY:y,identifier:id});
  function event(type,touches,changedTouches=[]){let prevented=false;chart.listeners.get(type)({touches,changedTouches,cancelable:true,preventDefault(){prevented=true}});return prevented}
@@ -175,18 +175,18 @@ test('month selections persist across years; Almaty boundaries and leap February
  f.setNow(Date.parse('2028-03-01T00:01:00+05:00'));assert.equal(f.api.businessMonthBounds(-1).days,29);assert.equal(f.api.businessMonthBounds(-1).end,Date.parse('2028-03-01T00:00:00+05:00'));
 });
 test('saved local snapshots paint synchronously after reload and survive an offline refresh',async()=>{
- const f=fixture({metric:'buyouts'});await f.window.renderBusinessDashboard();const saved=f.storage.get('milioner_business_snapshots_calendar_v1');assert.ok(saved);
- const reload=fixture({metric:'buyouts'},async()=>{throw Error('offline')});reload.storage.set('milioner_business_snapshots_calendar_v1',saved);reload.element('businessCacheStatus');reload.ctx.fetch=async()=>{throw Error('offline')};
+ const f=fixture({metric:'buyouts'});await f.window.renderBusinessDashboard();const saved=f.storage.get('milioner_business_snapshots_calendar_v2');assert.ok(saved);
+ const reload=fixture({metric:'buyouts'},async()=>{throw Error('offline')});reload.storage.set('milioner_business_snapshots_calendar_v2',saved);reload.element('businessCacheStatus');reload.ctx.fetch=async()=>{throw Error('offline')};
  const pending=reload.window.renderBusinessDashboard();assert.equal(reload.element('businessValue').textContent,'1000 ₸');assert.match(reload.element('businessCacheStatus').textContent,/обновляю/);
  await pending;assert.equal(reload.element('businessValue').textContent,'1000 ₸');assert.match(reload.element('businessCacheStatus').textContent,/не удалось обновить/);
 });
 test('a fresh server snapshot skips marketplace summaries; stale snapshots stay visible while one shared rebuild runs',async()=>{
  const seed=fixture({metric:'buyouts'});await seed.window.renderBusinessDashboard();const snapshot=seed.api.businessModels.values().next().value;
  const ready=fixture({metric:'buyouts'},async()=>{throw Error('Should not recalculate a ready server snapshot')});let gets=0;
- ready.ctx.fetch=async()=>{gets++;return{ok:true,json:async()=>({ok:true,version:'calendar-v1',sourceRevision:'a'.repeat(64),snapshot,generatedAt:stamp(0,0),stale:false})}};
+ ready.ctx.fetch=async()=>{gets++;return{ok:true,json:async()=>({ok:true,version:'calendar-v2',sourceRevision:'a'.repeat(64),snapshot,generatedAt:stamp(0,0),stale:false})}};
  await ready.window.renderBusinessDashboard();assert.equal(gets,1);assert.equal(ready.requests.length,0);assert.equal(ready.element('businessValue').textContent,'1000 ₸');
  const finish=[];let calculated=0,reads=0,writes=0;const stale=fixture({metric:'buyouts'},async()=>{calculated++;await new Promise(resolve=>finish.push(resolve));return{revenue:1200,qty:2,profit:null,sources:{Kaspi:{revenue:1200,profit:null}}}});
- stale.ctx.fetch=async(_url,options)=>{if(options?.method==='PUT'){writes++;return{ok:true}}reads++;return{ok:true,json:async()=>({ok:true,version:'calendar-v1',sourceRevision:'b'.repeat(64),snapshot,generatedAt:stamp(0,0),stale:true})}};
+ stale.ctx.fetch=async(_url,options)=>{if(options?.method==='PUT'){writes++;return{ok:true}}reads++;return{ok:true,json:async()=>({ok:true,version:'calendar-v2',sourceRevision:'b'.repeat(64),snapshot,generatedAt:stamp(0,0),stale:true})}};
  const first=stale.window.renderBusinessDashboard(),second=stale.window.renderBusinessDashboard();await flush();assert.equal(stale.element('businessValue').textContent,'1000 ₸');assert.equal(reads,1);assert.equal(calculated,2);
  for(const resolve of finish.splice(0))resolve();await Promise.all([first,second]);assert.equal(stale.element('businessValue').textContent,'1200 ₸');assert.equal(writes,1);
 });
@@ -198,6 +198,31 @@ test('a historical month before the saved Kaspi/WB archive is never reported as 
 });
 test('a partial historical Ozon finance window stays marked in cached totals and cannot create a false growth percentage',async()=>{
  const f=fixture({period:'month',metric:'buyouts'});f.window.ozonFboFinanceHistoryCovers=()=>false;await f.window.renderBusinessDashboard();assert.match(f.element('businessValueMeta').textContent,/неполная история Ozon/);assert.match(f.element('businessValue').textContent,/≈/);assert.doesNotMatch(f.element('businessYesterdayCompare').innerHTML,/%/);
- const saved=JSON.parse(f.storage.get('milioner_business_snapshots_calendar_v1'));assert.equal(saved.entries[0][1].model.summary.partialOzonHistory,true);
+ const saved=JSON.parse(f.storage.get('milioner_business_snapshots_calendar_v2'));assert.equal(saved.entries[0][1].model.summary.partialOzonHistory,true);
  f.window.setBusinessDashboardMetric('orders');assert.doesNotMatch(f.element('businessValueMeta').textContent,/неполная история/);
+});
+function sharedFixture(block=false){const f=fixture({period:'week'});let loads=0,finish;const stored=new Map(),revision='c'.repeat(64);
+ f.ctx.fetch=async(url,options)=>{if(options?.method==='PUT'){const body=JSON.parse(options.body);if(body.days)for(const day of body.days)stored.set(day.bounds.start,day);return{ok:true,json:async()=>({ok:true})}}if(url.includes('business-dashboard-days')){const q=new URL(url).searchParams,from=Number(q.get('from')),to=Number(q.get('to'));return{ok:true,json:async()=>({ok:true,version:'calendar-v2',sourceRevision:revision,days:[...stored].filter(([t])=>t>=from&&t<to).map(([,day])=>({day,generatedAt:Date.now(),fresh:true}))})}}return{ok:true,json:async()=>({ok:true,version:'calendar-v2',sourceRevision:revision,snapshot:null,stale:true})}};
+ f.window.loadBusinessMarketplaceDaily=async range=>{loads++;if(block)await new Promise(resolve=>{finish=resolve});const out=[],from=Date.parse(range.from+'T00:00:00+05:00'),to=Date.parse(range.to+'T00:00:00+05:00');for(let t=from;t<=to;t+=86400000){const revenue=2000+Math.round((t-today)/86400000)*10;out.push({day:new Date(t+18000000).toISOString().slice(0,10),summary:{revenue,qty:2,profit:80,sources:{Kaspi:{revenue,profit:80}}}})}return out};return{...f,get loads(){return loads},finish(){block=false;finish?.()},stored};}
+test('one loaded week prepares every included day and hour; day swipes reuse the same finance base',async()=>{
+ const f=sharedFixture();await f.window.renderBusinessDashboard();assert.equal(f.loads,1);
+ const week=f.api.businessModelFromDays('week',0),bounds=f.api.businessWeekBounds(0);let sum=0;for(let t=bounds.start;t<=today;t+=86400000)sum+=f.api.businessDays.get(t).data.summary.revenue;assert.equal(week.summary.revenue,sum);
+ await f.window.setBusinessDashboardPeriod('day');f.window.setBusinessDashboardMetric('buyouts');assert.equal(f.element('businessValue').textContent,'2000 ₸');
+ for(let i=1;i<=3;i++){const pending=f.window.shiftBusinessDashboardDay(-1);assert.equal(f.element('businessValue').textContent,(2000-i*10)+' ₸');await pending}
+ assert.equal(f.loads,1);assert.ok(f.stored.size>=11);const day=f.api.businessDays.get(today-2*86400000).data;assert.equal(day.buckets[12].orders,800);
+});
+test('known orders render before finance, and switching to an included day joins the pending week request',async()=>{
+ const f=sharedFixture(true),week=f.window.renderBusinessDashboard();await flush();assert.equal(f.loads,1);assert.equal(f.element('businessValueMetric').textContent,'Заказы');assert.doesNotMatch(f.element('businessValue').textContent,/…|—/);
+ const day=f.window.setBusinessDashboardPeriod('day');await flush();assert.equal(f.loads,1);assert.equal(f.element('businessValue').textContent,'1000 ₸');f.window.setBusinessDashboardMetric('buyoutProfit');assert.equal(f.element('businessValue').textContent,'—');
+ f.finish();await Promise.all([week,day]);assert.match(f.element('businessValueLabel').textContent,/сегодня/);assert.equal(f.element('businessValue').textContent,'80 ₸');assert.equal(f.loads,1);
+});
+test('a month and a week use matching shared day totals and survive reload without a finance read',async()=>{
+ const f=sharedFixture();await f.window.setBusinessDashboardPeriod('month');const month=f.api.businessModelFromDays('month',0),days=[...f.api.businessDays.values()].filter(r=>r.data.bounds.start>=month.bounds.start&&r.data.bounds.start<month.bounds.end);assert.equal(month.summary.revenue,days.reduce((n,r)=>n+r.data.summary.revenue,0));
+ const saved=f.storage.get('milioner_business_days_v2');assert.ok(saved);const reload=sharedFixture();reload.storage.set('milioner_business_days_v2',saved);const pending=reload.window.renderBusinessDashboard();assert.notEqual(reload.element('businessValue').textContent,'…');await pending;assert.equal(reload.loads,0);
+});
+test('moving between months keeps every day of the requested range when the bounded cache evicts older entries',async()=>{
+ const f=sharedFixture();await f.window.setBusinessDashboardPeriod('month');await f.window.shiftBusinessDashboardMonth(-1);await f.window.shiftBusinessDashboardMonth(-1);assert.match(f.element('businessValueLabel').textContent,/авг/);assert.ok(f.api.businessModelFromDays('month',-2));assert.ok(f.api.businessDays.size<=80);assert.notEqual(f.element('businessValue').textContent,'—');
+});
+test('a recently generated server day with obsolete source revision still rebuilds instead of being trusted locally',async()=>{
+ const seed=sharedFixture();await seed.window.renderBusinessDashboard();const stale=sharedFixture(),fetch=stale.ctx.fetch;stale.ctx.fetch=async(url,options)=>{if(!options&&url.includes('business-dashboard-days'))return{ok:true,json:async()=>({ok:true,version:'calendar-v2',sourceRevision:'d'.repeat(64),days:[...seed.stored.values()].map(day=>({day,generatedAt:today+20*60000,fresh:false}))})};return fetch(url,options)};await stale.window.renderBusinessDashboard();assert.equal(stale.loads,1);
 });

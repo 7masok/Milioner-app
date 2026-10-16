@@ -1,7 +1,7 @@
 import crypto from 'node:crypto';
 import {pool} from './db.js';
 import {asyncRoute,requireTrustedOrigin} from './http.js';
-export const BUSINESS_CACHE_VERSION='calendar-v1';
+export const BUSINESS_CACHE_VERSION='calendar-v2';
 const DAY=86400000,OFFSET=18000000;
 const midnight=t=>Math.floor((t+OFFSET)/DAY)*DAY-OFFSET;
 let ready;
@@ -21,7 +21,7 @@ export function validBusinessSnapshot(model,period,start){
  if(![model,model.yesterday,model.yesterdayCompare].every(snapshot))return false;
  const expected=period==='day'?24:period==='week'?7:new Date(new Date(Number(start)+OFFSET).getUTCFullYear(),new Date(Number(start)+OFFSET).getUTCMonth()+1,0).getDate();
  if(model.buckets.length!==expected)return false;
- let nodes=0;function safe(v){if(++nodes>25000)return false;if(v===null||typeof v==='boolean')return true;if(typeof v==='number')return Number.isFinite(v);if(typeof v==='string')return v.length<500&&!/[<>&]/.test(v);if(Array.isArray(v))return v.length<200&&v.every(safe);if(v&&typeof v==='object')return Object.entries(v).every(([k,x])=>!['__proto__','prototype','constructor'].includes(k)&&safe(x));return false}
+ let nodes=0;function safe(v){if(++nodes>100000)return false;if(v===null||typeof v==='boolean')return true;if(typeof v==='number')return Number.isFinite(v);if(typeof v==='string')return v.length<500&&!/[<>&]/.test(v);if(Array.isArray(v))return v.length<5000&&v.every(safe);if(v&&typeof v==='object')return Object.entries(v).every(([k,x])=>!['__proto__','prototype','constructor'].includes(k)&&safe(x));return false}
  return safe(model);
 }
 async function sourceRevision(){
@@ -37,7 +37,27 @@ async function sourceRevision(){
  (SELECT MAX(last_success_at) FROM wb_sales_live_state) AS live`);
  return crypto.createHash('sha256').update(JSON.stringify(r.rows[0]||{})).digest('hex');
 }
+function dailyBounds(from,to){return Number.isFinite(from)&&Number.isFinite(to)&&from===midnight(from)&&to===midnight(to)&&from>0&&to>from&&to-from<=64*DAY&&to<=midnight(Date.now())+DAY&&from>=midnight(Date.now())-400*DAY}
+export function validBusinessDay(day){return validBusinessSnapshot({...day,yesterday:day,yesterdayCompare:day},'day',day?.bounds?.start)}
 export function registerBusinessDashboardCache(router){
+ router.get('/business-dashboard-days',asyncRoute(async(req,res)=>{
+  const from=Number(req.query.from),to=Number(req.query.to);if(!dailyBounds(from,to))return res.status(400).json({ok:false,error:'Некорректный дневной диапазон'});
+  await ensureCache();const keys=[];for(let t=from;t<to;t+=DAY)keys.push('base:'+t);
+  const [revision,result]=await Promise.all([sourceRevision(),pool.query('SELECT cache_key,version,source_revision,payload,generated_at FROM business_dashboard_cache WHERE cache_key=ANY($1::text[])',[keys])]);
+  res.json({ok:true,version:BUSINESS_CACHE_VERSION,sourceRevision:revision,days:result.rows.filter(r=>r.version===BUSINESS_CACHE_VERSION&&validBusinessDay(r.payload)).map(r=>({day:r.payload,generatedAt:Number(r.generated_at),fresh:r.source_revision===revision&&Date.now()-Number(r.generated_at)<(r.payload.bounds.end>Date.now()?60000:15*60000)&&!(Number(r.generated_at)<r.payload.bounds.end&&r.payload.bounds.end<=Date.now())}))});
+ }));
+ router.put('/business-dashboard-days',requireTrustedOrigin,asyncRoute(async(req,res)=>{
+  const {days,version,sourceRevision:revision}=req.body||{};
+  if(version!==BUSINESS_CACHE_VERSION||!/^[a-f0-9]{64}$/.test(String(revision||''))||!Array.isArray(days)||!days.length||days.length>64||new Set(days.map(d=>d?.bounds?.start)).size!==days.length||JSON.stringify(days).length>2000000||!days.every(d=>businessCacheKey('day',d?.bounds?.start)&&validBusinessDay(d)))return res.status(400).json({ok:false,error:'Некорректная дневная основа'});
+  await ensureCache();if(await sourceRevision()!==revision)return res.status(409).json({ok:false,error:'Данные обновились во время расчёта'});
+  const at=Date.now(),rows=days.map(day=>({key:'base:'+day.bounds.start,payload:day}));
+  await pool.query(`INSERT INTO business_dashboard_cache(cache_key,version,source_revision,payload,generated_at)
+   SELECT x->>'key',$2,$3,x->'payload',$4 FROM jsonb_array_elements($1::jsonb) x
+   ON CONFLICT(cache_key) DO UPDATE SET version=excluded.version,source_revision=excluded.source_revision,payload=excluded.payload,generated_at=excluded.generated_at`,[JSON.stringify(rows),version,revision,at]);
+  await pool.query('DELETE FROM business_dashboard_cache WHERE cache_key NOT IN (SELECT cache_key FROM business_dashboard_cache ORDER BY generated_at DESC LIMIT 400)');
+  res.json({ok:true,generatedAt:at});
+ }));
+
  router.get('/business-dashboard-cache',asyncRoute(async(req,res)=>{
   const key=businessCacheKey(req.query.period,req.query.start);if(!key)return res.status(400).json({ok:false,error:'Некорректный период'});
   await ensureCache();const [revision,result]=await Promise.all([sourceRevision(),pool.query('SELECT version,source_revision,payload,generated_at FROM business_dashboard_cache WHERE cache_key=$1',[key])]);
@@ -52,7 +72,7 @@ export function registerBusinessDashboardCache(router){
   await ensureCache();const current=await sourceRevision();if(current!==revision)return res.status(409).json({ok:false,error:'Данные обновились во время расчёта'});
   const at=Date.now();await pool.query(`INSERT INTO business_dashboard_cache(cache_key,version,source_revision,payload,generated_at) VALUES($1,$2,$3,$4::jsonb,$5)
    ON CONFLICT(cache_key) DO UPDATE SET version=excluded.version,source_revision=excluded.source_revision,payload=excluded.payload,generated_at=excluded.generated_at`,[key,version,revision,JSON.stringify(snapshot),at]);
-  await pool.query('DELETE FROM business_dashboard_cache WHERE cache_key NOT IN (SELECT cache_key FROM business_dashboard_cache ORDER BY generated_at DESC LIMIT 120)');
+  await pool.query('DELETE FROM business_dashboard_cache WHERE cache_key NOT IN (SELECT cache_key FROM business_dashboard_cache ORDER BY generated_at DESC LIMIT 400)');
   res.json({ok:true,generatedAt:at});
  }));
 }
