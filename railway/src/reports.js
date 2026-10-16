@@ -207,7 +207,8 @@ reportsRouter.get('/kaspi-report-orders', asyncRoute(async (req, res) => {
     pool.query(`SELECT order_id AS id,code,amount,return_date AS "returnDate",original_completion_date AS "originalCompletionDate",
       detected_at AS "detectedAt",date_source AS "dateSource" FROM kaspi_report_returns
       WHERE return_date >= $1 AND return_date < $2 ORDER BY return_date`, [bounds.start, bounds.end]),
-    pool.query(`SELECT finished_at AS "lastRefreshAt",items AS "lastItems",error AS "lastError"
+    pool.query(`SELECT finished_at AS "lastRefreshAt",items AS "lastItems",error AS "lastError",
+      (SELECT MAX(finished_at) FROM sync_runs WHERE market='Kaspi' AND ok=1 AND finished_at>0) AS "lastSuccessAt"
       FROM sync_runs WHERE market='Kaspi' ORDER BY id DESC LIMIT 1`),
     pool.query(`SELECT MIN(creation_date) AS "coverageFrom",MAX(creation_date) AS "coverageTo"
       FROM marketplace_order_lines WHERE market='Kaspi' AND creation_date>0`)
@@ -228,6 +229,7 @@ reportsRouter.get('/kaspi-report-orders', asyncRoute(async (req, res) => {
     to: req.query.to ? Number(req.query.to) : null, fetchedAt: Date.now(), source: 'PostgreSQL completed Kaspi orders by completion date',
     historyComplete: Number(coverage.coverageFrom || 0) <= bounds.start, coverageFrom: Number(coverage.coverageFrom || 0) || null,
     coverageTo: Number(coverage.coverageTo || 0) || null, lastRefreshAt: Number(cache.lastRefreshAt || 0) || null,
+    lastSuccessAt: Number(cache.lastSuccessAt || 0) || null,
     warnings: cache.lastError ? [String(cache.lastError)] : [], orders, returns: returnsResult.rows });
 }));
 
