@@ -25,13 +25,11 @@ export async function fetchPostings(credentials,from,to){
  }throw new Error('Ozon: превышен лимит страниц отправлений');
 }
 export async function fetchPostingHistory(credentials,from,to,previous={},fetchRows=fetchPostings){
- const historyFrom=new Date(Date.parse(to)-50*86400000).toISOString(),fresh=await fetchRows(credentials,from,to),cachedFrom=Date.parse(previous.from||'');
- let older=Array.isArray(previous.rows)?previous.rows:[];
- // Backfill only the missing older segment, within the existing 30-day request size.
- if(!Number.isFinite(cachedFrom)||cachedFrom>Date.parse(historyFrom)){
-  const olderTo=Number.isFinite(cachedFrom)?new Date(Math.min(cachedFrom,Date.parse(from))).toISOString():from;
-  older=[...older,...await fetchRows(credentials,historyFrom,olderTo)];
- }
+ const target=Date.parse(to)-155*86400000,fresh=await fetchRows(credentials,from,to),cachedFrom=Date.parse(previous.from||'');
+ let older=Array.isArray(previous.rows)?previous.rows:[],coveredFrom=Number.isFinite(cachedFrom)?Math.min(cachedFrom,Date.parse(from)):Date.parse(from);
+ // One bounded older chunk per normal sync. Do not claim the target until fetched.
+ if(coveredFrom>target){const olderTo=new Date(coveredFrom).toISOString(),olderFrom=new Date(Math.max(target,coveredFrom-30*86400000)).toISOString();older=[...older,...await fetchRows(credentials,olderFrom,olderTo)];coveredFrom=Date.parse(olderFrom)}
+ const historyFrom=new Date(Math.max(target,coveredFrom)).toISOString();
  const retained=older.filter(row=>{const created=Date.parse(row.created_at||row.in_process_at||'');return created>=Date.parse(historyFrom)&&created<Date.parse(from)});
  return {rows:[...new Map([...retained,...fresh].map(row=>[row.posting_number,row])).values()],from:historyFrom,to};
 }

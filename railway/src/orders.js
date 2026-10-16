@@ -80,6 +80,8 @@ ordersRouter.get('/orders', asyncRoute(async (req, res) => {
   const params = [], clauses = [];
   if (selected) clauses.push('o.market=' + '$' + params.push(selected));
   if (after) clauses.push('o.creation_date >= ' + '$' + params.push(after));
+  const before = Math.max(0, Number(req.query.before || 0) || 0);
+  if (before) clauses.push('o.creation_date < ' + '$' + params.push(before));
   const where = clauses.length ? `WHERE ${clauses.join(' AND ')}` : '';
   params.push(limit);
   const [rows, products, warehouse] = await Promise.all([
@@ -127,5 +129,6 @@ ordersRouter.get('/orders', asyncRoute(async (req, res) => {
       ON CONFLICT(market,sku) DO NOTHING`, [productId, linkMarket, sku, now]);
   }
 
-  res.json({ ok: true, orders: out });
+  const historyCoverage = before ? (await pool.query("SELECT market,MIN(creation_date) AS \"from\" FROM marketplace_order_lines WHERE market=ANY($1::text[]) AND creation_date>0 GROUP BY market", [['Kaspi','WB','WB2']])).rows : undefined;
+  res.json({ ok: true, orders: out, ...(historyCoverage ? {historyCoverage} : {}) });
 }));

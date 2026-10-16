@@ -1,3 +1,4 @@
+import { registerBusinessDashboardCache } from './business-dashboard-cache.js';
 import { registerProductOrderSeries } from './product-sales-series.js';
 import express from 'express';
 import { pool } from './db.js';
@@ -9,6 +10,7 @@ import { reconcileWbReportProducts } from './wb-report-reconciliation.js';
 
 export const reportsRouter = express.Router();
 registerProductOrderSeries(reportsRouter);
+registerBusinessDashboardCache(reportsRouter);
 const ALMATY_OFFSET = 5 * 60 * 60 * 1000;
 
 function market(value) {
