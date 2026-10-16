@@ -51,19 +51,53 @@ test('posted rows without time need a unique unchanged merchant; ambiguous rows 
   assert.equal(model.matches(draft([{...posted,title:'Другой магазин'}]),'a',[saved]).size,0);
 });
 
-test('actual APK engine unchecks a refined BCC import and forced retry reuses old keys without changing balances',async()=>{
+test('posted PDF merchant missing a wrapped continuation matches a unique blocked purchase without rewriting history',()=>{
+  const saved=tx({title:'IP LEGA PACK',amount:5694,originalAmount:5694,originalCurrency:'KZT'}),before=structuredClone(saved);
+  const posted=row({title:'Покупка IP LEGA',time:'',bankStatus:'posted',amount:5694,originalAmount:5694,originalCurrency:'KZT',amountEstimated:false});
+  assert.equal(model.matches(draft([posted]),'a',[saved]).get(posted),saved);
+  assert.deepEqual(saved,before);
+  assert.equal(model.matches(draft([posted]),'a',[{...saved,bankStatus:'posted',statementTime:''}]).size,0,'posted-to-posted does not allow a truncated merchant');
+  for(const title of ['Покупка IP LEGACY','Покупка IP OTHER','Покупка IP','Покупка IP LEGA2']){
+    assert.equal(model.matches(draft([{...posted,title}]),'a',[saved]).size,0,title);
+  }
+  for(const change of [{amount:5695,originalAmount:5695},{date:'2026-10-09'},{originalCurrency:'USD'},{type:'income'},{time:'19:12:25'}]){
+    assert.equal(model.matches(draft([{...posted,...change}]),'a',[saved]).size,0,JSON.stringify(change));
+  }
+  assert.equal(model.matches(draft([posted]),'a',[{...saved,statementAccountNumber:'KZOTHER'}]).size,0);
+  assert.equal(model.matches(draft([posted]),'b',[saved]).size,0);
+});
+
+test('abbreviated merchant does not hide ambiguous equal purchases and preserves complete split groups',()=>{
+  const saved=tx({title:'IP LEGA PACK',amount:5694,originalAmount:5694,originalCurrency:'KZT'});
+  const posted=row({title:'Покупка IP LEGA',time:'',bankStatus:'posted',amount:5694,originalAmount:5694,originalCurrency:'KZT',amountEstimated:false});
+  assert.equal(model.matches(draft([posted]),'a',[saved,{...saved,id:'second',bankOperationKey:'second-key',statementFingerprint:'second-fp',statementTime:'19:13:00'}]).size,0);
+  assert.equal(model.matches(draft([posted,{...posted,title:'Покупка IP LEGA PACK',bankOperationKey:'other-key',statementFingerprint:'other-fp'}]),'a',[saved]).size,0);
+  assert.equal(model.matches(draft([posted]),'a',[{...saved,title:'IP LEGA OTHER'},{...saved,id:'second',bankOperationKey:'second-key'}]).size,0);
+  const parts=[{...saved,id:'p1',amount:2000,originalAmount:2000,bankOperationKey:'parts',statementFingerprint:'parts-fp'},{...saved,id:'p2',amount:3694,originalAmount:3694,bankOperationKey:'parts#split:2',statementFingerprint:'parts-fp#split:2'}];
+  assert.equal(model.matches(draft([posted]),'a',parts).get(posted)?.id,'p1');
+  assert.equal(model.matches(draft([posted]),'a',[parts[0]]).size,0);
+});
+
+for(const fixture of [
+  {name:'timed refined BCC merchant',saved:tx(),incoming:row()},
+  {name:'untimed posted merchant missing wrapped word',saved:tx({title:'IP LEGA PACK',amount:5694,originalAmount:5694,originalCurrency:'KZT'}),incoming:row({title:'Покупка IP LEGA',time:'',bankStatus:'posted',amount:5694,originalAmount:5694,originalCurrency:'KZT',amountEstimated:false})}
+])test('actual APK engine unchecks '+fixture.name+' and forced retry reuses old keys without changing balances',async()=>{
   const core=await fs.readFile(new URL('../../finances/core.js',import.meta.url),'utf8'),source=await fs.readFile(new URL('../../finance-bcc-identity.js',import.meta.url),'utf8');
-  const saved=tx(),nodes=new Map(),check={dataset:{index:'0'},checked:true};let html='',outgoing,result;
+  const saved=fixture.saved,originalAmount=saved.amount,nodes=new Map(),check={dataset:{index:'0'},checked:true};let html='',outgoing,result;
   for(const [id,value]of [['financeStatementAccount','a'],['financeStatementCategory-0','goods'],['financeStatementTransfer-0',''],['financeStatementRefundMode-0',''],['financeStatementRefund-0','']])nodes.set(id,{value,focus(){},scrollIntoView(){}});
   const c={crypto:webcrypto,TextEncoder,Uint8Array,Date,Intl,console,document:{getElementById:id=>nodes.get(id),querySelectorAll:()=>[check]},localStorage:{getItem(){return null}},setTimeout(){},navigator:{onLine:false},showSheet:s=>{html=s},closeModal(){},alert(){}};c.window=c;vm.createContext(c);
   vm.runInContext("const KEY='fixture';const state={settings:{}};const esc=String;const fmt=String;function saveLocalOnly(){throw Error('write forbidden')}",c);vm.runInContext(core,c);
   c.saved=saved;vm.runInContext("state.settings={personalFinanceAccounts:[{id:'a',name:'BCC',currency:'KZT',balance:500,iban:'KZFIXTURE'}],personalFinanceCategories:[{id:'goods',name:'Товар',kind:'expense'}],personalFinanceTransactions:[saved]};financeHydrated=true",c);
   c.financeStatementRememberAccount=async()=>false;c.financeRevealStatementRows=()=>{};
   c.financeRunLocalMutation=async(mutation,commands)=>{result=mutation();outgoing=commands()[0].body.transactions;return result;};
-  vm.runInContext(source,c);await c.financeStatementPreview(draft([row()]));
+  vm.runInContext(source,c);await c.financeStatementPreview(draft([fixture.incoming]));
   assert.match(html,/уже импортирован/);assert.doesNotMatch(html,/<input class="finance-statement-use"[^>]*\bchecked\b/);
   assert.equal(c.financeStatementExactDuplicate(vm.runInContext('financeStatementDraft.transactions[0]',c),'a').id,'saved');
-  await c.financeImportStatementDraft();assert.equal(result.skipped.length,1);assert.equal(result.transactions.length,0);
+  await c.financeImportStatementDraft();if(fixture.incoming.bankStatus==='posted'){assert.equal(result.repaired.length,1);assert.equal(result.transactions.length,1);}else{assert.equal(result.skipped.length,1);assert.equal(result.transactions.length,0);}
   assert.equal(outgoing[0].bankOperationKey,'historic-key');assert.equal(outgoing[0].statementFingerprint,'historic-fp');
-  assert.equal(vm.runInContext('financeAccounts()[0].balance',c),500);assert.equal(vm.runInContext('financeTransactions().length',c),1);assert.equal(saved.categoryId,'goods');assert.equal(saved.amount,2600);
+  assert.equal(vm.runInContext('financeAccounts()[0].balance',c),500);assert.equal(vm.runInContext('financeTransactions().length',c),1);assert.equal(saved.categoryId,'goods');assert.equal(saved.amount,originalAmount);
+  await c.financeStatementPreview(draft([fixture.incoming]));
+  assert.doesNotMatch(html,/<input class="finance-statement-use"[^>]*\bchecked\b/);
+  await c.financeImportStatementDraft();assert.equal(result.skipped.length,1);assert.equal(result.transactions.length,0);
+  assert.equal(vm.runInContext('financeAccounts()[0].balance',c),500);assert.equal(vm.runInContext('financeTransactions().length',c),1);
 });

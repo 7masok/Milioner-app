@@ -11,6 +11,16 @@ function time(value){const s=String(value||'').trim();return /^(?:[01]\d|2[0-3])
 function direction(tx,account){if(tx.type==='transfer')return tx.statementDirection||(String(tx.toAccountId)===account?'income':String(tx.accountId)===account?'expense':'');return tx.type==='transit_in'?'income':tx.type==='transit_out'?'expense':String(tx.type||'');}
 function scoped(tx,account){return String(tx.statementAccountId||'')===account||(!tx.statementAccountId&&(String(tx.accountId||'')===account||String(tx.toAccountId||'')===account));}
 function title(value){return String(value||'').replace(/^(?:Покупка|Purchase|Сатып алу|Плат[её]ж|Payment|Төлем)\s*/i,'').toLowerCase().replace(/[^a-zа-яё0-9]+/gi,' ').trim();}
+// The posted table can lose continuation words on the next PDF line.
+// Permit a complete-token prefix only, with an identifying merchant word;
+// amount/date/scope and a unique pair are still required by matches().
+function sameMerchant(a,b){
+  const left=title(a),right=title(b);if(!left||!right)return false;
+  if(left===right)return true;
+  const [short,long]=left.length<right.length?[left,right]:[right,left];
+  const legal=new Set(['ip','ип','too','тоо','llp','llc','ao','ао','ooo','ооо']);
+  return long.startsWith(short+' ')&&short.split(' ').some(word=>!legal.has(word)&&/[a-zа-яё]/i.test(word)&&word.length>=4);
+}
 function rowIdentity(row,accountCurrency){
   const original=cents(row.originalAmount),originalCurrency=currency(row.originalCurrency);
   if(original>0&&originalCurrency)return {amount:original,currency:originalCurrency};
@@ -71,12 +81,13 @@ function matches(data,account,history){
     const c=key&&candidates.find(c=>unused.has(c)&&c.signature===key);
     if(c){result.set(row,c.primary);unused.delete(c);}
   }
-  // A posted BCC table may omit time: require unchanged merchant plus a unique
-  // blocked->posted pair. A changed title with no precise timestamp is ambiguous.
+  // A posted BCC table may omit time and wrapped merchant words. Require an
+  // exact merchant or identifying token prefix, with a unique pair in BOTH directions.
+  // After a forced blocked->posted update, untimed posted repeats need the exact name.
   for(const row of rows){
     if(result.has(row)||row.bankStatus!=='posted')continue;
-    const available=[...unused].filter(c=>c.primary.bankStatus==='blocked'&&compatible(c,row)&&title(c.primary.title)&&title(c.primary.title)===title(row.title));
-    const incoming=rows.filter(r=>!result.has(r)&&r.bankStatus==='posted'&&day(r.date)===day(row.date)&&title(r.title)===title(row.title)&&rowIdentity(r,accountCurrency)?.amount===rowIdentity(row,accountCurrency)?.amount&&currency(r.originalCurrency)===currency(row.originalCurrency));
+    const available=[...unused].filter(c=>compatible(c,row)&&(c.primary.bankStatus==='blocked'&&sameMerchant(c.primary.title,row.title)||c.primary.bankStatus==='posted'&&!time(c.row.time)&&title(c.primary.title)&&title(c.primary.title)===title(row.title)));
+    const incoming=available.length===1?rows.filter(r=>!result.has(r)&&r.bankStatus==='posted'&&compatible(available[0],r)&&sameMerchant(available[0].primary.title,r.title)):[];
     if(available.length===1&&incoming.length===1){result.set(row,available[0].primary);unused.delete(available[0]);}
   }
   return result;
