@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
 import {pool} from '../src/db.js';
 import {reportsRouter} from '../src/reports.js';
-import {businessCacheKey,validBusinessSnapshot,BUSINESS_CACHE_VERSION} from '../src/business-dashboard-cache.js';
+import {businessCacheKey,validBusinessSnapshot,validBusinessDay,BUSINESS_CACHE_VERSION} from '../src/business-dashboard-cache.js';
 const DAY=86400000,today=Math.floor((Date.now()+18000000)/DAY)*DAY-18000000,start=today-2*DAY;
 function snapshot(begin=start){return{period:'day',bounds:{start:begin,end:begin+DAY},buckets:Array.from({length:24},(_,i)=>({start:begin+i*3600000,end:begin+(i+1)*3600000,orders:5,buyouts:4})),orders:{amount:120,qty:2,profit:10,orderCount:1,coverage:1},summary:{revenue:100,qty:2,profit:null},netProfit:null,hourly:{ozonHourlyComplete:false}}}
 const model=()=>({...snapshot(),dayOffset:-2,yesterday:snapshot(start-DAY),yesterdayCompare:snapshot(start-DAY)});
@@ -38,4 +38,24 @@ test('dashboard order-history reads both date bounds with parameters and exposes
  pool.query=async(sql,args)=>{queries.push({sql,args});return{rows:sql.includes('MIN(creation_date)')?[{market:'Kaspi',from:1}]:[]}};
  try{await handler({query:{after:String(start),before:String(start+DAY),limit:'15000'}},{json(x){out=x}},e=>{throw e})}finally{pool.query=old}
  const q=queries.find(x=>x.sql.includes('FROM marketplace_order_lines o'));assert.match(q.sql,/o\.creation_date >= \$1/);assert.match(q.sql,/o\.creation_date < \$2/);assert.deepEqual(q.args,[start,start+DAY,15000]);assert.equal(out.historyCoverage[0].from,1);assert.ok(queries.every(x=>x.sql.startsWith('SELECT')));
+});
+
+let savedDays=[];
+async function dailyInvoke(method,body=null,query={from:start,to:start+2*DAY}){
+ const route=reportsRouter.stack.find(x=>x.route?.path==='/business-dashboard-days'&&x.route.methods[method]).route,old=pool.query,queries=[];let status=200,out;
+ pool.query=async(sql,args)=>{queries.push({sql,args});if(sql.includes(' AS warehouse,'))return{rows:[marker]};if(sql.startsWith('SELECT cache_key'))return{rows:savedDays.filter(r=>args[0].includes(r.cache_key))};if(sql.startsWith('INSERT INTO business_dashboard_cache'))savedDays=JSON.parse(args[0]).map(r=>({cache_key:r.key,version:args[1],source_revision:args[2],payload:r.payload,generated_at:args[3]}));return{rows:[]}};
+ try{await route.stack.at(-1).handle({query,body},{status(n){status=n;return this},json(x){out=x}},e=>{throw e})}finally{pool.query=old}return{status,out,queries,route};
+}
+test('shared days use one bounded aggregate batch and reuse it for any contained range',async()=>{
+ savedDays=[];const get=await dailyInvoke('get');assert.deepEqual(get.out.days,[]);
+ const days=[snapshot(),snapshot(start+DAY)];days[0].events=[[start+1000,120,2,10,1,120,2]];
+ assert.equal(validBusinessDay(days[0]),true);
+ const put=await dailyInvoke('put',{days,version:BUSINESS_CACHE_VERSION,sourceRevision:get.out.sourceRevision});assert.equal(put.status,200);assert.equal(put.route.stack.length,2);assert.equal(put.queries.filter(q=>q.sql.startsWith('INSERT')).length,1);assert.match(put.queries.find(q=>q.sql.startsWith('INSERT')).sql,/jsonb_array_elements/);
+ const narrow=await dailyInvoke('get',null,{from:start,to:start+DAY});assert.equal(narrow.out.days.length,1);assert.equal(narrow.out.days[0].fresh,true);assert.equal(narrow.out.days[0].day.summary.profit,null);assert.deepEqual(narrow.out.days[0].day.events,days[0].events);assert.ok(narrow.queries.every(q=>q.sql.startsWith('SELECT')));
+ const prior=revision();marker={...marker,finance:99};assert.equal((await dailyInvoke('get')).out.days[0].fresh,false);assert.equal((await dailyInvoke('put',{days,version:BUSINESS_CACHE_VERSION,sourceRevision:prior})).status,409);
+ savedDays[0].generated_at=start+DAY-1;savedDays[0].source_revision=revision();assert.equal((await dailyInvoke('get')).out.days[0].fresh,false);
+});
+test('shared day writes reject duplicate days, HTML, unknown shape, excessive ranges and old versions',async()=>{
+ for(const patch of [{days:[snapshot(),snapshot()]},{days:[{...snapshot(),summary:{revenue:null,qty:2,profit:null}}]},{days:[{...snapshot(),label:'<script>'}]},{version:'calendar-v1'},{days:Array(65).fill(snapshot())}]){const out=await dailyInvoke('put',{days:[snapshot()],version:BUSINESS_CACHE_VERSION,sourceRevision:revision(),...patch});assert.equal(out.status,400);assert.equal(out.queries.length,0)}
+ for(const query of [{from:start+1,to:start+DAY},{from:start-65*DAY,to:start},{from:today,to:today+2*DAY}]){const out=await dailyInvoke('get',null,query);assert.equal(out.status,400);assert.equal(out.queries.length,0)}
 });

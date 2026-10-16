@@ -346,6 +346,11 @@ try{
     if(ads?.configured&&ads?.pending)watchOzonAds(days,payload,range);
     return ozonSummaryFrom(payload,days,ads||{configured:false,pending:false,rows:[]},range);
   };
+  window.loadOzonBusinessDaily=async function(range){
+    const payload=await loadOzonProfitData(),from=Date.parse(range.from+'T00:00:00+05:00'),to=Date.parse(range.to+'T00:00:00+05:00'),out=[];
+    for(let t=from;t<=to;t+=86400000){const day=new Date(t+18000000).toISOString().slice(0,10),span={from:day,to:day},summary=ozonSummaryFrom(payload,0,null,span),covered=(payload.accounts||[]).every(a=>Date.parse(a.finance?.from||'')<=t&&Date.parse(a.finance?.to||'')>=Math.min(t+86400000,Date.now()));out.push({day,summary,covered})}
+    return out;
+  };
   window.ozonStoreDetail=window.summarizeOzonReport;
   const sumText=(groups,key)=>groups.length?groups.map(g=>ozonMoney(g[key],g.currency)).join(' + '):'—';
   async function renderOzonProfitReport(){

@@ -455,7 +455,7 @@ reportsRouter.get('/wb-unit-histories',asyncRoute(async(req,res)=>{
  res.json({ok:true,scope:'unit-histories',market:selected,histories:result.histories});
 }));
 
-async function readWbReportReconciliation(selected,since,until,reportRows){
+async function readWbReportReconciliation(selected,since,until,reportRows,daily=false){
  const finance=await pool.query(`SELECT f.* FROM wb_finance_rows f WHERE f.market=$1 AND (${wbFinancePeriodSql('f')}) >= $2 AND (${wbFinancePeriodSql('f')}) < $3 ORDER BY rr_date,rrd_id LIMIT 50001`,[selected,since,until]);
  if(finance.rows.length>50000)return {error:'Больше 50 000 операций. Выберите более короткий период.'};
   const srids = [...new Set(finance.rows.map(x => {
@@ -473,17 +473,18 @@ async function readWbReportReconciliation(selected,since,until,reportRows){
       LIMIT 50001`, [selected, srids]) : Promise.resolve({ rows: [] })
   ]);
   if (purchases.rows.length > 50000 || costs.rows.length > 50000) return {error:'Слишком много записей себестоимости.'};
- return {products:reconcileWbReportProducts({market:selected,reportRows,financeRows:finance.rows,links:links.rows,products:products.rows,purchaseRows:purchases.rows,saleCosts:costs.rows})};
+ return {products:reconcileWbReportProducts({market:selected,reportRows,financeRows:finance.rows,links:links.rows,products:products.rows,purchaseRows:purchases.rows,saleCosts:costs.rows,daily})};
 }
 
 reportsRouter.get('/wb-finance-products', asyncRoute(async (req, res) => {
   const selected = market(req.query.market);
   if (!['WB', 'WB2'].includes(selected)) return res.status(400).json({ ok: false, error: 'market must be WB or WB2' });
   const days = Number(req.query.days || 1);
-  const { since, until } = requestPeriodBounds(req);
+  const { since, until } = requestPeriodBounds(req),daily=req.query.daily==='1',daySql="to_char(to_timestamp(("+wbFinancePeriodSql('f')+")/1000.0) AT TIME ZONE 'Asia/Almaty','YYYY-MM-DD')";
+  if(daily&&until-since>64*86400000)return res.status(400).json({ok:false,error:'Дневной диапазон не более 64 дней'});
   const daysList = [];
   for (let time = since; time < until; time += 86_400_000) daysList.push(dateKey(time));
-  const [result, adResult] = await Promise.all([pool.query(`SELECT f.vendor_code AS "vendorCode",f.nm_id AS "nmId",MAX(f.title) AS title,l.product_id AS "productId",
+  const [result, adResult] = await Promise.all([pool.query(`SELECT ${daily?daySql+' AS day,COUNT(*) AS "financeRowCount",':''}f.vendor_code AS "vendorCode",f.nm_id AS "nmId",MAX(f.title) AS title,l.product_id AS "productId",
     SUM(CASE WHEN trim(f.doc_type)='Продажа' THEN f.qty WHEN trim(f.doc_type)='Возврат' THEN -f.qty ELSE 0 END) AS qty,
     SUM(CASE WHEN trim(f.doc_type)='Продажа' THEN ABS(f.qty) ELSE 0 END) AS "saleQty",
     SUM(CASE WHEN trim(f.doc_type)='Возврат' THEN ABS(f.qty) ELSE 0 END) AS "returnQty",
@@ -512,13 +513,14 @@ reportsRouter.get('/wb-finance-products', asyncRoute(async (req, res) => {
       HAVING COUNT(DISTINCT pl.product_id)=1
     ) l ON TRUE
     WHERE f.market=$1 AND (${wbFinancePeriodSql("f")}) >= $2 AND (${wbFinancePeriodSql("f")}) < $3
-    GROUP BY f.vendor_code,f.nm_id,l.product_id ORDER BY SUM(f.for_pay) DESC`, [selected, since, until]),
+    GROUP BY ${daily?daySql+',':''}f.vendor_code,f.nm_id,l.product_id ORDER BY SUM(f.for_pay) DESC`, [selected, since, until]),
     daysList.length
       ? pool.query('SELECT day,advert_id AS "advertId",campaign,payment_type AS "paymentType",amount,nm_ids AS "nmIds" FROM wb_ad_costs WHERE market=$1 AND day=ANY($2::text[])', [selected, daysList])
       : Promise.resolve({ rows: [] })]);
   const attribution = await resolveWbAdvertising(selected, adResult.rows);
   const rows = [...result.rows];
-  for (const [productId] of attribution.byProduct) {
+  const dayAds=new Map();for(const ad of attribution.rows){if(!ad.productId)continue;const key=ad.day+':'+ad.productId;dayAds.set(key,(dayAds.get(key)||0)+Number(ad.amount||0))}
+  for (const [productId] of (daily?[]:attribution.byProduct)) {
     if (rows.some(row => String(row.productId || '') === String(productId))) continue;
     const linkedAd = attribution.rows.find(row => row.productId === String(productId));
     rows.push({ productId: String(productId), nmId: linkedAd?.nmIds?.[0] || '', vendorCode: '', title: linkedAd?.productName || '',
@@ -529,8 +531,8 @@ reportsRouter.get('/wb-finance-products', asyncRoute(async (req, res) => {
   const consumedAdvertising = new Set();
   const products = rows.map(row => {
     const wbCharges = Number(row.delivery || 0) + Number(row.storage || 0) + Number(row.acceptance || 0) + Number(row.deduction || 0) + Number(row.penalty || 0) + Number(row.rebill || 0);
-    const productId = String(row.productId || ''), key = productId ? 'p:' + productId : 'nm:' + String(row.nmId || '');
-    const productAdvertising = productId && !consumedAdvertising.has(key) ? attribution.byProduct.get(productId) || 0 : 0;
+    const productId = String(row.productId || ''), key = (daily?row.day+':':'')+(productId ? 'p:' + productId : 'nm:' + String(row.nmId || ''));
+    const productAdvertising = productId && !consumedAdvertising.has(key) ? (daily?dayAds.get(row.day+':'+productId):attribution.byProduct.get(productId)) || 0 : 0;
     consumedAdvertising.add(key);
     const wbExpenses = Number(row.retailAmount || 0) - Number(row.forPay || 0) + wbCharges;
     const saleQty = Math.max(0, Number(row.saleQty || 0));
@@ -540,8 +542,13 @@ reportsRouter.get('/wb-finance-products', asyncRoute(async (req, res) => {
     return { ...row, wbCharges, wbExpenses, advertising: productAdvertising, avgDelivery, avgCommissionPct,
       netBeforeCost: Number(row.forPay || 0) - wbCharges + Number(row.additionalPayment || 0) - productAdvertising };
   });
-  const reconciled=await readWbReportReconciliation(selected,since,until,products);
+  const reconciled=await readWbReportReconciliation(selected,since,until,products,daily);
   if(reconciled.error)return res.status(422).json({ok:false,error:reconciled.error});
+  if(daily){
+    const fields=['retailAmount','forPay','acquiring','delivery','storage','acceptance','deduction','promotionDeduction','penalty','additionalPayment','rebill'];
+    const dailyRows=daysList.map(day=>{const products=reconciled.products.filter(p=>p.day===day),summary={financeRowCount:products.reduce((n,p)=>n+Number(p.financeRowCount||0),0),advertising:adResult.rows.filter(a=>a.day===day).reduce((n,a)=>n+Number(a.amount||0),0)};for(const field of fields)summary[field]=products.reduce((n,p)=>n+Number(p[field]||0),0);summary.financeAvailable=summary.financeRowCount>0;return{day,summary,products}});
+    return res.json({ok:true,market:selected,daily:dailyRows,range:{since,until}});
+  }
   res.json({ ok: true, market: selected, days, range: { since, until, timezone: 'Asia/Almaty', businessTimezone: 'Europe/Moscow' }, products:reconciled.products,
     advertising: attribution.total, unmatchedAdvertising: attribution.unmatched, autoRecoveredAdvertising: attribution.autoRecovered });
 }));

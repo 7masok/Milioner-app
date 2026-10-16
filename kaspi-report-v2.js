@@ -104,6 +104,23 @@ window.loadBusinessMarketplaceSummary=async function(days=30,{force=false,range=
  businessMarketplaceSummaryCache.set(key,{at:Date.now(),promise});
  return promise;
 };
+function businessDailyTotal(sources){
+ const total={qty:0,revenue:0,cost:0,fees:0,ads:0,profit:0,complete:true,financeAvailable:true,estimated:false},known={cost:0,fees:0,profit:0},partial={cost:false,fees:false,profit:false};
+ for(const x of Object.values(sources)){for(const k of ['qty','revenue','ads'])total[k]+=Number(x[k])||0;for(const k of ['cost','fees','profit']){if(x[k]===null||x[k]===undefined||!Number.isFinite(Number(x[k])))partial[k]=true;else{total[k]+=Number(x[k]);known[k]++}}total.complete=total.complete&&Boolean(x.complete);total.financeAvailable=total.financeAvailable&&Boolean(x.financeAvailable);total.estimated=total.estimated||Boolean(x.estimated)}
+ for(const k of ['cost','fees','profit'])if(!known[k])total[k]=null;
+ return {...total,sources,partial,estimated:total.estimated||Object.values(partial).some(Boolean)};
+}
+window.loadBusinessMarketplaceDaily=async function(range,{force=false}={}){
+ const bounds=explicitRangeBounds(range);if(!bounds||bounds.end-bounds.start>64*86400000)throw Error('Некорректный дневной диапазон');
+ const days=[];for(let t=bounds.start;t<bounds.end;t+=86400000)days.push(new Date(t+18000000).toISOString().slice(0,10));
+ const query='&daily=1',today=Date.parse(new Date(Date.now()+18000000).toISOString().slice(0,10)+'T00:00:00+05:00');
+ const liveTasks=[];for(const market of ['WB','WB2'])for(const offset of [0,-1])if(today+offset*86400000>=bounds.start&&today+offset*86400000<bounds.end&&typeof ensureWbLiveOverview==='function')liveTasks.push(Promise.resolve(ensureWbLiveOverview(market,offset===0?1:-1)).then(data=>[market+':'+new Date(today+offset*86400000+18000000).toISOString().slice(0,10),data]));
+ const [kaspi,wb1,wb2,ozon,livePairs]=await Promise.all([loadKaspiOrders(0,{force,range}),apiJson(MILLIONER_API+'/api/wb-finance-products'+reportQuery('WB',0,range)+query),apiJson(MILLIONER_API+'/api/wb-finance-products'+reportQuery('WB2',0,range)+query),window.loadOzonBusinessDaily(range),Promise.all(liveTasks)]),live=new Map(livePairs),wb=[wb1,wb2];
+ return days.map(day=>{const start=Date.parse(day+'T00:00:00+05:00'),end=start+86400000,span={from:day,to:day},snapshot={...kaspi,orders:kaspi.orders.filter(o=>Number(o.completionDate)>=start&&Number(o.completionDate)<end),returns:(kaspi.returns||[]).filter(r=>Number(r.returnDate)>=start&&Number(r.returnDate)<end)},model=buildModel(snapshot,0,span),view=reportProfitView(model),ks={qty:Math.max(0,Number(model.qty)||0),revenue:Number(model.revenue)||0,cost:Number(model.cost)||0,fees:Number(model.fees)||0,ads:Number(model.ads)||0,profit:Number(view.value)||0,complete:!(Number(model.unknownRevenue)>0),financeAvailable:true,estimated:Boolean(view.estimated)},sources={Kaspi:ks};
+  for(let i=0;i<2;i++){const market=i?'WB2':'WB',entry=wb[i].daily?.find(x=>x.day===day);if(!entry)throw Error('Нет дневной разбивки '+market);const m={market,...wbExpenseModel(entry.summary,entry.products,market,0,span),products:entry.products};sources[market]=resolvedWbReportStats(m,live.get(market+':'+day),market,start===today?1:start===today-86400000?-1:0)}
+  const o=ozon.find(x=>x.day===day);if(!o)throw Error('Нет дневной разбивки Ozon');const x=o.summary,known=o.covered&&!x?.missing;sources.Ozon={qty:Math.max(0,Number(x?.qty)||0),revenue:Number(x?.sales)||0,cost:known?Number(x?.cost)||0:null,fees:known?Number(x?.fees)||0:null,ads:Number(x?.ads)||0,profit:known?Number(x?.profit)||0:null,complete:known,financeAvailable:known,estimated:!known};return {day,summary:{...businessDailyTotal(sources),partialOzonHistory:!o.covered,generatedAt:Date.now()}};
+ });
+};
 const productPeriodStatsCache=new Map(),productPeriodStatsJobs=new Map();
 window.refreshProductPeriodStats=function(spec={days:30,key:'30'},{force=false}={}){
  const days=Number(spec?.days)===-1?-1:Math.max(0,Number(spec?.days)||0),range=spec?.range||null,key=String(spec?.key||periodCacheKey(days,range));
