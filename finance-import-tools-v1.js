@@ -11,7 +11,9 @@ const originalImportStatement=window.financeImportStatementDraft;
 const originalTransferChanged=window.financeStatementTransferChanged;
 const originalRefundChanged=window.financeStatementRefundChanged;
 
-function rowFor(index){return window.financeStatementDraft?.transactions?.[Number(index)]||null}
+// Classic scripts share a global lexical `let`; it is not a window property.
+function currentDraft(){return typeof financeStatementDraft!=='undefined'?financeStatementDraft:(window.financeStatementDraft||null)}
+function rowFor(index){return currentDraft()?.transactions?.[Number(index)]||null}
 function n(value){const x=Number(value);return Number.isFinite(x)?x:0}
 function money(value){try{return typeof window.fmt==='function'?window.fmt(value):String(Math.round(n(value)*100)/100)}catch{return String(Math.round(n(value)*100)/100)}}
 function html(value){try{return typeof window.esc==='function'?window.esc(String(value??'')):String(value??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}catch{return String(value??'')}}
@@ -26,7 +28,7 @@ function simpleHash(value){let h=2166136261;for(const ch of String(value||'')){h
 function stableSplitFingerprint(row,index){
   const direct=String(row?.statementFingerprint||'').trim();
   if(direct)return direct.slice(0,470);
-  const raw=[row?.bankOperationKey,row?.date,row?.time,row?.title,row?.amount,window.financeStatementDraft?.statement?.sourceHash,currentAccountId(),index].join('|');
+  const raw=[row?.bankOperationKey,row?.date,row?.time,row?.title,row?.amount,currentDraft()?.statement?.sourceHash,currentAccountId(),index].join('|');
   return 'split-'+simpleHash(raw)+'-'+simpleHash(raw.split('').reverse().join(''));
 }
 function splitNote(row,part,totalParts,totalAmount){
@@ -127,7 +129,7 @@ window.financeStatementCategorySelect=function(tx,index,suggestion=null){
 };
 
 window.financeStatementEnableSplit=function(index){
-  index=Number(index);const row=rowFor(index);if(!row)return;
+  index=Number(index);const row=rowFor(index);if(!row)return alert('Предпросмотр выписки закрыт. Откройте выписку заново.');
   const existing=typeof window.financeStatementExactDuplicate==='function'?window.financeStatementExactDuplicate(row,currentAccountId()):null;
   if(existing)return alert('Этот платёж уже импортирован. Разделение доступно для нового платежа до импорта.');
   if(splitFor(index)){renderSplit(index);return}
@@ -208,7 +210,7 @@ window.financeStatementSaveQuickCategory=async function(index,splitPart=-1){
 const originalSummary=window.financeStatementUpdateSummary;
 window.financeStatementUpdateSummary=function(){
   if(!splitState.size)return originalSummary();
-  const rows=window.financeStatementDraft?.transactions||[];
+  const rows=currentDraft()?.transactions||[];
   let income=0,expense=0,excluded=0,selected=0;
   rows.forEach((row,index)=>{
     const check=document.querySelector('.finance-statement-use[data-index="'+index+'"]');
@@ -246,7 +248,7 @@ function helperInput(container,index,categoryId){
   const refundMode=document.createElement('input');refundMode.type='hidden';refundMode.id='financeStatementRefundMode-'+index;refundMode.value='';container.appendChild(refundMode);
 }
 window.financeImportStatementDraft=async function(){
-  const draft=window.financeStatementDraft;if(!draft)return originalImportStatement();
+  const draft=currentDraft();if(!draft)return originalImportStatement();
   const active=[...splitState.entries()].filter(([index])=>document.querySelector('.finance-statement-use[data-index="'+index+'"]')?.checked);
   if(!active.length)return originalImportStatement();
   for(const [index] of active){const result=splitValid(index);if(!result.ok){document.getElementById('financeStatementSplitBox-'+index)?.scrollIntoView({behavior:'smooth',block:'center'});return alert(result.message)}}
@@ -261,7 +263,7 @@ window.financeImportStatementDraft=async function(){
   draft.transactions=expanded;
   try{return await originalImportStatement()}
   finally{
-    if(window.financeStatementDraft===draft)draft.transactions=originalRows;
+    if(currentDraft()===draft)draft.transactions=originalRows;
     for(const [index,value] of restoreCategories){const category=document.getElementById('financeStatementCategory-'+index);if(category)category.value=value}
     helper.remove();
   }
