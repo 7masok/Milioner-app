@@ -234,3 +234,31 @@ test('first month build yields to actual UI tasks, permits switching day before 
  const month=f.window.setBusinessDashboardPeriod('month');await month;done=true;await dayJob;
  assert.equal(switchedWhileBuilding,true);assert.ok(yielded>30);assert.equal(salesReads,1);assert.equal(f.loads,1);assert.match(f.element('businessValueLabel').textContent,/сегодня/);assert.equal(f.api.businessDays.get(today).data.orders.amount,1000);
 });
+
+test('September comparison prepares August; selecting August keeps it visible when July is unavailable',async()=>{
+ const f=sharedFixture(),read=f.ctx.apiJson,archive=Date.parse('2026-07-19T00:00:00+05:00');f.ctx.apiJson=async url=>({...await read(url),historyCoverage:[{market:'WB',from:archive}]});
+ await f.window.setBusinessDashboardPeriod('month');await f.window.shiftBusinessDashboardMonth(-1);
+ const september=f.api.businessModelFromDays('month',-1),august=september.yesterday;assert.equal(august.unavailable,undefined);assert.ok(august.orders.amount>0);
+ const pending=f.window.shiftBusinessDashboardMonth(-1);assert.equal(f.element('businessValue').textContent,august.orders.amount+' ₸');await pending;
+ const selected=f.api.businessModelFromDays('month',-2);assert.equal(selected.orders.amount,august.orders.amount);assert.equal(selected.yesterday.unavailable,true);assert.equal(f.element('businessYesterdayValue').textContent,'—');assert.match(f.element('businessYesterdayMeta').textContent,/Нет полной истории/);assert.match(f.element('businessYesterdayCompare').textContent,/Нет полной истории/);assert.doesNotMatch(f.element('businessChart').innerHTML,/business-yesterday-bar/);assert.match(f.element('businessValueLabel').textContent,/авг/);
+});
+test('a missing optional preceding day cannot hide either complete calendar month',async()=>{
+ const f=sharedFixture(),read=f.ctx.apiJson;f.ctx.apiJson=async url=>({...await read(url),historyCoverage:[{market:'WB',from:Date.parse('2026-08-01T00:00:00+05:00')}]});await f.window.setBusinessDashboardPeriod('month');await f.window.shiftBusinessDashboardMonth(-1);const model=f.api.businessModelFromDays('month',-1);assert.ok(model.orders.amount>0);assert.equal(model.yesterday.unavailable,undefined);assert.match(f.element('businessChart').innerHTML,/business-yesterday-bar/);
+});
+test('unknown selected month is never replaced by zeros or the preceding screen comparison',async()=>{
+ const f=sharedFixture(),read=f.ctx.apiJson;f.ctx.apiJson=async url=>({...await read(url),historyCoverage:[{market:'WB',from:Date.parse('2026-09-01T00:00:00+05:00')}]});await f.window.setBusinessDashboardPeriod('month');await f.window.shiftBusinessDashboardMonth(-1);await f.window.shiftBusinessDashboardMonth(-1);assert.equal(f.element('businessValue').textContent,'—');assert.equal(f.element('businessYesterdayMeta').textContent,'');assert.match(f.element('businessValueLabel').textContent,/Нет полной истории WB1/);assert.equal(f.element('businessChart').innerHTML,'');
+});
+
+test('failed month navigation cannot restore a pending week under the month selection',async()=>{
+ const f=sharedFixture(true),week=f.window.renderBusinessDashboard();
+ for(let i=0;i<4;i++)await flush();
+ assert.ok(f.api.businessModelFromDays('week',0)?.pending);
+ f.ctx.apiJson=async()=>{throw Error('offline')};
+ await f.window.setBusinessDashboardPeriod('month');
+ await f.window.shiftBusinessDashboardMonth(-1);
+ assert.equal(f.element('businessValue').textContent,'—');
+ assert.equal(f.element('businessValueLabel').textContent,'Не удалось посчитать');
+ assert.equal(f.element('businessChart').innerHTML,'');
+ f.finish();await week;
+ assert.equal(f.element('businessValueLabel').textContent,'Не удалось посчитать');
+});
