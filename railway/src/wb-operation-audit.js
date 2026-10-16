@@ -105,6 +105,16 @@ function linkProduct(row, index) {
   if (knownSizes?.size > 1 || row.barcode && knownSizes?.size === 1 && !candidates.has([...knownSizes][0])) return { productId: '', linkSource: 'ambiguous' };
   return candidates.size === 1 ? { productId: [...candidates][0], linkSource: 'article' } : { productId: '', linkSource: candidates.size > 1 ? 'ambiguous' : 'none' };
 }
+// Reuse the audit's exact barcode/size rules for placed-order analytics.
+export function resolveWbOrderProducts({market,orders=[],links=[],products=[]}) {
+  const index=indexes(links.filter(x=>!x.market||x.market===market),products,market);
+  return orders.filter(o=>o.market===market).map(o=>{
+    const raw=object(o.raw_json),identity=raw.identity||{},order=raw.order||raw;
+    const r={nmId:id(identity.nmId||order.nmId),barcode:id(identity.barcode||order.skus?.[0]),vendorCode:text(identity.article||order.article||o.sku)};
+    const resolved=linkProduct(r,index),candidates=new Set([...(index.bySku.get(r.barcode)||[]),...(index.bySku.get(r.nmId)||[]),...(index.byArticle.get(articleKey(r.vendorCode))||[]),...(index.nmProducts.get(r.nmId)||[])]);
+    return {...o,...resolved,candidates:resolved.productId?[]:[...candidates]};
+  });
+}
 function adNmIds(value) { const values = Array.isArray(value) ? value : (() => { try { return JSON.parse(value || '[]'); } catch { return []; } })(); return Array.isArray(values) ? [...new Set(values.map(id).filter(Boolean))] : []; }
 
 // A provisional updNum=0 can remain in the cache after the same billing entry
