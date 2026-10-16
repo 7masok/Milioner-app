@@ -201,7 +201,7 @@ try{
   }
   function ozonProfitModel(payload,days,range=null){
     const bounds=ozonBounds(days,range),maps=buildOzonMaps(payload),groups=new Map(),products=new Map();let unallocated=0,unallocatedAds=0,unallocatedFbo=0;
-    const productRow=p=>{const id=String(p.id);if(!products.has(id))products.set(id,{product:p,qty:0,sales:0,commission:0,delivery:0,ads:0,services:0,other:0,net:0,cogs:0,fbo:0});return products.get(id);};
+    const productRow=p=>{const id=String(p.id);if(!products.has(id))products.set(id,{product:p,qty:0,dailySales:{},sales:0,commission:0,delivery:0,ads:0,services:0,other:0,net:0,cogs:0,fbo:0});return products.get(id);};
     for(const account of payload?.accounts||[])for(const raw of account?.finance?.rows||[]){
       const t=Date.parse(raw?.operation_date||'');if(!(t>=bounds.start&&t<bounds.end))continue;
       const row={...raw,_account:String(account?.account||''),_label:account?.label||account?.account||'Ozon'};
@@ -223,7 +223,7 @@ try{
       if(category==='sales'){
         const posting=String(row?.posting?.posting_number||'');
         const q=maps.postingQty.get(String(account?.account||'')+'|'+posting+'|'+sku)||1;
-        pr.qty+=q;
+        pr.qty+=q;if(categoryAmount>0&&!/возврат|отмен/i.test(String(row.operation_type_name||''))){const day=new Date(t+18000000).toISOString().slice(0,10);pr.dailySales[day]=(pr.dailySales[day]||0)+q;}
       }
     }
     for(const pr of products.values()){
@@ -318,6 +318,7 @@ try{
     };
     tick();
   }
+  window.loadOzonProductSalesSeries=async function(range){const payload=await loadOzonProfitData(),model=ozonProfitModel(payload,0,range),rows=[];for(const p of model.products)for(const [day,qty]of Object.entries(p.dailySales||{}))rows.push({market:'Ozon',productId:String(p.product.id),day,qty});const accounts=payload.accounts||[],starts=accounts.map(a=>a.finance?.from?Date.parse(a.finance.from.slice(0,10)+'T00:00:00+05:00'):0),ends=accounts.map(a=>a.finance?.to?Date.parse(a.finance.to.slice(0,10)+'T00:00:00+05:00'):0);return {rows,history:[{market:'Ozon',firstDate:starts.length&&starts.every(Boolean)?Math.max(...starts):null,lastDate:ends.length&&ends.every(Boolean)?Math.min(...ends):null}],configured:payload.configured}};
   window.summarizeOzonReport=async function(days,range=null){
     const payload=await loadOzonProfitData();
     let ads=null;
