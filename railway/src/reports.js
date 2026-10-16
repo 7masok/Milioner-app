@@ -1,4 +1,4 @@
-import { registerProductSalesSeries } from './product-sales-series.js';
+import { registerProductOrderSeries } from './product-sales-series.js';
 import express from 'express';
 import { pool } from './db.js';
 import { asyncRoute } from './http.js';
@@ -8,7 +8,7 @@ import { wbOrderDay } from './wb-order-advertising.js';
 import { reconcileWbReportProducts } from './wb-report-reconciliation.js';
 
 export const reportsRouter = express.Router();
-registerProductSalesSeries(reportsRouter);
+registerProductOrderSeries(reportsRouter);
 const ALMATY_OFFSET = 5 * 60 * 60 * 1000;
 
 function market(value) {
