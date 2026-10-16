@@ -90,8 +90,8 @@ test('money formatting removes negative zero and unknown WB fields render as das
 
 test('business dashboard assets are cache-busted and served', () => {
   assert.match(html, /kaspi-report-v2\.js\?v=20261016-order-trends/);
-  assert.match(html, /business-dashboard-v1\.js\?v=20261008-business-week-swipe/);
-  assert.match(html, /ozon-fbo-v1\.js\?v=20261008-ozon-order-history/);
+  assert.match(html, /business-dashboard-v1\.js\?v=20261016-month-cache/);
+  assert.match(html, /ozon-fbo-v1\.js\?v=20261016-month-cache/);
   assert.match(server, /'business-dashboard-v1\.js'/);
 });
 
@@ -122,7 +122,7 @@ test('week chart compares the calendar week with the previous week through the s
   assert.match(ui, /function businessWeekBounds\(which=0\)/);
   assert.match(ui, /getUTCDay\(\)\+6/);
   assert.match(ui, /BUSINESS_WEEKDAYS=\['Пн','Вт','Ср','Чт','Пт','Сб','Вс'\]/);
-  assert.match(ui, /function businessWeekSamePoint\(fullWeek\)/);
+  assert.match(ui, /function businessWeekSamePoint\(fullWeek,history=null\)/);
   assert.match(ui, /setBusinessDashboardPeriod\('week'\)/);
   assert.match(ui, /прошлая до /);
   assert.match(ui, /вся неделя/);
@@ -135,8 +135,8 @@ test('week chart compares the calendar week with the previous week through the s
 
 test('month chart compares the calendar month with the previous month through the same day and time', () => {
   assert.match(ui, /function businessMonthBounds\(which=0\)/);
-  assert.match(ui, /new Date\(today\.getFullYear\(\),today\.getMonth\(\)\+Number\(which\|\|0\),1\)/);
-  assert.match(ui, /function businessMonthSamePoint\(fullMonth\)/);
+  assert.match(ui, /Date\.UTC\(local\.getUTCFullYear\(\),local\.getUTCMonth\(\)\+Number\(which\|\|0\),1\)/);
+  assert.match(ui, /function businessMonthSamePoint\(fullMonth,history=null\)/);
   assert.match(ui, /setBusinessDashboardPeriod\('month'\)/);
   assert.match(ui, /прошлый до /);
   assert.match(ui, /весь месяц/);
