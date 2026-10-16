@@ -29,7 +29,7 @@ productCard=function(...args){
   const product=args[0];
   if(!isGroup(product))return originalProductCard(...args);
   const totals=groupTotals(product),mismatch=totals.hasWb&&totals.wb!==totals.physical;
-  return `<div class="item variant-group-card" onclick="openProduct('${product.id}')"><div class="row"><div class="grow"><div class="name">${esc(product.name)}</div><div class="muted">WB1 · ${totals.rows.length} размеров · <span class="badge">Размеры ›</span></div><div class="product-stock-inline"><span style="color:#16752d">В продаже: ${totals.available} шт.</span>${totals.reserve?`<span style="color:#8a5300">Резерв: ${totals.reserve} шт.</span>`:''}${mismatch?`<span style="color:#a40000">WB: ${totals.wb} · склад: ${totals.physical}</span>`:''}</div></div></div></div>`;
+  return `<div class="item variant-group-card" onclick="openProduct('${product.id}')"><div class="row"><div class="grow"><div class="name">${esc(product.name)}</div>${typeof productSalesTrendHtml==='function'?productSalesTrendHtml(product,productRankSpec()):''}<div class="muted">WB1 · ${totals.rows.length} размеров · <span class="badge">Размеры ›</span></div><div class="product-stock-inline"><span style="color:#16752d">В продаже: ${totals.available} шт.</span>${totals.reserve?`<span style="color:#8a5300">Резерв: ${totals.reserve} шт.</span>`:''}${mismatch?`<span style="color:#a40000">WB: ${totals.wb} · склад: ${totals.physical}</span>`:''}</div></div></div></div>`;
 };
 
 buildProductRenderStats=function(){

@@ -43,6 +43,7 @@ const frontendFiles = Object.freeze([
   'business-dashboard-v1.js',
   'ozon-supplies-v1.js',
   'warehouse-insights.js',
+  'product-sales-trend-v1.js',
   'cloud-sync-v3.js',
   'wb-variants-v1.js',
   'kaspi-report-v2.js',
