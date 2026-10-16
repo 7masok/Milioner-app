@@ -121,6 +121,7 @@ test('actual preview renders multiple choices and blocks an unresolved transfer 
  const document={getElementById:id=>elements.get(id)||null,querySelectorAll:()=>[{dataset:{index:'0'}}]};
  const context={globalThis,document,financeStatementDraft:draft,financeTransactions:()=>rows,financeAccounts:()=>accounts,financeStatementDateRu:date=>date.split('-').reverse().join('.'),financeMoney:(amount,currency)=>amount+' '+currency,esc:value=>String(value),alert:message=>alerts.push(message)};
  vm.createContext(context);
+ vm.runInContext(html.slice(html.indexOf('function financeStatementRefundContext('),html.indexOf('function financeStatementRefundSource('))+html.slice(html.indexOf('function financeStatementValidateRefunds('),html.indexOf('function financeStatementRefreshRowState(')),context);
  vm.runInContext(line('financeStatementTransferCandidate')+'\n'+line('financeStatementRenderTransferMatch')+'\n'+line('financeStatementExactDuplicate')+'\nasync '+line('financeImportStatementDraft'),context);
  context.financeStatementRenderTransferMatch(0);
  assert.match(box.markup,/value="first"/);assert.match(box.markup,/value="first2"/);

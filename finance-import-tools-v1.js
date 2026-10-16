@@ -4,6 +4,8 @@
 if(typeof window.financeStatementCategorySelect!=='function'||typeof window.financeImportStatementDraft!=='function')return;
 
 const splitState=new Map();
+let splitImportExpanded=false;
+window.financeStatementRefundDraftParts=index=>splitImportExpanded?null:(splitFor(index)?.parts.map(part=>({...part}))||null);
 const originalCategorySelect=window.financeStatementCategorySelect;
 const originalCategoryPickerRender=window.financeStatementRenderCategoryPicker;
 const originalStatementPreview=window.financeStatementPreview;
@@ -67,6 +69,8 @@ function enforceSplitControls(index){
   if(transfer){transfer.value='';transfer.disabled=true}
   if(refundMode){refundMode.value='';refundMode.disabled=true}
   if(refund)refund.value='';
+  const source=document.getElementById('financeStatementRefundSource-'+index),picker=document.getElementById('financeStatementRefundPicker-'+index);
+  if(source){source.value='';source.disabled=true}if(picker)picker.hidden=true;
   if(category)category.value=String(state.parts[0]?.categoryId||'');
   if(button){button.disabled=true;button.textContent='Платёж разделён'}
 }
@@ -81,7 +85,12 @@ function updateSplitStatus(index){
   const state=splitFor(index),status=document.getElementById('financeStatementSplitStatus-'+index);if(!state||!status)return;
   const result=splitValid(index);status.className='finance-statement-split-status '+(result.ok?'ok':'warn');status.textContent=result.message;
   enforceSplitControls(index);
+  refreshRefundPickers();
   try{window.financeStatementUpdateSummary()}catch{}
+}
+function refreshRefundPickers(){
+  if(splitImportExpanded)return;
+  (currentDraft()?.transactions||[]).forEach((row,index)=>{if(row.type==='income'&&document.getElementById('financeStatementRefundMode-'+index)?.value==='refund')window.financeStatementRefundChanged(index);});
 }
 function fillSplitRemainder(index){
   const state=splitFor(index);if(!state||!state.parts.length)return;
@@ -147,6 +156,7 @@ window.financeStatementDisableSplit=function(index){
   const launch=document.getElementById('financeStatementSplitLaunch-'+index);if(launch)launch.hidden=false;
   try{window.financeStatementTransferChanged(index)}catch{}
   try{window.financeStatementRefundChanged(index)}catch{}
+  refreshRefundPickers();
   try{window.financeStatementUpdateSummary()}catch{}
 };
 window.financeStatementSplitCategoryChanged=function(index,part,value){
@@ -252,18 +262,30 @@ window.financeImportStatementDraft=async function(){
   const active=[...splitState.entries()].filter(([index])=>document.querySelector('.finance-statement-use[data-index="'+index+'"]')?.checked);
   if(!active.length)return originalImportStatement();
   for(const [index] of active){const result=splitValid(index);if(!result.ok){document.getElementById('financeStatementSplitBox-'+index)?.scrollIntoView({behavior:'smooth',block:'center'});return alert(result.message)}}
-  const originalRows=Array.isArray(draft.transactions)?draft.transactions:[],expanded=originalRows.slice(),restoreCategories=new Map(),helper=document.createElement('div');helper.hidden=true;helper.id='financeStatementSplitImportHelpers';document.body.appendChild(helper);
+  const originalRows=Array.isArray(draft.transactions)?draft.transactions:[],expanded=originalRows.slice(),restoreCategories=new Map(),restoreRefunds=[],partIndexes=new Map(),helper=document.createElement('div');helper.hidden=true;helper.id='financeStatementSplitImportHelpers';document.body.appendChild(helper);
   let nextIndex=expanded.length;
   for(const [index,state] of active){
     const row=originalRows[index],total=Math.abs(n(row?.amount)),parts=state.parts.map(p=>({categoryId:String(p.categoryId||''),amount:Math.abs(n(p.amount))}));if(!row)continue;
     const category=document.getElementById('financeStatementCategory-'+index);restoreCategories.set(index,String(category?.value||''));if(category)category.value=parts[0].categoryId;
     expanded[index]=splitPartRow(row,index,parts[0],0,parts.length,total);
-    for(let p=1;p<parts.length;p++){expanded.push(splitPartRow(row,index,parts[p],p,parts.length,total));helperInput(helper,nextIndex,parts[p].categoryId);nextIndex++}
+    partIndexes.set('draft:'+index+':part:0',index);
+    for(let p=1;p<parts.length;p++){partIndexes.set('draft:'+index+':part:'+p,nextIndex);expanded.push(splitPartRow(row,index,parts[p],p,parts.length,total));helperInput(helper,nextIndex,parts[p].categoryId);nextIndex++}
   }
-  draft.transactions=expanded;
-  try{return await originalImportStatement()}
+  draft.transactions=expanded;splitImportExpanded=true;
+  try{
+    for(let index=0;index<originalRows.length;index++){
+      if(!document.querySelector('.finance-statement-use[data-index="'+index+'"]')?.checked)continue;
+      const field=document.getElementById('financeStatementRefund-'+index),ref=String(field?.value||'');
+      if(!/^draft:\d+:part:\d+$/.test(ref))continue;
+      const target=partIndexes.get(ref);if(target===undefined)return alert('Выберите выбранную часть исходного платежа для возврата.');
+      restoreRefunds.push({field,ref});field.value='draft:'+target;
+    }
+    return await originalImportStatement();
+  }
   finally{
+    splitImportExpanded=false;
     if(currentDraft()===draft)draft.transactions=originalRows;
+    for(const {field,ref}of restoreRefunds)field.value=ref;
     for(const [index,value] of restoreCategories){const category=document.getElementById('financeStatementCategory-'+index);if(category)category.value=value}
     helper.remove();
   }
