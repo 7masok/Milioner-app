@@ -40,3 +40,19 @@ test('the existing filter persists decline ordering and selected days without wr
  const ctx={productRankSort:'decline',productRankDays:7,productRankDirection:'desc',productRankStatsErrorKey:'',productCardProfitStats:null,productCardProfitStatsKey:'',productCardProfitStatsAt:0,productPage:3,document:{getElementById:id=>fields[id]},showSheet:s=>{sheet=s},rememberProductUi:patch=>{saved=patch},closeModal(){},syncProductRankButton(){},productUiFrame:fn=>fn(),renderProducts(){},ensureProductRankStats(){requested++},alert:s=>{throw Error(s)},save(){throw Error('Filter must not write stock')}};
  vm.runInNewContext(line('openProductRankFilter')+'\n'+line('applyProductRankFilter'),ctx);ctx.openProductRankFilter();assert.match(sheet,/<option value="decline" selected>Сильнее всего упали/);ctx.applyProductRankFilter();assert.equal(saved.rankSort,'decline');assert.equal(saved.rankDays,14);assert.equal(saved.rankDirection,'desc');assert.equal(saved.page,1);assert.equal(requested,1);assert.match(html,/savedRankSort=\['sales','profit','decline'\]/);
 });
+
+test('a real finance/live coverage gap remains unknown but adjoining intervals permit a percentage',()=>{
+ const {api,products,rows}=fixture(),b=api.bounds(7,NOW),p={...products[0],wb:'same'};
+ const history=[{market:'Kaspi',firstDate:1,lastDate:NOW},{market:'WB',firstDate:1,lastDate:NOW,ranges:[{from:1,to:b.middle},{from:b.middle+DAY,to:NOW}]}];
+ assert.equal(api.metric(p,snapshot(rows,history),b).status,'unknown');
+ history[1].ranges[1].from=b.middle;
+ assert.equal(api.metric(p,snapshot(rows,history),b).pct,-40);
+});
+test('Kaspi completion history remains covered while the next sync is running or has failed after a successful refresh',async()=>{
+ const text=readFileSync(new URL('../../kaspi-report-v2.js',import.meta.url),'utf8'),bridge=text.split('\n').find(x=>x.startsWith('window.loadKaspiProductSalesSeries='));
+ const snap={orders:[],coverageFrom:1,lastRefreshAt:null,lastSuccessAt:NOW,warnings:[]};
+ const ctx={window:{},loadKaspiOrders:async()=>snap,localOrderGroups:()=>new Map()};vm.runInNewContext(bridge,ctx);
+ assert.equal((await ctx.window.loadKaspiProductSalesSeries({})).history[0].lastDate,NOW);
+ snap.warnings=['latest sync failed'];snap.lastRefreshAt=NOW+1000;
+ assert.equal((await ctx.window.loadKaspiProductSalesSeries({})).history[0].lastDate,NOW);
+});
