@@ -115,7 +115,7 @@ test('unified Product-period profit includes Ozon and supports an explicit custo
   assert.match(report,/add\(pid,qty,Number\(x\?\.profit\)\|\|0,'Ozon'/);
   assert.match(report,/periodCacheKey\(days,range\)/);
   assert.match(compat,/window\.summarizeOzonReport=async function\(days,range=null\)/);
-  assert.match(compat,/ozonProfitModel\(payload,days,range\)/);
+  assert.match(compat,/ozonProfitModel\(payload,days,range,prepared\)/);
   assert.match(html,/Не удалось загрузить расчёт за '\+esc\(spec\.label\)/);
   assert.match(report,/kaspi=buildModel\(kaspiSnapshot,days,range\)/);
   assert.match(report,/kaspiAdsBreakdown\(days,range\)/);
