@@ -1,3 +1,5 @@
+import { financeHistoryStatus } from './wb-finance-history.js';
+import { configuredWbConnectionIds } from './connections.js';
 import { registerBusinessDashboardCache } from './business-dashboard-cache.js';
 import { registerProductOrderSeries } from './product-sales-series.js';
 import express from 'express';
@@ -233,6 +235,13 @@ reportsRouter.get('/kaspi-report-orders', asyncRoute(async (req, res) => {
     coverageTo: Number(coverage.coverageTo || 0) || null, lastRefreshAt: Number(cache.lastRefreshAt || 0) || null,
     lastSuccessAt: Number(cache.lastSuccessAt || 0) || null,
     warnings: cache.lastError ? [String(cache.lastError)] : [], orders, returns: returnsResult.rows });
+}));
+
+reportsRouter.get('/wb-finance-history', asyncRoute(async (_req, res) => {
+  const markets = await configuredWbConnectionIds();
+  const result = await pool.query('SELECT market,state FROM wb_finance_history WHERE market=ANY($1::text[])', [markets]);
+  const states = new Map(result.rows.map(row => [row.market, row.state]));
+  res.json({ ok: true, markets: markets.map(market => ({ market, ...financeHistoryStatus(states.get(market)) })) });
 }));
 
 reportsRouter.get('/wb-finance-summary', asyncRoute(async (req, res) => {

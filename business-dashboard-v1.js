@@ -224,8 +224,27 @@ function businessEnsureUi(){
  <div class="business-metrics">${[['orders','Заказы'],['buyouts','Выкупы'],['orderProfit','Прибыль заказов'],['buyoutProfit','Прибыль выкупов']].map(([k,v])=>`<button type="button" data-business-metric="${k}" onclick="setBusinessDashboardMetric('${k}')">${v}</button>`).join('')}</div>
  <div id="businessDayNav" class="business-day-nav"><button id="businessDayPrevious" type="button" aria-label="Предыдущий день" onclick="shiftBusinessDashboardSelection(-1)">‹</button><span id="businessDayDate"></span><button id="businessDayNext" type="button" aria-label="Следующий день" onclick="shiftBusinessDashboardSelection(1)">›</button></div>
  <div class="business-value-card"><div id="businessValueMetric" class="business-value-title">Загрузка…</div><div class="business-value-grid"><div class="business-value-side"><div id="businessValueLabel" class="business-value-label">Сегодня</div><div id="businessValue" class="business-value">—</div><div id="businessValueMeta" class="business-value-meta"></div></div><div class="business-value-side business-yesterday-side"><div id="businessYesterdayLabel" class="business-value-label">Вчера</div><div id="businessYesterdayValue" class="business-value">—</div><div id="businessYesterdayMeta" class="business-value-meta"></div></div></div><div id="businessYesterdayCompare" class="business-compare"></div></div>
- <div id="businessChart" class="business-chart"></div><div id="businessCacheStatus" class="business-sub" aria-live="polite"></div>`;
+ <div id="businessChart" class="business-chart"></div><div id="businessCacheStatus" class="business-sub" aria-live="polite"></div><div id="businessFinanceHistory" class="business-sub" aria-live="polite"></div>`;
  const title=reports.querySelector('h2');if(title)title.insertAdjacentElement('afterend',root);else reports.prepend(root);businessInstallDaySwipe();return root;
+}
+let businessFinanceHistoryAt=0,businessFinanceHistoryLoading=false;
+function businessFinanceHistoryText(rows){
+ return (rows||[]).map(row=>{
+  const name=row.market==='WB'?'WB1':row.market;
+  const range=row.dateFrom&&row.dateTo?` (${row.dateFrom} — ${row.dateTo})`:'';
+  if(row.status==='complete')return `${name}: финансовые отчёты за 365 дней загружены${range}`;
+  if(row.status==='pending')return `${name}: финансовые отчёты за 365 дней ожидают загрузки`;
+  const next=Number(row.nextAllowedAt)>Date.now()?` · продолжение после ${new Date(Number(row.nextAllowedAt)).toLocaleString('ru-RU',{timeZone:'Asia/Almaty',day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit'})}`:'';
+  return `${name}: ${row.status==='retry'?'повтор загрузки':'загрузка'} финансовых отчётов за 365 дней · ${Number(row.rows)||0} строк${next}`;
+ }).join(' · ');
+}
+async function businessLoadFinanceHistory(force=false){
+ const el=document.getElementById('businessFinanceHistory');
+ if(!el||typeof apiJson!=='function'||businessFinanceHistoryLoading||(!force&&Date.now()-businessFinanceHistoryAt<60000))return;
+ businessFinanceHistoryLoading=true;
+ try{const data=await apiJson(MILLIONER_API+'/api/wb-finance-history');el.textContent=businessFinanceHistoryText(data.markets);businessFinanceHistoryAt=Date.now()}
+ catch{el.textContent='Статус загрузки финансовых отчётов WB временно недоступен'}
+ finally{businessFinanceHistoryLoading=false}
 }
 function businessInstallDaySwipe(){
  const chart=document.getElementById('businessChart');if(!chart||chart.dataset.daySwipe==='1')return;chart.dataset.daySwipe='1';
@@ -498,6 +517,7 @@ async function businessResolveModel(force,period,offset,key){
 }
 window.renderBusinessDashboard=async function(force=false){
  const root=businessEnsureUi();if(!root)return;if(!document.getElementById('reports')?.classList.contains('active')){businessPaintTabs();return}
+ void businessLoadFinanceHistory(force);
  const seq=++businessRenderSeq,period=businessPeriod,key=businessModelKey(),offset=businessSelectedOffset();businessHydrateModels();businessLastModel=null;businessPaintTabs();
  const shared=typeof window.loadBusinessMarketplaceDaily==='function'?businessModelFromDays(period,offset):null,cached=shared||businessModels.get(key),metaRow=businessModelMeta.get(key);
  if(cached){businessPaint(cached);businessCacheStatus(key,'updating');if(!force&&!cached.pending&&Date.now()-Number(metaRow?.at||0)<30000&&typeof fetch!=='function'){businessCacheStatus(key);return cached}}

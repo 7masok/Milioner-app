@@ -1,9 +1,10 @@
+import { syncFinanceHistoryPage, financePageRows } from './wb-finance-history.js';
 import { pool } from './db.js';
 import { config } from './config.js';
 import { reconcileWbReservations } from './reservation-reconcile.js';
 import { reconcileMarketplaceSales } from './marketplace-sale-reconcile.js';
 import { configuredWbConnectionIds, credentialFor } from './connections.js';
-import { financeRowsFromPayload, promotionCostDay, promotionCostRowsFromPayload } from './wb-finance.js';
+import { promotionCostDay, promotionCostRowsFromPayload } from './wb-finance.js';
 import { syncWbStockMarket } from './wb-stock-sync.js';
 import { cacheWbOrderStickers } from './wb-returns.js';
 
@@ -19,8 +20,8 @@ const STALE_STATUS_STATES = Object.freeze(['WAITING','SORTED','ACCEPTED_BY_CARRI
 const LIVE_SALES_LOOKBACK_DAYS = 45;
 const LIVE_SALES_SYNC_MS = 35 * 60 * 1000;
 const LIVE_SALES_RETRY_MS = 65 * 60 * 1000;
-// Keep finance on the conservative cadence that was stable before the report work.
-// Orders may still refresh every ten minutes; finance must not.
+// Check report/promotion state at the existing cadence. Actual Finance API
+// requests have a separate persisted 12-hour slot in wb-finance-history.
 const FINANCE_SYNC_MS = 2 * 60 * 60 * 1000;
 const FINANCE_FAILURE_RETRY_MS = 65 * 60 * 1000;
 const inFlight = new Map();
@@ -82,6 +83,7 @@ async function requestJson(url, options, label) {
       error.retryAt = response.status === 429 ? retryAtFromHeaders(response.headers) : 0;
       throw error;
     }
+    if (response.status === 204) return { __noContent: true };
     return data || {};
   } finally {
     clearTimeout(timer);
@@ -336,25 +338,13 @@ async function syncLiveSales(market, token) {
   }
 }
 
-async function fetchFinanceRows(token) {
-  const dateTo = isoDate(Date.now()), dateFrom = isoDate(Date.now() - 45 * 86_400_000);
-  const rows = [];
-  let rrdId = 0;
-  for (let page = 0; page < 20; page += 1) {
-    const data = await requestJson(`${WB_FINANCE_API}/api/finance/v1/sales-reports/detailed`, {
-      method: 'POST',
-      headers: { Accept: 'application/json', Authorization: token, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ dateFrom, dateTo, limit: 100000, rrdId, period: 'daily' })
-    }, 'WB Finance report');
-    const batch = financeRowsFromPayload(data);
-    if (!batch.length) break;
-    rows.push(...batch);
-    if (batch.length < 100000) break;
-    const next = Number(value(batch[batch.length - 1], 'rrdId', 'rrd_id')) || 0;
-    if (!next || next === rrdId) break;
-    rrdId = next;
-  }
-  return rows;
+async function fetchFinancePage(token, body) {
+  const data = await requestJson(`${WB_FINANCE_API}/api/finance/v1/sales-reports/detailed`, {
+    method: 'POST',
+    headers: { Accept: 'application/json', Authorization: token, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ ...body, period: 'daily' })
+  }, 'WB Finance report');
+  return financePageRows(data);
 }
 
 async function fetchPromotionCosts(token) {
@@ -401,7 +391,7 @@ async function upsertPromotionCosts(market, rows) {
   finally { client.release(); }
 }
 
-async function upsertFinance(market, rows) {
+async function upsertFinance(market, rows, { prune = true } = {}) {
   if (!rows.length) return { saved: 0, pruned: 0 };
   const now = Date.now();
   const normalized = rows.map(row => {
@@ -461,7 +451,7 @@ async function upsertFinance(market, rows) {
           rebill_logistic_cost=excluded.rebill_logistic_cost,raw_json=excluded.raw_json,updated_at=excluded.updated_at
       `, [market, JSON.stringify(chunk), now]);
     }
-    if (Number.isFinite(minRrDate) && Number.isFinite(maxRrDate)) {
+    if (prune && Number.isFinite(minRrDate) && Number.isFinite(maxRrDate)) {
       const deleted = await client.query(
         'DELETE FROM wb_finance_rows WHERE market=$1 AND rr_date >= $2 AND rr_date <= $3 AND updated_at < $4',
         [market, minRrDate, maxRrDate, now]
@@ -511,11 +501,13 @@ async function syncFinanceReport(market, token) {
 
     if (!reuseFinance) {
       try {
-        const rows = await fetchFinanceRows(token);
-        financeItems = rows.length;
-        const saved = await upsertFinance(market, rows);
-        financePruned = Number(saved.pruned || 0);
-        financeOk = 1;
+        const page = await syncFinanceHistoryPage({ client, market, now, previousRequestAt: lastStartedAt,
+          fetchPage: body => fetchFinancePage(token, body),
+          saveRows: (rows, options) => upsertFinance(market, rows, options) });
+        financePruned = Number(page.pruned || 0);
+        financeItems = page.skipped ? Number(previousRun.finance_items || 0) : page.saved;
+        financeOk = page.skipped ? (previousFinanceOk ? 1 : 0) : 1;
+        financeRetryAt = page.nextAt;
       } catch (error) {
         financeError = String(error?.message || error).slice(0, 1000);
         financeRetryAt = Number(error?.retryAt || 0);
@@ -548,7 +540,7 @@ async function syncFinanceReport(market, token) {
       [market, runStartedAt, Date.now(), financeOk && promotionOk ? 1 : 0, financeOk, promotionOk, financeItems, adItems, errorText, retryAt]);
     return { financeItems, financeError, financePruned, adItems, adRowsWithoutDate, promotionError,
       financeSkipped: reuseFinance, promotionSkipped: reusePromotion,
-      financeNextAt: retryAt || runStartedAt + FINANCE_SYNC_MS };
+      financeNextAt: Math.max(financeRetryAt, retryAt || runStartedAt + FINANCE_SYNC_MS) };
   } finally {
     if (locked) await client.query('SELECT pg_advisory_unlock(hashtext($1))', [lockName]).catch(() => {});
     client.release();
