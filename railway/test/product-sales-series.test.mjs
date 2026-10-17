@@ -36,3 +36,12 @@ test('order endpoint reads only cached placed lines and last successful sync; no
 test('bad bounds and overflow fail explicitly; two 365-day windows plus today are accepted',async()=>{
  for(const query of [{from:0,to:1},{from:3,to:2},{from:'x',to:4},{from:1,to:1+732*DAY}]){const r=await invoke(query);assert.equal(r.status,400);assert.equal(r.calls.length,0)}assert.equal((await invoke({from:1,to:1+731*DAY})).status,200);assert.equal((await invoke(undefined,true)).status,422);
 });
+
+test('sale recency is a bounded read of positive recorded sales, independent of order dates and returns',async()=>{
+ const handler=reportsRouter.stack.find(x=>x.route?.path==='/product-sale-recency').route.stack[0].handle,old=pool.query,calls=[];let out,status=200;
+ pool.query=async(sql,args)=>{calls.push({sql,args});return{rows:[{productId:'a',lastSaleAt:at('2026-10-15')}]}};
+ try{await handler({}, {status(n){status=n;return this},json(x){out=x}},e=>{throw e})}finally{pool.query=old}
+ assert.equal(status,200);assert.equal(out.scope,'recorded-sales');assert.equal(out.rows[0].lastSaleAt,at('2026-10-15'));assert.equal(calls.length,1);
+ assert.match(calls[0].sql,/MAX\(sale_date\)/);assert.match(calls[0].sql,/qty>0 AND sale_date>0 AND sale_date<=\$1/);assert.match(calls[0].sql,/GROUP BY product_id LIMIT 50001/);assert.equal(calls[0].args[0],out.asOf);
+ assert.doesNotMatch(calls[0].sql,/INSERT|UPDATE|DELETE|marketplace_order_lines/);
+});

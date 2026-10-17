@@ -29,6 +29,15 @@ export function buildProductOrderSeries({orders=[],links=[],products=[],history=
 }
 
 export function registerProductOrderSeries(router) {
+  router.get('/product-sale-recency',asyncRoute(async(_req,res)=>{
+    const asOf=Date.now();
+    const result=await pool.query(`SELECT product_id AS "productId",MAX(sale_date) AS "lastSaleAt"
+      FROM warehouse_sales WHERE qty>0 AND sale_date>0 AND sale_date<=$1
+      GROUP BY product_id LIMIT 50001`,[asOf]);
+    if(result.rows.length>50000)return res.status(422).json({ok:false,error:'Слишком много товаров для расчёта последних продаж'});
+    res.json({ok:true,scope:'recorded-sales',asOf,rows:result.rows});
+  }));
+
   router.get('/product-order-series',asyncRoute(async(req,res)=>{
     const from=Number(req.query.from),to=Number(req.query.to);
     if(!Number.isFinite(from)||!Number.isFinite(to)||from<=0||to<=from||to-from>731*DAY)return res.status(400).json({ok:false,error:'Некорректный период сравнения'});
