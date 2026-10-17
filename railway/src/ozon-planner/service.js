@@ -17,6 +17,13 @@ export async function prepareDevice(device,source){
  const result=await pool.query(`UPDATE ozon_planner_devices SET prepared=$2::jsonb,source_updated_at=$3,calculated_day=$4,revision=revision+1 WHERE id=$1 AND config_hash=$5 AND NOT revoked RETURNING *`,[device.id,JSON.stringify(prepared),sourceAt,prepared.calculatedDay,configurationHash(config)]);
  return result.rows[0]||null;
 }
+// Call only while holding the account advisory lock: an unfinished attempt then
+// belongs to a stopped process, so resume checkpoints instead of waiting a full slot.
+export function sourceDue(source,now=Date.now()){
+ if(!source)return true;
+ if(!source.last_error&&Number(source.attempt_at)>Number(source.updated_at))return true;
+ return Number(source.next_allowed_at||0)<=now;
+}
 let running=null;
 async function run(){
  if(!config.adminToken)return;
@@ -24,8 +31,8 @@ async function run(){
   const lock=await pool.connect();let locked=false;
   try{
    locked=!!(await lock.query('SELECT pg_try_advisory_lock(hashtext($1)) AS locked',['ozon-planner:'+account.id])).rows[0]?.locked;if(!locked)continue;
-   const source=await sourceFor(account);if(Number(source?.next_allowed_at||0)>Date.now())continue;
-   await pool.query(`INSERT INTO ozon_planner_sources(account,client_id,attempt_at,next_allowed_at) VALUES($1,$2,$3,$4) ON CONFLICT(account) DO UPDATE SET client_id=EXCLUDED.client_id,payload=CASE WHEN ozon_planner_sources.client_id=EXCLUDED.client_id THEN ozon_planner_sources.payload ELSE NULL END,updated_at=CASE WHEN ozon_planner_sources.client_id=EXCLUDED.client_id THEN ozon_planner_sources.updated_at ELSE 0 END,attempt_at=EXCLUDED.attempt_at,next_allowed_at=EXCLUDED.next_allowed_at`,[account.id,account.clientId,Date.now(),Date.now()+15*60000]);
+   const source=await sourceFor(account);if(!sourceDue(source))continue;
+   await pool.query(`INSERT INTO ozon_planner_sources(account,client_id,attempt_at,next_allowed_at) VALUES($1,$2,$3,$4) ON CONFLICT(account) DO UPDATE SET client_id=EXCLUDED.client_id,payload=CASE WHEN ozon_planner_sources.client_id=EXCLUDED.client_id THEN ozon_planner_sources.payload ELSE NULL END,updated_at=CASE WHEN ozon_planner_sources.client_id=EXCLUDED.client_id THEN ozon_planner_sources.updated_at ELSE 0 END,attempt_at=EXCLUDED.attempt_at,next_allowed_at=EXCLUDED.next_allowed_at,last_error=''`,[account.id,account.clientId,Date.now(),Date.now()+15*60000]);
    console.info('Ozon planner refresh started',account.id);
    const entries=(await pool.query('SELECT supply_id,payload FROM ozon_planner_bundles WHERE account=$1 AND client_id=$2',[account.id,account.clientId])).rows,cache=new Map(entries.map(r=>[r.supply_id,r.payload]));
    const configs=(await pool.query('SELECT configuration FROM ozon_planner_devices WHERE account=$1 AND client_id=$2 AND NOT revoked',[account.id,account.clientId])).rows;
