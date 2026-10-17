@@ -55,12 +55,6 @@ async function loadIndex(force=false){
  if(cache&&!force)return cache;
  cache=await api('/api/ozon-fbo');return cache;
 }
-function ensureButton(){
- const tabs=document.getElementById('reportMarketTabs');if(!tabs)return;
- let b=document.getElementById('ozonFboSuppliesBtn');
- if(!b){b=document.createElement('button');b.id='ozonFboSuppliesBtn';b.type='button';b.className='btn';b.textContent='Поставки FBO';b.onclick=()=>window.openOzonFboSupplies();tabs.parentNode.insertBefore(b,tabs.nextSibling);b.style.margin='8px 0 12px';}
- b.style.display=String(state?.settings?.reportMarket||'')==='Ozon'?'':'none';
-}
 function renderOrders(){
  const accounts=cache?.accounts||[],rows=[];
  for(const a of accounts)for(const o of a.supplies?.rows||[])rows.push({account:a.account,label:a.label||'Ozon',...o});
@@ -166,5 +160,4 @@ function roundOzonMoneyDisplay(){
 const moneyObserver=new MutationObserver(()=>queueMicrotask(roundOzonMoneyDisplay));
 if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',()=>{const root=document.getElementById('reports');if(root)moneyObserver.observe(root,{subtree:true,childList:true,characterData:true});roundOzonMoneyDisplay();},{once:true});
 else{const root=document.getElementById('reports');if(root)moneyObserver.observe(root,{subtree:true,childList:true,characterData:true});roundOzonMoneyDisplay();}
-ensureButton();setInterval(ensureButton,1000);
 })();
