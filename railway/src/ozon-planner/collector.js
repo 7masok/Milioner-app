@@ -5,7 +5,9 @@ const id=x=>{const s=String(x??'');if(!/^[1-9][0-9]{0,18}$/.test(s))throw Error(
 const day=x=>/^\d{4}-\d{2}-\d{2}(T.*)?$/.test(String(x||''))&&!Number.isNaN(Date.parse(String(x).slice(0,10)))&&new Date(String(x).slice(0,10)).toISOString().slice(0,10)===String(x).slice(0,10)?String(x).slice(0,10):'';
 const array=(x,label)=>{if(!Array.isArray(x))throw Error('Ozon: нет '+label);return x;};
 const pause=ms=>new Promise(r=>setTimeout(r,ms));
-export function parseOzonJson(text){return JSON.parse(text.replace(/("(?:[^"\\]|\\.)*")|(-?\d{16,})(?=[,}\]\s])/g,(all,quoted,number)=>quoted||JSON.stringify(number)));}
+export function parseOzonJson(text){
+ return JSON.parse(text.replace(/("(?:[^"\\]|\\.)*")|(-?(?:0|[1-9]\d*)(?:\.\d+)?(?:[eE][+-]?\d+)?)/g,(all,quoted,number)=>quoted||(/^-?\d+$/.test(number)&&!Number.isSafeInteger(Number(number))?JSON.stringify(number):number)));
+}
 export function createOzonReader(credentials,{fetchImpl=fetch,sleep=pause,now=Date.now,spacing=1150}={}){
  let nextAt=0;
  return async(path,body)=>{
