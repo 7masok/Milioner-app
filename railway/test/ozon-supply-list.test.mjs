@@ -58,3 +58,15 @@ test('details retain history view, show remaining quantity, and hide bulk action
  marker(f,o,o.supplies[1]);await f.window.openOzonFboSupplyOrder('a','done');assert.doesNotMatch(f.html(),/onclick="accountWholeOzonFboOrder/);
  f.window.showOzonFboSupplyList();assert.match(f.html(),/aria-pressed="true" onclick="setOzonFboSupplyListView\('history'\)/);assert.match(f.html(),/<b>Учтено<\/b>/);
 });
+
+test('supply entry is a permanent purchases action, outside report rendering and selected marketplace',()=>{
+ const html=readFileSync(new URL('../../index.html',import.meta.url),'utf8');
+ const purchases=html.slice(html.indexOf('<section id="purchases"'),html.indexOf('<section id="reports"'));
+ const reports=html.slice(html.indexOf('<section id="reports"'),html.indexOf('</section>',html.indexOf('<section id="reports"')));
+ assert.match(purchases,/id="ozonFboSuppliesBtn"[^>]*onclick="openOzonFboSupplies\(\)"/);
+ assert.doesNotMatch(reports,/ozonFboSuppliesBtn/);
+ assert.equal((html.match(/id="ozonFboSuppliesBtn"/g)||[]).length,1);
+ assert.doesNotMatch(source,/function ensureButton|setInterval\(ensureButton|ozonFboSuppliesBtn/);
+ const button=purchases.match(/<button id="ozonFboSuppliesBtn"[^>]*>/)[0];assert.doesNotMatch(button,/hidden|display:\s*none|disabled/);
+ let opened=0;vm.runInNewContext(button.match(/onclick="([^"]+)"/)[1],{openOzonFboSupplies:()=>{opened++}});assert.equal(opened,1);
+});
