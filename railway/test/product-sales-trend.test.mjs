@@ -30,8 +30,8 @@ test('Ozon placed orders use created_at and actual quantities, including cancell
 test('the existing filter persists decline ordering and selected days without writing warehouse state',()=>{
  const html=readFileSync(new URL('../../index.html',import.meta.url),'utf8'),line=n=>html.split('\n').find(s=>s.startsWith('function '+n+'('));let sheet='',saved=null,requested=0;
  const fields={productRankMetric:{value:'decline'},productRankDaysInput:{value:'14'},productRankDirectionInput:{value:'desc'}};
- const ctx={productRankSort:'decline',productRankDays:7,productRankDirection:'desc',productRankStatsErrorKey:'',productCardProfitStats:null,productCardProfitStatsKey:'',productCardProfitStatsAt:0,productPage:3,document:{getElementById:id=>fields[id]},showSheet:s=>{sheet=s},rememberProductUi:patch=>{saved=patch},closeModal(){},syncProductRankButton(){},productUiFrame:fn=>fn(),renderProducts(){},ensureProductRankStats(){requested++},alert:s=>{throw Error(s)},save(){throw Error('Filter must not write stock')}};
- vm.runInNewContext(line('openProductRankFilter')+'\n'+line('applyProductRankFilter'),ctx);ctx.openProductRankFilter();assert.match(sheet,/<option value="decline" selected>Сильнее всего упали/);ctx.applyProductRankFilter();assert.equal(saved.rankSort,'decline');assert.equal(saved.rankDays,14);assert.equal(saved.rankDirection,'desc');assert.equal(saved.page,1);assert.equal(requested,1);assert.match(html,/savedRankSort=\['sales','profit','decline'\]/);
+ const ctx={productRankSort:'decline',productRankDays:7,productRankDirection:'desc',productRankStatsErrorKey:'',productCardProfitStats:null,productCardProfitStatsKey:'',productCardProfitStatsAt:0,productPage:3,document:{getElementById:id=>fields[id]},showSheet:s=>{sheet=s},rememberProductUi:patch=>{saved=patch},closeModal(){},syncProductRankButton(){},productRankHint:()=>'',productUiFrame:fn=>fn(),renderProducts(){},ensureProductRankStats(){requested++},alert:s=>{throw Error(s)},save(){throw Error('Filter must not write stock')}};
+ vm.runInNewContext(line('openProductRankFilter')+'\n'+line('applyProductRankFilter'),ctx);ctx.openProductRankFilter();assert.match(sheet,/<option value="decline" selected>Падение заказов, %/);ctx.applyProductRankFilter();assert.equal(saved.rankSort,'decline');assert.equal(saved.rankDays,14);assert.equal(saved.rankDirection,'desc');assert.equal(saved.page,1);assert.equal(requested,1);assert.match(html,/savedRankSort=\['sales','profit','decline','growth','idle'\]/);
 });
 
 test('a real source history gap remains unknown but adjoining intervals permit a percentage',()=>{
@@ -44,4 +44,35 @@ test('a real source history gap remains unknown but adjoining intervals permit a
 test('compact card and details explicitly say orders while the source uses placed-order cache',async()=>{
  const f=fixture();let request='';f.ctx.apiJson=async url=>{request=url;return{ok:true,rows:f.rows,history:f.history}};await f.ctx.window.ensureProductSalesTrends({days:7});assert.match(request,/product-order-series/);assert.doesNotMatch(request,/wb-product-sales-series/);
  assert.match(f.ctx.window.productSalesTrendHtml(f.products[0],{days:7}),/Заказы ↓ -40%/);await f.ctx.window.openProductSalesTrend('a');assert.match(f.sheet,/Количество заказанных штук по дате оформления/);assert.match(f.sheet,/Последующая отмена или возврат не убирает исходный заказ/);assert.doesNotMatch(f.sheet,/завершённым продажам/);
+});
+
+test('growth and decline sort the same known percentages in opposite directions without moving unknown data first',async()=>{
+ const f=fixture();await f.ctx.window.ensureProductSalesTrends({days:7});
+ for(const [mode,expected]of [['growth',['b','a']],['decline',['a','b']]]){
+  const compare=mode==='growth'?f.ctx.window.compareProductOrderGrowth:f.ctx.window.compareProductSalesTrends;
+  const rows=[...f.products].sort((a,b)=>compare(a,b,'desc',{days:7}));assert.deepEqual(rows.slice(0,2).map(p=>p.id),expected);
+  const reversed=[...f.products].sort((a,b)=>compare(a,b,'asc',{days:7}));assert.deepEqual(reversed.slice(0,2).map(p=>p.id),[...expected].reverse());
+ }
+});
+test('days without recorded sales use all available sale dates, separate from orders and selected comparison window',async()=>{
+ const f=fixture();let reads=0;f.ctx.apiJson=async url=>{reads++;assert.match(url,/product-sale-recency/);return{ok:true,rows:[{productId:'a',lastSaleAt:Date.parse('2026-09-01T12:00:00+05:00')},{productId:'b',lastSaleAt:Date.parse('2026-10-16T00:01:00+05:00')},{productId:'new',lastSaleAt:Date.parse('2026-10-15T23:59:00+05:00')}]}};
+ await Promise.all([f.ctx.window.ensureProductSaleIdleStats(),f.ctx.window.ensureProductSaleIdleStats()]);assert.equal(reads,1);
+ const compare=f.ctx.window.compareProductSaleIdleDays,rows=[...f.products];rows.sort((a,b)=>compare(a,b,'desc',{days:7}));assert.deepEqual(rows.map(p=>p.id),['a','new','b','u']);
+ assert.match(f.ctx.window.productSaleIdleHtml(f.products[0],{days:7}),/45 дн./);assert.match(f.ctx.window.productSaleIdleHtml(f.products[1],{days:365}),/0 дн./);assert.match(f.ctx.window.productSaleIdleHtml(f.products[3],{days:7}),/Нет учтённых продаж/);
+ rows.sort((a,b)=>compare(a,b,'asc',{days:7}));assert.deepEqual(rows.map(p=>p.id),['b','new','a','u']);
+ f.products.push({id:'group',kind:'variant-group',name:'Размеры'});f.products[0].variantGroupId='group';f.products[1].variantGroupId='group';f.ctx.state={products:f.products};assert.match(f.ctx.window.productSaleIdleHtml(f.products.at(-1),{days:7}),/0 дн./);
+ await f.ctx.window.ensureProductSaleIdleStats();assert.equal(reads,1);
+});
+test('failure to read last sales stays unknown and never retries once per render',async()=>{
+ const f=fixture();let reads=0;f.ctx.apiJson=async()=>{reads++;throw Error('offline')};
+ await f.ctx.window.ensureProductSaleIdleStats();await f.ctx.window.ensureProductSaleIdleStats();assert.equal(reads,1);
+ assert.match(f.ctx.window.productSaleIdleHtml(f.products[0],{days:7}),/Последняя продажа —/);assert.doesNotMatch(f.ctx.window.productSaleIdleHtml(f.products[0],{days:7}),/0 дн.|Нет учтённых/);
+});
+test('new sort modes persist alongside category and do not write warehouse state',()=>{
+ const html=readFileSync(new URL('../../index.html',import.meta.url),'utf8'),line=n=>html.split('\n').find(s=>s.startsWith('function '+n+'('));
+ for(const mode of ['growth','idle']){
+  let saved,sheet='';const ctx={productRankSort:mode,productRankDays:30,productRankDirection:'desc',productRankStatsErrorKey:'',productCardProfitStats:null,productCardProfitStatsKey:'',productCardProfitStatsAt:0,productPage:2,document:{getElementById:id=>({productRankMetric:{value:mode},productRankDaysInput:{value:'14'},productRankDirectionInput:{value:'asc'}}[id])},showSheet:x=>{sheet=x},rememberProductUi:x=>{saved=x},closeModal(){},syncProductRankButton(){},productUiFrame:fn=>fn(),renderProducts(){},ensureProductRankStats(){},alert:x=>{throw Error(x)},save(){throw Error('No warehouse writes')}};
+  vm.runInNewContext(['productRankHint','openProductRankFilter','applyProductRankFilter'].map(line).join('\n'),ctx);ctx.openProductRankFilter();assert.match(sheet,new RegExp('value="'+mode+'" selected'));
+  ctx.applyProductRankFilter();assert.equal(saved.rankSort,mode);assert.equal(saved.rankDays,14);assert.equal(saved.rankDirection,'asc');assert.equal(saved.page,1);assert.equal(Object.hasOwn(saved,'categoryFilter'),false);
+ }
 });
