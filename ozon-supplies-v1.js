@@ -84,12 +84,13 @@ function renderOrder(){
   const items=(s.items||[]).map(item=>{
    const p=matchProduct(current.account,item),key=transferKey(current.account,order.order_id,s.supply_id,s.bundle_id,item.sku),done=storedTransfers()[key],qty=Math.max(0,Number(item.quantity)||0);
    const action=done?`<b style="color:${Number(done.qty)===qty?'#218838':'#a86400'}">Учтено ${Math.max(0,Number(done.qty)||0)} из ${qty} шт.</b>`:p?`<button class="btn" onclick="accountOzonFboLine('${encodeURIComponent(key)}')">Учесть ${qty} шт.</button>`:`<button class="btn" onclick="linkOzonFboItem('${encodeURIComponent(String(s.supply_id||''))}','${encodeURIComponent(String(s.bundle_id||''))}','${encodeURIComponent(String(item.sku||''))}')">Привязать</button>`;
-   return `<div style="padding:9px 0;border-top:1px solid #eee"><div class="row"><div class="grow"><b>${text(item.name||item.offer_id||('SKU '+item.sku))}</b><div class="muted">SKU ${text(item.sku)}${item.offer_id?' · арт. '+text(item.offer_id):''} · ${qty} шт.<br>${p?'Товар склада: '+text(p.name):'Нужно привязать к товару склада'}</div></div>${action}</div></div>`;
+   const source=p&&!done?`<label class="muted" for="ozonFboSource-${encodeURIComponent(key)}">Откуда отправляем</label><select id="ozonFboSource-${encodeURIComponent(key)}" class="select" style="width:100%;margin-top:5px">${sourceOptions(p)}</select>`:'';
+   return `<div style="padding:9px 0;border-top:1px solid #eee"><div class="row"><div class="grow"><b>${text(item.name||item.offer_id||('SKU '+item.sku))}</b><div class="muted">SKU ${text(item.sku)}${item.offer_id?' · арт. '+text(item.offer_id):''} · ${qty} шт.<br>${p?'Товар склада: '+text(p.name):'Нужно привязать к товару склада'}</div></div>${action}</div>${source}</div>`;
   }).join('')||'<div class="muted">Состав не получен'+(s.bundle_error?' · '+text(s.bundle_error):'')+'</div>';
   return `<div class="item" style="margin-top:9px"><b>${text(warehouseLabel(s))}</b><div class="muted">${s.is_crossdock?'Кросс-докинг · ':''}${text(stateLabel(s.state))} · поставка ${text(s.supply_id)}</div>${items}</div>`;
  }).join('');
  const remaining=sum.lines.filter(x=>!storedTransfers()[transferKey(current.account,order.order_id,x.s.supply_id,x.s.bundle_id,x.item.sku)]),remainingQty=remaining.reduce((n,x)=>n+Math.max(0,Number(x.item.quantity)||0),0);
- const bulk=remaining.length?`<button class="btn dark full" style="margin:10px 0" onclick="accountWholeOzonFboOrder()">${remaining.length===sum.lines.length?'Учесть отправку':'Учесть оставшееся'} · ${remainingQty} шт.</button>`:'';
+ const bulk=remaining.length?`<label class="muted" for="ozonFboBulkSource">Источник для всей поставки</label><select id="ozonFboBulkSource" class="select" style="width:100%;margin-top:5px"><option value="auto">По наличию · сначала со склада</option><option value="at_warehouse">Только со склада</option><option value="sale">Только из продажи</option></select><button class="btn dark full" style="margin:10px 0" onclick="accountWholeOzonFboOrder()">${remaining.length===sum.lines.length?'Учесть отправку':'Учесть оставшееся'} · ${remainingQty} шт.</button>`:'';
  showSheet(`<button type="button" class="btn" style="margin-bottom:10px" onclick="showOzonFboSupplyList()">‹ К поставкам</button><h3>${text(order.order_number||('Заявка #'+order.order_id))}</h3>${accountingHtml(current.account,order)}<div class="muted">${supplies.length} направлений · ${sum.qty} шт. · привязано ${sum.linked}/${sum.lines.length} · учтено ${sum.recorded}/${sum.lines.length}</div>${bulk}${cards}`);
 }
 window.openOzonFboSupplyOrder=async(account,orderId)=>{
@@ -120,25 +121,67 @@ window.chooseOzonFboProduct=pid=>{
  for(const alias of ids)if(alias&&alias!==preferred)attachMarketplaceSku(p,'Ozon',alias,'');
  try{save();}catch(_){}renderOrder();
 };
-function physicalStock(p){return Math.max(0,Number(p?.stock)||0)}
 function lineByKey(key){return allLines(current.order).find(x=>transferKey(current.account,current.order.order_id,x.s.supply_id,x.s.bundle_id,x.item.sku)===key);}
+function saleStock(p){return Math.max(0,(Number(p?.stock)||0)-(typeof reserved==='function'?Math.max(0,Number(reserved(p))||0):0));}
+function warehouseStock(p){return typeof purchaseAtWarehouseQty==='function'?purchaseAtWarehouseQty(p.id):0;}
+function sourceOptions(p){return `<option value="auto">По наличию</option><option value="at_warehouse">На складе · ${warehouseStock(p)} шт.</option><option value="sale">В продаже · ${saleStock(p)} шт.</option>`;}
+function stockPlan(p,qty,source='auto'){
+ if(!Number.isInteger(qty)||qty<=0)throw Error('Количество отправки должно быть целым положительным числом.');
+ if(!['auto','at_warehouse','sale'].includes(source))throw Error('Выберите источник отправки.');
+ const wh=warehouseStock(p),free=saleStock(p),warehouseQty=source==='sale'?0:source==='at_warehouse'?qty:Math.min(qty,wh),saleQty=qty-warehouseQty;
+ if(warehouseQty>wh||saleQty>free)throw Error('Недостаточно товара «'+p.name+'»: нужно '+qty+' шт. На складе: '+wh+' шт., в продаже без резерва: '+free+' шт.');
+ if(warehouseQty&&typeof releaseWarehousePurchaseUnits!=='function')throw Error('Учёт партий ещё загружается. Обновите страницу и повторите.');
+ if(saleQty&&typeof fifoConsume!=='function')throw Error('Учёт себестоимости ещё загружается. Обновите страницу и повторите.');
+ const lots=[];let need=warehouseQty;
+ for(const lot of (state.purchases||[]).filter(x=>String(x.productId)===String(p.id)&&purchaseWarehouseQty(x)>0).sort((a,b)=>(Number(a.warehouseReceivedAt||a.orderedAt||a.date||a.createdAt)||0)-(Number(b.warehouseReceivedAt||b.orderedAt||b.date||b.createdAt)||0))){
+  if(!need)break;const take=Math.min(need,purchaseWarehouseQty(lot));lots.push({lot,qty:take,unitCost:purchaseDisplayUnitCost(lot)});need-=take;
+ }
+ if(need)throw Error('Не удалось найти полный состав складских партий. Обновите страницу.');
+ return{p,qty,warehouseQty,saleQty,lots};
+}
+function consumeStockPlan(plan){
+ const {p,warehouseQty,saleQty,lots}=plan,used=[];let totalCost=0;
+ for(const part of lots){
+  // Reuse the regular warehouse release/split, preserving paid totals and prior
+  // writeoffs. The released units immediately leave for FBO in this same save.
+  releaseWarehousePurchaseUnits(part.lot,part.qty,Date.now());
+  const released=purchaseStatus(part.lot)==='received'?part.lot:state.purchases[0];
+  released.remainingQty=Math.max(0,Number(released.remainingQty)-part.qty);
+  totalCost+=part.qty*part.unitCost;
+  used.push({purchaseId:String(released.id),warehousePurchaseId:String(part.lot.id),qty:part.qty,unitCost:part.unitCost});
+ }
+ if(warehouseQty)log('приход',p.id,warehouseQty,'со склада для отправки Ozon FBO');
+ if(saleQty){const cost=fifoConsume(p.id,saleQty);totalCost+=Number(cost.totalCost)||0;used.push(...(cost.lots||[]));p.stock=(Number(p.stock)||0)-saleQty;}
+ try{refreshProductAverageCost(p)}catch(_){}
+ return{totalCost,lots:used,stockSource:warehouseQty&&saleQty?'mixed':warehouseQty?'at_warehouse':'sale'};
+}
+function recordTransfer(row,p,cost,qty){
+ const key=transferKey(current.account,current.order.order_id,row.s.supply_id,row.s.bundle_id,row.item.sku);
+ transfers()[key]={key,productId:p.id,sku:String(row.item.sku||''),qty,account:current.account,orderId:String(current.order.order_id),supplyId:String(row.s.supply_id||''),bundleId:String(row.s.bundle_id||''),warehouseId:String(row.s.storage_warehouse?.warehouse_id||''),warehouseName:warehouseLabel(row.s),crossdock:Boolean(row.s.is_crossdock),sentAt:Date.now(),unitCost:cost.unitCost,stockSource:cost.stockSource,status:'in_transit'};
+}
+function confirmPlans(plans){const qty=plans.reduce((n,p)=>n+p.qty,0),wh=plans.reduce((n,p)=>n+p.warehouseQty,0),sale=plans.reduce((n,p)=>n+p.saleQty,0);return confirm('Учесть отправку '+qty+' шт. на Ozon FBO?'+(wh?'\nСо склада: '+wh+' шт.':'')+(sale?'\nИз продажи: '+sale+' шт.':''));}
 window.accountOzonFboLine=encoded=>{
- const key=decodeURIComponent(encoded),row=lineByKey(key);if(!row||transfers()[key])return;const p=matchProduct(current.account,row.item),qty=Math.max(0,Number(row.item.quantity)||0);if(!p)return alert('Сначала привяжите товар.');if(physicalStock(p)<qty)return alert('На физическом локальном остатке недостаточно товара: нужно '+qty+' шт., на складе '+physicalStock(p)+' шт.');
- if(!confirm('Перевести '+qty+' шт. «'+p.name+'» из локального склада в «В пути Ozon FBO»?'))return;
- const cost=typeof fifoConsume==='function'?fifoConsume(p.id,qty):{totalCost:qty*(Number(p.cost)||0)};p.stock=Math.max(0,(Number(p.stock)||0)-qty);try{refreshProductAverageCost(p)}catch(_){}
- transfers()[key]={key,productId:p.id,sku:String(row.item.sku||''),qty,account:current.account,orderId:String(current.order.order_id),supplyId:String(row.s.supply_id||''),bundleId:String(row.s.bundle_id||''),warehouseId:String(row.s.storage_warehouse?.warehouse_id||''),warehouseName:warehouseLabel(row.s),crossdock:Boolean(row.s.is_crossdock),sentAt:Date.now(),unitCost:qty?Number(cost?.totalCost||0)/qty:0,status:'in_transit'};
- log('FBO Ozon',p.id,-qty,'в пути на Ozon FBO · '+warehouseLabel(row.s)+' · заявка '+String(current.order.order_number||current.order.order_id));save();render();renderOrder();
+ if(!requireWarehouseEditReady())return;
+ const key=decodeURIComponent(encoded),row=lineByKey(key);if(!row||storedTransfers()[key])return;
+ const p=matchProduct(current.account,row.item);if(!p)return alert('Сначала привяжите товар.');
+ let plan;try{plan=stockPlan(p,Number(row.item.quantity),document.getElementById('ozonFboSource-'+encoded)?.value||'auto')}catch(e){return alert(e.message)}
+ if(!confirmPlans([plan]))return;
+ const cost=consumeStockPlan(plan),movement=log('FBO Ozon',p.id,-plan.qty,'в пути на Ozon FBO · '+warehouseLabel(row.s)+' · заявка '+String(current.order.order_number||current.order.order_id));
+ movement.fifoLots=cost.lots;recordTransfer(row,p,{unitCost:cost.totalCost/plan.qty,stockSource:cost.stockSource},plan.qty);
+ save();render();renderOrder();
 };
 window.accountWholeOzonFboOrder=()=>{
- const rows=allLines(current.order).filter(x=>!transfers()[transferKey(current.account,current.order.order_id,x.s.supply_id,x.s.bundle_id,x.item.sku)]);if(!rows.length)return alert('Эта поставка уже учтена.');
- const unmatched=rows.filter(x=>!matchProduct(current.account,x.item));if(unmatched.length)return alert('Сначала привяжите непривязанные товары: '+unmatched.length+' строк.');
- const groups=new Map();for(const x of rows){const p=matchProduct(current.account,x.item),q=Math.max(0,Number(x.item.quantity)||0);if(!groups.has(p.id))groups.set(p.id,{p,qty:0,rows:[]});const g=groups.get(p.id);g.qty+=q;g.rows.push(x);}
- for(const g of groups.values())if(physicalStock(g.p)<g.qty)return alert('Недостаточно физического остатка «'+g.p.name+'»: нужно '+g.qty+', на складе '+physicalStock(g.p)+'.');
- const total=[...groups.values()].reduce((n,g)=>n+g.qty,0);if(!confirm('Учесть отправку '+total+' шт. на '+new Set(rows.map(x=>String(x.s.supply_id))).size+' направлений Ozon FBO? Локальный остаток уменьшится на это количество.'))return;
- for(const g of groups.values()){
-  const cost=typeof fifoConsume==='function'?fifoConsume(g.p.id,g.qty):{totalCost:g.qty*(Number(g.p.cost)||0)},unit=g.qty?Number(cost?.totalCost||0)/g.qty:0;g.p.stock=Math.max(0,(Number(g.p.stock)||0)-g.qty);try{refreshProductAverageCost(g.p)}catch(_){}
-  for(const x of g.rows){const q=Math.max(0,Number(x.item.quantity)||0),key=transferKey(current.account,current.order.order_id,x.s.supply_id,x.s.bundle_id,x.item.sku);transfers()[key]={key,productId:g.p.id,sku:String(x.item.sku||''),qty:q,account:current.account,orderId:String(current.order.order_id),supplyId:String(x.s.supply_id||''),bundleId:String(x.s.bundle_id||''),warehouseId:String(x.s.storage_warehouse?.warehouse_id||''),warehouseName:warehouseLabel(x.s),crossdock:Boolean(x.s.is_crossdock),sentAt:Date.now(),unitCost:unit,status:'in_transit'};}
-  log('FBO Ozon',g.p.id,-g.qty,'в пути на Ozon FBO · '+g.rows.length+' направлений · заявка '+String(current.order.order_number||current.order.order_id));
+ if(!requireWarehouseEditReady())return;
+ const rows=allLines(current.order).filter(x=>!storedTransfers()[transferKey(current.account,current.order.order_id,x.s.supply_id,x.s.bundle_id,x.item.sku)]);
+ if(!rows.length)return alert('Эта поставка уже учтена.');
+ const groups=new Map();
+ for(const row of rows){const p=matchProduct(current.account,row.item);if(!p)return alert('Сначала привяжите все товары.');const q=Number(row.item.quantity);if(!Number.isInteger(q)||q<=0)return alert('Проверьте количество в составе поставки.');if(!groups.has(p.id))groups.set(p.id,{p,qty:0,rows:[]});const g=groups.get(p.id);g.qty+=q;g.rows.push(row);}
+ const source=document.getElementById('ozonFboBulkSource')?.value||'auto';let plans;
+ try{plans=[...groups.values()].map(g=>({...stockPlan(g.p,g.qty,source),rows:g.rows}))}catch(e){return alert(e.message)}
+ if(!confirmPlans(plans))return;
+ for(const plan of plans){
+  const cost=consumeStockPlan(plan),movement=log('FBO Ozon',plan.p.id,-plan.qty,'в пути на Ozon FBO · '+plan.rows.length+' направлений · заявка '+String(current.order.order_number||current.order.order_id));movement.fifoLots=cost.lots;
+  for(const row of plan.rows)recordTransfer(row,plan.p,{unitCost:cost.totalCost/plan.qty,stockSource:cost.stockSource},Number(row.item.quantity));
  }
  save();render();renderOrder();
 };
