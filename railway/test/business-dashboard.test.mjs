@@ -9,10 +9,9 @@ const server = readFileSync(new URL('../src/server.js', import.meta.url), 'utf8'
 const passport = readFileSync(new URL('../../docs/SITE-PASSPORT.md', import.meta.url), 'utf8');
 
 test('business dashboard keeps day and week and all agreed profit layers', () => {
-  for (const word of ['Сегодня','Неделя','Месяц','Заказы','Выкупы','Прибыль заказов','Прибыль выкупов']) assert.match(ui, new RegExp(word));
+  for (const word of ['Сегодня','Неделя','Месяц','Год','Заказы','Выкупы','Прибыль заказов','Прибыль выкупов']) assert.match(ui, new RegExp(word));
   assert.doesNotMatch(ui, /Чистая прибыль/);
-  assert.equal(ui.includes('Год'),false);
-  assert.match(ui, /BUSINESS_PERIODS=new Set\(\['day','week','month'\]\)/);
+  assert.match(ui, /BUSINESS_PERIODS=new Set\(\['day','week','month','year'\]\)/);
   assert.match(ui, /BUSINESS_METRICS=new Set\(\['orders','buyouts','orderProfit','buyoutProfit'\]\)/);
   assert.match(ui, /BUSINESS_SUPPORTED_MARKETS=new Set\(\['Kaspi','WB','WB2','Ozon'\]\)/);
   assert.match(ui, /allMarketUnitProfit30/);
@@ -130,7 +129,7 @@ test('week chart compares the calendar week with the previous week through the s
   assert.match(ui, /businessBuildDaySnapshot\(businessDayBounds\(0\),1,force\)/);
   assert.match(passport, /Переключатель «Неделя»/);
   assert.match(report, /explicitRangeBounds\(range\)/);
-  assert.doesNotMatch(ui, /Год/);
+  assert.match(ui, /setBusinessDashboardPeriod\('year'\)/);
 });
 
 test('month chart compares the calendar month with the previous month through the same day and time', () => {
@@ -142,7 +141,7 @@ test('month chart compares the calendar month with the previous month through th
   assert.match(ui, /весь месяц/);
   assert.match(ui, /businessBuildMonthSnapshot/);
   assert.match(passport, /Переключатель «Месяц»/);
-  assert.doesNotMatch(ui, /Год/);
+  assert.match(ui, /setBusinessDashboardPeriod\('year'\)/);
 });
 
 test('legacy net profit selection migrates to buyout profit and four buttons stay 2x2', () => {

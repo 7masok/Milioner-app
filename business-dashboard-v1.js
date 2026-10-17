@@ -3,29 +3,32 @@
 if(typeof window==='undefined')return;
 
 const BUSINESS_SUPPORTED_MARKETS=new Set(['Kaspi','WB','WB2','Ozon']);
-const BUSINESS_PERIODS=new Set(['day','week','month']);
+const BUSINESS_PERIODS=new Set(['day','week','month','year']);
 const BUSINESS_WEEKDAYS=['Пн','Вт','Ср','Чт','Пт','Сб','Вс'];
 const BUSINESS_METRICS=new Set(['orders','buyouts','orderProfit','buyoutProfit']);
 const BUSINESS_UI_KEY='milioner_business_dashboard_v1';
 const BUSINESS_DAY_HISTORY=7;
 const BUSINESS_WEEK_HISTORY=5;
 const BUSINESS_MONTH_HISTORY=3;
+const BUSINESS_YEAR_HISTORY=2;
+const BUSINESS_MONTH_NAMES=['янв','фев','мар','апр','май','июн','июл','авг','сен','окт','ноя','дек'];
 const BUSINESS_CACHE_VERSION='calendar-v2',BUSINESS_CACHE_KEY='milioner_business_snapshots_calendar_v2';
 const businessModelMeta=new Map(),businessBuildJobs=new Map();let businessCacheHydrated=false;
 let businessRenderSeq=0,businessSummaryCache=new Map(),businessLastModel=null;
-let businessPeriod='day',businessMetric='orders',businessModels=new Map(),businessDayDate='',businessWeekDate='',businessMonthDate='',businessWeekOrderCache=new Map();
+let businessPeriod='day',businessMetric='orders',businessModels=new Map(),businessDayDate='',businessWeekDate='',businessMonthDate='',businessYearDate='',businessWeekOrderCache=new Map();
 try{
  const saved=JSON.parse(localStorage.getItem(BUSINESS_UI_KEY)||'{}');
- businessPeriod=saved.period==='week'||saved.period==='month'?saved.period:'day';
+ businessPeriod=saved.period==='week'||saved.period==='month'||saved.period==='year'?saved.period:'day';
  if(saved.metric==='netProfit')businessMetric='buyoutProfit';
  else if(BUSINESS_METRICS.has(saved.metric))businessMetric=saved.metric;
  if(/^\d{4}-\d{2}-\d{2}$/.test(saved.dayDate||''))businessDayDate=saved.dayDate;
  if(/^\d{4}-\d{2}-\d{2}$/.test(saved.weekDate||''))businessWeekDate=saved.weekDate;
  if(/^\d{4}-\d{2}-01$/.test(saved.monthDate||''))businessMonthDate=saved.monthDate;
+ if(/^\d{4}-01-01$/.test(saved.yearDate||''))businessYearDate=saved.yearDate;
 }catch(_){}
 
 function businessSaveUi(){
- try{localStorage.setItem(BUSINESS_UI_KEY,JSON.stringify({period:businessPeriod,metric:businessMetric,dayDate:businessDayDate,weekDate:businessWeekDate,monthDate:businessMonthDate}))}catch(_){}
+ try{localStorage.setItem(BUSINESS_UI_KEY,JSON.stringify({period:businessPeriod,metric:businessMetric,dayDate:businessDayDate,weekDate:businessWeekDate,monthDate:businessMonthDate,yearDate:businessYearDate}))}catch(_){}
 }
 function businessRemoveLegacyStoreNote(){
  const root=document.getElementById('reports');if(!root)return;
@@ -56,12 +59,14 @@ function businessSelectedWeekOffset(){
  return Number.isFinite(selected)?Math.max(-BUSINESS_WEEK_HISTORY,Math.min(0,Math.floor((selected-businessWeekBounds(0).start)/(7*86400000)))):0;
 }
 function businessSelectedMonthOffset(){const selected=Date.parse(businessMonthDate+'T00:00:00+05:00');if(!Number.isFinite(selected))return 0;const a=new Date(selected+5*3600000),b=new Date(businessMonthBounds(0).start+5*3600000);return Math.max(-BUSINESS_MONTH_HISTORY,Math.min(0,(a.getUTCFullYear()-b.getUTCFullYear())*12+a.getUTCMonth()-b.getUTCMonth()))}
-function businessSelectedOffset(period=businessPeriod){return period==='month'?businessSelectedMonthOffset():period==='week'?businessSelectedWeekOffset():businessSelectedDayOffset()}
+function businessSelectedYearOffset(){const selected=Number(businessYearDate.slice(0,4)),current=new Date(businessYearBounds(0).start+18000000).getUTCFullYear();return selected?Math.max(-BUSINESS_YEAR_HISTORY,Math.min(0,selected-current)):0}
+function businessBounds(period,offset=0){return period==='year'?businessYearBounds(offset):period==='month'?businessMonthBounds(offset):period==='week'?businessWeekBounds(offset):businessDayBounds(offset)}
+function businessSelectedOffset(period=businessPeriod){return period==='year'?businessSelectedYearOffset():period==='month'?businessSelectedMonthOffset():period==='week'?businessSelectedWeekOffset():businessSelectedDayOffset()}
 function businessModelKey(period=businessPeriod,offset=businessSelectedOffset(period)){
- const bounds=period==='month'?businessMonthBounds(offset):period==='week'?businessWeekBounds(offset):businessDayBounds(offset);
+ const bounds=businessBounds(period,offset);
  return period+':'+bounds.start;
 }
-function businessPeriodBounds(){return businessPeriod==='month'?businessMonthBounds(businessSelectedMonthOffset()):businessPeriod==='week'?businessWeekBounds(businessSelectedWeekOffset()):businessDayBounds(businessSelectedDayOffset())}
+function businessPeriodBounds(){return businessBounds(businessPeriod,businessSelectedOffset())}
 const businessDateFormatter=new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Almaty',year:'numeric',month:'2-digit',day:'2-digit'});
 function businessIsoDate(ts){const parts=businessDateFormatter.formatToParts(new Date(ts)),part=type=>parts.find(x=>x.type===type)?.value;return part('year')+'-'+part('month')+'-'+part('day')}
 function businessWeekStart(which=0){
@@ -77,9 +82,11 @@ function businessMonthBounds(which=0){
  const start=businessMonthStart(which).getTime(),local=new Date(start+5*3600000),end=Date.UTC(local.getUTCFullYear(),local.getUTCMonth()+1,1)-5*3600000;
  return {start,end,days:Math.round((end-start)/86400000),label:which===0?'Этот месяц':'Весь месяц'};
 }
+function businessYearBounds(which=0){const year=new Date(businessDayBounds(0).start+18000000).getUTCFullYear()+Number(which||0),start=Date.UTC(year,0,1)-18000000,end=Date.UTC(year+1,0,1)-18000000;return{start,end,days:Math.round((end-start)/86400000),label:which===0?'Этот год':'Весь год'}}
 function businessEmptyBucket(start,end,label){return {start,end,label,orders:0,orderQty:0,orderProfit:0,buyouts:0,buyoutQty:0,buyoutBaseProfit:0,buyoutProfit:0,coreBuyouts:0,coreBuyoutQty:0,coreBuyoutBaseProfit:0,coreBuyoutProfit:0,ozonBuyouts:0,ozonBuyoutQty:0,ozonBuyoutBaseProfit:0,ozonBuyoutProfit:0,netProfit:0}}
 function businessBuckets(period,bounds){
  const rows=[];
+ if(period==='year'){const year=new Date(bounds.start+18000000).getUTCFullYear();for(let i=0;i<12;i++)rows.push(businessEmptyBucket(Date.UTC(year,i,1)-18000000,Date.UTC(year,i+1,1)-18000000,BUSINESS_MONTH_NAMES[i]));return rows}
  if(period==='week'){for(let i=0;i<7;i++){const s=bounds.start+i*86400000;rows.push(businessEmptyBucket(s,s+86400000,BUSINESS_WEEKDAYS[i]))}return rows}
  if(period==='month'){for(let t=bounds.start,i=1;t<bounds.end;t+=86400000,i++)rows.push(businessEmptyBucket(t,t+86400000,String(i)));return rows}
  for(let h=0;h<24;h++){const s=bounds.start+h*3600000;rows.push(businessEmptyBucket(s,s+3600000,String(h).padStart(2,'0')))}
@@ -195,7 +202,7 @@ function businessMetricInfo(model){
   orderProfit:{label:'Прибыль с заказов · прогноз',value:model.orders.qty>0&&!(model.orders.coverage>0)?null:model.orders.profit,meta:'покрытие расчётом '+Math.round(model.orders.coverage*100)+'%',field:'orderProfit'},
   buyoutProfit:{label:'Прибыль с выкупов',value:model.pending?null:model.summary.profit,estimated:Boolean(model.summary.estimated),incomplete:Boolean(model.summary.partialOzonHistory),meta:(model.summary.estimated?'≈ по данным маркетплейсов':'по данным маркетплейсов')+ozonHourlyNote+historyNote,field:'buyoutProfit'}
  };
- const info=map[businessMetric]||map.orders;return model.unavailable?{...info,value:null,meta:'Нет полной истории для сравнения',incomplete:true}:info;
+ const info=map[businessMetric]||map.orders;if(model.yearPartial){info.incomplete=true;info.estimated=true;info.meta+=' · неполный год: '+model.knownMonths+' из '+model.expectedMonths+' мес.'}return model.unavailable?{...info,value:null,meta:model.period==='year'?'Нет полной истории за этот год':'Нет полной истории для сравнения',incomplete:true}:info;
 }
 function businessEnsureStyle(){
  if(document.getElementById('businessDashboardStyle'))return;
@@ -212,6 +219,7 @@ function businessEnsureStyle(){
  .business-hour{position:relative;min-width:0}.business-yesterday-bar,.business-bar{position:absolute;left:24%;width:52%;min-height:1px}.business-yesterday-bar{border-radius:5px 5px 1px 1px;background:#d1d1d6;border-top:3px solid #9d9da3;box-sizing:border-box}.business-yesterday-bar.negative{border-radius:1px 1px 5px 5px;border-top:0;border-bottom:3px solid #9d9da3}.business-bar{border-radius:5px 5px 1px 1px;background:#111}.business-bar.negative{border-radius:1px 1px 5px 5px;background:#8d2222}
  .business-y-axis{grid-column:2;grid-row:1;position:relative;font-size:10px;color:var(--muted)}.business-y-tick{position:absolute;right:0;transform:translateY(50%);white-space:nowrap}
  .business-x-axis{grid-column:1;grid-row:2;position:relative;height:24px;padding-top:6px;font-size:9px;color:var(--muted)}.business-x-label{position:absolute;top:6px;white-space:nowrap;transform:translateX(-50%);text-align:center}
+ .business-month-gap{position:absolute;bottom:3px;left:0;right:0;text-align:center;font-size:12px;color:var(--muted)}
  .business-axis-caption{grid-column:2;grid-row:2;font-size:9px;color:var(--muted);padding-top:6px;text-align:right}
  .business-detail-btn{border:1px solid var(--line);background:var(--bg);border-radius:12px;padding:8px 10px;font:inherit;white-space:nowrap}
  @media(max-width:560px){.business-dashboard{padding:12px;border-radius:20px}.business-value{font-size:25px}.business-chart-frame{grid-template-columns:minmax(0,1fr) 42px;grid-template-rows:158px 24px}.business-metrics button{font-size:12px;padding:8px 5px}.business-bar,.business-yesterday-bar{left:20%;width:60%}}
@@ -220,7 +228,7 @@ function businessEnsureStyle(){
 function businessEnsureUi(){
  const reports=document.getElementById('reports');if(!reports)return null;let root=document.getElementById('businessDashboard');
  if(root){businessInstallDaySwipe();return root}businessEnsureStyle();root=document.createElement('div');root.id='businessDashboard';root.className='business-dashboard';
- root.innerHTML=`<div class="business-top"><div><h3 id="businessPeriodTitle">Сегодня</h3><div id="businessPeriodSub" class="business-sub">Kaspi + WB1 + WB2 + Ozon · по часам</div></div><div class="business-periods"><button type="button" data-business-period="day" onclick="setBusinessDashboardPeriod('day')">Сегодня</button><button type="button" data-business-period="week" onclick="setBusinessDashboardPeriod('week')">Неделя</button><button type="button" data-business-period="month" onclick="setBusinessDashboardPeriod('month')">Месяц</button><button class="business-detail-btn" type="button" onclick="renderBusinessDashboard(true)">↻</button></div></div>
+ root.innerHTML=`<div class="business-top"><div><h3 id="businessPeriodTitle">Сегодня</h3><div id="businessPeriodSub" class="business-sub">Kaspi + WB1 + WB2 + Ozon · по часам</div></div><div class="business-periods"><button type="button" data-business-period="day" onclick="setBusinessDashboardPeriod('day')">Сегодня</button><button type="button" data-business-period="week" onclick="setBusinessDashboardPeriod('week')">Неделя</button><button type="button" data-business-period="month" onclick="setBusinessDashboardPeriod('month')">Месяц</button><button type="button" data-business-period="year" onclick="setBusinessDashboardPeriod('year')">Год</button><button class="business-detail-btn" type="button" onclick="renderBusinessDashboard(true)">↻</button></div></div>
  <div class="business-metrics">${[['orders','Заказы'],['buyouts','Выкупы'],['orderProfit','Прибыль заказов'],['buyoutProfit','Прибыль выкупов']].map(([k,v])=>`<button type="button" data-business-metric="${k}" onclick="setBusinessDashboardMetric('${k}')">${v}</button>`).join('')}</div>
  <div id="businessDayNav" class="business-day-nav"><button id="businessDayPrevious" type="button" aria-label="Предыдущий день" onclick="shiftBusinessDashboardSelection(-1)">‹</button><span id="businessDayDate"></span><button id="businessDayNext" type="button" aria-label="Следующий день" onclick="shiftBusinessDashboardSelection(1)">›</button></div>
  <div class="business-value-card"><div id="businessValueMetric" class="business-value-title">Загрузка…</div><div class="business-value-grid"><div class="business-value-side"><div id="businessValueLabel" class="business-value-label">Сегодня</div><div id="businessValue" class="business-value">—</div><div id="businessValueMeta" class="business-value-meta"></div></div><div class="business-value-side business-yesterday-side"><div id="businessYesterdayLabel" class="business-value-label">Вчера</div><div id="businessYesterdayValue" class="business-value">—</div><div id="businessYesterdayMeta" class="business-value-meta"></div></div></div><div id="businessYesterdayCompare" class="business-compare"></div></div>
@@ -258,11 +266,11 @@ function businessPaintTabs(){
  document.querySelectorAll('[data-business-metric]').forEach(x=>x.classList.toggle('active',x.dataset.businessMetric===businessMetric));
  document.querySelectorAll('[data-business-period]').forEach(x=>x.classList.toggle('active',x.dataset.businessPeriod===businessPeriod));
  const title=document.getElementById('businessPeriodTitle'),sub=document.getElementById('businessPeriodSub');
- const week=businessPeriod==='week',month=businessPeriod==='month',offset=businessSelectedOffset(),bounds=businessPeriodBounds(),nav=document.getElementById('businessDayNav'),dayDate=document.getElementById('businessDayDate'),previous=document.getElementById('businessDayPrevious'),next=document.getElementById('businessDayNext');
- if(nav)nav.hidden=false;if(previous){previous.disabled=offset<=-(month?BUSINESS_MONTH_HISTORY:week?BUSINESS_WEEK_HISTORY:BUSINESS_DAY_HISTORY);previous.setAttribute('aria-label',month?'Предыдущий месяц':week?'Предыдущая неделя':'Предыдущий день')}if(next){next.disabled=offset>=0;next.setAttribute('aria-label',month?'Следующий месяц':week?'Следующая неделя':'Следующий день')}
- if(dayDate)dayDate.innerHTML=(month?new Date(bounds.start).toLocaleDateString('ru-RU',{timeZone:'Asia/Almaty',month:'long',year:'numeric'}):week?businessShortDate(bounds.start)+' – '+businessShortDate(bounds.end-86400000)+' · '+(offset===0?'эта неделя':'вся неделя'):businessShortDate(bounds.start)+' · '+(offset===0?'сегодня':offset===-1?'вчера':'весь день'))+'<small>Свайп по графику ← →</small>';
- if(title)title.textContent=month?'Месяц':week?'Неделя':offset===0?'Сегодня':bounds.label;
- if(sub)sub.textContent=businessPeriod==='day'?'Kaspi + WB1 + WB2 + Ozon · по часам':'Kaspi + WB1 + WB2 + Ozon · по дням';
+ const year=businessPeriod==='year',week=businessPeriod==='week',month=businessPeriod==='month',offset=businessSelectedOffset(),bounds=businessPeriodBounds(),nav=document.getElementById('businessDayNav'),dayDate=document.getElementById('businessDayDate'),previous=document.getElementById('businessDayPrevious'),next=document.getElementById('businessDayNext');
+ if(nav)nav.hidden=false;if(previous){previous.disabled=offset<=-(year?BUSINESS_YEAR_HISTORY:month?BUSINESS_MONTH_HISTORY:week?BUSINESS_WEEK_HISTORY:BUSINESS_DAY_HISTORY);previous.setAttribute('aria-label',year?'Предыдущий год':month?'Предыдущий месяц':week?'Предыдущая неделя':'Предыдущий день')}if(next){next.disabled=offset>=0;next.setAttribute('aria-label',year?'Следующий год':month?'Следующий месяц':week?'Следующая неделя':'Следующий день')}
+ if(dayDate)dayDate.innerHTML=(year?new Date(bounds.start+18000000).getUTCFullYear()+' год':month?new Date(bounds.start).toLocaleDateString('ru-RU',{timeZone:'Asia/Almaty',month:'long',year:'numeric'}):week?businessShortDate(bounds.start)+' – '+businessShortDate(bounds.end-86400000)+' · '+(offset===0?'эта неделя':'вся неделя'):businessShortDate(bounds.start)+' · '+(offset===0?'сегодня':offset===-1?'вчера':'весь день'))+'<small>Свайп по графику ← →</small>';
+ if(title)title.textContent=year?'Год':month?'Месяц':week?'Неделя':offset===0?'Сегодня':bounds.label;
+ if(sub)sub.textContent=year?'Kaspi + WB1 + WB2 + Ozon · по месяцам':businessPeriod==='day'?'Kaspi + WB1 + WB2 + Ozon · по часам':'Kaspi + WB1 + WB2 + Ozon · по дням';
 }
 function businessNiceStep(raw){
  const n=Math.max(1e-9,Math.abs(Number(raw)||0)),pow=Math.pow(10,Math.floor(Math.log10(n))),f=n/pow;
@@ -286,7 +294,7 @@ function businessAxisNumber(value){
 }
 function businessPaintChart(model,field){
  const box=document.getElementById('businessChart');if(!box)return;
- const month=model.period==='month',week=model.period==='week',past=Number(model.dayOffset)<0,pastWeek=week&&Number(model.weekOffset)<0,pastMonth=month&&Number(model.monthOffset)<0,count=month?Math.max(model.buckets.length,model.yesterday?.buckets?.length||0):week?model.buckets.length:24,currentName=month?(pastMonth?businessShortDate(model.bounds.start):'этот'):week?(pastWeek?businessShortDate(model.bounds.start)+' – '+businessShortDate(model.bounds.end-86400000):'эта'):past?businessShortDate(model.bounds.start):'сегодня',previousName=month?(pastMonth?businessShortDate(model.yesterday.bounds.start):'прошлый'):week?(pastWeek?businessShortDate(model.yesterday.bounds.start)+' – '+businessShortDate(model.yesterday.bounds.end-86400000):'прошлая'):past?businessShortDate(model.yesterday.bounds.start):'вчера';
+ const year=model.period==='year',month=model.period==='month',week=model.period==='week',past=Number(model.dayOffset)<0,pastWeek=week&&Number(model.weekOffset)<0,pastMonth=month&&Number(model.monthOffset)<0,count=year?12:month?Math.max(model.buckets.length,model.yesterday?.buckets?.length||0):week?model.buckets.length:24,currentName=year?String(new Date(model.bounds.start+18000000).getUTCFullYear()):month?(pastMonth?businessShortDate(model.bounds.start):'этот'):week?(pastWeek?businessShortDate(model.bounds.start)+' – '+businessShortDate(model.bounds.end-86400000):'эта'):past?businessShortDate(model.bounds.start):'сегодня',previousName=year?String(new Date(model.yesterday.bounds.start+18000000).getUTCFullYear()):month?(pastMonth?businessShortDate(model.yesterday.bounds.start):'прошлый'):week?(pastWeek?businessShortDate(model.yesterday.bounds.start)+' – '+businessShortDate(model.yesterday.bounds.end-86400000):'прошлая'):past?businessShortDate(model.yesterday.bounds.start):'вчера';
  const values=model.buckets.map(x=>Number(x[field])||0),yesterdayValues=(model.yesterday?.unavailable?[]:model.yesterday?.buckets||[]).map(x=>Number(x[field])||0),scale=businessChartScale([...values,...yesterdayValues]),range=Math.max(1e-9,scale.max-scale.min),toPct=v=>(v-scale.min)/range*100,zeroPct=toPct(0);
  const lines=scale.ticks.map(v=>`<div class="business-grid-line" style="bottom:${toPct(v)}%"></div>`).join('');
  const ticks=scale.ticks.map(v=>`<div class="business-y-tick" style="bottom:${toPct(v)}%">${businessAxisNumber(v)}</div>`).join('');
@@ -301,11 +309,12 @@ function businessPaintChart(model,field){
     todayZ=todayShorter||equal?3:2,yesterdayZ=yesterdayShorter?3:1,
     todayBottom=equal&&v<0?`calc(${bottom}% + 3px)`:`${bottom}%`,
     todayHeight=equal?`calc(${Math.max(0,height)}% - 3px)`:`${Math.max(v===0?0:1.2,height)}%`;
-  const title=model.yesterday?.unavailable?b.label+' · '+currentName+' '+businessMoney(v):month?b.label+' · '+currentName+' '+businessMoney(v)+' · '+previousName+' '+businessMoney(yv):week?b.label+' · '+currentName+' '+businessMoney(v)+' · '+previousName+' '+businessMoney(yv):b.label+':00 · '+currentName+' '+businessMoney(v)+' · '+previousName+' '+businessMoney(yv);
-  return `<div class="business-hour" title="${title}">${model.yesterday?.unavailable?'':`<div class="business-yesterday-bar ${yv<0?'negative':''}" style="bottom:${yBottom}%;height:${Math.max(yv===0?0:1.2,yHeight)}%;z-index:${yesterdayZ}"></div>`}<div class="business-bar ${v<0?'negative':''}" style="bottom:${todayBottom};height:${todayHeight};z-index:${todayZ}"></div></div>`;
+  const missing=x=>year&&(!x||x.unavailable||x.future||field==='buyouts'&&x.financeUnavailable||field==='buyoutProfit'&&x.profitUnavailable||field==='orderProfit'&&x.orderProfitUnavailable),currentMissing=missing(b),previousMissing=model.yesterday?.unavailable||missing(model.yesterday?.buckets?.[i]);
+  const title=currentMissing?b.label+' · '+(b.future?'ещё не наступил':'нет полной истории'):previousMissing?b.label+' · '+currentName+' '+businessMoney(v):year||month?b.label+' · '+currentName+' '+businessMoney(v)+' · '+previousName+' '+businessMoney(yv):week?b.label+' · '+currentName+' '+businessMoney(v)+' · '+previousName+' '+businessMoney(yv):b.label+':00 · '+currentName+' '+businessMoney(v)+' · '+previousName+' '+businessMoney(yv);
+  return `<div class="business-hour" title="${title}">${previousMissing?'':`<div class="business-yesterday-bar ${yv<0?'negative':''}" style="bottom:${yBottom}%;height:${Math.max(yv===0?0:1.2,yHeight)}%;z-index:${yesterdayZ}"></div>`}${currentMissing?(b.future?'':'<span class="business-month-gap" aria-label="Нет полной истории">—</span>'):`<div class="business-bar ${v<0?'negative':''}" style="bottom:${todayBottom};height:${todayHeight};z-index:${todayZ}"></div>`}</div>`;
  }).join('');
- const labels=month?[1,8,15,22,count].filter((d,i,all)=>d>=1&&d<=count&&all.indexOf(d)===i).map(d=>`<div class="business-x-label" style="left:${(d-.5)/count*100}%">${d}</div>`).join(''):week?BUSINESS_WEEKDAYS.map((name,i)=>`<div class="business-x-label" style="left:${(i+.5)/count*100}%">${name}</div>`).join(''):[3,6,9,12,15,18,21,24].map(h=>`<div class="business-x-label" style="left:${h===24?100:((h-.5)/24*100)}%">${String(h).padStart(2,'0')}</div>`).join('');
- box.innerHTML=`<div class="business-chart-legend"><span class="business-legend-today">${currentName}</span>${model.yesterday?.unavailable?'':`<span class="business-legend-yesterday">${previousName}</span>`}</div><div class="business-chart-frame"><div class="business-plot">${lines}<div class="business-bars${month?' month':week?' week':''}"${month?' style="grid-template-columns:repeat('+count+',minmax(0,1fr))"':''}>${bars}</div></div><div class="business-y-axis">${ticks}</div><div class="business-x-axis">${labels}</div><div class="business-axis-caption">₸</div></div>`;
+ const labels=year?BUSINESS_MONTH_NAMES.map((name,i)=>`<div class="business-x-label" style="left:${(i+.5)/12*100}%">${name}</div>`).join(''):month?[1,8,15,22,count].filter((d,i,all)=>d>=1&&d<=count&&all.indexOf(d)===i).map(d=>`<div class="business-x-label" style="left:${(d-.5)/count*100}%">${d}</div>`).join(''):week?BUSINESS_WEEKDAYS.map((name,i)=>`<div class="business-x-label" style="left:${(i+.5)/count*100}%">${name}</div>`).join(''):[3,6,9,12,15,18,21,24].map(h=>`<div class="business-x-label" style="left:${h===24?100:((h-.5)/24*100)}%">${String(h).padStart(2,'0')}</div>`).join('');
+ box.innerHTML=`<div class="business-chart-legend"><span class="business-legend-today">${currentName}</span>${model.yesterday?.unavailable?'':`<span class="business-legend-yesterday">${previousName}</span>`}</div><div class="business-chart-frame"><div class="business-plot">${lines}<div class="business-bars${year?' year':month?' month':week?' week':''}"${month||year?' style="grid-template-columns:repeat('+count+',minmax(0,1fr))"':''}>${bars}</div></div><div class="business-y-axis">${ticks}</div><div class="business-x-axis">${labels}</div><div class="business-axis-caption">₸</div></div>`;
 }
 
 async function businessLoadSummary(days,force=false,range=null){
@@ -406,9 +415,9 @@ function businessOrderEvents(groups,unitMap){return groups.map(g=>{const x=busin
 function businessOrdersBefore(records,cutoff){const x={amount:0,qty:0,profit:0,orderCount:0,coveredAmount:0,coveredQty:0};for(const r of records)for(const e of r.events||[])if(e[0]<cutoff){x.amount+=e[1];x.qty+=e[2];x.profit+=e[3];x.orderCount+=e[4];x.coveredAmount+=e[5];x.coveredQty+=e[6]}return{...x,coverage:x.amount>0?x.coveredAmount/x.amount:1}}
 function businessRecords(bounds){const rows=[];for(let t=bounds.start;t<Math.min(bounds.end,businessDayBounds(0).end);t+=86400000){const row=businessDays.get(t)?.data;if(!row)return null;rows.push(row)}return rows}
 function businessCalendarFromDays(period,offset){const bounds=period==='week'?businessWeekBounds(offset):businessMonthBounds(offset),records=businessRecords(bounds);if(!records)return null;const buckets=businessBuckets(period,bounds);for(const row of records){const bucket=buckets.find(b=>b.start===row.bounds.start);if(bucket){for(const field of ['orders','orderQty','orderProfit'])bucket[field]=row.buckets.reduce((n,h)=>n+(Number(h[field])||0),0);businessCopyBuyouts(bucket,row.buckets)}}const summary=businessCombineSummary(records.map(r=>r.summary)),orders=businessOrdersBefore(records,Infinity);return{period,bounds,buckets,orders,summary,netProfit:summary.profit,hourly:{ozonHourlyComplete:records.every(r=>r.hourly?.ozonHourlyComplete!==false)},pending:records.some(r=>r.pending)}}
-function businessPreviousPoint(previous,period){const origin=period==='month'?businessMonthBounds(0).start:period==='week'?businessWeekBounds(0).start:businessDayBounds(0).start,cutoff=Math.min(previous.bounds.end,previous.bounds.start+Math.max(0,Date.now()-origin)),records=businessRecords(previous.bounds);if(!records)return previous;let revenue=0,qty=0,profit=0;for(const r of records)for(const h of r.buckets){const factor=Math.max(0,Math.min(1,(cutoff-h.start)/(h.end-h.start)));revenue+=(Number(h.buyouts)||0)*factor;qty+=(Number(h.buyoutQty)||0)*factor;profit+=(Number(h.buyoutProfit)||0)*factor}const known=previous.summary.profit!==null,summary={...previous.summary,revenue,qty:Math.round(qty),profit:known?profit:null};return{...previous,bounds:{...previous.bounds,end:cutoff},summary,orders:businessOrdersBefore(records,cutoff),netProfit:summary.profit,comparisonCutoff:cutoff}}
-function businessMissingComparison(period,offset){const bounds=period==='month'?businessMonthBounds(offset):period==='week'?businessWeekBounds(offset):businessDayBounds(offset);return{period,bounds,buckets:businessBuckets(period,bounds),orders:{amount:0,qty:0,profit:0,orderCount:0,coverage:0},summary:{revenue:0,qty:0,profit:null},unavailable:true,pending:false}}
-function businessModelFromDays(period,offset){businessHydrateDays();let current,previous;if(period==='day'){current=businessDays.get(businessDayBounds(offset).start)?.data;previous=businessDays.get(businessDayBounds(offset-1).start)?.data;if(!current)return null}else{current=businessCalendarFromDays(period,offset);previous=businessCalendarFromDays(period,offset-1);if(!current)return null}previous=previous||businessMissingComparison(period,offset-1);return{...current,dayOffset:period==='day'?offset:undefined,weekOffset:period==='week'?offset:undefined,monthOffset:period==='month'?offset:undefined,yesterday:previous,yesterdayCompare:offset===0&&!previous.unavailable?businessPreviousPoint(previous,period):previous,pending:Boolean(current.pending||previous.pending)}}
+function businessPreviousPoint(previous,period,exactCutoff=null){const origin=period==='month'?businessMonthBounds(0).start:period==='week'?businessWeekBounds(0).start:businessDayBounds(0).start,cutoff=exactCutoff===null?Math.min(previous.bounds.end,previous.bounds.start+Math.max(0,Date.now()-origin)):Math.max(previous.bounds.start,Math.min(previous.bounds.end,exactCutoff)),records=businessRecords(previous.bounds);if(!records)return previous;let revenue=0,qty=0,profit=0;for(const r of records)for(const h of r.buckets){const factor=Math.max(0,Math.min(1,(cutoff-h.start)/(h.end-h.start)));revenue+=(Number(h.buyouts)||0)*factor;qty+=(Number(h.buyoutQty)||0)*factor;profit+=(Number(h.buyoutProfit)||0)*factor}const known=previous.summary.profit!==null,summary={...previous.summary,revenue,qty:Math.round(qty),profit:known?profit:null};return{...previous,bounds:{...previous.bounds,end:cutoff},summary,orders:businessOrdersBefore(records,cutoff),netProfit:summary.profit,comparisonCutoff:cutoff}}
+function businessMissingComparison(period,offset){const bounds=businessBounds(period,offset);return{period,bounds,buckets:businessBuckets(period,bounds),orders:{amount:0,qty:0,profit:0,orderCount:0,coverage:0},summary:{revenue:0,qty:0,profit:null},unavailable:true,pending:false}}
+function businessModelFromDays(period,offset){if(period==='year')return null;businessHydrateDays();let current,previous;if(period==='day'){current=businessDays.get(businessDayBounds(offset).start)?.data;previous=businessDays.get(businessDayBounds(offset-1).start)?.data;if(!current)return null}else{current=businessCalendarFromDays(period,offset);previous=businessCalendarFromDays(period,offset-1);if(!current)return null}previous=previous||businessMissingComparison(period,offset-1);return{...current,dayOffset:period==='day'?offset:undefined,weekOffset:period==='week'?offset:undefined,monthOffset:period==='month'?offset:undefined,yesterday:previous,yesterdayCompare:offset===0&&!previous.unavailable?businessPreviousPoint(previous,period):previous,pending:Boolean(current.pending||previous.pending)}}
 function businessYieldUi(){return typeof window.setTimeout==='function'?new Promise(resolve=>window.setTimeout(resolve,0)):Promise.resolve()}
 function businessMakeDay(start,groups,summary=null,preparedSales=null){const bounds={start,end:start+86400000,days:0,label:businessShortDate(start)},selected=groups.filter(g=>Number(g.creationDate)>=start&&Number(g.creationDate)<start+86400000),buckets=businessBuckets('day',bounds),orders=businessEstimateOrders(selected,buckets,window.allMarketUnitProfit30),local=summary?businessLocalBuyouts(bounds,buckets,window.allMarketUnitProfit30,preparedSales):null,hourly=summary?businessNormalizeBuyoutBuckets(buckets,local,summary):{ozonHourlyComplete:false};return{period:'day',bounds,buckets,orders,events:businessOrderEvents(selected,window.allMarketUnitProfit30),local,summary:summary||{revenue:null,qty:null,profit:null},netProfit:summary?.profit??null,hourly,pending:!summary}}
 async function businessLoadDayBase(bounds,force=false,preview=null){businessHydrateDays();const key=bounds.start+':'+bounds.end;if(businessDayJobs.has(key))return businessDayJobs.get(key);for(const [span,job]of businessDayJobs){const [start,end]=span.split(':').map(Number);if(bounds.start>=start&&bounds.end<=end)return job}const task=(async()=>{
@@ -429,7 +438,61 @@ async function businessLoadDayBase(bounds,force=false,preview=null){businessHydr
  })().finally(()=>businessDayJobs.delete(key));businessDayJobs.set(key,task);return task}
 async function businessBuildSharedModel(force,period,offset){const bounds=businessDaysBounds(period,offset),key=businessModelKey(period,offset),selected=period==='month'?businessMonthBounds(offset):period==='week'?businessWeekBounds(offset):businessDayBounds(offset),candidates=[bounds,...(period==='day'?[]:[{start:bounds.start+86400000,end:bounds.end}]),{start:selected.start,end:Math.min(selected.end,businessDayBounds(0).end)}],preview=()=>{if(key===businessModelKey()&&document.getElementById('reports')?.classList.contains('active')){const m=businessModelFromDays(period,offset);if(m){businessPaint(m);businessCacheStatus(key,'updating')}}};for(let i=0;i<candidates.length;i++){try{await businessLoadDayBase(candidates[i],force,preview);break}catch(error){if(!error.businessHistoryPending||i===candidates.length-1)throw error}}const model=businessModelFromDays(period,offset);if(!model)throw Error('Дневная основа ещё не загружена');return model}
 
-async function businessBuildModel(force=false,period=businessPeriod,dayOffset=businessSelectedDayOffset(),weekOffset=businessSelectedWeekOffset(),monthOffset=businessSelectedMonthOffset()){
+function businessYearComparisonCutoff(year){const local=new Date(Date.now()+18000000),day=Math.min(local.getUTCDate(),new Date(Date.UTC(year,local.getUTCMonth()+1,0)).getUTCDate());return Date.UTC(year,local.getUTCMonth(),day,local.getUTCHours(),local.getUTCMinutes(),local.getUTCSeconds())-18000000}
+async function businessLoadYearMonth(bounds,force){
+ const active={start:bounds.start,end:Math.min(bounds.end,businessDayBounds(0).end)},current=businessMonthBounds(0),a=new Date(bounds.start+18000000),b=new Date(current.start+18000000),offset=(a.getUTCFullYear()-b.getUTCFullYear())*12+a.getUTCMonth()-b.getUTCMonth();
+ if(typeof window.loadBusinessMarketplaceDaily==='function'){
+  await businessLoadDayBase(active,force);
+  const month=businessCalendarFromDays('month',offset);
+  if(!month)throw Error('Месячная основа ещё не загружена');
+  return{month,samePoint:a.getUTCMonth()===b.getUTCMonth()?businessPreviousPoint(month,'month',businessYearComparisonCutoff(a.getUTCFullYear())):month};
+ }
+ const history=[...await businessLoadWeekOrderHistory(active,force),...(state.ozonOrderFeed||[]).map(row=>({...row,market:'Ozon'}))];
+ const month=await businessBuildMonthSnapshot(offset,force,null,history);
+ // Without daily records there is no exact same-date financial comparison.
+ return{month,samePoint:null};
+}
+function businessYearFromMonths(bounds,parts){
+ const buckets=businessBuckets('year',bounds),rows=[],orders={amount:0,qty:0,profit:0,orderCount:0,coveredAmount:0,coveredQty:0};let knownMonths=0,expectedMonths=0;
+ for(let i=0;i<12;i++){
+  const bucket=buckets[i];if(bucket.start>=Math.min(Date.now(),bounds.end)){bucket.future=true;continue}expectedMonths++;
+  const month=parts[i];if(!month){bucket.unavailable=true;continue}knownMonths++;rows.push(month.summary);
+  for(const field of ['orders','orderQty','orderProfit'])bucket[field]=month.buckets.reduce((n,b)=>n+(Number(b[field])||0),0);
+  businessCopyBuyouts(bucket,month.buckets);bucket.financeUnavailable=month.pending||month.summary.revenue===null;bucket.profitUnavailable=month.pending||month.summary.profit===null;bucket.orderProfitUnavailable=month.orders.qty>0&&!(month.orders.coverage>0);
+  for(const field of ['amount','qty','profit','orderCount'])orders[field]+=Number(month.orders[field])||0;
+  orders.coveredAmount+=(Number(month.orders.amount)||0)*(Number(month.orders.coverage)||0);
+ }
+ orders.coverage=orders.amount>0?orders.coveredAmount/orders.amount:1;
+ const summary=businessCombineSummary(rows);
+ return{period:'year',bounds,buckets,orders,summary,netProfit:summary.profit,knownMonths,expectedMonths,yearPartial:knownMonths<expectedMonths,unavailable:knownMonths===0,hourly:{ozonHourlyComplete:true},pending:false};
+}
+async function businessBuildYearModel(force,offset,loadMonth=businessLoadYearMonth){
+ const bounds=businessYearBounds(offset),previousBounds=businessYearBounds(offset-1),currentParts=[],previousParts=[],alignedParts=[],key='year:'+bounds.start,currentMonth=new Date(Date.now()+18000000).getUTCMonth(),watchSelection=key===businessModelKey();
+ for(const [span,parts]of [[previousBounds,previousParts],[bounds,currentParts]]){
+  const buckets=businessBuckets('year',span);
+  for(let i=0;i<12;i++){
+   if(buckets[i].start>Date.now())continue;
+   await businessYieldUi();
+   if(watchSelection&&key!==businessModelKey())throw Error('Выбран другой период');
+   try{const loaded=await loadMonth(buckets[i],force);parts[i]=loaded.month;if(span===previousBounds&&i<=currentMonth)alignedParts[i]=i===currentMonth?loaded.samePoint:loaded.month}
+   catch(error){if(!error.businessHistoryPending)console.warn('Годовой отчёт: месяц недоступен',businessIsoDate(buckets[i].start),error)}
+   if(span===bounds&&key===businessModelKey()&&document.getElementById('reports')?.classList.contains('active')){
+    const preview=businessYearFromMonths(bounds,currentParts),previous=businessMissingComparison('year',offset-1);
+    businessPaint({...preview,pending:true,yearOffset:offset,yesterday:previous,yesterdayCompare:previous});businessCacheStatus(key,'updating');
+   }
+  }
+ }
+ const current=businessYearFromMonths(bounds,currentParts),previous=businessYearFromMonths(previousBounds,previousParts);
+ let compare=previous;
+ if(offset===0){
+  const cutoff=businessYearComparisonCutoff(new Date(previousBounds.start+18000000).getUTCFullYear());
+  compare=businessYearFromMonths({...previousBounds,end:cutoff},alignedParts);compare.comparisonCutoff=cutoff;
+ }
+ return{...current,yearOffset:offset,yesterday:previous,yesterdayCompare:compare};
+}
+
+async function businessBuildModel(force=false,period=businessPeriod,dayOffset=businessSelectedDayOffset(),weekOffset=businessSelectedWeekOffset(),monthOffset=businessSelectedMonthOffset(),yearOffset=businessSelectedYearOffset()){
+ if(period==='year')return businessBuildYearModel(force,yearOffset);
  if(typeof window.loadBusinessMarketplaceDaily==='function')return businessBuildSharedModel(force,period,period==='month'?monthOffset:period==='week'?weekOffset:dayOffset);
  const selectedBounds=businessDayBounds(dayOffset),previousBounds=businessDayBounds(dayOffset-1);
  if(force){businessSummaryCache.clear();businessWeekOrderCache.clear()}
@@ -462,9 +525,10 @@ function businessShowSelection(){businessRenderSeq++;businessLastModel=null;busi
 window.shiftBusinessDashboardDay=function(direction){if(businessPeriod!=='day'||![-1,1].includes(direction))return;const current=businessSelectedDayOffset(),next=Math.max(-BUSINESS_DAY_HISTORY,Math.min(0,current+direction));if(next===current)return;businessDayDate=next===0?'':businessIsoDate(businessDayBounds(next).start);return businessShowSelection()};
 window.shiftBusinessDashboardWeek=function(direction){if(businessPeriod!=='week'||![-1,1].includes(direction))return;const current=businessSelectedWeekOffset(),next=Math.max(-BUSINESS_WEEK_HISTORY,Math.min(0,current+direction));if(next===current)return;businessWeekDate=next===0?'':businessIsoDate(businessWeekBounds(next).start);return businessShowSelection()};
 window.shiftBusinessDashboardMonth=function(direction){if(businessPeriod!=='month'||![-1,1].includes(direction))return;const current=businessSelectedMonthOffset(),next=Math.max(-BUSINESS_MONTH_HISTORY,Math.min(0,current+direction));if(next===current)return;businessMonthDate=next===0?'':businessIsoDate(businessMonthBounds(next).start);return businessShowSelection()};
-window.shiftBusinessDashboardSelection=function(direction){return businessPeriod==='month'?window.shiftBusinessDashboardMonth(direction):businessPeriod==='week'?window.shiftBusinessDashboardWeek(direction):window.shiftBusinessDashboardDay(direction)};
+window.shiftBusinessDashboardYear=function(direction){if(businessPeriod!=='year'||![-1,1].includes(direction))return;const current=businessSelectedYearOffset(),next=Math.max(-BUSINESS_YEAR_HISTORY,Math.min(0,current+direction));if(next===current)return;businessYearDate=next===0?'':businessIsoDate(businessYearBounds(next).start);return businessShowSelection()};
+window.shiftBusinessDashboardSelection=function(direction){return businessPeriod==='year'?window.shiftBusinessDashboardYear(direction):businessPeriod==='month'?window.shiftBusinessDashboardMonth(direction):businessPeriod==='week'?window.shiftBusinessDashboardWeek(direction):window.shiftBusinessDashboardDay(direction)};
 window.setBusinessDashboardMetric=function(metric){if(!BUSINESS_METRICS.has(metric))return;businessMetric=metric;businessSaveUi();if(businessLastModel&&businessLastModel.period+':'+businessLastModel.bounds.start===businessModelKey())businessPaint(businessLastModel);else return window.renderBusinessDashboard(false)};
-window.setBusinessDashboardPeriod=function(period){if(!BUSINESS_PERIODS.has(period))return;if(period===businessPeriod&&businessSelectedOffset(period)===0)return;businessPeriod=period;if(period==='day')businessDayDate='';if(period==='week')businessWeekDate='';if(period==='month')businessMonthDate='';return businessShowSelection()};
+window.setBusinessDashboardPeriod=function(period){if(!BUSINESS_PERIODS.has(period))return;if(period===businessPeriod&&businessSelectedOffset(period)===0)return;businessPeriod=period;if(period==='day')businessDayDate='';if(period==='week')businessWeekDate='';if(period==='month')businessMonthDate='';if(period==='year')businessYearDate='';return businessShowSelection()};
 function businessComparison(current,previous){
  if(current===null||current===undefined||previous===null||previous===undefined||!Number.isFinite(Number(current))||!Number.isFinite(Number(previous)))return {html:''};
  const now=Number(current),prev=Number(previous),delta=now-prev,cls=Math.abs(delta)<.005?'flat':delta>0?'up':'down',sign=delta>0?'+':'',pct=prev!==0?delta/Math.abs(prev)*100:null,pctText=pct===null?'':(' · '+(pct>0?'+':'')+Math.round(pct)+'%');
@@ -474,15 +538,15 @@ function businessPaint(model){
  if(model.period==='month'&&model.bounds.start<businessMonthBounds(0).start)model={...model,monthOffset:-1,yesterdayCompare:model.yesterday};
  if(model.period==='week'&&model.bounds.start<businessWeekBounds(0).start)model={...model,weekOffset:-1,yesterdayCompare:model.yesterday};
  if(model.period==='day'&&model.bounds.start<businessDayBounds(0).start)model={...model,dayOffset:-1,yesterdayCompare:model.yesterday};
- businessLastModel=model;if(model?.period&&!model.pending)businessModels.set(model.period+':'+model.bounds.start,model);businessPaintTabs();const week=model.period==='week',month=model.period==='month',past=Number(model.dayOffset)<0,pastWeek=week&&Number(model.weekOffset)<0,pastMonth=month&&Number(model.monthOffset)<0,info=businessMetricInfo(model),full=model.yesterday,same=model.yesterdayCompare||full,fullInfo=full?businessMetricInfo(full):null,sameInfo=same?businessMetricInfo(same):null,
+ businessLastModel=model;if(model?.period&&!model.pending)businessModels.set(model.period+':'+model.bounds.start,model);businessPaintTabs();const year=model.period==='year',week=model.period==='week',month=model.period==='month',past=Number(model.dayOffset)<0,pastWeek=week&&Number(model.weekOffset)<0,pastMonth=month&&Number(model.monthOffset)<0,info=businessMetricInfo(model),full=model.yesterday,same=model.yesterdayCompare||full,fullInfo=full?businessMetricInfo(full):null,sameInfo=same?businessMetricInfo(same):null,
  metric=document.getElementById('businessValueMetric'),label=document.getElementById('businessValueLabel'),value=document.getElementById('businessValue'),meta=document.getElementById('businessValueMeta'),
  yLabel=document.getElementById('businessYesterdayLabel'),yValue=document.getElementById('businessYesterdayValue'),yMeta=document.getElementById('businessYesterdayMeta'),
  compare=document.getElementById('businessYesterdayCompare');
- if(metric)metric.textContent=info.label;if(label)label.textContent=month?businessShortDate(model.bounds.start)+' – '+businessShortDate(Math.min(Date.now(),model.bounds.end-1))+(pastMonth?' · весь месяц':' · этот месяц'):week?businessShortDate(model.bounds.start)+' – '+businessShortDate(Math.min(Date.now(),model.bounds.end-1))+(pastWeek?' · вся неделя':' · эта неделя'):businessShortDate(model.bounds.start)+(past?' · весь день':' · сегодня');if(value)value.textContent=businessMaybeMoney(info.value,Boolean(info.estimated));if(meta)meta.textContent=info.meta;
- if(yLabel)yLabel.textContent=full?(month?businessShortDate(full.bounds.start)+' – '+businessShortDate(full.bounds.end-86400000)+' · весь месяц':week?businessShortDate(full.bounds.start)+' – '+businessShortDate(full.bounds.end-86400000)+' · вся неделя':businessShortDate(full.bounds.start)+' · весь день'):(month?'Прошлый месяц':week?'Прошлая неделя':'Вчера');
+ if(metric)metric.textContent=info.label;if(label)label.textContent=year?new Date(model.bounds.start+18000000).getUTCFullYear()+' · '+(Number(model.yearOffset)<0?'весь год':'этот год'):month?businessShortDate(model.bounds.start)+' – '+businessShortDate(Math.min(Date.now(),model.bounds.end-1))+(pastMonth?' · весь месяц':' · этот месяц'):week?businessShortDate(model.bounds.start)+' – '+businessShortDate(Math.min(Date.now(),model.bounds.end-1))+(pastWeek?' · вся неделя':' · эта неделя'):businessShortDate(model.bounds.start)+(past?' · весь день':' · сегодня');if(value)value.textContent=businessMaybeMoney(info.value,Boolean(info.estimated));if(meta)meta.textContent=info.meta;
+ if(yLabel)yLabel.textContent=full?(year?new Date(full.bounds.start+18000000).getUTCFullYear()+' · весь год':month?businessShortDate(full.bounds.start)+' – '+businessShortDate(full.bounds.end-86400000)+' · весь месяц':week?businessShortDate(full.bounds.start)+' – '+businessShortDate(full.bounds.end-86400000)+' · вся неделя':businessShortDate(full.bounds.start)+' · весь день'):(year?'Прошлый год':month?'Прошлый месяц':week?'Прошлая неделя':'Вчера');
  if(yValue)yValue.textContent=fullInfo?businessMaybeMoney(fullInfo.value,Boolean(fullInfo.estimated)):'—';if(yMeta)yMeta.textContent=fullInfo?fullInfo.meta:'';
  if(compare&&full?.unavailable)compare.textContent='Нет полной истории для сравнения';
- else if(compare){const until=same?businessHourMinute(same.comparisonCutoff||same.bounds.end):'',mark=same?same.comparisonCutoff||same.bounds.end:0,phrase=month?(pastMonth?businessShortDate(full.bounds.start)+' – '+businessShortDate(full.bounds.end-86400000)+' · весь месяц':same?.comparisonCutoff>=full?.bounds?.end?'прошлый месяц целиком':'прошлый до '+new Date(mark+5*3600000).getUTCDate()+' '+until):week?(pastWeek?businessShortDate(full.bounds.start)+' – '+businessShortDate(full.bounds.end-86400000)+' · вся неделя':'прошлая до '+businessWeekdayName(mark)+' '+until):past?businessShortDate(full.bounds.start)+' · весь день':'вчера до '+until;compare.innerHTML=(sameInfo&&!info.incomplete&&!sameInfo.incomplete?businessComparison(info.value,sameInfo.value).html:'')+(until&&sameInfo?'<span class="business-compare-label">'+phrase+' · '+businessMaybeMoney(sameInfo.value,Boolean(sameInfo.estimated))+'</span>':'')}
+ else if(compare){const until=same?businessHourMinute(same.comparisonCutoff||same.bounds.end):'',mark=same?same.comparisonCutoff||same.bounds.end:0,phrase=year?(Number(model.yearOffset)<0?'прошлый год целиком':'прошлый год до '+businessShortDate(mark)+' '+until):month?(pastMonth?businessShortDate(full.bounds.start)+' – '+businessShortDate(full.bounds.end-86400000)+' · весь месяц':same?.comparisonCutoff>=full?.bounds?.end?'прошлый месяц целиком':'прошлый до '+new Date(mark+5*3600000).getUTCDate()+' '+until):week?(pastWeek?businessShortDate(full.bounds.start)+' – '+businessShortDate(full.bounds.end-86400000)+' · вся неделя':'прошлая до '+businessWeekdayName(mark)+' '+until):past?businessShortDate(full.bounds.start)+' · весь день':'вчера до '+until;compare.innerHTML=(sameInfo&&!info.incomplete&&!sameInfo.incomplete?businessComparison(info.value,sameInfo.value).html:'')+(until&&sameInfo?'<span class="business-compare-label">'+phrase+' · '+businessMaybeMoney(sameInfo.value,Boolean(sameInfo.estimated))+'</span>':'')}
  businessPaintChart(model,info.field);
 }
 function businessHydrateModels(){
@@ -511,8 +575,8 @@ function businessStoreOnline(model,revision){
 async function businessResolveModel(force,period,offset,key){
  let online=null;
  try{online=await businessReadOnline(period,Number(key.split(':')[1]));}catch(_){}
- const remote=online?.snapshot;if(remote&&remote.period+':'+remote.bounds?.start===key){const newer=businessModels.get(key)&&Number(businessModelMeta.get(key)?.at)>Number(online.generatedAt),chosen=newer?businessModels.get(key):remote;if(!newer)businessRememberModel(key,remote,online.generatedAt);if(key===businessModelKey()&&document.getElementById('reports')?.classList.contains('active')){businessPaint(chosen);businessCacheStatus(key,online.stale||force?'updating':'ready')}if(!force&&!online.stale){if(typeof window.loadBusinessMarketplaceDaily==='function')return businessBuildSharedModel(false,period,offset);return chosen}}
- const model=await businessBuildModel(force||Boolean(online?.stale&&remote&&typeof window.loadBusinessMarketplaceDaily!=='function'),period,period==='day'?offset:0,period==='week'?offset:0,period==='month'?offset:0);
+ const remote=online?.snapshot;if(remote&&remote.period+':'+remote.bounds?.start===key){const newer=businessModels.get(key)&&Number(businessModelMeta.get(key)?.at)>Number(online.generatedAt),chosen=newer?businessModels.get(key):remote;if(!newer)businessRememberModel(key,remote,online.generatedAt);if(key===businessModelKey()&&document.getElementById('reports')?.classList.contains('active')){businessPaint(chosen);businessCacheStatus(key,online.stale||force?'updating':'ready')}if(!force&&!online.stale){if(period!=='year'&&typeof window.loadBusinessMarketplaceDaily==='function')return businessBuildSharedModel(false,period,offset);return chosen}}
+ const model=await businessBuildModel(force||Boolean(online?.stale&&remote&&typeof window.loadBusinessMarketplaceDaily!=='function'),period,period==='day'?offset:0,period==='week'?offset:0,period==='month'?offset:0,period==='year'?offset:0);
  businessRememberModel(key,model);businessStoreOnline(model,online?.sourceRevision);return model;
 }
 window.renderBusinessDashboard=async function(force=false){
@@ -522,7 +586,7 @@ window.renderBusinessDashboard=async function(force=false){
  const shared=typeof window.loadBusinessMarketplaceDaily==='function'?businessModelFromDays(period,offset):null,cached=shared||businessModels.get(key),metaRow=businessModelMeta.get(key);
  if(cached){businessPaint(cached);businessCacheStatus(key,'updating');if(!force&&!cached.pending&&Date.now()-Number(metaRow?.at||0)<30000&&typeof fetch!=='function'){businessCacheStatus(key);return cached}}
  else{const metric=document.getElementById('businessValueMetric'),label=document.getElementById('businessValueLabel'),value=document.getElementById('businessValue'),meta=document.getElementById('businessValueMeta'),yValue=document.getElementById('businessYesterdayValue'),compare=document.getElementById('businessYesterdayCompare'),chart=document.getElementById('businessChart');
-  if(metric)metric.textContent='Считаю бизнес-показатели…';if(label)label.textContent=businessPeriodBounds().label;if(value)value.textContent='…';if(meta)meta.textContent='';if(yValue)yValue.textContent='…';const yLabel=document.getElementById('businessYesterdayLabel'),yMeta=document.getElementById('businessYesterdayMeta');if(yLabel)yLabel.textContent=period==='month'?'Прошлый месяц':period==='week'?'Прошлая неделя':'Вчера';if(yMeta)yMeta.textContent='';if(compare)compare.innerHTML='';if(chart)chart.innerHTML='';businessCacheStatus(key,'updating');}
+  if(metric)metric.textContent='Считаю бизнес-показатели…';if(label)label.textContent=businessPeriodBounds().label;if(value)value.textContent='…';if(meta)meta.textContent='';if(yValue)yValue.textContent='…';const yLabel=document.getElementById('businessYesterdayLabel'),yMeta=document.getElementById('businessYesterdayMeta');if(yLabel)yLabel.textContent=period==='year'?'Прошлый год':period==='month'?'Прошлый месяц':period==='week'?'Прошлая неделя':'Вчера';if(yMeta)yMeta.textContent='';if(compare)compare.innerHTML='';if(chart)chart.innerHTML='';businessCacheStatus(key,'updating');}
  let job=businessBuildJobs.get(key);if(!job){job=businessResolveModel(force,period,offset,key).finally(()=>{businessBuildJobs.delete(key)});businessBuildJobs.set(key,job)}
  try{const model=await job;if(seq!==businessRenderSeq||key!==businessModelKey())return;businessPaint(model);businessCacheStatus(key);return model}
  catch(error){if(seq!==businessRenderSeq||key!==businessModelKey())return;const pendingHere=businessLastModel?.pending&&businessLastModel.period+':'+businessLastModel.bounds?.start===key?businessLastModel:null;if(cached||pendingHere){const keep=cached||pendingHere;businessPaint(keep);businessCacheStatus(key,'offline');return keep}const label=document.getElementById('businessValueLabel'),value=document.getElementById('businessValue');if(label)label.textContent=error.businessHistoryPending?error.message:'Не удалось посчитать';if(value)value.textContent='—';businessCacheStatus(key,'offline')}

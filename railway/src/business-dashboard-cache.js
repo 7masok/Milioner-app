@@ -9,17 +9,17 @@ function ensureCache(){return ready ||= pool.query(`CREATE TABLE IF NOT EXISTS b
  cache_key TEXT PRIMARY KEY,version TEXT NOT NULL,source_revision TEXT NOT NULL,payload JSONB NOT NULL,generated_at BIGINT NOT NULL
 )`).catch(error=>{ready=null;throw error})}
 export function businessCacheKey(period,start){
- start=Number(start);if(!['day','week','month'].includes(period)||!Number.isFinite(start)||start<1||start!==midnight(start)||start>midnight(Date.now()))return null;
- const d=new Date(start+OFFSET);if(period==='week'&&d.getUTCDay()!==1||period==='month'&&d.getUTCDate()!==1)return null;
- if(start<midnight(Date.now())-400*DAY)return null;return period+':'+start;
+ start=Number(start);if(!['day','week','month','year'].includes(period)||!Number.isFinite(start)||start<1||start!==midnight(start)||start>midnight(Date.now()))return null;
+ const d=new Date(start+OFFSET);if(period==='week'&&d.getUTCDay()!==1||period==='month'&&d.getUTCDate()!==1||period==='year'&&(d.getUTCMonth()!==0||d.getUTCDate()!==1))return null;
+ if(start<midnight(Date.now())-(period==='year'?1200:400)*DAY)return null;return period+':'+start;
 }
 export function validBusinessSnapshot(model,period,start){
  if(!model||model.period!==period||Number(model.bounds?.start)!==Number(start)||!model.yesterday||!model.yesterdayCompare)return false;
  const finite=(o,fields)=>fields.every(k=>typeof o?.[k]==='number'&&Number.isFinite(o[k]));
  const size=JSON.stringify(model).length;if(size>500000)return false;
- function snapshot(x){return x&&Number.isFinite(x.bounds?.start)&&Number.isFinite(x.bounds?.end)&&x.bounds.end>x.bounds.start&&x.bounds.end-x.bounds.start<=32*DAY&&Array.isArray(x.buckets)&&x.buckets.length>0&&x.buckets.length<=31&&finite(x.orders,['amount','qty','profit','orderCount','coverage'])&&finite(x.summary,['revenue','qty'])&&(x.summary.profit===null||typeof x.summary.profit==='number'&&Number.isFinite(x.summary.profit))&&x.buckets.every(b=>Number.isFinite(b.start)&&Number.isFinite(b.end)&&b.end>b.start)}
+ function snapshot(x){return x&&Number.isFinite(x.bounds?.start)&&Number.isFinite(x.bounds?.end)&&x.bounds.end>x.bounds.start&&x.bounds.end-x.bounds.start<=(period==='year'?366:32)*DAY&&Array.isArray(x.buckets)&&x.buckets.length>0&&x.buckets.length<=31&&finite(x.orders,['amount','qty','profit','orderCount','coverage'])&&finite(x.summary,['revenue','qty'])&&(x.summary.profit===null||typeof x.summary.profit==='number'&&Number.isFinite(x.summary.profit))&&x.buckets.every(b=>Number.isFinite(b.start)&&Number.isFinite(b.end)&&b.end>b.start)}
  if(![model,model.yesterday,model.yesterdayCompare].every(snapshot))return false;
- const expected=period==='day'?24:period==='week'?7:new Date(new Date(Number(start)+OFFSET).getUTCFullYear(),new Date(Number(start)+OFFSET).getUTCMonth()+1,0).getDate();
+ const expected=period==='year'?12:period==='day'?24:period==='week'?7:new Date(new Date(Number(start)+OFFSET).getUTCFullYear(),new Date(Number(start)+OFFSET).getUTCMonth()+1,0).getDate();
  if(model.buckets.length!==expected)return false;
  let nodes=0;function safe(v){if(++nodes>100000)return false;if(v===null||typeof v==='boolean')return true;if(typeof v==='number')return Number.isFinite(v);if(typeof v==='string')return v.length<500&&!/[<>&]/.test(v);if(Array.isArray(v))return v.length<5000&&v.every(safe);if(v&&typeof v==='object')return Object.entries(v).every(([k,x])=>!['__proto__','prototype','constructor'].includes(k)&&safe(x));return false}
  return safe(model);
