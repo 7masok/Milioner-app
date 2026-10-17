@@ -1,3 +1,5 @@
+import { plannerRouter } from './ozon-planner/router.js';
+import { startPlannerLoop } from './ozon-planner/service.js';
 import { ozonRouter, startOzonSyncLoop } from './ozon-fbo.js';
 import { ozonPerformanceRouter } from './ozon-performance.js';
 import express from 'express';
@@ -113,6 +115,8 @@ app.post('/api/auth/webauthn/register-options', requireTrustedOrigin, webauthnRe
 app.post('/api/auth/webauthn/register-verify', requireTrustedOrigin, webauthnRegisterVerify);
 app.post('/api/auth/webauthn/login-options', requireTrustedOrigin, webauthnLoginOptions);
 app.post('/api/auth/webauthn/login-verify', requireTrustedOrigin, webauthnLoginVerify);
+// Device tokens are scoped to the planner; warehouse routes keep their session gate.
+app.use('/api/ozon-planner', plannerRouter);
 app.use('/api', requireAppSession);
 registerDeveloperGuideRoutes(app, repositoryRoot);
 app.get('/api/auth/webauthn/credentials', requireTrustedOrigin, listWebauthnCredentials);
@@ -332,6 +336,7 @@ const server = app.listen(config.port, '0.0.0.0', () => {
   setTimeout(()=>verifyBackupRestoreReadiness(),4000).unref();
   setTimeout(()=>logWbHourlyOrders(30),7000).unref();
   startOzonSyncLoop();
+  startPlannerLoop();
   startKaspiSyncLoop();
   startWbSyncLoop();
   startWbPriceSyncLoop();

@@ -1,0 +1,25 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import {collectSnapshot,createOzonReader,parseOzonJson} from '../src/ozon-planner/collector.js';
+import {buildPrepared,emptyConfiguration,validateConfiguration,today} from '../src/ozon-planner/model.js';
+const fixed=Date.parse('2026-10-17T13:00:00Z');
+function fixture({badStock=false,hasNext=false}={}){const calls=[];return {calls,api:async(path,body)=>{calls.push({path,body});switch(path){
+ case '/v3/supply-order/list':return {order_ids:['9007199254740997'],last_id:''};
+ case '/v3/supply-order/get':return {orders:[{order_id:'9007199254740997',state:'IN_TRANSIT',state_updated_date:'2026-10-17',dropoff_warehouse:{warehouse_id:480,name:'Алматы'},timeslot:{timeslot:{from:'2026-10-17T09:00:00Z'},timezone_info:{offset:'+05:00'}},supplies:[{supply_id:'2000069871819',bundle_id:'50',macrolocal_cluster_id:42,state:'IN_TRANSIT',storage_warehouse:{warehouse_id:70,name:'Ростов'},is_crossdock:true}]}]};
+ case '/v1/cargoes/get':return {supply:[{supply_id:'2000069871819',cargoes:[{cargo_id:'5',tracking_info:{date:'2026-10-29',type:'EXPECTED_ARRIVAL',status:'ON_TRANSIT_WAREHOUSE'}}]}]};
+ case '/v1/supply-order/bundle':return {items:[{sku:'4161490186',name:'Малина 24',quantity:5}],has_next:hasNext,last_id:hasNext?'same':''};
+ case '/v1/cluster/list':return {clusters:[{macrolocal_cluster_id:42,name:'Ростов'}]};
+ case '/v3/product/list':return {result:{items:[{sku:'4626428205',offer_id:'Лимон'}],last_id:''}};
+ case '/v1/analytics/stocks':return {items:[{sku:'4161490186',name:'Малина 24',cluster_name:'Ростов',macrolocal_cluster_id:42,available_stock_count:badStock?-1:3,ads_cluster:1}]};
+ default:throw Error('unexpected '+path);
+ }}};}
+test('complete snapshot: supply-only SKU, dates, exact IDs, checkpoint, cached second refresh',async()=>{
+ const {api,calls}=fixture(),cache=new Map(),checkpoints=[];const first=await collectSnapshot(api,{cache,now:()=>fixed,today:'2026-10-17',saveBundle:async(k,v)=>checkpoints.push([k,v])});
+ assert.deepEqual(calls.find(c=>c.path==='/v1/analytics/stocks').body.skus,['4161490186','4626428205']);assert.equal(first.supplies[0].orderId,'9007199254740997');assert.equal(first.supplies[0].arrivalDate,'2026-10-29');assert.equal(first.supplies[0].timeslotLocal,'2026-10-17T14:00:00');assert.equal(first.rows[0].stock,3);assert.equal(checkpoints.length,1);
+ const f=fixture(),second=await collectSnapshot(f.api,{previous:first,cache,now:()=>fixed+1000,today:'2026-10-17'});assert.equal(second.compositionSync.reused,1);assert.equal(f.calls.filter(c=>c.path==='/v1/supply-order/bundle').length,0);assert.ok(f.calls.some(c=>c.path==='/v1/cargoes/get'));assert.ok(f.calls.some(c=>c.path==='/v1/analytics/stocks'));
+});
+test('partial stock or composition cannot publish a partial snapshot',async()=>{for(const options of [{badStock:true},{hasNext:true}])await assert.rejects(collectSnapshot(fixture(options).api,{today:'2026-10-17',now:()=>fixed}));});
+test('long numeric IDs stay exact and unrelated strings remain unchanged',()=>{const p=parseOzonJson('{"order_ids":[9007199254740997],"sku":4161490186,"name":"9007199254740997"}');assert.equal(p.order_ids[0],'9007199254740997');assert.equal(p.sku,4161490186);assert.equal(p.name,'9007199254740997');});
+test('429 respects long Retry-After without blocking and exposes cooldown for persistence',async()=>{let n=1000,calls=0;const api=createOzonReader({clientId:'fixture',apiKey:'fixture'},{now:()=>n,sleep:async(ms)=>{n+=ms;},fetchImpl:async()=>{calls++;return {status:429,ok:false,headers:new Headers({'Retry-After':'60'})};}});await assert.rejects(api('/v1/analytics/stocks',{}),e=>e.retryAt>=61000);assert.equal(calls,1);});
+test('server plan includes road and incoming; aliases survive; stock age does not reset on reread',async()=>{const source=await collectSnapshot(fixture().api,{now:()=>fixed,today:'2026-10-17'}),config=emptyConfiguration();config.productNames={'4161490186':'Своя малина'};const result=buildPrepared(config,source),p=result.plans[0];assert.equal(p.lead,12);assert.equal(p.item.stock,3);assert.equal(result.state.shipments[0].qty,5);assert.equal(result.state.productNames['4161490186'],'Своя малина');if(today()==='2026-10-17'){assert.equal(p.inTransitQty,5);assert.equal(p.qty,28);}const next=buildPrepared(config,{...source,asOf:'2026-10-16'},result.state);assert.equal(next.state.items[0].asOf,'2026-10-16');assert.equal(next.plans[0].stale,true);});
+test('client configuration cannot overwrite the source or ready plan',()=>{const c=validateConfiguration({...emptyConfiguration(),items:[{stock:999}],plans:[{qty:999}],source:{rows:[]}});assert.equal(c.items,undefined);assert.equal(c.plans,undefined);assert.equal(c.source,undefined);assert.throws(()=>validateConfiguration({...emptyConfiguration(),settings:{cover:0,safety:5,ozonFloor:false}}));});
