@@ -1,15 +1,44 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
+import vm from 'node:vm';
 import {initialWbOrderHistory,stepWbOrderHistory,historicalWbOrder,mergeReportingOrders,readWbOrderHistory,syncWbOrderHistory} from '../src/wb-order-history.js';
 const now=Date.parse('2026-10-18T15:10:00Z'),DAY=86400000;
 const order=(extra={})=>({id:101,createdAt:new Date(now-DAY).toISOString(),article:'toy',skus:['barcode'],techSize:'0',currencyCode:643,convertedCurrencyCode:398,price:10000,convertedPrice:60000,...extra});
 const status=(extra={})=>({id:101,supplierStatus:'complete',wbStatus:'sold',...extra});
+test('live archive starts with the legacy migration flag off, isolates shops, and prevents overlapping ticks',async()=>{
+ const source=readFileSync(new URL('../src/wb-order-history.js',import.meta.url),'utf8');
+ let tick,first,release;const calls=[];
+ const context={config:{marketSyncEnabled:false},console:{info(){},warn(){}},
+  setTimeout(fn){first=fn;return{unref(){}}},setInterval(fn){tick=fn;return{unref(){}}},
+  async syncWbOrderHistory(market){calls.push(market);if(market==='WB'){await new Promise(r=>{release=r});throw Error('fixture connection failure')}}};
+ vm.runInNewContext(source.slice(source.indexOf('let timer,running=false;')).replace('export function','function'),context);
+ context.startWbOrderHistoryLoop();const attempt=first();await tick();assert.deepEqual(calls,['WB']);release();await attempt;
+ assert.deepEqual(calls,['WB','WB2']);
+ const next=tick();release();await next;assert.deepEqual(calls,['WB','WB2','WB','WB2']);
+});
 test('backfill scans at most 30 calendar days, newest first, and covers an empty full window',async()=>{
  const s=initialWbOrderHistory(now);assert.ok(s.to-s.from<30*DAY);assert.equal(s.coveredFrom,s.anchor);
  const result=await stepWbOrderHistory(s,{market:'WB',now,fetchPage:async args=>{assert.equal(args.cursor,0);assert.equal(args.to,s.anchor);return{orders:[],next:0}}});
  assert.equal(result.state.coveredFrom,s.from);assert.equal(result.state.to,s.from);assert.equal(result.state.from,s.from-29*DAY);assert.equal(result.state.complete,false);
  assert.equal(s.coveredFrom,s.anchor,'pure step never mutates persisted cursor');
+});
+test('old windows use archived monthly pages with inline statuses and persisted cursors',async()=>{
+ const initial={...initialWbOrderHistory(now),from:Date.parse('2026-01-18T00:00:00Z'),to:Date.parse('2026-02-16T00:00:00Z')};
+ const archiveOrder=(id,date)=>({id,createdAt:date,product:{article:'toy',nmId:1,skus:['barcode']},priceInfo:{currencyCode:643,convertedCurrencyCode:398,convertedPrice:60000},status:status({id,wbStatus:'sold'})});
+ const page=await stepWbOrderHistory(initial,{market:'WB',now,fetchPage:async()=>assert.fail('old window must use archive'),fetchArchive:async args=>{assert.deepEqual(args,{year:2026,month:1,cursor:0});return{orders:[archiveOrder(100,'2026-01-10T10:00:00Z'),archiveOrder(101,'2026-01-20T10:00:00Z')],next:101}}});
+ assert.equal(page.state.coveredFrom,initial.anchor);assert.equal(page.state.phase,'archive');assert.equal(page.rows.length,1);assert.equal(page.rows[0].totalPrice,600);assert.equal(page.rows[0].historyOnly,true);assert.equal(page.state.archiveCursor,101);
+ await assert.rejects(stepWbOrderHistory(page.state,{market:'WB',now,fetchArchive:async()=>({orders:[archiveOrder(101,'2026-01-20T10:00:00Z')],next:101})}),/курсор архива/);
+ const next=await stepWbOrderHistory(JSON.parse(JSON.stringify(page.state)),{market:'WB',now,fetchArchive:async args=>{assert.equal(args.cursor,101);return{orders:[],next:0}}});
+ assert.equal(next.state.archiveMonths[next.state.archiveIndex].month,2);assert.equal(next.state.coveredFrom,initial.anchor);
+ const final=await stepWbOrderHistory(next.state,{market:'WB',now,fetchArchive:async()=>({orders:[archiveOrder(102,'2026-02-10T10:00:00Z')],next:0})});
+ assert.equal(final.state.coveredFrom,initial.from);assert.equal(final.rows[0].orderId,'102');assert.equal(final.state.phase,'orders');
+});
+test('malformed archival status, currency or month does not finish the window',async()=>{
+ const s={...initialWbOrderHistory(now),phase:'archive',from:Date.parse('2026-01-01'),to:Date.parse('2026-01-30'),archiveMonths:[{year:2026,month:1}],archiveIndex:0,archiveCursor:0};
+ const raw={id:101,createdAt:'2026-01-20T10:00:00Z',product:{article:'toy'},priceInfo:{currencyCode:398,price:10000},status:status()};
+ for(const bad of [{...raw,status:{}},{...raw,priceInfo:{currencyCode:643,price:10000}},{...raw,createdAt:'2026-02-01'}])await assert.rejects(stepWbOrderHistory(s,{market:'WB',now,fetchArchive:async()=>({orders:[bad],next:0})}));
+ assert.equal(s.archiveCursor,0);assert.equal(s.coveredFrom,s.anchor);
 });
 test('page and status phases persist separately; coverage advances only after the final page',async()=>{
  const initial=initialWbOrderHistory(now);
@@ -84,4 +113,10 @@ test('report-only orders route includes archive and checked coverage; ordinary f
   const report=await invoke('1');assert.equal(report.orders.length,2);assert.equal(report.orders.find(r=>r.market==='WB').totalPrice,900);assert.equal(report.historyCoverage.find(r=>r.market==='WB').from,now-60*DAY);
   const normal=await invoke(undefined);assert.equal(normal.orders.length,1);assert.equal(archiveReads,1);
  }finally{pool.query=prior}
+});
+
+test('empty recent endpoint at the retention edge waits for archive before declaring coverage',async()=>{
+ const s={...initialWbOrderHistory(now),from:now-88*DAY,to:now-61*DAY};
+ const live=await stepWbOrderHistory(s,{market:'WB',now,fetchPage:async()=>({orders:[],next:0})});
+ assert.equal(live.state.coveredFrom,s.anchor);assert.equal(live.state.phase,'archive');
 });

@@ -255,10 +255,14 @@ async function businessLoadFinanceHistory(force=false){
   const parts=[finance.status==='fulfilled'?businessFinanceHistoryText(finance.value.markets):'Статус финансовых отчётов WB временно недоступен'];
   if(orders.status==='fulfilled')for(const row of orders.value.markets||[]){
    const name=row.market==='WB'?'WB1':row.market,date=row.from?new Date(row.from).toLocaleDateString('ru-RU',{timeZone:'Asia/Almaty'}):'';
-   parts.push(name+': история заказов '+(row.status==='complete'?'загружена':row.status==='retry'?'ожидает повтора':'догружается')+' · '+Number(row.rows||0)+' заказов'+(date?' · проверено с '+date:'')+(row.error?' · '+row.error:''));
+   const next=Number(row.nextAllowedAt)>Date.now()?' · следующая попытка '+new Date(Number(row.nextAllowedAt)).toLocaleString('ru-RU',{timeZone:'Asia/Almaty',day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit'}):'';
+   parts.push(name+': история заказов '+(row.status==='complete'?'загружена':row.status==='retry'?'ожидает повтора':row.status==='pending'?'ожидает запуска':'догружается')+' · '+Number(row.rows||0)+' заказов'+(date?' · проверено с '+date:'')+(row.error?' · '+row.error:'')+next);
   }
   else parts.push('Статус истории заказов WB временно недоступен');
-  el.textContent=parts.filter(Boolean).join(' · ');businessFinanceHistoryAt=Date.now();
+  const open=Boolean(el.querySelector('details')?.open),details=document.createElement('details'),summary=document.createElement('summary'),body=document.createElement('div');
+  const rows=[...(finance.status==='fulfilled'?finance.value.markets||[]:[]),...(orders.status==='fulfilled'?orders.value.markets||[]:[])];
+  summary.textContent=(finance.status!=='fulfilled'||orders.status!=='fulfilled'?'Статус истории WB недоступен':rows.some(r=>r.status==='retry')?'Загрузка истории WB ожидает повтора':rows.length===4&&rows.every(r=>r.status==='complete')?'Архив WB загружен':rows.some(r=>r.status==='pending')?'История WB ожидает загрузки':'История WB загружается')+' · Подробности';
+  body.textContent=parts.filter(Boolean).join('\n');body.style.whiteSpace='pre-line';body.style.marginTop='8px';details.open=open;details.append(summary,body);el.replaceChildren(details);businessFinanceHistoryAt=Date.now();
  }catch{el.textContent='Статус загрузки истории WB временно недоступен'}
  finally{businessFinanceHistoryLoading=false}
 }
