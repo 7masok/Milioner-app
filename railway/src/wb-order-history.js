@@ -7,6 +7,18 @@ import {asyncRoute,requireTrustedOrigin} from './http.js';
 const DAY=86400000,SLOT=60000,API='https://marketplace-api.wildberries.ru';
 const object=v=>{if(v&&typeof v==='object')return v;try{return JSON.parse(v||'{}')}catch{return {}}};
 const text=v=>String(v??'').trim();
+export function parseWbHistoryPage(body){
+ // WB cursors are int64 and may exceed JavaScript's exact integer range.
+ // Quote only the integer next field before JSON.parse can round its digits.
+ return JSON.parse(body.replace(/("next"\s*:\s*)(-?\d{16,})(?=\s*[,}])/g,'$1"$2"'));
+}
+function pageCursor(value,current,count,scope){
+ const raw=String(value),valid=(typeof value==='string'||(typeof value==='number'&&Number.isSafeInteger(value)))&&/^\d+$/.test(raw);
+ if(!valid||BigInt(raw)>9223372036854775807n||(count&&BigInt(raw)!==0n&&BigInt(raw)<=BigInt(current))){
+  const error=Error('WB вернул некорректный курсор '+scope);error.cursorInfo={type:typeof value,value:raw.slice(0,80),current:String(current),count};throw error;
+ }
+ return BigInt(raw)<=BigInt(Number.MAX_SAFE_INTEGER)?Number(raw):raw;
+}
 export function initialWbOrderHistory(now){
  const anchor=Math.floor(now/1000)*1000,goal=Math.floor((now+18000000)/DAY)*DAY-18000000-364*DAY;
  return {version:2,anchor,goal,coveredFrom:anchor,from:Math.max(goal,anchor-29*DAY),to:anchor,cursor:0,phase:'orders',pending:[],rows:0,complete:false,nextAllowedAt:0,lastError:''};
@@ -59,8 +71,7 @@ export async function stepWbOrderHistory(input,{market,fetchPage,fetchStatuses,f
  if(state.phase==='archive'){
   const month=state.archiveMonths[state.archiveIndex],data=await fetchArchive({...month,cursor:state.archiveCursor});
   if(!Array.isArray(data?.orders)||data.orders.length>1000)throw Error('WB вернул неполную страницу архива');
-  const next=Number(data.next);
-  if(!Number.isSafeInteger(next)||next<0||(data.orders.length&&next!==0&&next<=state.archiveCursor))throw Error('WB вернул некорректный курсор архива');
+  const next=pageCursor(data.next,state.archiveCursor,data.orders.length,'архива');
   for(const raw of data.orders){
    const at=Date.parse(raw.createdAt),date=new Date(at);
    if(!(at>0)||date.getUTCFullYear()!==month.year||date.getUTCMonth()+1!==month.month)throw Error('WB вернул архивные заказы за пределами месяца');
@@ -73,8 +84,7 @@ export async function stepWbOrderHistory(input,{market,fetchPage,fetchStatuses,f
  }else if(state.phase==='orders'){
   const data=await fetchPage({from:state.from,to:state.to,cursor:state.cursor});
   if(!Array.isArray(data?.orders)||data.orders.length>1000)throw Error('WB вернул неполную страницу истории');
-  const next=Number(data.next);
-  if(!Number.isSafeInteger(next)||next<0||(data.orders.length&&next!==0&&next<=state.cursor))throw Error('WB вернул некорректный курсор истории');
+  const next=pageCursor(data.next,state.cursor,data.orders.length,'истории');
   const pending=data.orders.map(compactOrder);
   if(pending.some(o=>!Number.isSafeInteger(Number(o.id))||Number(o.id)<=0||!(Date.parse(o.createdAt)>=state.from&&Date.parse(o.createdAt)<=state.to)))throw Error('WB вернул заказы за пределами запрошенного периода');
   if(!pending.length)finishLiveWindow(state,now);
@@ -111,7 +121,7 @@ export async function syncWbOrderHistory(market,{client=pool,token,fetcher=fetch
   const request=async(path,body)=>{
    const response=await fetcher(API+path,{method:body?'POST':'GET',headers:{Authorization:token,Accept:'application/json',...(body?{'Content-Type':'application/json'}:{})},...(body?{body:JSON.stringify(body)}:{}),signal:AbortSignal.timeout(25000)});
    if(!response.ok){const error=Error('WB история заказов: HTTP '+response.status);error.retryAt=retryAt(response.headers,now);throw error;}
-   return response.json();
+   return parseWbHistoryPage(await response.text());
   };
   const result=await stepWbOrderHistory(state,{market,now,
    fetchPage:({from,to,cursor})=>request('/api/v3/orders?'+new URLSearchParams({limit:'1000',next:String(cursor),dateFrom:String(Math.floor(from/1000)),dateTo:String(Math.floor(to/1000))})),
@@ -130,7 +140,7 @@ export async function syncWbOrderHistory(market,{client=pool,token,fetcher=fetch
   await db.query('ROLLBACK').catch(()=>{});
   state=recovery||state;
   if(state){state.lastError=/^WB /.test(error.message)?error.message:'Не удалось догрузить историю заказов WB';state.nextAllowedAt=Math.max(now+5*60000,Number(error.retryAt)||0);await persist();}
-  console.warn('WB order history retry',JSON.stringify({market,error:state?.lastError||'Не удалось запустить архив заказов WB',nextAllowedAt:state?.nextAllowedAt||0}));
+  console.warn('WB order history retry',JSON.stringify({market,error:state?.lastError||'Не удалось запустить архив заказов WB',nextAllowedAt:state?.nextAllowedAt||0,...(error.cursorInfo?{cursor:error.cursorInfo}:{})}));
  }finally{if(locked)await db.query('SELECT pg_advisory_unlock(730146,hashtext($1))',[market]).catch(()=>{});db.release()}
 }
 export async function readWbOrderHistory(client,after,before,market,limit){

@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
 import vm from 'node:vm';
-import {initialWbOrderHistory,stepWbOrderHistory,historicalWbOrder,mergeReportingOrders,readWbOrderHistory,syncWbOrderHistory} from '../src/wb-order-history.js';
+import {initialWbOrderHistory,stepWbOrderHistory,historicalWbOrder,mergeReportingOrders,readWbOrderHistory,syncWbOrderHistory,parseWbHistoryPage} from '../src/wb-order-history.js';
 const now=Date.parse('2026-10-18T15:10:00Z'),DAY=86400000;
 const order=(extra={})=>({id:101,createdAt:new Date(now-DAY).toISOString(),article:'toy',skus:['barcode'],techSize:'0',currencyCode:643,convertedCurrencyCode:398,price:10000,convertedPrice:60000,...extra});
 const status=(extra={})=>({id:101,supplierStatus:'complete',wbStatus:'sold',...extra});
@@ -94,7 +94,7 @@ test('worker persists cooldown before network and preserves cursor/retry across 
 });
 test('failed archive insert rolls back without acknowledging a page or advancing its cursor',async()=>{
  const initial=initialWbOrderHistory(now),page=await stepWbOrderHistory(initial,{market:'WB',now,fetchPage:async()=>({orders:[order()],next:101})}),client=database(page.state);client.fail();
- await syncWbOrderHistory('WB',{client,token:'fixture',now:now+60000,fetcher:async()=>({ok:true,json:async()=>({orders:[status()]}),headers:new Headers()})});
+ await syncWbOrderHistory('WB',{client,token:'fixture',now:now+60000,fetcher:async()=>({ok:true,text:async()=>JSON.stringify({orders:[status()]}),headers:new Headers()})});
  assert.equal(client.state().phase,'statuses');assert.equal(client.state().cursor,0);assert.equal(client.state().pending.length,1);assert.equal(client.state().rows,0);assert.ok(client.queries.some(q=>q.sql==='ROLLBACK'));
 });
 test('report-only orders route includes archive and checked coverage; ordinary feed stays isolated',async()=>{
@@ -119,4 +119,20 @@ test('empty recent endpoint at the retention edge waits for archive before decla
  const s={...initialWbOrderHistory(now),from:now-88*DAY,to:now-61*DAY};
  const live=await stepWbOrderHistory(s,{market:'WB',now,fetchPage:async()=>({orders:[],next:0})});
  assert.equal(live.state.coveredFrom,s.anchor);assert.equal(live.state.phase,'archive');
+});
+
+
+test('int64 pagination retains exact digits through parsing, persistence and the next request',async()=>{
+ const cursor='9223372036854775800';
+ const data=parseWbHistoryPage('{"next":'+cursor+',"orders":'+JSON.stringify([order()])+'}');
+ assert.equal(data.next,cursor);
+ const first=await stepWbOrderHistory(initialWbOrderHistory(now),{market:'WB',now,fetchPage:async()=>data});
+ const saved=await stepWbOrderHistory(JSON.parse(JSON.stringify(first.state)),{market:'WB',now,fetchStatuses:async()=>({orders:[status()]})});
+ assert.equal(saved.state.cursor,cursor);
+ const last=await stepWbOrderHistory(saved.state,{market:'WB',now,fetchPage:async args=>{assert.equal(args.cursor,cursor);return{orders:[],next:0}}});
+ assert.equal(last.state.coveredFrom,first.state.from);
+ const s={...first.state,phase:'archive',from:Date.parse('2026-01-01'),to:Date.parse('2026-01-30'),archiveMonths:[{year:2026,month:1}],archiveIndex:0,archiveCursor:0};
+ const archived={id:101,createdAt:'2026-01-20T10:00:00Z',product:{article:'toy'},priceInfo:{currencyCode:398,price:10000},status:status()};
+ const a=await stepWbOrderHistory(s,{market:'WB',now,fetchArchive:async()=>({orders:[archived],next:cursor})});
+ assert.equal(a.state.archiveCursor,cursor);
 });
