@@ -403,7 +403,7 @@ test('WB night price schedule is persisted, bulk-configurable and reuses the 15-
   assert.match(wbNightMigration,/CREATE TABLE IF NOT EXISTS wb_price_schedules/);
   assert.match(wbNightMigration,/status IN \('pending','sent','held'\)/);
   assert.match(api,/ALMATY_OFFSET_MS = 5 \* 60 \* 60 \* 1000/);
-  assert.match(api,/export function wbNightWindowState\(startMinute, endMinute, now = Date\.now\(\)\)/);
+  assert.match(api,/export function wbNightWindowState\(startMinute, endMinute, now = Date\.now\(\), weekdays\)/);
   assert.match(api,/async function syncWbNightSchedules\(market, now = Date\.now\(\)\)/);
   assert.match(api,/await syncWbNightSchedules\(market, now\)/);
   assert.match(api,/source='schedule'/);

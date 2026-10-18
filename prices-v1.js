@@ -235,6 +235,7 @@ function priceInlineEditor(row,index){
       '<div class="price-night-row"><label class="price-promo-toggle"><input id="priceNightEnabled" type="checkbox" '+(row.nightPriceEnabled?'checked':'')+' '+(priceDisabled?'disabled':'')+'>Ночь</label>'+
       '<div class="field"><label>Ночная цена, '+pEsc(row.currency||'RUB')+'</label><input id="priceNightCardValue" type="number" min="1" step="1" inputmode="decimal" value="'+pEsc(pNum(row.nightPriceTarget)||'')+'" '+(priceDisabled?'disabled':'')+'></div></div>'+
       '<div class="price-night-times"><div class="field"><label>С · Алматы</label><input id="priceNightCardStart" type="time" value="'+pEsc(row.nightPriceStart||'04:00')+'"></div><div class="field"><label>До</label><input id="priceNightCardEnd" type="time" value="'+pEsc(row.nightPriceEnd||'06:00')+'"></div><button type="button" class="btn" onclick="savePriceCardNight('+Number(index)+',document.getElementById(\'priceNightEnabled\').checked)">Сохранить ночь</button></div>'+
+      priceNightDaysPicker('priceNightCardDays',row.nightPriceWeekdays)+
       '<div class="muted">Возврат: '+pMoney(ordinary,row.currency)+' до скидки</div>'+
       (priceDisabled?'<div class="price-inline-warning">Разные цены по размерам · меняется только скидка</div>':'')+
       '<details class="price-advanced"><summary>Защита</summary><div class="price-protection-grid">'+
@@ -290,7 +291,7 @@ function priceCard(row,index){
       row.promoEnabled?'Подбирает условия акции':'Участие проверяйте в WB')+'</span>'
     :'';
   const night=(row.market==='WB'||row.market==='WB2')&&(row.nightPriceEnabled||row.nightPricePhase==='restoring')
-    ?'<span class="price-night-badge"> · 🌙 '+pEsc(row.nightPriceStart||'04:00')+'–'+pEsc(row.nightPriceEnd||'06:00')+' · '+pMoney(row.nightPriceTarget,row.currency)+' · '+pEsc(({idle:'Запланировано',raising:'Устанавливается',active:'Установлена',restoring:'Возвращается',manual:'Ручная цена',locked:'Защита',off:'Выключено',error:'Ошибка'})[row.nightPricePhase]||'Запланировано')+(row.nightPriceError?' · '+pEsc(row.nightPriceError):'')+'</span>'
+    ?'<span class="price-night-badge"> · 🌙 '+pEsc(priceNightDaysLabel(row.nightPriceWeekdays))+' · '+pEsc(row.nightPriceStart||'04:00')+'–'+pEsc(row.nightPriceEnd||'06:00')+' · '+pMoney(row.nightPriceTarget,row.currency)+' · '+pEsc(({idle:'Запланировано',raising:'Устанавливается',active:'Установлена',restoring:'Возвращается',manual:'Ручная цена',locked:'Защита',off:'Выключено',error:'Ошибка'})[row.nightPricePhase]||'Запланировано')+(row.nightPriceError?' · '+pEsc(row.nightPriceError):'')+'</span>'
     :'';
   const discountBlock=row.promoBlocked?'<span class="price-lock-badge"> · Скидки заблокированы · 0%</span>':'';
   const protection=row.priceProtected?'<span class="price-lock-badge"> · 🔒 '+pEsc(row.protectionReason||'Защита цены')+'</span>':'';
@@ -781,6 +782,13 @@ async function remoteNightSchedule(body){
   if(!response.ok||data?.ok===false)throw new Error(data?.error||('HTTP '+response.status));
   return data;
 }
+function priceNightWeekdays(value){return Array.isArray(value)?value:[1,2,3,4,5,6,7];}
+function priceNightDaysLabel(value){const days=priceNightWeekdays(value),names=['Пн','Вт','Ср','Чт','Пт','Сб','Вс'];return days.length===7?'Ежедневно':days.map(day=>names[day-1]).join(', ');}
+function priceNightDaysPicker(id,value){
+  const selected=priceNightWeekdays(value);
+  return '<style>.price-night-days{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:5px}.price-night-day{display:flex;align-items:center;justify-content:center;min-height:42px;border:1px solid #e3e3e3;border-radius:12px;cursor:pointer;font-size:14px;position:relative}.price-night-day:has(input:checked){background:#111;color:#fff;border-color:#111}.price-night-day input{position:absolute;opacity:0;width:1px;height:1px}.price-night-day:focus-within{outline:2px solid #218838;outline-offset:2px}</style><fieldset id="'+id+'" style="border:0;padding:0;margin:10px 0 14px"><legend class="muted" style="margin-bottom:7px">Дни начала · Алматы</legend><div class="price-night-days">'+['Пн','Вт','Ср','Чт','Пт','Сб','Вс'].map((name,i)=>'<label class="price-night-day"><input type="checkbox" value="'+(i+1)+'" '+(selected.includes(i+1)?'checked':'')+' aria-label="'+name+'"><span>'+name+'</span></label>').join('')+'</div><small class="muted">Через полночь — день начала ночи.</small></fieldset>';
+}
+function readPriceNightWeekdays(id,fallback){const box=document.getElementById(id);return box?[...box.querySelectorAll('input:checked')].map(el=>Number(el.value)):priceNightWeekdays(fallback);}
 window.savePriceCardNight=async function(index,enabled){
   const row=activeRows()[Number(index)];
   if(!row||(row.market!=='WB'&&row.market!=='WB2'))return;
@@ -792,12 +800,15 @@ window.savePriceCardNight=async function(index,enabled){
     return;
   }
   const start=String(document.getElementById('priceNightCardStart')?.value||row.nightPriceStart||'04:00'),end=String(document.getElementById('priceNightCardEnd')?.value||row.nightPriceEnd||'06:00');
+  const weekdays=readPriceNightWeekdays('priceNightCardDays',row.nightPriceWeekdays);
+  if(enabled&&!weekdays.length)return alert('Выберите хотя бы один день недели.');
   try{
-    const result=await remoteNightSchedule({market:row.market,remoteIds:[row.remoteId],enabled:Boolean(enabled),start,end,price:price>0?price:0});
+    const result=await remoteNightSchedule({market:row.market,remoteIds:[row.remoteId],enabled:Boolean(enabled),start,end,weekdays:weekdays.length?weekdays:priceNightWeekdays(row.nightPriceWeekdays),price:price>0?price:0});
     const schedule=(result.schedules||[]).find(item=>String(item.nmId||'')===String(row.remoteId||''));
     if(!schedule)throw new Error('Расписание не сохранено: товар защищён или недоступен');
     row.nightPriceEnabled=Boolean(schedule.enabled);
     if(schedule){
+      row.nightPriceWeekdays=priceNightWeekdays(schedule.weekdays);
       row.nightPriceStart=priceMinuteTime(schedule.startMinute);
       row.nightPriceEnd=priceMinuteTime(schedule.endMinute);
       row.nightPriceTarget=Number(schedule.targetPrice)||null;
@@ -821,8 +832,9 @@ window.openPriceNightSchedule=function(){
   const start=String(first.nightPriceStart||'04:00'),end=String(first.nightPriceEnd||'06:00'),price=pNum(first.nightPriceTarget)||'';
   const activeCount=configured.length;
   showSheet('<div class="price-night-sheet"><h3>Ночная цена · '+ids.length+'</h3>'+
-    '<div class="muted">Каждый день · время Алматы · возврат к своей обычной цене</div><div class="two"><div class="field"><label>С</label><input id="priceNightStart" type="time" value="'+pEsc(start)+'"></div>'+
+    '<div class="muted">Время Алматы · возврат к своей обычной цене</div><div class="two"><div class="field"><label>С</label><input id="priceNightStart" type="time" value="'+pEsc(start)+'"></div>'+
     '<div class="field"><label>До</label><input id="priceNightEnd" type="time" value="'+pEsc(end)+'"></div></div>'+
+    priceNightDaysPicker('priceNightDays',first.nightPriceWeekdays)+
     '<div class="field"><label>Ночная цена до скидки, ₽</label><input id="priceNightValue" type="number" min="1" step="1" inputmode="decimal" value="'+pEsc(price)+'"></div>'+
     '<div class="actions"><button type="button" class="btn" onclick="savePriceNightSchedule(false)" '+(activeCount?'':'disabled')+'>Выключить</button>'+
     '<button type="button" class="btn dark" onclick="savePriceNightSchedule(true)">Сохранить</button></div></div>');
@@ -835,8 +847,10 @@ window.savePriceNightSchedule=async function(enabled){
   const price=Number(document.getElementById('priceNightValue')?.value);
   if(enabled&&(!/^\d{2}:\d{2}$/.test(start)||!/^\d{2}:\d{2}$/.test(end)||start===end))return alert('Укажите корректное время.');
   if(enabled&&!(price>0))return alert('Укажите цену больше 0.');
+  const weekdays=readPriceNightWeekdays('priceNightDays');
+  if(enabled&&!weekdays.length)return alert('Выберите хотя бы один день недели.');
   try{
-    const result=await remoteNightSchedule({market:ctx.market,remoteIds:ids,enabled:Boolean(enabled),start,end,price});
+    const result=await remoteNightSchedule({market:ctx.market,remoteIds:ids,enabled:Boolean(enabled),start,end,price,...(weekdays.length?{weekdays}:{})});
     const schedules=result.schedules||[],applied=new Set(schedules.map(row=>String(row.nmId)));
     for(const id of applied)priceSelection(ctx.market).delete(id);
     closeModal();bumpPriceEpoch(ctx.market);
