@@ -69,7 +69,7 @@ test('bulk exit enables block even during upload; enter clears it and SQL failur
   pool.connect=async()=>client;
   const invoke=async action=>{
     let status=200,result;
-    await handler({body:{market:'WB',remoteIds:['1'],action,discount:action==='exit'?0:20,confirm:true}},
+    await handler({body:{market:'WB',remoteIds:['1'],action,discount:action==='exit'?0:20,confirm:true,overrideProtection:true,overrideRemoteIds:['1']}},
       {status(n){status=n;return this;},json(v){result=v;return this;}},e=>{throw e;});
     return {status,result};
   };

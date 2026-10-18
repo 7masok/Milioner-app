@@ -385,7 +385,7 @@ test('WB night price restore stays below the configured 2x category quarantine t
   assert.match(api,/function isWbGradualReductionError\(value\)/);
   assert.match(api,/more than\.\*twice/);
   assert.match(api,/!isWbGradualReductionError\(schedule\.lastError\)/);
-  assert.match(api,/queueSchedulePrice\(market, schedule\.nmId, restoreTarget\)/);
+  assert.match(api,/queueSchedulePrice\(market, schedule\.nmId, restoreTarget, pool, protectedDiscount\)/);
 });
 
 test('WB price sync verifies upload details before retrying a rejected update',()=> {

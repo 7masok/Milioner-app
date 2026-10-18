@@ -515,7 +515,7 @@ async function wbPriceQueueRows(market, client = pool) {
 
 async function wbPriceSchedules(market, client = pool) {
   const result = await client.query(`SELECT market,nm_id AS "nmId",enabled,start_minute AS "startMinute",
-    end_minute AS "endMinute",weekdays,target_price AS "targetPrice",base_price AS "basePrice",
+    end_minute AS "endMinute",weekdays,protection_override AS "protectionOverride",target_price AS "targetPrice",base_price AS "basePrice",
     window_key AS "windowKey",manual_override_window AS "manualOverrideWindow",phase,
     last_error AS "lastError",updated_at AS "updatedAt"
     FROM wb_price_schedules WHERE market=$1 ORDER BY nm_id`, [market]);
@@ -524,6 +524,7 @@ async function wbPriceSchedules(market, client = pool) {
     nmId: String(row.nmId || ''),
     enabled: Boolean(row.enabled),
     weekdays: normalizeWbNightWeekdays(row.weekdays),
+    protectionOverride: Boolean(row.protectionOverride),
     startMinute: Number(row.startMinute || 0),
     endMinute: Number(row.endMinute || 0),
     targetPrice: Number(row.targetPrice || 0),
@@ -542,6 +543,7 @@ function decorateWbNightSchedules(rows, schedules) {
     const row = { ...raw };
     const schedule = byNm.get(String(row.remoteId || ''));
     row.nightPriceEnabled = Boolean(schedule?.enabled);
+    row.nightProtectionOverride = Boolean(schedule?.protectionOverride);
     row.nightPriceWeekdays = normalizeWbNightWeekdays(schedule?.weekdays);
     row.nightPriceStart = schedule ? minuteToTime(schedule.startMinute) : '04:00';
     row.nightPriceEnd = schedule ? minuteToTime(schedule.endMinute) : '06:00';
@@ -553,26 +555,26 @@ function decorateWbNightSchedules(rows, schedules) {
   });
 }
 
-async function queueSchedulePrice(market, nmId, price, client = pool) {
+async function queueSchedulePrice(market, nmId, price, client = pool, protectedDiscount = null) {
   const now = Date.now();
   const result = await client.query(`INSERT INTO wb_price_update_queue
     (market,nm_id,desired_price,desired_discount,status,queued_at,sent_at,upload_id,last_error,updated_at,source,promotion_id)
-    VALUES($1,$2,$3,NULL,'pending',$4,0,0,'',$4,'schedule',0)
-    ON CONFLICT(market,nm_id) DO UPDATE SET desired_price=excluded.desired_price,desired_discount=NULL,
+    VALUES($1,$2,$3,$5,'pending',$4,0,0,'',$4,'schedule',0)
+    ON CONFLICT(market,nm_id) DO UPDATE SET desired_price=excluded.desired_price,desired_discount=excluded.desired_discount,
       status='pending',queued_at=excluded.queued_at,sent_at=0,upload_id=0,last_error='',
       updated_at=excluded.updated_at,source='schedule',promotion_id=0
-    WHERE wb_price_update_queue.source NOT IN ('manual','protection')`, [market, nmId, Number(price), now]);
+    WHERE wb_price_update_queue.source NOT IN ('manual','protection')`, [market, nmId, Number(price), now, protectedDiscount]);
   return Number(result.rowCount || 0) > 0;
 }
 
-async function holdSchedulePrice(market, nmId, price, client = pool) {
+async function holdSchedulePrice(market, nmId, price, client = pool, protectedDiscount = null) {
   const now = Date.now();
   const result = await client.query(`INSERT INTO wb_price_update_queue
     (market,nm_id,desired_price,desired_discount,status,queued_at,sent_at,upload_id,last_error,updated_at,source,promotion_id)
-    VALUES($1,$2,$3,NULL,'held',$4,0,0,'',$4,'schedule',0)
-    ON CONFLICT(market,nm_id) DO UPDATE SET desired_price=excluded.desired_price,desired_discount=NULL,
+    VALUES($1,$2,$3,$5,'held',$4,0,0,'',$4,'schedule',0)
+    ON CONFLICT(market,nm_id) DO UPDATE SET desired_price=excluded.desired_price,desired_discount=excluded.desired_discount,
       status='held',last_error='',updated_at=excluded.updated_at,source='schedule',promotion_id=0
-    WHERE wb_price_update_queue.source NOT IN ('manual','protection')`, [market, nmId, Number(price), now]);
+    WHERE wb_price_update_queue.source NOT IN ('manual','protection')`, [market, nmId, Number(price), now, protectedDiscount]);
   return Number(result.rowCount || 0) > 0;
 }
 
@@ -616,7 +618,7 @@ async function syncWbNightSchedules(market, now = Date.now()) {
       continue;
     }
     if (schedule.phase === 'error' && schedule.lastError && !isWbGradualReductionError(schedule.lastError) && !(Number(schedule.basePrice) > 0)) continue;
-    if (row.priceProtected) {
+    if (row.priceProtected && !schedule.protectionOverride) {
       const phase = Number(schedule.basePrice) > 0 ? 'restoring' : 'locked';
       if (schedule.phase !== phase || schedule.lastError) {
         await pool.query(`UPDATE wb_price_schedules SET phase=$3,last_error='',updated_at=$4 WHERE market=$1 AND nm_id=$2`,
@@ -624,6 +626,7 @@ async function syncWbNightSchedules(market, now = Date.now()) {
       }
       continue;
     }
+    const protectedDiscount = schedule.protectionOverride && row.priceProtected && row.lockedDiscount != null ? clampDiscount(row.lockedDiscount) : null;
     const confirmedPrice = number(row.price);
     const window = wbNightWindowState(schedule.startMinute, schedule.endMinute, now, schedule.weekdays);
     let queueRow = queueByNm.get(schedule.nmId);
@@ -646,7 +649,7 @@ async function syncWbNightSchedules(market, now = Date.now()) {
       }
       const previousRestoreTarget = wbSafeReturnPrice(confirmedPrice, savedBasePrice);
       const alreadyRestoring = scheduleQueueBusy(queueRow, previousRestoreTarget, confirmedPrice);
-      if (!alreadyRestoring && await queueSchedulePrice(market, schedule.nmId, previousRestoreTarget)) {
+      if (!alreadyRestoring && await queueSchedulePrice(market, schedule.nmId, previousRestoreTarget, pool, protectedDiscount)) {
         changed += 1;
       }
       await pool.query(`UPDATE wb_price_schedules SET phase='restoring',last_error='',updated_at=$3
@@ -683,8 +686,8 @@ async function syncWbNightSchedules(market, now = Date.now()) {
       }
 
       if (queueRow?.source === 'manual') continue;
-      if (Math.abs(confirmedPrice - schedule.targetPrice) < 0.000001) {
-        const held = await holdSchedulePrice(market, schedule.nmId, schedule.targetPrice);
+      if (Math.abs(confirmedPrice - schedule.targetPrice) < 0.000001 && (protectedDiscount === null || clampDiscount(row.discount) === protectedDiscount)) {
+        const held = await holdSchedulePrice(market, schedule.nmId, schedule.targetPrice, pool, protectedDiscount);
         if (held) {
           await pool.query(`UPDATE wb_price_schedules SET phase='active',last_error='',updated_at=$3 WHERE market=$1 AND nm_id=$2`,
             [market, schedule.nmId, now]);
@@ -693,7 +696,7 @@ async function syncWbNightSchedules(market, now = Date.now()) {
         continue;
       }
       if (scheduleQueueBusy(queueRow, schedule.targetPrice, confirmedPrice)) continue;
-      if (await queueSchedulePrice(market, schedule.nmId, schedule.targetPrice)) {
+      if (await queueSchedulePrice(market, schedule.nmId, schedule.targetPrice, pool, protectedDiscount)) {
         await pool.query(`UPDATE wb_price_schedules SET phase='raising',last_error='',updated_at=$3 WHERE market=$1 AND nm_id=$2`,
           [market, schedule.nmId, now]);
         changed += 1;
@@ -721,7 +724,7 @@ async function syncWbNightSchedules(market, now = Date.now()) {
     }
     const restoreTarget = wbSafeReturnPrice(confirmedPrice, basePrice);
     if (scheduleQueueBusy(queueRow, restoreTarget, confirmedPrice)) continue;
-    if (await queueSchedulePrice(market, schedule.nmId, restoreTarget)) {
+    if (await queueSchedulePrice(market, schedule.nmId, restoreTarget, pool, protectedDiscount)) {
       await pool.query(`UPDATE wb_price_schedules SET phase='restoring',last_error='',updated_at=$3 WHERE market=$1 AND nm_id=$2`,
         [market, schedule.nmId, now]);
       changed += 1;
@@ -1456,6 +1459,8 @@ function sendPriceError(res, error) {
   return res.status(safeStatus).json({
     ok: false,
     error: safeStatus >= 500 ? 'Временная ошибка сервиса цен' : cleanText(error?.message || error),
+    code: error?.code === 'PRICE_PROTECTION_CONFIRMATION_REQUIRED' ? error.code : undefined,
+    blocked: error?.blocked,
     retryAt: Number(error?.retryAt) || 0
   });
 }
@@ -1503,18 +1508,27 @@ pricesRouter.post('/market-prices/update/bulk', requireWritesEnabled, asyncRoute
     const prefByNm = new Map(prefs.rows.map(row => [String(row.nmId), row]));
     const queue = new Map((await wbPriceQueueRows(market, client)).map(row => [row.nmId, row]));
     const applied = [], skipped = [], discovery = [];
+    const protectionByNm=new Map(),blocked=[];
+    for(const id of ids){
+      const row=rows.get(id);if(!row)continue;
+      const pref=await protectionFor(market,Number(id),client);protectionByNm.set(id,pref);
+      const touchesDiscount=req.body.action==='enter'||Number(req.body.discount)>0;
+      if(pref.priceProtected||(pref.promoBlock&&touchesDiscount))blocked.push({nmId:id,name:row.name||row.sku||id,reason:[pref.manualPriceLock?'Защита включена вручную':pref.autoZeroLock?'Нет товара на моём складе':'',pref.promoBlock&&touchesDiscount?'Блок скидок 0%':''].filter(Boolean).join(' · ')});
+    }
+    if(blocked.length&&!(req.body.overrideProtection===true&&Array.isArray(req.body.overrideRemoteIds)&&blocked.every(row=>req.body.overrideRemoteIds.map(String).includes(row.nmId)))){const error=new Error('На части товаров включена защита');error.status=409;error.code='PRICE_PROTECTION_CONFIRMATION_REQUIRED';error.blocked=blocked;throw error;}
     for (const id of ids) {
       const row = rows.get(id);
       try {
         if (!row) throw new Error('Товар отсутствует в снимке WB');
-        const protection = await protectionFor(market, Number(id), client);
+        const protection = protectionByNm.get(id)||{};
         const exit = req.body.action === 'exit';
-        if (protection.priceProtected && !exit) throw new Error('Включена защита цены');
+
         const automaticEntry=req.body.action==='enter'&&(req.body.discount===null||req.body.discount===undefined||req.body.discount==='');
         if(automaticEntry){
           if(req.body.price!==null&&req.body.price!==undefined&&req.body.price!=='')throw new Error('Для акции меняется только скидка');
           if(!(Number(row.price)>0))throw new Error('В снимке WB отсутствует цена товара');
-          await requestWbPromotionDiscovery(market,id,row,client,now);
+          await requestWbPromotionDiscovery(market,id,row,client,now,req.body.overrideProtection===true&&protection.priceProtected);
+          if(req.body.overrideProtection===true)await client.query(`INSERT INTO wb_control_history(market,nm_id,action,actor,payload,created_at) VALUES($1,$2,'protection-override','owner',$3::jsonb,$4)`,[market,id,JSON.stringify({scope:'promotion-discovery'}),now]);
           applied.push(id);discovery.push(id);continue;
         }
         const inFlight = ['sent', 'checking'].includes(queue.get(id)?.status);
@@ -1522,10 +1536,10 @@ pricesRouter.post('/market-prices/update/bulk', requireWritesEnabled, asyncRoute
         const previous = queue.get(id);
         const effective = previous?.source === 'manual' ? { ...row, price: previous.desiredPrice ?? row.price, discount: previous.desiredDiscount ?? row.discount } : row;
         const change = prepareWbPriceChange(effective, req.body, prefByNm.get(id));
-        if (protection.promoBlock && req.body.action !== 'enter' && change.discount > 0) throw new Error('Включён блок скидок. Снимите галочку или используйте «В акцию».');
+        if (protection.promoBlock && req.body.action !== 'enter' && change.discount > 0 && req.body.overrideProtection !== true) throw new Error('Включён блок скидок. Снимите галочку или используйте «В акцию».');
         // Disable the old calendar automation before setting an explicit discount.
         await client.query(`UPDATE wb_promo_preferences SET enabled=false,status='off',last_error='',updated_at=$3 WHERE market=$1 AND nm_id=$2`, [market, id, now]);
-        if (exit || req.body.action === 'enter') {
+        if (exit || req.body.action === 'enter' || (protection.promoBlock && change.discount > 0 && req.body.overrideProtection === true)) {
           await setWbDiscountBlock(market, Number(id), exit, client, now);
           await client.query(`INSERT INTO wb_control_history(market,nm_id,action,actor,payload,created_at)
             VALUES($1,$2,'discount-block','owner',$3::jsonb,$4)`, [market,id,JSON.stringify({ enabled: exit, action: req.body.action }),now]);
@@ -1552,6 +1566,10 @@ pricesRouter.post('/market-prices/update/bulk', requireWritesEnabled, asyncRoute
             phase=CASE WHEN $4 THEN 'manual' ELSE phase END,updated_at=$6 WHERE market=$1 AND nm_id=$2`,
             [market, id, change.price, Boolean(change.price !== null && schedule.enabled && window.inWindow), window.windowKey, now]);
         }
+        if(req.body.overrideProtection===true){
+          if(protection.priceProtected)await updateProtectionBaseline(market,Number(id),{price:change.price,discount:change.discount},client);
+          await client.query(`INSERT INTO wb_control_history(market,nm_id,action,actor,payload,created_at) VALUES($1,$2,'protection-override','owner',$3::jsonb,$4)`,[market,id,JSON.stringify({scope:req.body.action||'price',price:change.price,discount:change.discount}),now]);
+        }
         applied.push(id);
       } catch (error) {
         // SQL errors abort the transaction; only validation failures are skippable.
@@ -1567,7 +1585,7 @@ pricesRouter.post('/market-prices/update/bulk', requireWritesEnabled, asyncRoute
   } finally { client.release(); }
 }));
 
-async function saveWbNightSchedules(market, input) {
+async function saveWbNightSchedules(market, input, actor = 'owner') {
   const rawIds = Array.isArray(input?.remoteIds) ? input.remoteIds : [input?.remoteId];
   const ids = [...new Set(rawIds.map(Number).filter(value => Number.isInteger(value) && value > 0))].slice(0, 1000);
   if (!ids.length) {
@@ -1599,19 +1617,35 @@ async function saveWbNightSchedules(market, input) {
     const snapshot = await wbPriceSnapshot(market, client);
     const byNm = new Map((snapshot?.rows || []).map(row => [Number(row.remoteId), row]));
     const applied = [];
-    const skipped = [];
+    const skipped = [], skippedDetails = [], protectedRows = [], eligible = [];
+    const protections = new Map();
+    // Preflight the complete selection before any writes: cancel means no partial application.
     for (const nmId of ids) {
       const row = byNm.get(nmId);
-      if (!row) { skipped.push(String(nmId)); continue; }
-      if (enabled && row.canEditPrice === false) { skipped.push(String(nmId)); continue; }
-      if (enabled && (await protectionFor(market, nmId, client)).priceProtected) { skipped.push(String(nmId)); continue; }
+      if (!row || (enabled && row.canEditPrice === false)) {
+        skipped.push(String(nmId));skippedDetails.push({nmId:String(nmId),name:row?.name||row?.sku||String(nmId),reason:row?'Разные цены размеров — общую ночную цену задать нельзя':'Нет в снимке цен WB'});continue;
+      }
+      const pref = enabled ? await protectionFor(market,nmId,client) : {};
+      protections.set(nmId,pref);eligible.push(nmId);
+      if(pref.priceProtected)protectedRows.push({nmId:String(nmId),name:row.name||row.sku||String(nmId),reason:pref.manualPriceLock?'Защита включена вручную':'Нет товара на моём складе'});
+    }
+    if (protectedRows.length && !(input?.overrideProtection === true && Array.isArray(input.overrideRemoteIds) && protectedRows.every(row => input.overrideRemoteIds.map(String).includes(row.nmId)))) {
+      const error = new Error('Для ночной цены требуется подтверждение поверх защиты');
+      error.status=409;error.code='NIGHT_PROTECTION_CONFIRMATION_REQUIRED';error.blocked=protectedRows;error.skippedDetails=skippedDetails;throw error;
+    }
+    for (const nmId of eligible) {
+      const row = byNm.get(nmId);
       if (enabled) {
         await client.query(`INSERT INTO wb_price_schedules
-          (market,nm_id,enabled,start_minute,end_minute,target_price,base_price,window_key,manual_override_window,phase,last_error,updated_at,weekdays)
-          VALUES($1,$2,true,$3,$4,$5,NULL,'','','idle','',$6,COALESCE($7::integer[],ARRAY[1,2,3,4,5,6,7]))
+          (market,nm_id,enabled,start_minute,end_minute,target_price,base_price,window_key,manual_override_window,phase,last_error,updated_at,weekdays,protection_override)
+          VALUES($1,$2,true,$3,$4,$5,NULL,'','','idle','',$6,COALESCE($7::integer[],ARRAY[1,2,3,4,5,6,7]),$8)
           ON CONFLICT(market,nm_id) DO UPDATE SET enabled=true,start_minute=excluded.start_minute,
-            end_minute=excluded.end_minute,target_price=excluded.target_price,weekdays=COALESCE($7::integer[],wb_price_schedules.weekdays),last_error='',updated_at=excluded.updated_at`,
-          [market, nmId, startMinute, endMinute, targetPrice, now, weekdays]);
+            end_minute=excluded.end_minute,target_price=excluded.target_price,weekdays=COALESCE($7::integer[],wb_price_schedules.weekdays),protection_override=excluded.protection_override,last_error='',updated_at=excluded.updated_at`,
+          [market, nmId, startMinute, endMinute, targetPrice, now, weekdays, Boolean(input?.overrideProtection === true && protections.get(nmId)?.priceProtected)]);
+        if (input?.overrideProtection === true && protections.get(nmId)?.priceProtected) {
+          await client.query(`INSERT INTO wb_control_history(market,nm_id,action,actor,payload,created_at) VALUES($1,$2,'night-protection-override',$3,$4::jsonb,$5)`,
+            [market,nmId,cleanText(actor)||'owner',JSON.stringify({scope:'night-schedule',startMinute,endMinute,weekdays,targetPrice}),now]);
+        }
       } else if (targetPrice > 0 && startMinute !== null && endMinute !== null && startMinute !== endMinute) {
         await client.query(`INSERT INTO wb_price_schedules
           (market,nm_id,enabled,start_minute,end_minute,target_price,base_price,window_key,manual_override_window,phase,last_error,updated_at,weekdays)
@@ -1630,14 +1664,14 @@ async function saveWbNightSchedules(market, input) {
     }
     if (!applied.length) {
       const error = new Error(enabled ? 'Для выбранных товаров нельзя изменить общую цену' : 'У выбранных товаров нет ночного расписания');
-      error.status = 409;
+      error.status = 409;error.code='NIGHT_ITEMS_UNAVAILABLE';error.skippedDetails=skippedDetails;
       throw error;
     }
     await client.query('COMMIT');
     await syncWbNightSchedules(market, now);
     const schedules = await wbPriceSchedules(market);
     const appliedSet = new Set(applied);
-    return { applied, skipped, schedules: schedules.filter(row => appliedSet.has(String(row.nmId))) };
+    return { applied, skipped, skippedDetails, schedules: schedules.filter(row => appliedSet.has(String(row.nmId))) };
   } catch (error) {
     await client.query('ROLLBACK').catch(() => {});
     throw error;
@@ -1651,9 +1685,10 @@ pricesRouter.post('/market-prices/night-schedule', requireWritesEnabled, asyncRo
   const market = cleanText(req.body?.market);
   if (market !== 'WB' && market !== 'WB2') return res.status(400).json({ ok: false, error: 'Ночное расписание доступно только для WB' });
   try {
-    const result = await saveWbNightSchedules(market, req.body);
-    return res.json({ ok: true, market, count: result.applied.length, skipped: result.skipped, schedules: result.schedules });
+    const result = await saveWbNightSchedules(market, req.body, req.session?.user?.email || req.user?.email || 'owner');
+    return res.json({ ok: true, market, count: result.applied.length, skipped: result.skipped, skippedDetails:result.skippedDetails, schedules: result.schedules });
   } catch (error) {
+    if(error.code==='NIGHT_PROTECTION_CONFIRMATION_REQUIRED'||error.code==='NIGHT_ITEMS_UNAVAILABLE')return res.status(409).json({ok:false,error:error.message,code:error.code,blocked:error.blocked||[],skippedDetails:error.skippedDetails||[]});
     return sendPriceError(res, error);
   }
 }));

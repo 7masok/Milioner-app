@@ -127,10 +127,10 @@ async function baselineFor(market,nmId,row,client){
 async function disableAutomationForLock(market,nmId,client,now){
   await client.query(`DELETE FROM wb_price_update_queue WHERE market=$1 AND nm_id=$2
     AND source IN ('promo','schedule') AND status IN ('pending','held')`,[market,nmId]);
-  await client.query(`UPDATE wb_promo_preferences SET enabled=false,
+  await client.query(`UPDATE wb_promo_preferences SET enabled=false,protection_override=false,
     status=CASE WHEN status='participating' THEN status ELSE 'off' END,last_error='',updated_at=$3
     WHERE market=$1 AND nm_id=$2`,[market,nmId,now]).catch(()=>{});
-  await client.query(`UPDATE wb_price_schedules SET phase=CASE WHEN base_price IS NOT NULL THEN 'restoring' ELSE 'locked' END,
+  await client.query(`UPDATE wb_price_schedules SET protection_override=false,phase=CASE WHEN base_price IS NOT NULL THEN 'restoring' ELSE 'locked' END,
     last_error='',updated_at=$3 WHERE market=$1 AND nm_id=$2`,[market,nmId,now]).catch(()=>{});
 }
 async function history(client,market,nmId,action,actor,payload,now=Date.now()){
@@ -215,6 +215,11 @@ async function applyProtection(market,ids,input,actor){
 export async function syncWbPriceProtection(market,now=Date.now()){
   const [rows,prefs,inventory]=await Promise.all([priceRows(market),protectionRows(market),warehouseAvailability()]);
   if(!rows.length||!prefs.length)return {changed:0};
+  const [nightRows,promoRows]=await Promise.all([
+    pool.query(`SELECT nm_id AS "nmId",protection_override AS "protectionOverride",base_price AS "basePrice" FROM wb_price_schedules WHERE market=$1`,[market]),
+    pool.query(`SELECT nm_id AS "nmId",enabled,protection_override AS "protectionOverride" FROM wb_promo_preferences WHERE market=$1`,[market])
+  ]);
+  const nights=new Map(nightRows.rows.map(row=>[cleanText(row.nmId),row])),promos=new Map(promoRows.rows.map(row=>[cleanText(row.nmId),row]));
   const byNm=new Map(rows.map(row=>[cleanText(row?.remoteId),row]));
   let changed=0;
   for(const pref of prefs){
@@ -252,10 +257,16 @@ export async function syncWbPriceProtection(market,now=Date.now()){
     }
     const protectedNow=pref.manualPriceLock||autoLock;
     if(!protectedNow)continue;
+    const night=nights.get(pref.nmId);
+    // Only the explicitly approved night/return owns the temporary price. Once
+    // its original baseline is restored, ordinary protection resumes unchanged.
+    if(night?.protectionOverride===true&&number(night.basePrice)>0)continue;
+    const promo=promos.get(pref.nmId),promoOverride=promo?.enabled===true&&promo?.protectionOverride===true;
+    if(promoOverride)lockedDiscount=null;
     const queueResult=await pool.query(`SELECT desired_price AS "desiredPrice",desired_discount AS "desiredDiscount",source,status
       FROM wb_price_update_queue WHERE market=$1 AND nm_id=$2`,[market,pref.nmId]);
     const queue=queueResult.rows[0];
-    if(queue&&['promo','schedule'].includes(cleanText(queue.source))&&['pending','held'].includes(cleanText(queue.status))){
+    if(queue&&['promo','schedule'].includes(cleanText(queue.source))&&!(promoOverride&&queue.source==='promo')&&['pending','held'].includes(cleanText(queue.status))){
       await pool.query('DELETE FROM wb_price_update_queue WHERE market=$1 AND nm_id=$2',[market,pref.nmId]);changed++;
     }
     if(queue&&(['sent','checking'].includes(cleanText(queue.status))||['manual','protection'].includes(cleanText(queue.source))))continue;
