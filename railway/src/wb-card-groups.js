@@ -41,7 +41,11 @@ export function wbCardGroupCard(raw){
     subjectName:cleanText(raw?.subjectName||raw?.subject||raw?.object),
     vendorCode:cleanText(raw?.vendorCode),
     title:cleanText(raw?.title||raw?.subjectName||raw?.subject||raw?.vendorCode),
-    photo:cleanText(raw?.photo)||photoUrl(raw)
+    photo:cleanText(raw?.photo)||photoUrl(raw),
+    dimensions:raw?.dimensions&&typeof raw.dimensions==='object'?{
+      length:Number(raw.dimensions.length)||null,width:Number(raw.dimensions.width)||null,
+      height:Number(raw.dimensions.height)||null,weightBrutto:Number(raw.dimensions.weightBrutto)||null
+    }:null
   };
 }
 async function requestContent(token,path,options={},market='WB'){
