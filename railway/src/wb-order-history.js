@@ -4,7 +4,7 @@ import {config} from './config.js';
 import {credentialFor} from './connections.js';
 import {asyncRoute,requireTrustedOrigin} from './http.js';
 
-const DAY=86400000,SLOT=60000,API='https://marketplace-api.wildberries.ru';
+const DAY=86400000,SLOT=60000,WB_ARCHIVE_OFFSET=3*3600000,API='https://marketplace-api.wildberries.ru';
 const object=v=>{if(v&&typeof v==='object')return v;try{return JSON.parse(v||'{}')}catch{return {}}};
 const text=v=>String(v??'').trim();
 export function parseWbHistoryPage(body){
@@ -53,7 +53,9 @@ function finishLiveWindow(state,now){
  // The ordinary endpoint only retains three months. Query the archive as well
  // for older windows, with an overlap so the moving retention edge is covered.
  if(state.from<now-60*DAY){
-  const first=new Date(state.from),last=new Date(state.to),months=[];
+  // WB groups archive months by Moscow time, while createdAt is returned in UTC.
+  // Use the same calendar for requested months and response validation.
+  const first=new Date(state.from+WB_ARCHIVE_OFFSET),last=new Date(state.to+WB_ARCHIVE_OFFSET),months=[];
   for(let d=new Date(Date.UTC(first.getUTCFullYear(),first.getUTCMonth(),1));d<=last;d.setUTCMonth(d.getUTCMonth()+1))months.push({year:d.getUTCFullYear(),month:d.getUTCMonth()+1});
   state.archiveMonths=months;state.archiveIndex=0;state.archiveCursor=0;state.phase='archive';state.pending=[];
  }else finishWindow(state,now);
@@ -73,10 +75,10 @@ export async function stepWbOrderHistory(input,{market,fetchPage,fetchStatuses,f
   if(!Array.isArray(data?.orders)||data.orders.length>1000)throw Error('WB вернул неполную страницу архива');
   const next=pageCursor(data.next,state.archiveCursor,data.orders.length,'архива');
   for(const raw of data.orders){
-   const at=Date.parse(raw.createdAt),date=new Date(at);
+   const at=Date.parse(raw.createdAt),date=new Date(at+WB_ARCHIVE_OFFSET);
    if(!(at>0)||date.getUTCFullYear()!==month.year||date.getUTCMonth()+1!==month.month){
     const error=Error('WB вернул архивные заказы за пределами месяца');
-    error.archiveDateInfo={year:month.year,month:month.month,type:typeof raw.createdAt,parsed:Number.isFinite(at)?date.toISOString():'invalid',value:/^[\dTtZz:+.\- ]{1,64}$/.test(String(raw.createdAt))?String(raw.createdAt):'invalid'};
+    error.archiveDateInfo={year:month.year,month:month.month,type:typeof raw.createdAt,parsed:Number.isFinite(at)?new Date(at).toISOString():'invalid',value:/^[\dTtZz:+.\- ]{1,64}$/.test(String(raw.createdAt))?String(raw.createdAt):'invalid'};
     throw error;
    }
    if(at>=state.from&&at<=state.to)rows.push(historicalWbOrder(market,{...raw.product,...raw.priceInfo,id:raw.id,orderUid:raw.orderUid,createdAt:raw.createdAt},raw.status));
