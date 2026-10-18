@@ -7,10 +7,6 @@ const BUSINESS_PERIODS=new Set(['day','week','month','year']);
 const BUSINESS_WEEKDAYS=['Пн','Вт','Ср','Чт','Пт','Сб','Вс'];
 const BUSINESS_METRICS=new Set(['orders','buyouts','orderProfit','buyoutProfit']);
 const BUSINESS_UI_KEY='milioner_business_dashboard_v1';
-const BUSINESS_DAY_HISTORY=7;
-const BUSINESS_WEEK_HISTORY=5;
-const BUSINESS_MONTH_HISTORY=3;
-const BUSINESS_YEAR_HISTORY=2;
 const BUSINESS_MONTH_NAMES=['янв','фев','мар','апр','май','июн','июл','авг','сен','окт','ноя','дек'];
 const BUSINESS_CACHE_VERSION='calendar-v2',BUSINESS_CACHE_KEY='milioner_business_snapshots_calendar_v2';
 const businessModelMeta=new Map(),businessBuildJobs=new Map();let businessCacheHydrated=false;
@@ -52,14 +48,14 @@ function businessDayBounds(offset=0){
 }
 function businessSelectedDayOffset(){
  const selected=Date.parse(businessDayDate+'T00:00:00+05:00');
- return Number.isFinite(selected)?Math.max(-BUSINESS_DAY_HISTORY,Math.min(0,Math.round((selected-businessDayBounds(0).start)/86400000))):0;
+ return Number.isFinite(selected)?Math.min(0,Math.round((selected-businessDayBounds(0).start)/86400000)):0;
 }
 function businessSelectedWeekOffset(){
  const selected=Date.parse(businessWeekDate+'T00:00:00+05:00');
- return Number.isFinite(selected)?Math.max(-BUSINESS_WEEK_HISTORY,Math.min(0,Math.floor((selected-businessWeekBounds(0).start)/(7*86400000)))):0;
+ return Number.isFinite(selected)?Math.min(0,Math.floor((selected-businessWeekBounds(0).start)/(7*86400000))):0;
 }
-function businessSelectedMonthOffset(){const selected=Date.parse(businessMonthDate+'T00:00:00+05:00');if(!Number.isFinite(selected))return 0;const a=new Date(selected+5*3600000),b=new Date(businessMonthBounds(0).start+5*3600000);return Math.max(-BUSINESS_MONTH_HISTORY,Math.min(0,(a.getUTCFullYear()-b.getUTCFullYear())*12+a.getUTCMonth()-b.getUTCMonth()))}
-function businessSelectedYearOffset(){const selected=Number(businessYearDate.slice(0,4)),current=new Date(businessYearBounds(0).start+18000000).getUTCFullYear();return selected?Math.max(-BUSINESS_YEAR_HISTORY,Math.min(0,selected-current)):0}
+function businessSelectedMonthOffset(){const selected=Date.parse(businessMonthDate+'T00:00:00+05:00');if(!Number.isFinite(selected))return 0;const a=new Date(selected+5*3600000),b=new Date(businessMonthBounds(0).start+5*3600000);return Math.min(0,(a.getUTCFullYear()-b.getUTCFullYear())*12+a.getUTCMonth()-b.getUTCMonth())}
+function businessSelectedYearOffset(){const selected=Number(businessYearDate.slice(0,4)),current=new Date(businessYearBounds(0).start+18000000).getUTCFullYear();return selected?Math.min(0,selected-current):0}
 function businessBounds(period,offset=0){return period==='year'?businessYearBounds(offset):period==='month'?businessMonthBounds(offset):period==='week'?businessWeekBounds(offset):businessDayBounds(offset)}
 function businessSelectedOffset(period=businessPeriod){return period==='year'?businessSelectedYearOffset():period==='month'?businessSelectedMonthOffset():period==='week'?businessSelectedWeekOffset():businessSelectedDayOffset()}
 function businessModelKey(period=businessPeriod,offset=businessSelectedOffset(period)){
@@ -279,7 +275,7 @@ function businessPaintTabs(){
  document.querySelectorAll('[data-business-period]').forEach(x=>x.classList.toggle('active',x.dataset.businessPeriod===businessPeriod));
  const title=document.getElementById('businessPeriodTitle'),sub=document.getElementById('businessPeriodSub');
  const year=businessPeriod==='year',week=businessPeriod==='week',month=businessPeriod==='month',offset=businessSelectedOffset(),bounds=businessPeriodBounds(),nav=document.getElementById('businessDayNav'),dayDate=document.getElementById('businessDayDate'),previous=document.getElementById('businessDayPrevious'),next=document.getElementById('businessDayNext');
- if(nav)nav.hidden=false;if(previous){previous.disabled=offset<=-(year?BUSINESS_YEAR_HISTORY:month?BUSINESS_MONTH_HISTORY:week?BUSINESS_WEEK_HISTORY:BUSINESS_DAY_HISTORY);previous.setAttribute('aria-label',year?'Предыдущий год':month?'Предыдущий месяц':week?'Предыдущая неделя':'Предыдущий день')}if(next){next.disabled=offset>=0;next.setAttribute('aria-label',year?'Следующий год':month?'Следующий месяц':week?'Следующая неделя':'Следующий день')}
+ if(nav)nav.hidden=false;if(previous){previous.disabled=false;previous.setAttribute('aria-label',year?'Предыдущий год':month?'Предыдущий месяц':week?'Предыдущая неделя':'Предыдущий день')}if(next){next.disabled=offset>=0;next.setAttribute('aria-label',year?'Следующий год':month?'Следующий месяц':week?'Следующая неделя':'Следующий день')}
  if(dayDate)dayDate.innerHTML=(year?new Date(bounds.start+18000000).getUTCFullYear()+' год':month?new Date(bounds.start).toLocaleDateString('ru-RU',{timeZone:'Asia/Almaty',month:'long',year:'numeric'}):week?businessShortDate(bounds.start)+' – '+businessShortDate(bounds.end-86400000)+' · '+(offset===0?'эта неделя':'вся неделя'):businessShortDate(bounds.start)+' · '+(offset===0?'сегодня':offset===-1?'вчера':'весь день'))+'<small>Свайп по графику ← →</small>';
  if(title)title.textContent=year?'Год':month?'Месяц':week?'Неделя':offset===0?'Сегодня':bounds.label;
  if(sub)sub.textContent=year?'Kaspi + WB1 + WB2 + Ozon · по месяцам':businessPeriod==='day'?'Kaspi + WB1 + WB2 + Ozon · по часам':'Kaspi + WB1 + WB2 + Ozon · по дням';
@@ -534,10 +530,10 @@ async function businessBuildModel(force=false,period=businessPeriod,dayOffset=bu
 }
 
 function businessShowSelection(){businessRenderSeq++;businessLastModel=null;businessSaveUi();businessPaintTabs();return window.renderBusinessDashboard(false)}
-window.shiftBusinessDashboardDay=function(direction){if(businessPeriod!=='day'||![-1,1].includes(direction))return;const current=businessSelectedDayOffset(),next=Math.max(-BUSINESS_DAY_HISTORY,Math.min(0,current+direction));if(next===current)return;businessDayDate=next===0?'':businessIsoDate(businessDayBounds(next).start);return businessShowSelection()};
-window.shiftBusinessDashboardWeek=function(direction){if(businessPeriod!=='week'||![-1,1].includes(direction))return;const current=businessSelectedWeekOffset(),next=Math.max(-BUSINESS_WEEK_HISTORY,Math.min(0,current+direction));if(next===current)return;businessWeekDate=next===0?'':businessIsoDate(businessWeekBounds(next).start);return businessShowSelection()};
-window.shiftBusinessDashboardMonth=function(direction){if(businessPeriod!=='month'||![-1,1].includes(direction))return;const current=businessSelectedMonthOffset(),next=Math.max(-BUSINESS_MONTH_HISTORY,Math.min(0,current+direction));if(next===current)return;businessMonthDate=next===0?'':businessIsoDate(businessMonthBounds(next).start);return businessShowSelection()};
-window.shiftBusinessDashboardYear=function(direction){if(businessPeriod!=='year'||![-1,1].includes(direction))return;const current=businessSelectedYearOffset(),next=Math.max(-BUSINESS_YEAR_HISTORY,Math.min(0,current+direction));if(next===current)return;businessYearDate=next===0?'':businessIsoDate(businessYearBounds(next).start);return businessShowSelection()};
+window.shiftBusinessDashboardDay=function(direction){if(businessPeriod!=='day'||![-1,1].includes(direction))return;const current=businessSelectedDayOffset(),next=Math.min(0,current+direction);if(next===current)return;businessDayDate=next===0?'':businessIsoDate(businessDayBounds(next).start);return businessShowSelection()};
+window.shiftBusinessDashboardWeek=function(direction){if(businessPeriod!=='week'||![-1,1].includes(direction))return;const current=businessSelectedWeekOffset(),next=Math.min(0,current+direction);if(next===current)return;businessWeekDate=next===0?'':businessIsoDate(businessWeekBounds(next).start);return businessShowSelection()};
+window.shiftBusinessDashboardMonth=function(direction){if(businessPeriod!=='month'||![-1,1].includes(direction))return;const current=businessSelectedMonthOffset(),next=Math.min(0,current+direction);if(next===current)return;businessMonthDate=next===0?'':businessIsoDate(businessMonthBounds(next).start);return businessShowSelection()};
+window.shiftBusinessDashboardYear=function(direction){if(businessPeriod!=='year'||![-1,1].includes(direction))return;const current=businessSelectedYearOffset(),next=Math.min(0,current+direction);if(next===current)return;businessYearDate=next===0?'':businessIsoDate(businessYearBounds(next).start);return businessShowSelection()};
 window.shiftBusinessDashboardSelection=function(direction){return businessPeriod==='year'?window.shiftBusinessDashboardYear(direction):businessPeriod==='month'?window.shiftBusinessDashboardMonth(direction):businessPeriod==='week'?window.shiftBusinessDashboardWeek(direction):window.shiftBusinessDashboardDay(direction)};
 window.setBusinessDashboardMetric=function(metric){if(!BUSINESS_METRICS.has(metric))return;businessMetric=metric;businessSaveUi();if(businessLastModel&&businessLastModel.period+':'+businessLastModel.bounds.start===businessModelKey())businessPaint(businessLastModel);else return window.renderBusinessDashboard(false)};
 window.setBusinessDashboardPeriod=function(period){if(!BUSINESS_PERIODS.has(period))return;if(period===businessPeriod&&businessSelectedOffset(period)===0)return;businessPeriod=period;if(period==='day')businessDayDate='';if(period==='week')businessWeekDate='';if(period==='month')businessMonthDate='';if(period==='year')businessYearDate='';return businessShowSelection()};
