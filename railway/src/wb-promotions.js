@@ -4,7 +4,7 @@ import { config } from './config.js';
 import { pool } from './db.js';
 import { credentialFor } from './connections.js';
 import { asyncRoute, requireTrustedOrigin, requireWritesEnabled } from './http.js';
-import { setWbDiscountBlock } from './wb-price-protection.js';
+import { setWbDiscountBlock, protectionFor } from './wb-price-protection.js';
 
 const WB_PROMO_API = 'https://dp-calendar-api.wildberries.ru';
 const WB_PROMO_SLOT_MS = 60 * 60 * 1000 + 5_000;
@@ -213,15 +213,15 @@ async function wakePromoSync(market, now = Date.now()) {
 }
 
 // Called inside the bulk price transaction; discovery does not invent a discount.
-export async function requestWbPromotionDiscovery(market,nmId,row,client=pool,now=Date.now()){
+export async function requestWbPromotionDiscovery(market,nmId,row,client=pool,now=Date.now(),protectionOverride=false){
   await setWbDiscountBlock(market,Number(nmId),false,client,now);
   await client.query(`INSERT INTO wb_promo_preferences
-    (market,nm_id,enabled,base_discount,promotion_id,promotion_name,plan_price,plan_discount,status,last_error,updated_at)
-    VALUES($1,$2,true,$3,0,'',NULL,NULL,'idle','',$4)
-    ON CONFLICT(market,nm_id) DO UPDATE SET enabled=true,
+    (market,nm_id,enabled,base_discount,promotion_id,promotion_name,plan_price,plan_discount,status,last_error,updated_at,protection_override)
+    VALUES($1,$2,true,$3,0,'',NULL,NULL,'idle','',$4,$5)
+    ON CONFLICT(market,nm_id) DO UPDATE SET enabled=true,protection_override=excluded.protection_override,
       base_discount=CASE WHEN NOT wb_promo_preferences.enabled THEN excluded.base_discount ELSE wb_promo_preferences.base_discount END,
       promotion_id=0,promotion_name='',plan_price=NULL,plan_discount=NULL,status='idle',last_error='',updated_at=excluded.updated_at`,
-    [market,nmId,clampDiscount(row.discount),now]);
+    [market,nmId,clampDiscount(row.discount),now,Boolean(protectionOverride)]);
   // Respect the persisted calendar cooldown and current phase, including 429 retry headers.
   await client.query(`INSERT INTO wb_promo_sync_state
     (market,next_sync_at,last_sync_at,last_error,updated_at,phase,payload)
@@ -245,7 +245,8 @@ async function currentQueueRow(market, nmId, client = pool) {
 
 async function queuePromoDiscount(market, nmId, discount, promotionId = 0, client = pool) {
   const protectedRow = await client.query(`SELECT 1 FROM wb_price_protection
-    WHERE market=$1 AND nm_id=$2 AND (manual_price_lock=true OR auto_zero_lock=true) LIMIT 1`, [market, nmId]);
+    WHERE market=$1 AND nm_id=$2 AND (manual_price_lock=true OR auto_zero_lock=true)
+      AND NOT EXISTS (SELECT 1 FROM wb_promo_preferences p WHERE p.market=wb_price_protection.market AND p.nm_id=wb_price_protection.nm_id AND p.enabled=true AND p.protection_override=true) LIMIT 1`, [market, nmId]);
   if (protectedRow.rowCount) return false;
   const now = Date.now();
   const normalized = clampDiscount(discount);
@@ -686,7 +687,8 @@ async function syncWbPromotionsMarket(market) {
 
     const rawPrefs = await promoPreferences(market, pool, true);
     const blockedResult = await pool.query(`SELECT nm_id AS "nmId" FROM wb_price_protection
-      WHERE market=$1 AND (promo_block=true OR manual_price_lock=true OR auto_zero_lock=true)`, [market]);
+      WHERE market=$1 AND (promo_block=true OR ((manual_price_lock=true OR auto_zero_lock=true)
+      AND NOT EXISTS (SELECT 1 FROM wb_promo_preferences p WHERE p.market=wb_price_protection.market AND p.nm_id=wb_price_protection.nm_id AND p.enabled=true AND p.protection_override=true)))`, [market]);
     const blocked = new Set(blockedResult.rows.map(row => String(row.nmId)));
     const prefs = rawPrefs.filter(pref => !blocked.has(String(pref.nmId)));
     if (!prefs.length) {
@@ -750,7 +752,7 @@ export async function decorateWbPromotionRows(market, rows) {
   };
 }
 
-async function applyPromoPreferenceChange(market, rawIds, enabled) {
+async function applyPromoPreferenceChange(market, rawIds, enabled, overrideProtection=false, overrideRemoteIds=[]) {
   const ids = [...new Set((Array.isArray(rawIds) ? rawIds : [rawIds])
     .map(Number).filter(value => Number.isInteger(value) && value > 0))].slice(0, 1000);
   if (!ids.length) {
@@ -769,6 +771,9 @@ async function applyPromoPreferenceChange(market, rawIds, enabled) {
     const blockedResult = enabled ? await client.query(`SELECT nm_id AS "nmId" FROM wb_price_protection
       WHERE market=$1 AND (promo_block=true OR manual_price_lock=true OR auto_zero_lock=true)`, [market]) : { rows: [] };
     const blocked = new Set(blockedResult.rows.map(row => Number(row.nmId)));
+    const protectedItems=[];
+    for(const nmId of ids){if(!byNm.has(nmId)||!blocked.has(nmId))continue;const pref=await protectionFor(market,nmId,client);protectedItems.push({nmId:String(nmId),name:byNm.get(nmId).name||byNm.get(nmId).sku||String(nmId),reason:pref.manualPriceLock?'Защита включена вручную':pref.autoZeroLock?'Нет товара на моём складе':'Блок скидок 0%'});}
+    if(protectedItems.length&&!(overrideProtection&&Array.isArray(overrideRemoteIds)&&protectedItems.every(row=>overrideRemoteIds.map(String).includes(row.nmId)))){const error=new Error('На части товаров включена защита');error.status=409;error.code='PRICE_PROTECTION_CONFIRMATION_REQUIRED';error.blocked=protectedItems;throw error;}
     const queueResult = await client.query(`SELECT nm_id AS "nmId",desired_discount AS "desiredDiscount",source,status
       FROM wb_price_update_queue WHERE market=$1`, [market]);
     const queueByNm = new Map(queueResult.rows.map(row => [Number(row.nmId), row]));
@@ -776,7 +781,8 @@ async function applyPromoPreferenceChange(market, rawIds, enabled) {
 
     for (const nmId of ids) {
       const row = byNm.get(nmId);
-      if (!row || (enabled && blocked.has(nmId))) continue;
+      if (!row) continue;
+      if(enabled&&overrideProtection&&blocked.has(nmId))await setWbDiscountBlock(market,nmId,false,client,now);
       const existing = prefByNm.get(nmId);
       const queue = queueByNm.get(nmId);
       const effectiveDiscount = queue?.desiredDiscount !== null && queue?.desiredDiscount !== undefined
@@ -788,15 +794,16 @@ async function applyPromoPreferenceChange(market, rawIds, enabled) {
       const initialStatus = enabled ? 'idle' : 'off';
 
       await client.query(`INSERT INTO wb_promo_preferences
-        (market,nm_id,enabled,base_discount,promotion_id,promotion_name,plan_price,plan_discount,status,last_error,updated_at)
-        VALUES($1,$2,$3,$4,0,'',NULL,NULL,$5,'',$6)
-        ON CONFLICT(market,nm_id) DO UPDATE SET enabled=excluded.enabled,
+        (market,nm_id,enabled,base_discount,promotion_id,promotion_name,plan_price,plan_discount,status,last_error,updated_at,protection_override)
+        VALUES($1,$2,$3,$4,0,'',NULL,NULL,$5,'',$6,$7)
+        ON CONFLICT(market,nm_id) DO UPDATE SET enabled=excluded.enabled,protection_override=excluded.protection_override,
           base_discount=CASE WHEN excluded.enabled AND NOT wb_promo_preferences.enabled
             THEN excluded.base_discount ELSE wb_promo_preferences.base_discount END,
           status=CASE WHEN wb_promo_preferences.status='participating'
             THEN 'participating' ELSE excluded.status END,
           last_error='',updated_at=excluded.updated_at`,
-        [market, nmId, enabled, enabled ? effectiveDiscount : baseDiscount, initialStatus, now]);
+        [market, nmId, enabled, enabled ? effectiveDiscount : baseDiscount, initialStatus, now,Boolean(enabled&&overrideProtection&&blocked.has(nmId))]);
+      if(enabled&&overrideProtection&&blocked.has(nmId))await client.query(`INSERT INTO wb_control_history(market,nm_id,action,actor,payload,created_at) VALUES($1,$2,'protection-override','owner',$3::jsonb,$4)`,[market,nmId,JSON.stringify({scope:'promotion-automation'}),now]);
 
       if (!enabled && effectiveDiscount !== baseDiscount && !['manual','schedule'].includes(cleanText(queue?.source))) {
         await queuePromoDiscount(market, String(nmId), baseDiscount, 0, client);
@@ -841,15 +848,19 @@ function promoMarketFromRequest(req) {
 wbPromotionsRouter.post('/market-prices/promo', requireWritesEnabled, asyncRoute(async (req, res) => {
   if (req.body?.confirm !== true) return res.status(400).json({ ok: false, error: 'Нужно подтверждение изменения режима акций' });
   const market = promoMarketFromRequest(req);
-  const result = await applyPromoPreferenceChange(market, [req.body?.remoteId], req.body?.enabled === true);
+  try {
+  const result = await applyPromoPreferenceChange(market, [req.body?.remoteId], req.body?.enabled === true,req.body?.overrideProtection===true,req.body?.overrideRemoteIds);
   return res.json({ ok: true, market, remoteId: result.applied[0], enabled: result.enabled });
+  }catch(error){if(error.code==='PRICE_PROTECTION_CONFIRMATION_REQUIRED')return res.status(409).json({ok:false,error:error.message,code:error.code,blocked:error.blocked});throw error;}
 }));
 
 wbPromotionsRouter.post('/market-prices/promo/bulk', requireWritesEnabled, asyncRoute(async (req, res) => {
   if (req.body?.confirm !== true) return res.status(400).json({ ok: false, error: 'Нужно подтверждение массового изменения акций' });
   const market = promoMarketFromRequest(req);
-  const result = await applyPromoPreferenceChange(market, req.body?.remoteIds, req.body?.enabled === true);
+  try {
+  const result = await applyPromoPreferenceChange(market, req.body?.remoteIds, req.body?.enabled === true,req.body?.overrideProtection===true,req.body?.overrideRemoteIds);
   return res.json({ ok: true, market, remoteIds: result.applied, count: result.applied.length, enabled: result.enabled });
+  }catch(error){if(error.code==='PRICE_PROTECTION_CONFIRMATION_REQUIRED')return res.status(409).json({ok:false,error:error.message,code:error.code,blocked:error.blocked});throw error;}
 }));
 
 export function startWbPromotionLoop() {

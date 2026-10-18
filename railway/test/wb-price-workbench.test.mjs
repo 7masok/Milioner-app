@@ -68,13 +68,21 @@ test('bulk queue applies only selected writable positions and preserves the tran
     return { status, result };
   };
   try {
-    const saved = await invoke({ market: 'WB', remoteIds: ['1', '2', '99'], discount: 35, action: 'enter', confirm: true });
-    assert.equal(saved.status, 200);
-    assert.deepEqual(saved.result.applied, ['1']);
-    assert.deepEqual(saved.result.skipped.map(item => item.remoteId), ['2', '99']);
-    const writes = calls.filter(call => call.sql.includes('INSERT INTO wb_price_update_queue'));
-    assert.equal(writes.length, 1);
-    assert.deepEqual(writes[0].params.slice(0, 4), ['WB', '1', null, 35]);
+    const request={market:'WB',remoteIds:['1','2','99'],discount:35,action:'enter',confirm:true};
+    const blocked=await invoke(request);
+    assert.equal(blocked.status,409);
+    assert.equal(blocked.result.code,'PRICE_PROTECTION_CONFIRMATION_REQUIRED');
+    assert.deepEqual(blocked.result.blocked.map(row=>row.nmId),['2']);
+    assert.equal(calls.filter(call=>/INSERT INTO|UPDATE wb_/.test(call.sql)).length,0,'no partial save before owner confirms');
+    calls.length=0;
+    const saved=await invoke({...request,overrideProtection:true,overrideRemoteIds:['2']});
+    assert.equal(saved.status,200);
+    assert.deepEqual(saved.result.applied,['1','2']);
+    assert.deepEqual(saved.result.skipped.map(item=>item.remoteId),['99']);
+    const writes=calls.filter(call=>call.sql.includes('INSERT INTO wb_price_update_queue'));
+    assert.equal(writes.length,2);
+    assert.deepEqual(writes[0].params.slice(0,4),['WB','1',null,35]);
+    assert.ok(calls.some(call=>call.sql.includes('UPDATE wb_price_protection')&&call.params[1]===2),'confirmed value becomes protected baseline');
     assert.ok(calls.some(call => call.sql.includes('pg_advisory_xact_lock')));
     assert.ok(calls.some(call => call.sql === 'COMMIT'));
     calls.length = 0; failInsert = true;

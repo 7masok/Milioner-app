@@ -33,7 +33,7 @@ test('legacy schedules remain daily; invalid selections rejected',()=>{
 });
 test('save passes validated weekdays to both upserts, preserves old clients and in-flight/base fields',async()=>{
  const calls=[];const client={query:async(sql,args)=>{calls.push({sql,args});return{rows:[]}},release(){}};
- const saveCtx={Number,Set,Array,Date,normalizeWbNightWeekdays:ctx.normalizeWbNightWeekdays,pool:{connect:async()=>client},timeToMinute:v=>Number(v.slice(0,2))*60+Number(v.slice(3)),number:Number,wbPriceSnapshot:async()=>({rows:[{remoteId:10}]}),protectionFor:async()=>({}),syncWbNightSchedules:async()=>{},wbPriceSchedules:async()=>[]};
+ const saveCtx={Number,Set,Array,Map,Date,normalizeWbNightWeekdays:ctx.normalizeWbNightWeekdays,pool:{connect:async()=>client},timeToMinute:v=>Number(v.slice(0,2))*60+Number(v.slice(3)),number:Number,wbPriceSnapshot:async()=>({rows:[{remoteId:10}]}),protectionFor:async()=>({}),syncWbNightSchedules:async()=>{},wbPriceSchedules:async()=>[]};
  runInNewContext('async '+source('saveWbNightSchedules',"pricesRouter.post('/market-prices/night-schedule'"),saveCtx);
  for(const enabled of [true,false]){
   calls.length=0;await saveCtx.saveWbNightSchedules('WB',{remoteId:10,enabled,start:'23:00',end:'05:00',price:2000,weekdays:[5,7]});

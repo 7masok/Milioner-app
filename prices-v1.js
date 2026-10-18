@@ -291,7 +291,7 @@ function priceCard(row,index){
       row.promoEnabled?'Подбирает условия акции':'Участие проверяйте в WB')+'</span>'
     :'';
   const night=(row.market==='WB'||row.market==='WB2')&&(row.nightPriceEnabled||row.nightPricePhase==='restoring')
-    ?'<span class="price-night-badge"> · 🌙 '+pEsc(priceNightDaysLabel(row.nightPriceWeekdays))+' · '+pEsc(row.nightPriceStart||'04:00')+'–'+pEsc(row.nightPriceEnd||'06:00')+' · '+pMoney(row.nightPriceTarget,row.currency)+' · '+pEsc(({idle:'Запланировано',raising:'Устанавливается',active:'Установлена',restoring:'Возвращается',manual:'Ручная цена',locked:'Защита',off:'Выключено',error:'Ошибка'})[row.nightPricePhase]||'Запланировано')+(row.nightPriceError?' · '+pEsc(row.nightPriceError):'')+'</span>'
+    ?'<span class="price-night-badge"> · 🌙 '+pEsc(priceNightDaysLabel(row.nightPriceWeekdays))+' · '+pEsc(row.nightPriceStart||'04:00')+'–'+pEsc(row.nightPriceEnd||'06:00')+' · '+pMoney(row.nightPriceTarget,row.currency)+' · '+pEsc(({idle:'Запланировано',raising:'Устанавливается',active:'Установлена',restoring:'Возвращается',manual:'Ручная цена',locked:'Защита',off:'Выключено',error:'Ошибка'})[row.nightPricePhase]||'Запланировано')+(row.nightProtectionOverride?' · Поверх защиты':'')+(row.nightPriceError?' · '+pEsc(row.nightPriceError):'')+'</span>'
     :'';
   const discountBlock=row.promoBlocked?'<span class="price-lock-badge"> · Скидки заблокированы · 0%</span>':'';
   const protection=row.priceProtected?'<span class="price-lock-badge"> · 🔒 '+pEsc(row.protectionReason||'Защита цены')+'</span>':'';
@@ -500,8 +500,8 @@ function workbenchChanges(){
     if(ctx.action==='price'&&rawPrice===''&&rawDiscount==='')error='Укажите цену или скидку';
     const final=price*(1-Number(discount??row.confirmedDiscount??row.discount??0)/100);
     if(ctx.action==='enter'&&!automaticEntry&&plan>0&&final>plan+1e-6)error='Скидки недостаточно';
-    if(row.priceProtected&&ctx.action!=='exit')error='Включена защита';
-    if(ctx.action==='price'&&row.promoBlocked&&discount>0)error='Снимите блок скидок или нажмите «В акцию»';
+
+
     if(row.syncState==='sent'&&ctx.action!=='exit'&&!automaticEntry)error='Предыдущее изменение проверяется';
     return {row,price,discount,final,error,automaticEntry};
   });
@@ -510,7 +510,7 @@ window.priceWorkbenchPreview=function(){
   const items=workbenchChanges(),el=document.getElementById('priceWorkbenchPreview');
   if(el)el.innerHTML=items.map(item=>priceWorkbench.market==='Kaspi'
     ?'<div class="item"><b>'+pEsc(item.row.name||item.row.sku)+'</b><div>'+pMoney(item.row.price,'KZT')+' → '+pMoney(item.price,'KZT')+'</div>'+(item.error?'<div class="price-error">'+pEsc(item.error)+'</div>':'')+'</div>'
-    :'<div class="item"><b>'+pEsc(item.row.name||item.row.sku)+'</b><div>'+pMoney(item.row.confirmedPrice??item.row.price,'RUB')+' → '+pMoney(item.price,'RUB')+' · скидка '+(item.automaticEntry?'подбор для товара':pEsc(item.discount??'—')+'%')+' · '+(item.automaticEntry?'цена после подбора':('итог '+pMoney(item.final,'RUB')))+'</div>'+(item.error?'<div class="price-error">'+pEsc(item.error)+'</div>':item.automaticEntry?'<div class="muted">Порог и скидку найдёт сервер по условиям WB</div>':!pNum(item.row.promoPlanPrice)&&priceWorkbench.action!=='price'?'<div class="muted">Порог неизвестен · статус участия проверьте в WB</div>':'')+'</div>').join('');
+    :'<div class="item"><b>'+pEsc(item.row.name||item.row.sku)+'</b><div>'+pMoney(item.row.confirmedPrice??item.row.price,'RUB')+' → '+pMoney(item.price,'RUB')+' · скидка '+(item.automaticEntry?'подбор для товара':pEsc(item.discount??'—')+'%')+' · '+(item.automaticEntry?'цена после подбора':('итог '+pMoney(item.final,'RUB')))+'</div>'+(item.error?'<div class="price-error">'+pEsc(item.error)+'</div>':item.row.priceProtected||item.row.promoBlocked?'<div class="muted">Защита · потребуется подтверждение</div>':item.automaticEntry?'<div class="muted">Порог и скидку найдёт сервер по условиям WB</div>':!pNum(item.row.promoPlanPrice)&&priceWorkbench.action!=='price'?'<div class="muted">Порог неизвестен · статус участия проверьте в WB</div>':'')+'</div>').join('');
   const button=document.getElementById('priceWorkbenchApply');if(button)button.disabled=!items.some(item=>!item.error)||priceWorkbenchBusy;
 };
 window.submitPriceWorkbench=async function(){
@@ -521,13 +521,13 @@ window.submitPriceWorkbench=async function(){
   if(!confirm((automatic?'Подобрать скидку для '+eligible.length+' товаров по условиям акции?':'Сохранить изменения для '+eligible.length+' товаров? Они будут отправлены в ближайший сеанс WB.')+(skipped?' Пропущено: '+skipped+' — причины указаны в списке.':'')))return;
   priceWorkbenchBusy=true;window.priceWorkbenchPreview();
   try{
-    const response=await fetch(MILLIONER_API+'/api/market-prices/update/bulk',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({market:ctx.market,action:ctx.action,remoteIds:eligible.map(item=>String(item.row.remoteId)),price:document.getElementById('priceWorkbenchPrice')?.value||null,discount:ctx.action==='exit'?0:document.getElementById('priceWorkbenchDiscount')?.value||null,confirm:true})});
-    const result=await response.json();if(!response.ok||result.ok===false)throw new Error(result.error||('HTTP '+response.status));
+    const result=await protectedPriceRequest('/api/market-prices/update/bulk',{market:ctx.market,action:ctx.action,remoteIds:eligible.map(item=>String(item.row.remoteId)),price:document.getElementById('priceWorkbenchPrice')?.value||null,discount:ctx.action==='exit'?0:document.getElementById('priceWorkbenchDiscount')?.value||null},ctx.action==='enter'?'promo':'price');
+    if(!result)return;
     const applied=new Set((result.applied||[]).map(String));
     for(const id of applied)priceSelection(ctx.market).delete(id);
     closeModal();bumpPriceEpoch(ctx.market);
     if(priceUi.market===ctx.market){await window.renderPrices(true);setPriceStatus('Поиск условий акции: '+(result.discovery?.length||0)+' · очередь скидок: '+(applied.size-(result.discovery?.length||0))+' · пропущено: '+(ctx.ids.length-applied.size),'ok');}
-    if(result.skipped?.length)alert(result.skipped.map(item=>item.remoteId+': '+item.error).join('\n'));
+    if(result.skipped?.length)showPriceBlockedDetails(result.skipped.map(item=>({...item,name:ctx.rows.find(row=>String(row.remoteId)===String(item.remoteId))?.name||item.remoteId})));
   }catch(error){alert(priceErrorText(error));}
   finally{priceWorkbenchBusy=false;window.priceWorkbenchPreview();}
 };
@@ -734,16 +734,7 @@ window.submitPriceGroupDetach=async function(separateEach){
     setPriceStatus(separateEach?'Карточки разъединены и проверены':'Новая группа проверена по фактическим данным WB','ok');
   }catch(error){showPriceGroupFailure(error,ids)}
 };
-async function remotePromoBulk(remoteIds,enabled){
-  const response=await fetch(MILLIONER_API+'/api/market-prices/promo/bulk',{
-    method:'POST',headers:{'Content-Type':'application/json'},
-    body:JSON.stringify({market:priceUi.market,remoteIds,enabled:Boolean(enabled),confirm:true})
-  });
-  const text=await response.text();
-  let data=null;if(text){try{data=JSON.parse(text)}catch{throw new Error('Сервер акций вернул некорректный ответ')}}
-  if(!response.ok||data?.ok===false)throw new Error(data?.error||('HTTP '+response.status));
-  return data;
-}
+async function remotePromoBulk(remoteIds,enabled){return protectedPriceRequest('/api/market-prices/promo/bulk',{market:priceUi.market,remoteIds,enabled:Boolean(enabled)},'promo');}
 window.priceBulkPromo=async function(enabled){
   if(!priceIsWbMarket())return;
   const ids=[...priceSelection()].filter(Boolean);if(!ids.length)return;
@@ -752,7 +743,7 @@ window.priceBulkPromo=async function(enabled){
   const enableButton=document.getElementById('priceBulkEnablePromo'),disableButton=document.getElementById('priceBulkDisablePromo');
   if(enableButton)enableButton.disabled=true;if(disableButton)disableButton.disabled=true;
   try{
-    const result=await remotePromoBulk(ids,enabled),applied=new Set((result.remoteIds||ids).map(String));
+    const result=await remotePromoBulk(ids,enabled);if(!result){updatePriceBulkTools();return;}const applied=new Set((result.remoteIds||ids).map(String));
     for(const row of activeRows()){
       if(!applied.has(String(row.remoteId||'')))continue;
       row.promoEnabled=Boolean(enabled);
@@ -773,15 +764,50 @@ function priceMinuteTime(value){
   const minute=Math.max(0,Math.min(1439,Math.trunc(Number(value)||0)));
   return String(Math.floor(minute/60)).padStart(2,'0')+':'+String(minute%60).padStart(2,'0');
 }
-async function remoteNightSchedule(body){
-  const response=await fetch(MILLIONER_API+'/api/market-prices/night-schedule',{
-    method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({...body,confirm:true})
+function priceProtectionDialog(body,blocked,scope){
+  return new Promise(resolve=>{
+    const dialog=document.createElement('dialog');
+    dialog.className='price-protection-confirm';
+    dialog.setAttribute('aria-labelledby','priceProtectionTitle');
+    dialog.style.cssText='border:0;border-radius:24px;padding:22px;width:calc(100% - 32px);max-width:540px;max-height:85vh;box-sizing:border-box;color:#161616;background:#fff';
+    const night=scope==='night',promo=scope==='promo'||body.action==='enter';
+    const changes=night?'Ночная цена '+pMoney(body.price,'RUB')+' · '+body.start+'–'+body.end+' · '+priceNightDaysLabel(body.weekdays):promo?'Вход в акцию'+(body.discount!=null?' · скидка '+body.discount+'%':' · подбор условий WB'):body.action==='exit'?'Выход из акции · скидка 0%':[(body.price!=null?'Цена '+pMoney(body.price,'RUB'):''),(body.discount!=null?'Скидка '+body.discount+'%':'')].filter(Boolean).join(' · ');
+    dialog.innerHTML='<style>.price-protection-confirm::backdrop{background:rgba(0,0,0,.46)}.price-protection-confirm .price-confirm-actions{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:18px}.price-protection-confirm h3{margin:0 0 10px}.price-protection-confirm .price-confirm-list{max-height:30vh;overflow:auto;margin:14px 0}.price-protection-confirm .price-confirm-item{padding:10px 0;border-bottom:1px solid #eee}</style>'+
+      '<h3 id="priceProtectionTitle">Включена защита · '+blocked.length+'</h3><div style="background:#fff7e8;border:1px solid #ebd2a2;border-radius:14px;padding:12px">'+pEsc(changes)+'</div>'+
+      '<div class="price-confirm-list">'+blocked.map(row=>'<div class="price-confirm-item"><b>'+pEsc(row.name||row.nmId)+'</b><div class="muted">'+pEsc(row.reason||'Защита цены')+'</div></div>').join('')+'</div>'+
+      '<div class="muted">'+(night?'Разрешение действует для этого ночного расписания, включая возврат обычной цены. Защита остальных изменений и блок скидок сохранятся.':promo?'Разрешение действует для выбранных акций. Блок скидок будет снят только у этих товаров; защита обычной цены сохранится.':'Новое значение станет защищённым. Если задана положительная скидка, её блок 0% будет снят только у этих товаров.')+'</div><p style="margin:12px 0 0">Применить поверх защиты? Подтверждая, вы принимаете риск изменения цены.</p>'+
+      '<div class="price-confirm-actions"><button type="button" class="btn" data-price-confirm-cancel>Отменить</button><button type="button" class="btn dark" data-price-confirm-apply>Подтвердить</button></div>';
+    const finish=value=>{dialog.close();dialog.remove();resolve(value)};
+    dialog.querySelector('[data-price-confirm-cancel]').addEventListener('click',()=>finish(false),{once:true});
+    dialog.querySelector('[data-price-confirm-apply]').addEventListener('click',()=>finish(true),{once:true});
+    dialog.addEventListener('cancel',event=>{event.preventDefault();finish(false)},{once:true});
+    document.body.appendChild(dialog);dialog.showModal();dialog.querySelector('[data-price-confirm-cancel]').focus();
   });
-  const text=await response.text();
-  let data=null;if(text){try{data=JSON.parse(text)}catch{throw new Error('Сервер ночных цен вернул некорректный ответ')}}
-  if(!response.ok||data?.ok===false)throw new Error(data?.error||('HTTP '+response.status));
-  return data;
 }
+const priceProtectedRequests=new Map();
+async function protectedPriceRequest(path,body,scope){
+  const captured=JSON.parse(JSON.stringify(body)),key=path+JSON.stringify(captured);
+  if(priceProtectedRequests.has(key))return priceProtectedRequests.get(key);
+  const task=(async()=>{
+    const send=async payload=>{
+      const response=await fetch(MILLIONER_API+path,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({...payload,confirm:true})});
+      const text=await response.text();let data;
+      try{data=JSON.parse(text)}catch{throw new Error('Сервер цен вернул некорректный ответ')}
+      if(!response.ok||data?.ok===false){const error=new Error(data?.error||('HTTP '+response.status));error.status=response.status;error.code=data?.code;error.blocked=data?.blocked;error.skippedDetails=data?.skippedDetails;throw error;}return data;
+    };
+    try{return await send(captured)}catch(error){
+      if(!['PRICE_PROTECTION_CONFIRMATION_REQUIRED','NIGHT_PROTECTION_CONFIRMATION_REQUIRED'].includes(error.code)||!error.blocked?.length)throw error;
+      if(!await priceProtectionDialog(captured,error.blocked,scope))return null;
+      return send({...captured,overrideProtection:true,overrideRemoteIds:error.blocked.map(row=>String(row.nmId))});
+    }
+  })();
+  priceProtectedRequests.set(key,task);try{return await task}finally{priceProtectedRequests.delete(key)}
+}
+function showPriceBlockedDetails(rows){
+  if(!rows?.length)return;
+  showSheet('<h3>Не удалось применить · '+rows.length+'</h3>'+rows.map(row=>'<div class="item"><b>'+pEsc(row.name||row.nmId||row.remoteId)+'</b><div class="muted">'+pEsc(row.reason||row.error)+'</div></div>').join('')+'<button type="button" class="btn full" onclick="closeModal()">Понятно</button>');
+}
+async function remoteNightSchedule(body){return protectedPriceRequest('/api/market-prices/night-schedule',body,'night');}
 function priceNightWeekdays(value){return Array.isArray(value)?value:[1,2,3,4,5,6,7];}
 function priceNightDaysLabel(value){const days=priceNightWeekdays(value),names=['Пн','Вт','Ср','Чт','Пт','Сб','Вс'];return days.length===7?'Ежедневно':days.map(day=>names[day-1]).join(', ');}
 function priceNightDaysPicker(id,value){
@@ -804,9 +830,11 @@ window.savePriceCardNight=async function(index,enabled){
   if(enabled&&!weekdays.length)return alert('Выберите хотя бы один день недели.');
   try{
     const result=await remoteNightSchedule({market:row.market,remoteIds:[row.remoteId],enabled:Boolean(enabled),start,end,weekdays:weekdays.length?weekdays:priceNightWeekdays(row.nightPriceWeekdays),price:price>0?price:0});
+    if(!result){if(box)box.checked=Boolean(row.nightPriceEnabled);return;}
     const schedule=(result.schedules||[]).find(item=>String(item.nmId||'')===String(row.remoteId||''));
     if(!schedule)throw new Error('Расписание не сохранено: товар защищён или недоступен');
     row.nightPriceEnabled=Boolean(schedule.enabled);
+    row.nightProtectionOverride=Boolean(schedule.protectionOverride);
     if(schedule){
       row.nightPriceWeekdays=priceNightWeekdays(schedule.weekdays);
       row.nightPriceStart=priceMinuteTime(schedule.startMinute);
@@ -819,7 +847,7 @@ window.savePriceCardNight=async function(index,enabled){
     setPriceStatus(enabled?'Ночная цена включена':'Ночной режим выключен','ok');
   }catch(error){
     if(box)box.checked=Boolean(row.nightPriceEnabled);
-    alert(priceErrorText(error));
+    if(error.skippedDetails?.length)showPriceBlockedDetails(error.skippedDetails);else alert(priceErrorText(error));
   }
 };
 window.openPriceNightSchedule=function(){
@@ -851,12 +879,13 @@ window.savePriceNightSchedule=async function(enabled){
   if(enabled&&!weekdays.length)return alert('Выберите хотя бы один день недели.');
   try{
     const result=await remoteNightSchedule({market:ctx.market,remoteIds:ids,enabled:Boolean(enabled),start,end,price,...(weekdays.length?{weekdays}:{})});
+    if(!result)return;
     const schedules=result.schedules||[],applied=new Set(schedules.map(row=>String(row.nmId)));
     for(const id of applied)priceSelection(ctx.market).delete(id);
     closeModal();bumpPriceEpoch(ctx.market);
     if(priceUi.market===ctx.market){await window.renderPrices(true);setPriceStatus((enabled?'Ночь сохранена':'Ночь выключена')+' · '+applied.size+' · пропущено '+(ids.length-applied.size),'ok');}
-    if(result.skipped?.length)alert('Не изменены: '+result.skipped.join(', ')+'. Проверьте защиту цены и цены размеров.');
-  }catch(error){alert(priceErrorText(error))}
+    if(result.skippedDetails?.length)showPriceBlockedDetails(result.skippedDetails);
+  }catch(error){if(error.skippedDetails?.length)showPriceBlockedDetails(error.skippedDetails);else alert(priceErrorText(error))}
 };
 
 window.hidePriceRow=function(index){
@@ -898,22 +927,14 @@ window.collapsePriceEditor=function(){
   priceExpanded=null;paintPrices();
 };
 
-async function remotePromoToggle(body){
-  const response=await fetch(MILLIONER_API+'/api/market-prices/promo',{
-    method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({...body,confirm:true})
-  });
-  const text=await response.text();
-  let data=null;if(text){try{data=JSON.parse(text)}catch{throw new Error('Сервер акций вернул некорректный ответ')}}
-  if(!response.ok||data?.ok===false)throw new Error(data?.error||('HTTP '+response.status));
-  return data;
-}
+async function remotePromoToggle(body){return protectedPriceRequest('/api/market-prices/promo',body,'promo');}
 window.togglePricePromo=async function(index,enabled){
   const row=activeRows()[Number(index)];if(!row||(row.market!=='WB'&&row.market!=='WB2'))return;
-  if(enabled&&(row.priceProtected||row.promoBlocked)){paintPrices();return alert('Для товара включена защита цены или запрет акций.');}
   const checkbox=document.querySelector('[data-price-row="'+Number(index)+'"] .price-promo-toggle input');
   if(checkbox)checkbox.disabled=true;
   try{
     const result=await remotePromoToggle({market:row.market,remoteId:row.remoteId,enabled:Boolean(enabled)});
+    if(!result){paintPrices();return;}
     row.promoEnabled=Boolean(result.enabled);
     if(row.promoStatus!=='participating')row.promoStatus=row.promoEnabled?'idle':'off';
     if(!row.promoEnabled&&row.promoStatus!=='participating'){row.promoName='';row.promoPlanPrice=null;row.promoPlanDiscount=null}
@@ -924,15 +945,10 @@ window.togglePricePromo=async function(index,enabled){
   }
 };
 async function remotePriceUpdate(body){
-  const workbench=priceIsWbMarket(body.market)&&body.overrideProtection!==true;
+  const workbench=priceIsWbMarket(body.market);
   if(workbench)body={...body,remoteIds:[body.remoteId],action:'price'};
-  const response=await fetch(MILLIONER_API+'/api/market-prices/update'+(workbench?'/bulk':''),{
-    method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({...body,confirm:true})
-  });
-  const text=await response.text();
-  let data=null;if(text){try{data=JSON.parse(text)}catch{const e=new Error('Сервер цен вернул некорректный ответ');e.status=502;throw e}}
-  if(!response.ok||data?.ok===false){const error=new Error(data?.error||('HTTP '+response.status));error.status=response.status;error.retryAt=Number(data?.retryAt)||0;throw error}
-  if(!data||typeof data!=='object')throw new Error('Сервер цен вернул пустой ответ');
+  const data=await protectedPriceRequest('/api/market-prices/update'+(workbench?'/bulk':''),body,'price');
+  if(!data)return null;
   if(workbench&&!data.applied?.length)throw new Error(data.skipped?.[0]?.error||'Изменение не сохранено');
   return data;
 }
@@ -970,13 +986,9 @@ window.submitPriceEdit=async function(index){
       const question='Сохранить для '+marketLabel(row.market)+' '+changes.join(' и ')+'?';
       if(!confirm(question))return;
       const body={market:row.market,remoteId:row.remoteId};
-      if(row.priceProtected){
-        if(!confirm('Защита цены включена. Всё равно изменить цену/скидку вручную и сохранить новое значение как защищённое?'))return;
-        body.overrideProtection=true;
-      }
       if(priceChanged)body.price=enteredPrice;
       if(discountChanged)body.discount=enteredDiscount;
-      const result=await remotePriceUpdate(body);
+      const result=await remotePriceUpdate(body);if(!result)return;
       if(priceChanged){row.nightBasePrice=enteredPrice;row.price=enteredPrice;row.priceMax=enteredPrice;row.finalPrice=enteredPrice*(1-enteredDiscount/100);row.finalPriceMax=row.finalPrice}
       if(discountChanged){row.discount=enteredDiscount;if(!priceChanged&&pNum(row.price)>0){row.finalPrice=pNum(row.price)*(1-enteredDiscount/100);row.finalPriceMax=pNum(row.priceMax||row.price)*(1-enteredDiscount/100)}}
       row.syncState='pending';row.syncQueuedAt=Number(result.queuedAt)||Date.now();row.syncSentAt=0;row.syncError='';

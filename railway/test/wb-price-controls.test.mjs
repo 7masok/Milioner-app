@@ -42,7 +42,7 @@ test('manual and automatic price protection guard all price automation paths',()
   assert.match(prices,/updateProtectionBaseline/);
   assert.match(prices,/source NOT IN \('manual','protection'\)/);
   assert.match(prices,/await syncWbPriceProtection\(market, now\);\s*await syncWbNightSchedules/);
-  assert.match(prices,/if \(row\.priceProtected\)/);
+  assert.match(prices,/if \(row\.priceProtected && !schedule\.protectionOverride\)/);
   assert.match(promo,/promo_block=true OR manual_price_lock=true OR auto_zero_lock=true/);
   assert.match(promo,/manual_price_lock=true OR auto_zero_lock=true/);
   assert.match(protection,/pref\.autoZeroEnabled&&known&&available===0&&!autoLock/);
@@ -103,7 +103,7 @@ test('Prices UI isolates WB shops and exposes group and protection controls',()=
   assert.match(ui,/manualPriceLock/);
   assert.match(ui,/promoBlock/);
   assert.match(ui,/autoZeroEnabled/);
-  assert.match(ui,/overrideProtection=true/);
+  assert.match(ui,/overrideProtection:true/);
 });
 
 test('WB stock display uses the current Analytics warehouse inventory API and cache',()=>{
@@ -143,7 +143,7 @@ test('night scheduler source restores the previous window before any new raise',
   const sql=read('../migrations/138_wb_night_restore_source_guard.sql');
   assert.match(prices,/savedBasePrice > 0 && schedule\.windowKey !== window\.windowKey/);
   assert.match(prices,/const previousRestoreTarget = wbSafeReturnPrice\(confirmedPrice, savedBasePrice\)/);
-  assert.match(prices,/queueSchedulePrice\(market, schedule\.nmId, previousRestoreTarget\)/);
+  assert.match(prices,/queueSchedulePrice\(market, schedule\.nmId, previousRestoreTarget, pool, protectedDiscount\)/);
   assert.match(prices,/phase='restoring',last_error='',updated_at=\$3/);
   assert.match(prices,/schedule\.phase === 'error'[\s\S]*Number\(schedule\.basePrice\) > 0/);
   assert.match(prices,/CASE WHEN base_price IS NOT NULL AND base_price > 0 THEN 'restoring' ELSE \$3 END/);
