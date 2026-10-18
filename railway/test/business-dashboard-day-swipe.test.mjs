@@ -77,7 +77,8 @@ test('horizontal swipes change days while scroll, tap, cancellation and multiple
  f.swipe(-80);await flush();assert.equal(f.api.businessSelectedDayOffset(),0);
  f.swipe(-80);assert.equal(f.api.businessSelectedDayOffset(),0);
  for(let i=0;i<9;i++)await f.window.shiftBusinessDashboardDay(-1);
- assert.equal(f.api.businessSelectedDayOffset(),-7);assert.equal(f.element('businessDayPrevious').disabled,true);
+ assert.equal(f.api.businessSelectedDayOffset(),-9);assert.equal(f.element('businessDayPrevious').disabled,false);
+ const reload=fixture(JSON.parse(f.storage.get('milioner_business_dashboard_v1')));assert.equal(reload.api.businessSelectedDayOffset(),-9);
 });
 
 test('a late response cannot replace a cached selected day or another period',async()=>{
@@ -131,11 +132,13 @@ test('weekly swipes navigate five full weeks with exact histories and matching d
  for(let i=0;i<4;i++)await f.window.shiftBusinessDashboardWeek(-1);
  assert.equal(f.api.businessSelectedWeekOffset(),-5);
  assert.equal(f.element('businessValue').textContent,expected(-5)+' ₸');assert.equal(f.element('businessYesterdayValue').textContent,expected(-6)+' ₸');
- assert.equal(f.element('businessDayPrevious').disabled,true);await f.window.shiftBusinessDashboardWeek(-1);assert.equal(f.api.businessSelectedWeekOffset(),-5);
+ assert.equal(f.element('businessDayPrevious').disabled,false);
  const oldest=f.api.businessWeekBounds(-6).start;
  assert.ok(f.requests.some(row=>row.orderHistoryUrl?.endsWith('after='+oldest)));
  assert.ok(f.requests.some(row=>row.range?.from==='2026-08-24'&&row.range.to==='2026-08-30'));
  f.window.setBusinessDashboardMetric('buyouts');assert.equal(f.element('businessValue').textContent,expected(-5)+' ₸');
+ await f.window.shiftBusinessDashboardWeek(-1);assert.equal(f.api.businessSelectedWeekOffset(),-6);assert.equal(f.element('businessDayPrevious').disabled,false);
+ assert.equal(fixture(JSON.parse(f.storage.get('milioner_business_dashboard_v1'))).api.businessSelectedWeekOffset(),-6);
  await f.window.setBusinessDashboardPeriod('week');assert.equal(f.api.businessSelectedWeekOffset(),0);assert.match(f.element('businessValueLabel').textContent,/эта неделя/);
  f.swipe(-80);assert.equal(f.api.businessSelectedWeekOffset(),0);assert.equal(JSON.stringify(f.state),unchanged);
 });
@@ -146,7 +149,7 @@ test('saved week retains its Monday across week/year boundaries and vertical ges
  await f.window.shiftBusinessDashboardWeek(-1);const saved=JSON.parse(f.storage.get('milioner_business_dashboard_v1'));assert.equal(saved.weekDate,'2026-09-21');
  const reload=fixture(saved);assert.equal(reload.api.businessSelectedWeekOffset(),-2);
  reload.setNow(Date.parse('2026-10-12T00:01:00+05:00'));assert.equal(reload.api.businessSelectedWeekOffset(),-3);
- reload.setNow(Date.parse('2027-01-01T00:01:00+05:00'));assert.equal(reload.api.businessWeekBounds(0).start,Date.parse('2026-12-28T00:00:00+05:00'));assert.equal(reload.api.businessSelectedWeekOffset(),-5);
+ reload.setNow(Date.parse('2027-01-01T00:01:00+05:00'));assert.equal(reload.api.businessWeekBounds(0).start,Date.parse('2026-12-28T00:00:00+05:00'));assert.equal(reload.api.businessSelectedWeekOffset(),-14);
 });
 
 test('late weekly history cannot replace the current week, and incomplete history is not shown as zero',async()=>{
@@ -157,7 +160,7 @@ test('late weekly history cannot replace the current week, and incomplete histor
  const truncated=fixture({period:'week'});truncated.ctx.apiJson=async()=>({ok:true,orders:Array(15000).fill({})});await truncated.window.shiftBusinessDashboardWeek(-1);assert.equal(truncated.element('businessValue').textContent,'—');assert.equal(truncated.element('businessChart').innerHTML,'');
 });
 
-test('monthly swipes use full historical calendar months, correct comparison dates and three-month navigation',async()=>{
+test('monthly swipes use full historical calendar months, correct comparison dates and unlimited backward navigation',async()=>{
  const f=fixture({period:'month'});
  for(let offset=-180;offset<-50;offset++){const creationDate=stamp(offset),amount=500-offset*10;f.state.kaspiOrderFeed.push({market:'Kaspi',creationDate,status:'NEW',lines:[{qty:2,totalPrice:amount,productId:'p'}]})}
  await f.window.renderBusinessDashboard();assert.equal(f.element('businessDayNav').hidden,false);assert.equal(f.element('businessDayPrevious')['aria-label'],'Предыдущий месяц');
@@ -165,7 +168,9 @@ test('monthly swipes use full historical calendar months, correct comparison dat
  const b=f.api.businessMonthBounds(-1),total=f.state.kaspiOrderFeed.filter(r=>r.creationDate>=b.start&&r.creationDate<b.end).reduce((sum,r)=>sum+r.lines[0].totalPrice,0);assert.equal(f.element('businessValue').textContent,total+' ₸');
  assert.ok(f.requests.some(r=>r.orderHistoryUrl?.includes('before='+f.api.businessMonthBounds(-1).end)));
  f.swipe(60,100);assert.equal(f.api.businessSelectedMonthOffset(),-1);
- await f.window.shiftBusinessDashboardMonth(-1);await f.window.shiftBusinessDashboardMonth(-1);assert.equal(f.api.businessSelectedMonthOffset(),-3);assert.equal(f.element('businessDayPrevious').disabled,true);
+ await f.window.shiftBusinessDashboardMonth(-1);await f.window.shiftBusinessDashboardMonth(-1);assert.equal(f.api.businessSelectedMonthOffset(),-3);assert.equal(f.element('businessDayPrevious').disabled,false);
+ f.swipe(80);await flush();assert.equal(f.api.businessSelectedMonthOffset(),-4);
+ assert.equal(fixture(JSON.parse(f.storage.get('milioner_business_dashboard_v1'))).api.businessSelectedMonthOffset(),-4);
  await f.window.setBusinessDashboardPeriod('month');assert.equal(f.api.businessSelectedMonthOffset(),0);assert.equal(f.element('businessDayNext').disabled,true);
 });
 test('month selections persist across years; Almaty boundaries and leap February are independent of browser timezone',async()=>{
