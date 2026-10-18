@@ -160,9 +160,10 @@ export async function readWbOrderHistory(client,after,before,market,limit){
  return {rows:archive.rows.map(r=>({...object(r.payload),productId:r.productId||null,linkSource:r.productId?'sku-exact':null})),states:states.rows.map(r=>wbOrderHistoryStatus(r.market,r.payload))};
 }
 export function mergeReportingOrders(live,archive,limit){
- const byId=new Map(archive.map(row=>[row.market+'|'+row.orderId,row]));
- for(const row of live)byId.set(row.market+'|'+row.orderId,row); // Live statuses/prices win.
- return [...byId.values()].sort((a,b)=>b.creationDate-a.creationDate).slice(0,limit);
+ const group=rows=>{const result=new Map();for(const row of rows){const key=row.market+'|'+row.orderId,list=result.get(key)||[];list.push(row);result.set(key,list)}return result};
+ const byId=group(archive);
+ for(const [key,rows] of group(live))byId.set(key,rows); // A live order replaces its entire archive composition.
+ return [...byId.values()].flat().sort((a,b)=>b.creationDate-a.creationDate).slice(0,limit);
 }
 export const wbOrderHistoryRouter=express.Router();wbOrderHistoryRouter.use(requireTrustedOrigin);
 wbOrderHistoryRouter.get('/wb-order-history',asyncRoute(async(req,res)=>{
