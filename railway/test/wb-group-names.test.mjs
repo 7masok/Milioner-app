@@ -42,3 +42,23 @@ test('group selector escapes custom labels and lookup finds all members by name'
  assert.doesNotMatch(elements.priceGroupSelect.innerHTML,/>\s*<Рыбалка>/);
  assert.equal(context.window.fixture.search('рыбалка').length,2);
 });
+
+test('Без группы in group dropdown filters singleton cards, persists and can switch directly to a group or all',()=>{
+ const source=readFileSync(new URL('../../prices-v1.js',import.meta.url),'utf8');
+ const rows=[{market:'WB',remoteId:'1',name:'Нож',grouped:true,groupImtId:'123',groupSize:2},
+  {market:'WB',remoteId:'2',name:'Брелок',grouped:false,groupImtId:'456',groupSize:1},
+  {market:'WB',remoteId:'3',name:'Нож без группы',grouped:false,groupImtId:'789',groupSize:1}];
+ const elements={priceGroupSelect:{},priceGroupName:{}},saved=[];
+ const context={window:{},localStorage:{getItem:()=>null,setItem:(key,value)=>saved.push(JSON.parse(value))},
+  document:{getElementById:id=>elements[id]||null,querySelectorAll:()=>[]},KEY:'fixture'};
+ const modified=source.replace(/\}\)\(\);\s*$/,'window.fixture={set(rows){priceUi.market="WB";priceCache.set("WB",{rows})},visible:priceVisibleRows,search(q){priceUi.q=q},state(){return priceUi}};})();');
+ vm.runInNewContext(modified,context);const api=context.window;api.fixture.set(rows);api.priceSetGroup('__ungrouped__');
+ assert.deepEqual(Array.from(api.fixture.visible(),x=>x.row.remoteId),['2','3']);
+ assert.equal(elements.priceGroupSelect.value,'__ungrouped__');assert.equal(elements.priceGroupName.disabled,true);
+ assert.match(elements.priceGroupSelect.innerHTML,/Все группы<\/option><option value="__ungrouped__">Без группы/);
+ assert.match(elements.priceGroupSelect.innerHTML,/value="123"/,'other groups stay selectable');
+ assert.equal(saved.at(-1).groupFilter,'ungrouped');assert.equal(saved.at(-1).groupId,'');
+ api.fixture.search('нож');assert.deepEqual(Array.from(api.fixture.visible(),x=>x.row.remoteId),['3']);
+ api.fixture.search('');api.priceSetGroup('123');assert.deepEqual(Array.from(api.fixture.visible(),x=>x.row.remoteId),['1']);
+ api.priceSetGroup('__ungrouped__');api.priceSetGroup('');assert.equal(api.fixture.visible().length,3);assert.equal(api.fixture.state().groupFilter,'all');
+});

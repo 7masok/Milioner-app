@@ -104,15 +104,15 @@ function updatePriceGroupTools(){
   if(select){
     const groups=new Map(),q=priceUi.q.trim().toLocaleLowerCase('ru-RU');
     for(const row of activeRows()){
-      if(row?.error||!row?.grouped||!row?.groupImtId||priceIsHidden(row)||priceUi.groupFilter==='ungrouped')continue;
+      if(row?.error||!row?.grouped||!row?.groupImtId||priceIsHidden(row))continue;
       if(q&&![row.name,row.sku,row.remoteId,row.account,row.groupName].some(value=>String(value||'').toLocaleLowerCase('ru-RU').includes(q)))continue;
       const id=String(row.groupImtId),group=groups.get(id)||{row,count:0};
       group.count+=1;groups.set(id,group);
     }
-    const options=['<option value="">Все группы</option>',...[...groups.entries()].sort((a,b)=>String(a[1].row?.name||'').localeCompare(String(b[1].row?.name||''),'ru')).map(([id,group])=>'<option value="'+pEsc(id)+'">'+pEsc(priceGroupLabel(group.row))+' · '+(group.count===Number(group.row.groupSize)?group.count:group.count+' видно / '+Number(group.row.groupSize))+'</option>')];
+    const options=['<option value="">Все группы</option>','<option value="__ungrouped__">Без группы</option>',...[...groups.entries()].sort((a,b)=>String(a[1].row?.name||'').localeCompare(String(b[1].row?.name||''),'ru')).map(([id,group])=>'<option value="'+pEsc(id)+'">'+pEsc(priceGroupLabel(group.row))+' · '+(group.count===Number(group.row.groupSize)?group.count:group.count+' видно / '+Number(group.row.groupSize))+'</option>')];
     // Keep the current filter explicit; never silently switch to unrelated products.
     if(priceUi.groupId&&!groups.has(priceUi.groupId))options.push('<option value="'+pEsc(priceUi.groupId)+'">Группа '+pEsc(priceUi.groupId)+' · нет видимых товаров</option>');
-    select.innerHTML=options.join('');select.value=priceUi.groupId||'';
+    select.innerHTML=options.join('');select.value=priceUi.groupFilter==='ungrouped'?'__ungrouped__':priceUi.groupId||'';
   }
   const rename=document.getElementById('priceGroupName');
   if(rename)rename.disabled=!priceUi.groupId||!activeRows().some(row=>row.grouped&&String(row.groupImtId)===priceUi.groupId);
@@ -445,7 +445,8 @@ window.priceSetGroupFilter=function(value){
   priceUi.groupFilter=['grouped','ungrouped'].includes(value)?value:'all';priceUi.groupId='';rememberPriceUi();paintPrices();
 };
 window.priceSetGroup=function(value){
-  priceUi.groupId=String(value||'');if(priceUi.groupId)priceUi.groupFilter='all';rememberPriceUi();paintPrices();
+  priceUi.groupFilter=value==='__ungrouped__'?'ungrouped':'all';
+  priceUi.groupId=value==='__ungrouped__'?'':String(value||'');rememberPriceUi();paintPrices();
 };
 window.priceSearch=function(value){
   priceUi.q=String(value||'');rememberPriceUi();paintPrices();
