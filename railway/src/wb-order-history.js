@@ -9,7 +9,7 @@ const object=v=>{if(v&&typeof v==='object')return v;try{return JSON.parse(v||'{}
 const text=v=>String(v??'').trim();
 export function initialWbOrderHistory(now){
  const anchor=Math.floor(now/1000)*1000,goal=Math.floor((now+18000000)/DAY)*DAY-18000000-364*DAY;
- return {anchor,goal,coveredFrom:anchor,from:Math.max(goal,anchor-29*DAY),to:anchor,cursor:0,phase:'orders',pending:[],rows:0,complete:false,nextAllowedAt:0,lastError:''};
+ return {version:2,anchor,goal,coveredFrom:anchor,from:Math.max(goal,anchor-29*DAY),to:anchor,cursor:0,phase:'orders',pending:[],rows:0,complete:false,nextAllowedAt:0,lastError:''};
 }
 function compactOrder(raw){
  return Object.fromEntries(['id','orderUid','article','nmId','techSize','skus','createdAt','price','finalPrice','convertedPrice','convertedFinalPrice','currencyCode','convertedCurrencyCode'].map(k=>[k,raw[k]]).filter(([,v])=>v!==undefined));
@@ -35,30 +35,56 @@ function finishWindow(state,now){
   if(!state.complete){state.to=state.from;state.from=Math.max(state.goal,state.to-29*DAY)}
   else state.nextAllowedAt=now+DAY;
  }
- state.cursor=0;state.phase='orders';state.pending=[];
+ state.cursor=0;state.phase='orders';state.pending=[];delete state.archiveMonths;delete state.archiveIndex;delete state.archiveCursor;
 }
-export async function stepWbOrderHistory(input,{market,fetchPage,fetchStatuses,now}){
+function finishLiveWindow(state,now){
+ // The ordinary endpoint only retains three months. Query the archive as well
+ // for older windows, with an overlap so the moving retention edge is covered.
+ if(state.from<now-60*DAY){
+  const first=new Date(state.from),last=new Date(state.to),months=[];
+  for(let d=new Date(Date.UTC(first.getUTCFullYear(),first.getUTCMonth(),1));d<=last;d.setUTCMonth(d.getUTCMonth()+1))months.push({year:d.getUTCFullYear(),month:d.getUTCMonth()+1});
+  state.archiveMonths=months;state.archiveIndex=0;state.archiveCursor=0;state.phase='archive';state.pending=[];
+ }else finishWindow(state,now);
+}
+export async function stepWbOrderHistory(input,{market,fetchPage,fetchStatuses,fetchArchive,now}){
  const state=structuredClone(input),rows=[];state.nextAllowedAt=now+SLOT;
  if(state.complete&&!state.mode){
   // Daily refresh overlaps the previous scan and advances continuously after downtime.
   const end=Math.min(Math.floor(now/1000)*1000,state.anchor+28*DAY);
   state.mode='refresh';state.from=Math.max(state.goal,state.anchor-DAY);state.to=end;state.cursor=0;state.phase='orders';
  }
- if(state.phase==='orders'){
+ // Older windows belong to the archive endpoint; do not send unsupported
+ // dates to the ordinary endpoint or interpret its empty response as history.
+ if(state.phase==='orders'&&state.to<now-93*DAY)finishLiveWindow(state,now);
+ if(state.phase==='archive'){
+  const month=state.archiveMonths[state.archiveIndex],data=await fetchArchive({...month,cursor:state.archiveCursor});
+  if(!Array.isArray(data?.orders)||data.orders.length>1000)throw Error('WB вернул неполную страницу архива');
+  const next=Number(data.next);
+  if(!Number.isSafeInteger(next)||next<0||(data.orders.length&&next!==0&&next<=state.archiveCursor))throw Error('WB вернул некорректный курсор архива');
+  for(const raw of data.orders){
+   const at=Date.parse(raw.createdAt),date=new Date(at);
+   if(!(at>0)||date.getUTCFullYear()!==month.year||date.getUTCMonth()+1!==month.month)throw Error('WB вернул архивные заказы за пределами месяца');
+   if(at>=state.from&&at<=state.to)rows.push(historicalWbOrder(market,{...raw.product,...raw.priceInfo,id:raw.id,orderUid:raw.orderUid,createdAt:raw.createdAt},raw.status));
+  }
+  if(!data.orders.length||next===0){
+   state.archiveIndex++;state.archiveCursor=0;
+   if(state.archiveIndex>=state.archiveMonths.length)finishWindow(state,now);
+  }else state.archiveCursor=next;
+ }else if(state.phase==='orders'){
   const data=await fetchPage({from:state.from,to:state.to,cursor:state.cursor});
   if(!Array.isArray(data?.orders)||data.orders.length>1000)throw Error('WB вернул неполную страницу истории');
   const next=Number(data.next);
   if(!Number.isSafeInteger(next)||next<0||(data.orders.length&&next!==0&&next<=state.cursor))throw Error('WB вернул некорректный курсор истории');
   const pending=data.orders.map(compactOrder);
   if(pending.some(o=>!Number.isSafeInteger(Number(o.id))||Number(o.id)<=0||!(Date.parse(o.createdAt)>=state.from&&Date.parse(o.createdAt)<=state.to)))throw Error('WB вернул заказы за пределами запрошенного периода');
-  if(!pending.length)finishWindow(state,now);
+  if(!pending.length)finishLiveWindow(state,now);
   else{state.pending=pending;state.pageNext=next;state.phase='statuses'}
  }else{
   const data=await fetchStatuses(state.pending.map(o=>Number(o.id)));
   if(!Array.isArray(data?.orders))throw Error('WB не вернул статусы истории');
   const statuses=new Map(data.orders.map(s=>[text(s.id),s]));
   for(const order of state.pending)rows.push(historicalWbOrder(market,order,statuses.get(text(order.id))));
-  if(state.pageNext===0)finishWindow(state,now);
+  if(state.pageNext===0)finishLiveWindow(state,now);
   else{state.cursor=state.pageNext;state.pending=[];state.phase='orders'}
  }
  state.lastError='';return {state,rows};
@@ -78,7 +104,9 @@ export async function syncWbOrderHistory(market,{client=pool,token,fetcher=fetch
  try{
   locked=Boolean((await db.query('SELECT pg_try_advisory_lock(730146,hashtext($1)) AS locked',[market])).rows[0]?.locked);if(!locked)return;
   const old=(await db.query('SELECT payload FROM wb_order_history_state WHERE market=$1',[market])).rows[0];
-  state=old?object(old.payload):initialWbOrderHistory(now);if(state.nextAllowedAt>now)return;
+  state=old?object(old.payload):initialWbOrderHistory(now);
+  if(state.version!==2){const prior=state;state={...initialWbOrderHistory(now),rows:Number(prior.rows)||0,nextAllowedAt:Number(prior.nextAllowedAt)||0};}
+  if(state.nextAllowedAt>now)return;
   state.nextAllowedAt=now+SLOT;await persist();recovery=structuredClone(state); // Reserve before upstream; survives a restart.
   const request=async(path,body)=>{
    const response=await fetcher(API+path,{method:body?'POST':'GET',headers:{Authorization:token,Accept:'application/json',...(body?{'Content-Type':'application/json'}:{})},...(body?{body:JSON.stringify(body)}:{}),signal:AbortSignal.timeout(25000)});
@@ -87,7 +115,8 @@ export async function syncWbOrderHistory(market,{client=pool,token,fetcher=fetch
   };
   const result=await stepWbOrderHistory(state,{market,now,
    fetchPage:({from,to,cursor})=>request('/api/v3/orders?'+new URLSearchParams({limit:'1000',next:String(cursor),dateFrom:String(Math.floor(from/1000)),dateTo:String(Math.floor(to/1000))})),
-   fetchStatuses:ids=>request('/api/v3/orders/status',{orders:ids})});
+   fetchStatuses:ids=>request('/api/v3/orders/status',{orders:ids}),
+   fetchArchive:({year,month,cursor})=>request('/api/marketplace/v3/fbs/orders/archive?'+new URLSearchParams({year:String(year),month:String(month),limit:'1000',next:String(cursor)}))});
   await db.query('BEGIN');
   let inserted=0;
   for(const row of result.rows){
@@ -96,10 +125,12 @@ export async function syncWbOrderHistory(market,{client=pool,token,fetcher=fetch
    if(saved.rows[0]?.inserted)inserted++;
   }
   state=result.state;state.rows+=inserted;await persist();await db.query('COMMIT');
+  console.info('WB order history progress',JSON.stringify({market,...wbOrderHistoryStatus(market,state),phase:state.phase,inserted}));
  }catch(error){
   await db.query('ROLLBACK').catch(()=>{});
   state=recovery||state;
   if(state){state.lastError=/^WB /.test(error.message)?error.message:'Не удалось догрузить историю заказов WB';state.nextAllowedAt=Math.max(now+5*60000,Number(error.retryAt)||0);await persist();}
+  console.warn('WB order history retry',JSON.stringify({market,error:state?.lastError||'Не удалось запустить архив заказов WB',nextAllowedAt:state?.nextAllowedAt||0}));
  }finally{if(locked)await db.query('SELECT pg_advisory_unlock(730146,hashtext($1))',[market]).catch(()=>{});db.release()}
 }
 export async function readWbOrderHistory(client,after,before,market,limit){
@@ -124,6 +155,16 @@ wbOrderHistoryRouter.get('/wb-order-history',asyncRoute(async(req,res)=>{
 }));
 let timer,running=false;
 export function startWbOrderHistoryLoop(){
- if(timer)return;const run=async()=>{if(running||!config.marketSyncEnabled)return;running=true;try{for(const market of ['WB','WB2'])await syncWbOrderHistory(market)}catch{console.warn('WB order history worker failed')}finally{running=false}};
+ if(timer)return;
+ // Like the operational order worker, use configured credentials. The legacy
+ // migration switch is not used by the live marketplace loops and can remain
+ // false on an otherwise active warehouse. It must not silently stop this archive.
+ const run=async()=>{
+  if(running)return;running=true;
+  try{for(const market of ['WB','WB2']){
+   try{await syncWbOrderHistory(market)}catch{console.warn('WB order history worker failed',market)}
+  }}finally{running=false}
+ };
+ console.info('WB order history worker started',JSON.stringify({legacySyncEnabled:config.marketSyncEnabled}));
  setTimeout(run,25000).unref();timer=setInterval(run,60000);timer.unref();
 }
