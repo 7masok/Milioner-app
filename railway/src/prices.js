@@ -449,17 +449,28 @@ function isWbGradualReductionError(value) {
   return /quarant|карантин|more than.*twice|lower.*gradual|gradually|постеп/i.test(cleanText(value));
 }
 
-export function wbNightWindowState(startMinute, endMinute, now = Date.now()) {
+export function normalizeWbNightWeekdays(value) {
+  if (value === undefined || value === null) return [1, 2, 3, 4, 5, 6, 7];
+  if (!Array.isArray(value) || !value.length || value.some(day => !Number.isInteger(day) || day < 1 || day > 7)) {
+    const error = new Error('Выберите хотя бы один день недели');
+    error.status = 400;
+    throw error;
+  }
+  return [...new Set(value)].sort((a, b) => a - b);
+}
+
+export function wbNightWindowState(startMinute, endMinute, now = Date.now(), weekdays) {
   const start = Math.max(0, Math.min(1439, Math.trunc(Number(startMinute) || 0)));
   const end = Math.max(0, Math.min(1439, Math.trunc(Number(endMinute) || 0)));
   const local = new Date(Number(now) + ALMATY_OFFSET_MS);
   const minute = local.getUTCHours() * 60 + local.getUTCMinutes();
   const today = local.toISOString().slice(0, 10);
   const previous = new Date(Date.UTC(local.getUTCFullYear(), local.getUTCMonth(), local.getUTCDate()) - 86_400_000).toISOString().slice(0, 10);
-  if (start === end) return { inWindow: false, windowKey: '', minute };
-  if (start < end) return { inWindow: minute >= start && minute < end, windowKey: minute >= start && minute < end ? today : '', minute };
-  const inWindow = minute >= start || minute < end;
-  return { inWindow, windowKey: inWindow ? (minute >= start ? today : previous) : '', minute };
+  const insideTime = start !== end && (start < end ? minute >= start && minute < end : minute >= start || minute < end);
+  const windowDate = start > end && minute < end ? previous : today;
+  const weekday = new Date(windowDate + 'T00:00:00Z').getUTCDay() || 7;
+  const inWindow = insideTime && normalizeWbNightWeekdays(weekdays).includes(weekday);
+  return { inWindow, windowKey: inWindow ? windowDate : '', minute };
 }
 
 async function wbPriceState(market, client = pool) {
@@ -504,7 +515,7 @@ async function wbPriceQueueRows(market, client = pool) {
 
 async function wbPriceSchedules(market, client = pool) {
   const result = await client.query(`SELECT market,nm_id AS "nmId",enabled,start_minute AS "startMinute",
-    end_minute AS "endMinute",target_price AS "targetPrice",base_price AS "basePrice",
+    end_minute AS "endMinute",weekdays,target_price AS "targetPrice",base_price AS "basePrice",
     window_key AS "windowKey",manual_override_window AS "manualOverrideWindow",phase,
     last_error AS "lastError",updated_at AS "updatedAt"
     FROM wb_price_schedules WHERE market=$1 ORDER BY nm_id`, [market]);
@@ -512,6 +523,7 @@ async function wbPriceSchedules(market, client = pool) {
     ...row,
     nmId: String(row.nmId || ''),
     enabled: Boolean(row.enabled),
+    weekdays: normalizeWbNightWeekdays(row.weekdays),
     startMinute: Number(row.startMinute || 0),
     endMinute: Number(row.endMinute || 0),
     targetPrice: Number(row.targetPrice || 0),
@@ -530,6 +542,7 @@ function decorateWbNightSchedules(rows, schedules) {
     const row = { ...raw };
     const schedule = byNm.get(String(row.remoteId || ''));
     row.nightPriceEnabled = Boolean(schedule?.enabled);
+    row.nightPriceWeekdays = normalizeWbNightWeekdays(schedule?.weekdays);
     row.nightPriceStart = schedule ? minuteToTime(schedule.startMinute) : '04:00';
     row.nightPriceEnd = schedule ? minuteToTime(schedule.endMinute) : '06:00';
     row.nightPriceTarget = schedule?.targetPrice || null;
@@ -565,12 +578,12 @@ async function holdSchedulePrice(market, nmId, price, client = pool) {
 
 async function markManualScheduleOverride(market, nmId, desiredPrice, now = Date.now()) {
   if (!(Number(desiredPrice) > 0)) return;
-  const result = await pool.query(`SELECT enabled,start_minute AS "startMinute",end_minute AS "endMinute",
+  const result = await pool.query(`SELECT enabled,start_minute AS "startMinute",end_minute AS "endMinute",weekdays,
     target_price AS "targetPrice",base_price AS "basePrice",window_key AS "windowKey"
     FROM wb_price_schedules WHERE market=$1 AND nm_id=$2`, [market, nmId]);
   const schedule = result.rows[0];
   if (!schedule) return;
-  const window = wbNightWindowState(schedule.startMinute, schedule.endMinute, now);
+  const window = wbNightWindowState(schedule.startMinute, schedule.endMinute, now, schedule.weekdays);
   const inWindow = Boolean(schedule.enabled) && window.inWindow;
   const desiredIsNight = samePrice(desiredPrice, schedule.targetPrice);
   const replaceBase = !inWindow && !desiredIsNight;
@@ -612,7 +625,7 @@ async function syncWbNightSchedules(market, now = Date.now()) {
       continue;
     }
     const confirmedPrice = number(row.price);
-    const window = wbNightWindowState(schedule.startMinute, schedule.endMinute, now);
+    const window = wbNightWindowState(schedule.startMinute, schedule.endMinute, now, schedule.weekdays);
     let queueRow = queueByNm.get(schedule.nmId);
     // Preserve uploadID across an end-of-window or target change until WB is checked.
     if (nightUploadInFlight(queueRow)) continue;
@@ -1082,7 +1095,7 @@ async function saveWbPriceRead(market, state, batch, now) {
       if (priceOk && discountOk) {
         if (queued.source === 'schedule') {
           const schedule = scheduleByNm.get(String(queued.nmId));
-          const window = schedule ? wbNightWindowState(schedule.startMinute, schedule.endMinute, now) : { inWindow: false, windowKey: '' };
+          const window = schedule ? wbNightWindowState(schedule.startMinute, schedule.endMinute, now, schedule.weekdays) : { inWindow: false, windowKey: '' };
           const keepHeld = Boolean(schedule?.enabled && window.inWindow && window.windowKey === schedule.windowKey
             && schedule.manualOverrideWindow !== window.windowKey
             && Number(queued.desiredPrice) === Number(schedule.targetPrice));
@@ -1528,10 +1541,10 @@ pricesRouter.post('/market-prices/update/bulk', requireWritesEnabled, asyncRoute
           ON CONFLICT(market,nm_id) DO UPDATE SET desired_price=excluded.desired_price,desired_discount=excluded.desired_discount,
           status='pending',queued_at=excluded.queued_at,sent_at=0,upload_id=0,last_error='',updated_at=excluded.updated_at,source=excluded.source,promotion_id=0`,
           [market, id, desiredPrice, desiredDiscount, now, source]);
-        const schedules = await client.query(`SELECT enabled,start_minute AS "startMinute",end_minute AS "endMinute" FROM wb_price_schedules WHERE market=$1 AND nm_id=$2`, [market, id]);
+        const schedules = await client.query(`SELECT enabled,start_minute AS "startMinute",end_minute AS "endMinute",weekdays FROM wb_price_schedules WHERE market=$1 AND nm_id=$2`, [market, id]);
         const schedule = schedules.rows[0];
         if (schedule) {
-          const window = wbNightWindowState(schedule.startMinute, schedule.endMinute, now);
+          const window = wbNightWindowState(schedule.startMinute, schedule.endMinute, now, schedule.weekdays);
           // A manual price becomes the daytime return target; discounts do not copy the temporary night price.
           await client.query(`UPDATE wb_price_schedules SET
             base_price=CASE WHEN $3::double precision IS NOT NULL AND base_price IS NOT NULL THEN $3 ELSE base_price END,
@@ -1563,6 +1576,7 @@ async function saveWbNightSchedules(market, input) {
     throw error;
   }
   const enabled = input?.enabled === true;
+  const weekdays = input?.weekdays === undefined ? null : normalizeWbNightWeekdays(input.weekdays);
   const startMinute = timeToMinute(input?.start || '04:00');
   const endMinute = timeToMinute(input?.end || '06:00');
   const targetPrice = number(input?.price);
@@ -1593,20 +1607,20 @@ async function saveWbNightSchedules(market, input) {
       if (enabled && (await protectionFor(market, nmId, client)).priceProtected) { skipped.push(String(nmId)); continue; }
       if (enabled) {
         await client.query(`INSERT INTO wb_price_schedules
-          (market,nm_id,enabled,start_minute,end_minute,target_price,base_price,window_key,manual_override_window,phase,last_error,updated_at)
-          VALUES($1,$2,true,$3,$4,$5,NULL,'','','idle','',$6)
+          (market,nm_id,enabled,start_minute,end_minute,target_price,base_price,window_key,manual_override_window,phase,last_error,updated_at,weekdays)
+          VALUES($1,$2,true,$3,$4,$5,NULL,'','','idle','',$6,COALESCE($7::integer[],ARRAY[1,2,3,4,5,6,7]))
           ON CONFLICT(market,nm_id) DO UPDATE SET enabled=true,start_minute=excluded.start_minute,
-            end_minute=excluded.end_minute,target_price=excluded.target_price,last_error='',updated_at=excluded.updated_at`,
-          [market, nmId, startMinute, endMinute, targetPrice, now]);
+            end_minute=excluded.end_minute,target_price=excluded.target_price,weekdays=COALESCE($7::integer[],wb_price_schedules.weekdays),last_error='',updated_at=excluded.updated_at`,
+          [market, nmId, startMinute, endMinute, targetPrice, now, weekdays]);
       } else if (targetPrice > 0 && startMinute !== null && endMinute !== null && startMinute !== endMinute) {
         await client.query(`INSERT INTO wb_price_schedules
-          (market,nm_id,enabled,start_minute,end_minute,target_price,base_price,window_key,manual_override_window,phase,last_error,updated_at)
-          VALUES($1,$2,false,$3,$4,$5,NULL,'','','off','',$6)
+          (market,nm_id,enabled,start_minute,end_minute,target_price,base_price,window_key,manual_override_window,phase,last_error,updated_at,weekdays)
+          VALUES($1,$2,false,$3,$4,$5,NULL,'','','off','',$6,COALESCE($7::integer[],ARRAY[1,2,3,4,5,6,7]))
           ON CONFLICT(market,nm_id) DO UPDATE SET enabled=false,start_minute=excluded.start_minute,
-            end_minute=excluded.end_minute,target_price=excluded.target_price,
+            end_minute=excluded.end_minute,target_price=excluded.target_price,weekdays=COALESCE($7::integer[],wb_price_schedules.weekdays),
             phase=CASE WHEN wb_price_schedules.base_price IS NOT NULL THEN 'restoring' ELSE 'off' END,
             last_error='',updated_at=excluded.updated_at`,
-          [market, nmId, startMinute, endMinute, targetPrice, now]);
+          [market, nmId, startMinute, endMinute, targetPrice, now, weekdays]);
       } else {
         await client.query(`UPDATE wb_price_schedules SET enabled=false,
           phase=CASE WHEN base_price IS NOT NULL THEN 'restoring' ELSE 'off' END,
