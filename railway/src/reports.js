@@ -1,3 +1,4 @@
+import {kaspiHistoryStatus} from './kaspi-order-history.js';
 import { financeHistoryStatus } from './wb-finance-history.js';
 import { configuredWbConnectionIds } from './connections.js';
 import { registerBusinessDashboardCache } from './business-dashboard-cache.js';
@@ -197,7 +198,7 @@ reportsRouter.get('/wb-sync-status', asyncRoute(async (_req, res) => {
 
 reportsRouter.get('/kaspi-report-orders', asyncRoute(async (req, res) => {
   const bounds = kaspiBounds(Number(req.query.days || 1), req.query.from, req.query.to);
-  const [liveResult, cachedResult, returnsResult, latestSyncResult, coverageResult] = await Promise.all([
+  const [liveResult, cachedResult, returnsResult, latestSyncResult, coverageResult, archiveResult, archiveStateResult, missingDatesResult] = await Promise.all([
     pool.query(`SELECT order_id AS "orderId",code,entry_id AS "entryId",status,state,creation_date AS "creationDate",
       sku,product_name AS "productName",qty,total_price AS "totalPrice",seller_delivery_cost AS "sellerDeliveryCost",
       raw_json AS "rawJson"
@@ -215,12 +216,16 @@ reportsRouter.get('/kaspi-report-orders', asyncRoute(async (req, res) => {
       (SELECT MAX(finished_at) FROM sync_runs WHERE market='Kaspi' AND ok=1 AND finished_at>0) AS "lastSuccessAt"
       FROM sync_runs WHERE market='Kaspi' ORDER BY id DESC LIMIT 1`),
     pool.query(`SELECT MIN(creation_date) AS "coverageFrom",MAX(creation_date) AS "coverageTo"
-      FROM marketplace_order_lines WHERE market='Kaspi' AND creation_date>0`)
+      FROM marketplace_order_lines WHERE market='Kaspi' AND creation_date>0`),
+    pool.query("SELECT payload->'order' AS payload FROM kaspi_order_history WHERE completion_date >= $1 AND completion_date < $2 AND payload->'order'->>'status'='COMPLETED'",[bounds.start,bounds.end]),
+    pool.query('SELECT payload FROM kaspi_order_history_state WHERE id=1'),
+    pool.query("SELECT COUNT(*) AS rows FROM kaspi_order_history WHERE completion_date=0 AND creation_date >= $1 AND creation_date < $2 AND payload->'order'->>'status'='COMPLETED'",[bounds.start,bounds.end])
   ]);
   // PostgreSQL marketplace lines are the live source. The older report cache
   // remains only as a history fallback and is overridden order-by-order by
   // current synchronized data.
-  const ordersById = new Map(parseCachedKaspiOrders(cachedResult.rows).map(order => [String(order.id), order]));
+  const ordersById = new Map(archiveResult.rows.map(row=>[String(row.payload.id),row.payload]));
+  for(const order of parseCachedKaspiOrders(cachedResult.rows))ordersById.set(String(order.id),order);
   for (const order of groupLiveKaspiOrders(liveResult.rows)) {
     if (Number(order.completionDate) >= bounds.start && Number(order.completionDate) < bounds.end) {
       ordersById.set(String(order.id), order);
@@ -229,9 +234,12 @@ reportsRouter.get('/kaspi-report-orders', asyncRoute(async (req, res) => {
   const orders = [...ordersById.values()].sort((a, b) => Number(a.completionDate || a.creationDate) - Number(b.completionDate || b.creationDate));
   const cache = latestSyncResult.rows[0] || {};
   const coverage = coverageResult.rows[0] || {};
+  const archiveStatus=kaspiHistoryStatus(archiveStateResult.rows[0]?.payload);
+  const coverageFrom=Math.min(Number(coverage.coverageFrom)||Infinity,archiveStatus.from||Infinity);
+  const historyIncomplete=coverageFrom>bounds.start||Number(missingDatesResult.rows[0]?.rows)>0;
   res.json({ ok: true, days: Number(req.query.days || 1), from: req.query.from ? Number(req.query.from) : null,
     to: req.query.to ? Number(req.query.to) : null, fetchedAt: Date.now(), source: 'PostgreSQL completed Kaspi orders by completion date',
-    historyComplete: Number(coverage.coverageFrom || 0) <= bounds.start, coverageFrom: Number(coverage.coverageFrom || 0) || null,
+    historyComplete: !historyIncomplete, historyIncomplete, coverageFrom: Number.isFinite(coverageFrom)?coverageFrom:null,
     coverageTo: Number(coverage.coverageTo || 0) || null, lastRefreshAt: Number(cache.lastRefreshAt || 0) || null,
     lastSuccessAt: Number(cache.lastSuccessAt || 0) || null,
     warnings: cache.lastError ? [String(cache.lastError)] : [], orders, returns: returnsResult.rows });
