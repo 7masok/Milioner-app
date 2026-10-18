@@ -40,6 +40,33 @@ test('malformed archival status, currency or month does not finish the window',a
  for(const bad of [{...raw,status:{}},{...raw,priceInfo:{currencyCode:643,price:10000}},{...raw,createdAt:'2026-02-01'}])await assert.rejects(stepWbOrderHistory(s,{market:'WB',now,fetchArchive:async()=>({orders:[bad],next:0})}));
  assert.equal(s.archiveCursor,0);assert.equal(s.coveredFrom,s.anchor);
 });
+test('Moscow archive month accepts the observed WB boundary date and keeps exact UTC window filtering',async()=>{
+ const s={...initialWbOrderHistory(now),phase:'archive',from:Date.parse('2026-06-24T10:00:00Z'),to:Date.parse('2026-07-23T10:00:00Z'),archiveMonths:[{year:2026,month:6},{year:2026,month:7}],archiveIndex:0,archiveCursor:0};
+ const raw=(id,createdAt)=>({id,createdAt,product:{article:'toy'},priceInfo:{currencyCode:398,price:10000},status:status({id})});
+ const page=await stepWbOrderHistory(s,{market:'WB',now,fetchArchive:async()=>({orders:[raw(101,'2026-05-31T21:22:35Z'),raw(102,'2026-06-24T09:59:59Z'),raw(103,'2026-06-24T10:00:00Z'),raw(104,'2026-06-30T20:59:59Z')],next:'1784827125619238001'})});
+ assert.deepEqual(page.rows.map(r=>r.orderId),['103','104']);
+ assert.equal(page.rows[0].creationDate,s.from);assert.equal(page.state.archiveCursor,'1784827125619238001');assert.equal(page.state.coveredFrom,s.coveredFrom);
+ const next=await stepWbOrderHistory(JSON.parse(JSON.stringify(page.state)),{market:'WB',now,fetchArchive:async args=>{assert.equal(args.cursor,'1784827125619238001');return{orders:[],next:0}}});
+ assert.equal(next.state.archiveIndex,1);assert.equal(next.state.coveredFrom,s.coveredFrom);
+ const done=await stepWbOrderHistory(next.state,{market:'WB',now,fetchArchive:async()=>({orders:[raw(105,'2026-06-30T21:00:00Z'),raw(106,'2026-07-23T10:00:01Z')],next:0})});
+ assert.deepEqual(done.rows.map(r=>r.orderId),['105']);assert.equal(done.state.coveredFrom,s.from);
+ for(const createdAt of ['2026-05-31T20:59:59Z','2026-06-30T21:00:00Z','bad-date']){
+  await assert.rejects(stepWbOrderHistory(s,{market:'WB',now,fetchArchive:async()=>({orders:[raw(107,createdAt)],next:0})}),/за пределами месяца/);
+ }
+ assert.equal(s.archiveCursor,0);assert.equal(s.coveredFrom,s.anchor);
+});
+test('archive requests use Moscow months at UTC month and year boundaries',async()=>{
+ for(const [from,to,expected] of [
+  ['2026-06-30T21:00:00Z','2026-07-01T00:00:00Z',[{year:2026,month:7}]],
+  ['2025-12-31T21:00:00Z','2026-01-01T00:00:00Z',[{year:2026,month:1}]],
+  ['2025-12-31T20:59:59Z','2025-12-31T21:00:00Z',[{year:2025,month:12},{year:2026,month:1}]]
+ ]){
+  const s={...initialWbOrderHistory(now),from:Date.parse(from),to:Date.parse(to)};
+  const result=await stepWbOrderHistory(s,{market:'WB',now,fetchPage:async()=>assert.fail('old windows use archive'),fetchArchive:async args=>{assert.deepEqual(args,{...expected[0],cursor:0});return{orders:[],next:0}}});
+  if(expected.length===1)assert.equal(result.state.coveredFrom,s.from);
+  else{assert.deepEqual(result.state.archiveMonths,expected);assert.equal(result.state.archiveIndex,1);assert.equal(result.state.coveredFrom,s.anchor);}
+ }
+});
 test('page and status phases persist separately; coverage advances only after the final page',async()=>{
  const initial=initialWbOrderHistory(now);
  const page=await stepWbOrderHistory(initial,{market:'WB',now,fetchPage:async()=>({orders:[order({address:{secret:'never store'}})],next:101})});
