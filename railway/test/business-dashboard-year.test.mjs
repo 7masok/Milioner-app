@@ -63,7 +63,8 @@ test('year arrows, reset and restored selection use the selected year throughout
  await f.window.renderBusinessDashboard();assert.match(f.el('businessValueLabel').textContent,/2026/);
  await f.window.shiftBusinessDashboardSelection(-1);assert.match(f.el('businessDayDate').innerHTML,/2025/);assert.match(f.el('businessValueLabel').textContent,/2025/);
  assert.equal(JSON.parse(f.storage.get('milioner_business_dashboard_v1')).yearDate,'2025-01-01');
- await f.window.shiftBusinessDashboardSelection(-1);assert.equal(f.el('businessDayPrevious').disabled,true);
+ await f.window.shiftBusinessDashboardSelection(-1);await f.window.shiftBusinessDashboardSelection(-1);assert.equal(f.el('businessDayPrevious').disabled,false);assert.equal(f.api.businessSelectedYearOffset(),-3);
+ assert.equal(fixture(JSON.parse(f.storage.get('milioner_business_dashboard_v1'))).api.businessSelectedYearOffset(),-3);
  await f.window.setBusinessDashboardPeriod('year');assert.match(f.el('businessDayDate').innerHTML,/2026/);assert.equal(f.el('businessDayNext').disabled,true);
 });
 test('year loader reuses ready daily data without a year-sized order or finance request',async()=>{
