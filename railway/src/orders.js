@@ -1,3 +1,4 @@
+import {readKaspiHistory} from './kaspi-order-history.js';
 import express from 'express';
 import {readWbOrderHistory,mergeReportingOrders} from './wb-order-history.js';
 import { pool } from './db.js';
@@ -112,7 +113,8 @@ ordersRouter.get('/orders', asyncRoute(async (req, res) => {
   }
   const inferredLinks = new Map();
   const history=before&&after&&req.query.history==='1'?await readWbOrderHistory(pool,after,before,selected,limit):null;
-  const reportingRows=history?mergeReportingOrders(rows.rows,history.rows,limit):rows.rows;
+  const kaspiHistory=history?await readKaspiHistory(pool,after,before,selected,limit):null;
+  const reportingRows=history?mergeReportingOrders(rows.rows,[...history.rows,...kaspiHistory.rows],limit):rows.rows;
   const out = reportingRows.map(row => {
     if (row.productId && visibleLinks.get(`${row.market}\u0000${String(row.sku || '').trim()}`) === String(row.productId)) return row;
     if (row.productId) row = { ...row, productId: null, linkSource: null };
@@ -134,7 +136,7 @@ ordersRouter.get('/orders', asyncRoute(async (req, res) => {
 
   const historyCoverage = before ? (await pool.query("SELECT market,MIN(creation_date) AS \"from\" FROM marketplace_order_lines WHERE market=ANY($1::text[]) AND creation_date>0 GROUP BY market", [['Kaspi','WB','WB2']])).rows : undefined;
   if(history&&historyCoverage){
-    for(const state of history.states){
+    for(const state of [...history.states,kaspiHistory.state]){
       const live=historyCoverage.find(r=>r.market===state.market),from=Number(state.from)||0;
       const merged={...state,from:from?Math.min(Number(live?.from)||from,from):Number(live?.from)||0};
       if(live)Object.assign(live,merged);else historyCoverage.push(merged);
