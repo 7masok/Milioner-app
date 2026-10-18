@@ -74,7 +74,11 @@ export async function stepWbOrderHistory(input,{market,fetchPage,fetchStatuses,f
   const next=pageCursor(data.next,state.archiveCursor,data.orders.length,'архива');
   for(const raw of data.orders){
    const at=Date.parse(raw.createdAt),date=new Date(at);
-   if(!(at>0)||date.getUTCFullYear()!==month.year||date.getUTCMonth()+1!==month.month)throw Error('WB вернул архивные заказы за пределами месяца');
+   if(!(at>0)||date.getUTCFullYear()!==month.year||date.getUTCMonth()+1!==month.month){
+    const error=Error('WB вернул архивные заказы за пределами месяца');
+    error.archiveDateInfo={year:month.year,month:month.month,type:typeof raw.createdAt,parsed:Number.isFinite(at)?date.toISOString():'invalid',value:/^[\dTtZz:+.\- ]{1,64}$/.test(String(raw.createdAt))?String(raw.createdAt):'invalid'};
+    throw error;
+   }
    if(at>=state.from&&at<=state.to)rows.push(historicalWbOrder(market,{...raw.product,...raw.priceInfo,id:raw.id,orderUid:raw.orderUid,createdAt:raw.createdAt},raw.status));
   }
   if(!data.orders.length||next===0){
@@ -140,7 +144,7 @@ export async function syncWbOrderHistory(market,{client=pool,token,fetcher=fetch
   await db.query('ROLLBACK').catch(()=>{});
   state=recovery||state;
   if(state){state.lastError=/^WB /.test(error.message)?error.message:'Не удалось догрузить историю заказов WB';state.nextAllowedAt=Math.max(now+5*60000,Number(error.retryAt)||0);await persist();}
-  console.warn('WB order history retry',JSON.stringify({market,error:state?.lastError||'Не удалось запустить архив заказов WB',nextAllowedAt:state?.nextAllowedAt||0,...(error.cursorInfo?{cursor:error.cursorInfo}:{})}));
+  console.warn('WB order history retry',JSON.stringify({market,error:state?.lastError||'Не удалось запустить архив заказов WB',nextAllowedAt:state?.nextAllowedAt||0,...(error.cursorInfo?{cursor:error.cursorInfo}:{}),...(error.archiveDateInfo?{archiveDate:error.archiveDateInfo}:{})}));
  }finally{if(locked)await db.query('SELECT pg_advisory_unlock(730146,hashtext($1))',[market]).catch(()=>{});db.release()}
 }
 export async function readWbOrderHistory(client,after,before,market,limit){
