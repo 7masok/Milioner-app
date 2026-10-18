@@ -1,0 +1,129 @@
+import express from 'express';
+import {pool} from './db.js';
+import {config} from './config.js';
+import {credentialFor} from './connections.js';
+import {asyncRoute,requireTrustedOrigin} from './http.js';
+
+const DAY=86400000,SLOT=60000,API='https://marketplace-api.wildberries.ru';
+const object=v=>{if(v&&typeof v==='object')return v;try{return JSON.parse(v||'{}')}catch{return {}}};
+const text=v=>String(v??'').trim();
+export function initialWbOrderHistory(now){
+ const anchor=Math.floor(now/1000)*1000,goal=Math.floor((now+18000000)/DAY)*DAY-18000000-364*DAY;
+ return {anchor,goal,coveredFrom:anchor,from:Math.max(goal,anchor-29*DAY),to:anchor,cursor:0,phase:'orders',pending:[],rows:0,complete:false,nextAllowedAt:0,lastError:''};
+}
+function compactOrder(raw){
+ return Object.fromEntries(['id','orderUid','article','nmId','techSize','skus','createdAt','price','finalPrice','convertedPrice','convertedFinalPrice','currencyCode','convertedCurrencyCode'].map(k=>[k,raw[k]]).filter(([,v])=>v!==undefined));
+}
+export function historicalWbOrder(market,order,status){
+ const id=text(order.id),at=Date.parse(order.createdAt),size=text(order.techSize),article=text(order.article),barcode=text(order.skus?.[0]);
+ if(!/^[1-9]\d*$/.test(id)||!(at>0)||!text(status?.supplierStatus)||!text(status?.wbStatus))throw Error('WB не вернул заказ или его полный статус');
+ const converted=String(order.convertedCurrencyCode)==='398',original=String(order.currencyCode)==='398';
+ const cents=converted?(order.convertedFinalPrice??order.convertedPrice):original?(order.finalPrice??order.price):null;
+ if(cents===null||cents===undefined||!Number.isFinite(Number(cents))||Number(cents)<0)throw Error('WB не вернул историческую цену в тенге');
+ const variant=Boolean(size)&&!['0','00','ONE SIZE','ONESIZE','БЕЗ РАЗМЕРА'].includes(size.toUpperCase().replace(/\s+/g,' '));
+ const sku=variant?(barcode||article||text(order.nmId)):(article||text(order.nmId)||barcode);
+ if(!sku)throw Error('WB не вернул артикул исторического заказа');
+ return {market,orderId:id,code:id,entryId:id,status:text(status.supplierStatus),state:text(status.wbStatus),creationDate:at,
+  sku,productName:[article||text(order.nmId),size?'размер '+size:''].filter(Boolean).join(' · '),qty:1,unitPrice:Number(cents)/100,totalPrice:Number(cents)/100,
+  sellerDeliveryCost:null,marketplaceFee:null,feeSource:'',historyOnly:true,currency:'KZT'};
+}
+function finishWindow(state,now){
+ if(state.mode==='refresh'){
+  state.anchor=state.to;state.complete=state.coveredFrom<=state.goal;delete state.mode;state.nextAllowedAt=now+DAY;
+ }else{
+  state.coveredFrom=state.from;state.complete=state.from<=state.goal;
+  if(!state.complete){state.to=state.from;state.from=Math.max(state.goal,state.to-29*DAY)}
+  else state.nextAllowedAt=now+DAY;
+ }
+ state.cursor=0;state.phase='orders';state.pending=[];
+}
+export async function stepWbOrderHistory(input,{market,fetchPage,fetchStatuses,now}){
+ const state=structuredClone(input),rows=[];state.nextAllowedAt=now+SLOT;
+ if(state.complete&&!state.mode){
+  // Daily refresh overlaps the previous scan and advances continuously after downtime.
+  const end=Math.min(Math.floor(now/1000)*1000,state.anchor+28*DAY);
+  state.mode='refresh';state.from=Math.max(state.goal,state.anchor-DAY);state.to=end;state.cursor=0;state.phase='orders';
+ }
+ if(state.phase==='orders'){
+  const data=await fetchPage({from:state.from,to:state.to,cursor:state.cursor});
+  if(!Array.isArray(data?.orders)||data.orders.length>1000)throw Error('WB вернул неполную страницу истории');
+  const next=Number(data.next);
+  if(!Number.isSafeInteger(next)||next<0||(data.orders.length&&next!==0&&next<=state.cursor))throw Error('WB вернул некорректный курсор истории');
+  const pending=data.orders.map(compactOrder);
+  if(pending.some(o=>!Number.isSafeInteger(Number(o.id))||Number(o.id)<=0||!(Date.parse(o.createdAt)>=state.from&&Date.parse(o.createdAt)<=state.to)))throw Error('WB вернул заказы за пределами запрошенного периода');
+  if(!pending.length)finishWindow(state,now);
+  else{state.pending=pending;state.pageNext=next;state.phase='statuses'}
+ }else{
+  const data=await fetchStatuses(state.pending.map(o=>Number(o.id)));
+  if(!Array.isArray(data?.orders))throw Error('WB не вернул статусы истории');
+  const statuses=new Map(data.orders.map(s=>[text(s.id),s]));
+  for(const order of state.pending)rows.push(historicalWbOrder(market,order,statuses.get(text(order.id))));
+  if(state.pageNext===0)finishWindow(state,now);
+  else{state.cursor=state.pageNext;state.pending=[];state.phase='orders'}
+ }
+ state.lastError='';return {state,rows};
+}
+export function wbOrderHistoryStatus(market,input){
+ const s=object(input);return {market,status:!s.anchor?'pending':s.lastError?'retry':s.complete?'complete':'loading',
+  from:Number(s.coveredFrom)||0,to:Number(s.anchor)||0,rows:Number(s.rows)||0,nextAllowedAt:Number(s.nextAllowedAt)||0,error:s.lastError||''};
+}
+function retryAt(headers,now){
+ return Math.max(now+5*60000,...['retry-after','x-ratelimit-retry'].map(k=>{const v=headers?.get(k);return !v?0:Number.isFinite(Number(v))?now+Math.max(0,Number(v))*1000:Date.parse(v)||0}));
+}
+export async function syncWbOrderHistory(market,{client=pool,token,fetcher=fetch,now=Date.now()}={}){
+ token=token??await credentialFor(market,market==='WB2'?config.wbToken2:config.wbToken);if(!token)return;
+ const db=await client.connect();let locked=false,state,recovery;
+ const persist=()=>db.query(`INSERT INTO wb_order_history_state(market,payload,updated_at) VALUES($1,$2::jsonb,$3)
+  ON CONFLICT(market) DO UPDATE SET payload=EXCLUDED.payload,updated_at=EXCLUDED.updated_at`,[market,JSON.stringify(state),now]);
+ try{
+  locked=Boolean((await db.query('SELECT pg_try_advisory_lock(730146,hashtext($1)) AS locked',[market])).rows[0]?.locked);if(!locked)return;
+  const old=(await db.query('SELECT payload FROM wb_order_history_state WHERE market=$1',[market])).rows[0];
+  state=old?object(old.payload):initialWbOrderHistory(now);if(state.nextAllowedAt>now)return;
+  state.nextAllowedAt=now+SLOT;await persist();recovery=structuredClone(state); // Reserve before upstream; survives a restart.
+  const request=async(path,body)=>{
+   const response=await fetcher(API+path,{method:body?'POST':'GET',headers:{Authorization:token,Accept:'application/json',...(body?{'Content-Type':'application/json'}:{})},...(body?{body:JSON.stringify(body)}:{}),signal:AbortSignal.timeout(25000)});
+   if(!response.ok){const error=Error('WB история заказов: HTTP '+response.status);error.retryAt=retryAt(response.headers,now);throw error;}
+   return response.json();
+  };
+  const result=await stepWbOrderHistory(state,{market,now,
+   fetchPage:({from,to,cursor})=>request('/api/v3/orders?'+new URLSearchParams({limit:'1000',next:String(cursor),dateFrom:String(Math.floor(from/1000)),dateTo:String(Math.floor(to/1000))})),
+   fetchStatuses:ids=>request('/api/v3/orders/status',{orders:ids})});
+  await db.query('BEGIN');
+  let inserted=0;
+  for(const row of result.rows){
+   const saved=await db.query(`INSERT INTO wb_order_history(market,order_id,creation_date,payload,updated_at) VALUES($1,$2,$3,$4::jsonb,$5)
+    ON CONFLICT(market,order_id) DO UPDATE SET payload=EXCLUDED.payload,updated_at=EXCLUDED.updated_at RETURNING (xmax=0) AS inserted`,[market,row.orderId,row.creationDate,JSON.stringify(row),now]);
+   if(saved.rows[0]?.inserted)inserted++;
+  }
+  state=result.state;state.rows+=inserted;await persist();await db.query('COMMIT');
+ }catch(error){
+  await db.query('ROLLBACK').catch(()=>{});
+  state=recovery||state;
+  if(state){state.lastError=/^WB /.test(error.message)?error.message:'Не удалось догрузить историю заказов WB';state.nextAllowedAt=Math.max(now+5*60000,Number(error.retryAt)||0);await persist();}
+ }finally{if(locked)await db.query('SELECT pg_advisory_unlock(730146,hashtext($1))',[market]).catch(()=>{});db.release()}
+}
+export async function readWbOrderHistory(client,after,before,market,limit){
+ const [archive,states]=await Promise.all([
+  client.query(`SELECT a.payload,pl.product_id AS "productId" FROM wb_order_history a
+   LEFT JOIN product_links pl ON pl.market=a.market AND pl.sku=a.payload->>'sku'
+   WHERE a.creation_date >= $1 AND a.creation_date < $2 AND ($3::text IS NULL OR a.market=$3)
+   ORDER BY a.creation_date DESC LIMIT $4`,[after,before,market||null,limit]),
+  client.query('SELECT market,payload FROM wb_order_history_state')
+ ]);
+ return {rows:archive.rows.map(r=>({...object(r.payload),productId:r.productId||null,linkSource:r.productId?'sku-exact':null})),states:states.rows.map(r=>wbOrderHistoryStatus(r.market,r.payload))};
+}
+export function mergeReportingOrders(live,archive,limit){
+ const byId=new Map(archive.map(row=>[row.market+'|'+row.orderId,row]));
+ for(const row of live)byId.set(row.market+'|'+row.orderId,row); // Live statuses/prices win.
+ return [...byId.values()].sort((a,b)=>b.creationDate-a.creationDate).slice(0,limit);
+}
+export const wbOrderHistoryRouter=express.Router();wbOrderHistoryRouter.use(requireTrustedOrigin);
+wbOrderHistoryRouter.get('/wb-order-history',asyncRoute(async(req,res)=>{
+ const result=await pool.query('SELECT market,payload FROM wb_order_history_state');
+ return res.json({ok:true,markets:['WB','WB2'].map(m=>wbOrderHistoryStatus(m,result.rows.find(r=>r.market===m)?.payload))});
+}));
+let timer,running=false;
+export function startWbOrderHistoryLoop(){
+ if(timer)return;const run=async()=>{if(running||!config.marketSyncEnabled)return;running=true;try{for(const market of ['WB','WB2'])await syncWbOrderHistory(market)}catch{console.warn('WB order history worker failed')}finally{running=false}};
+ setTimeout(run,25000).unref();timer=setInterval(run,60000);timer.unref();
+}

@@ -34,7 +34,8 @@ async function sourceRevision(){
  (SELECT MAX(updated_at) FROM warehouse_sales) AS sales,
  (SELECT MAX(updated_at) FROM product_links) AS links,
  (SELECT MAX(updated_at) FROM ozon_fbo_cache) AS ozon,
- (SELECT MAX(last_success_at) FROM wb_sales_live_state) AS live`);
+ (SELECT MAX(last_success_at) FROM wb_sales_live_state) AS live,
+ (SELECT MAX(updated_at) FROM wb_order_history_state) AS order_history`);
  return crypto.createHash('sha256').update(JSON.stringify(r.rows[0]||{})).digest('hex');
 }
 function dailyBounds(from,to){return Number.isFinite(from)&&Number.isFinite(to)&&from===midnight(from)&&to===midnight(to)&&from>0&&to>from&&to-from<=64*DAY&&to<=midnight(Date.now())+DAY&&from>=midnight(Date.now())-400*DAY}

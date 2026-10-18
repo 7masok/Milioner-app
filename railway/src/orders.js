@@ -1,4 +1,5 @@
 import express from 'express';
+import {readWbOrderHistory,mergeReportingOrders} from './wb-order-history.js';
 import { pool } from './db.js';
 import { asyncRoute } from './http.js';
 import { hydrateWarehouseProducts } from './warehouse-products.js';
@@ -110,7 +111,9 @@ ordersRouter.get('/orders', asyncRoute(async (req, res) => {
     }
   }
   const inferredLinks = new Map();
-  const out = rows.rows.map(row => {
+  const history=before&&after&&req.query.history==='1'?await readWbOrderHistory(pool,after,before,selected,limit):null;
+  const reportingRows=history?mergeReportingOrders(rows.rows,history.rows,limit):rows.rows;
+  const out = reportingRows.map(row => {
     if (row.productId && visibleLinks.get(`${row.market}\u0000${String(row.sku || '').trim()}`) === String(row.productId)) return row;
     if (row.productId) row = { ...row, productId: null, linkSource: null };
     const fallback = safeNameFallback(row, products.rows);
@@ -130,5 +133,14 @@ ordersRouter.get('/orders', asyncRoute(async (req, res) => {
   }
 
   const historyCoverage = before ? (await pool.query("SELECT market,MIN(creation_date) AS \"from\" FROM marketplace_order_lines WHERE market=ANY($1::text[]) AND creation_date>0 GROUP BY market", [['Kaspi','WB','WB2']])).rows : undefined;
+  if(history&&historyCoverage){
+    for(const state of history.states){
+      const live=historyCoverage.find(r=>r.market===state.market),from=Number(state.from)||0;
+      const merged={...state,from:from?Math.min(Number(live?.from)||from,from):Number(live?.from)||0};
+      if(live)Object.assign(live,merged);else historyCoverage.push(merged);
+    }
+    // Absent worker state is unknown, never a silent zero for a missing account.
+    for(const m of ['WB','WB2'])if(!historyCoverage.some(r=>r.market===m))historyCoverage.push({market:m,from:0,status:'pending'});
+  }
   res.json({ ok: true, orders: out, ...(historyCoverage ? {historyCoverage} : {}) });
 }));
