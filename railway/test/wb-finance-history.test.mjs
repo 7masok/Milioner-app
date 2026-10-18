@@ -1,7 +1,5 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import vm from 'node:vm';
-import { readFileSync } from 'node:fs';
 import { initialFinanceHistory, syncFinanceHistoryPage, financeHistoryStatus, financePageRows, WB_FINANCE_SLOT_MS } from '../src/wb-finance-history.js';
 const NOW = Date.parse('2026-10-17T08:00:00Z');
 function fixture() {
@@ -66,18 +64,6 @@ test('first deployment respects most recent old finance request',async()=>{
   const f=fixture();const r=await f.run('WB',NOW,()=>assert.fail(),{previousRequestAt:NOW-1000});
   assert.equal(r.skipped,true);assert.equal(f.states.get('WB').nextAllowedAt,NOW-1000+WB_FINANCE_SLOT_MS);
 });
-test('report status distinguishes pending, partial, retry and completed financial scope',()=>{
-  const source=readFileSync(new URL('../../business-dashboard-v1.js',import.meta.url),'utf8');
-  const fn=source.slice(source.indexOf('function businessFinanceHistoryText('),source.indexOf('async function businessLoadFinanceHistory('));
-  const c={};vm.runInNewContext(fn,c);
-  assert.match(c.businessFinanceHistoryText([{market:'WB',status:'pending'}]),/ожидают/);
-  assert.match(c.businessFinanceHistoryText([{market:'WB',status:'loading',rows:5}]),/5 строк/);
-  assert.match(c.businessFinanceHistoryText([{market:'WB2',status:'retry'}]),/повтор/);
-  const done=c.businessFinanceHistoryText([{market:'WB',status:'complete',dateFrom:'2025-10-18',dateTo:'2026-10-17'}]);
-  assert.match(done,/финансовые отчёты/);assert.match(done,/2025-10-18/);
-  assert.doesNotMatch(done,/все магазины|заказы/);
-});
-
 test('multi-page recent window retains bounds and never prunes an individual page',async()=>{
   const f=fixture();
   await f.run('WB',NOW,[]); // archive empty and complete

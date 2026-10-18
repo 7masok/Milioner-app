@@ -198,8 +198,12 @@ test('a fresh server snapshot skips marketplace summaries; stale snapshots stay 
 test('a late month response cannot replace a subsequently selected cached day',async()=>{
  const f=fixture();await f.window.renderBusinessDashboard();await f.window.setBusinessDashboardPeriod('month');let finish;f.ctx.apiJson=()=>new Promise(resolve=>{finish=resolve});const pending=f.window.shiftBusinessDashboardMonth(-1);await flush();await f.window.setBusinessDashboardPeriod('day');assert.match(f.element('businessValueLabel').textContent,/сегодня/);finish({ok:true,orders:[]});await pending;assert.match(f.element('businessValueLabel').textContent,/сегодня/);
 });
-test('a historical month before the saved Kaspi/WB archive is never reported as empty',async()=>{
- const f=fixture({period:'month'});f.ctx.apiJson=async()=>({ok:true,orders:[],historyCoverage:[{market:'WB',from:Date.parse('2026-09-01T00:00:00+05:00')}]});await f.window.shiftBusinessDashboardMonth(-1);assert.match(f.element('businessValueLabel').textContent,/Нет полной истории WB1/);assert.equal(f.element('businessValue').textContent,'—');assert.equal(f.element('businessChart').innerHTML,'');
+test('a historical month before the saved Kaspi/WB archive is unavailable instead of endlessly calculating',async()=>{
+ for(const market of ['WB','Kaspi']){
+  const f=fixture({period:'month'});f.element('businessCacheStatus');f.ctx.apiJson=async()=>({ok:true,orders:[],historyCoverage:[{market,from:Date.parse('2026-09-01T00:00:00+05:00')}]});
+  await f.window.shiftBusinessDashboardMonth(-1);assert.match(f.element('businessValueLabel').textContent,market==='WB'?/Нет полной истории WB1/:/Нет полной истории Kaspi/);
+  assert.equal(f.element('businessValue').textContent,'—');assert.equal(f.element('businessChart').innerHTML,'');assert.equal(f.element('businessValueMetric').textContent,'Заказы');assert.equal(f.element('businessYesterdayValue').textContent,'—');assert.equal(f.element('businessCacheStatus').textContent,'');
+ }
 });
 test('a partial historical Ozon finance window stays marked in cached totals and cannot create a false growth percentage',async()=>{
  const f=fixture({period:'month',metric:'buyouts'});f.window.ozonFboFinanceHistoryCovers=()=>false;await f.window.renderBusinessDashboard();assert.match(f.element('businessValueMeta').textContent,/неполная история Ozon/);assert.match(f.element('businessValue').textContent,/≈/);assert.doesNotMatch(f.element('businessYesterdayCompare').innerHTML,/%/);

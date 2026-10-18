@@ -228,39 +228,8 @@ function businessEnsureUi(){
  <div class="business-metrics">${[['orders','Заказы'],['buyouts','Выкупы'],['orderProfit','Прибыль заказов'],['buyoutProfit','Прибыль выкупов']].map(([k,v])=>`<button type="button" data-business-metric="${k}" onclick="setBusinessDashboardMetric('${k}')">${v}</button>`).join('')}</div>
  <div id="businessDayNav" class="business-day-nav"><button id="businessDayPrevious" type="button" aria-label="Предыдущий день" onclick="shiftBusinessDashboardSelection(-1)">‹</button><span id="businessDayDate"></span><button id="businessDayNext" type="button" aria-label="Следующий день" onclick="shiftBusinessDashboardSelection(1)">›</button></div>
  <div class="business-value-card"><div id="businessValueMetric" class="business-value-title">Загрузка…</div><div class="business-value-grid"><div class="business-value-side"><div id="businessValueLabel" class="business-value-label">Сегодня</div><div id="businessValue" class="business-value">—</div><div id="businessValueMeta" class="business-value-meta"></div></div><div class="business-value-side business-yesterday-side"><div id="businessYesterdayLabel" class="business-value-label">Вчера</div><div id="businessYesterdayValue" class="business-value">—</div><div id="businessYesterdayMeta" class="business-value-meta"></div></div></div><div id="businessYesterdayCompare" class="business-compare"></div></div>
- <div id="businessChart" class="business-chart"></div><div id="businessCacheStatus" class="business-sub" aria-live="polite"></div><div id="businessFinanceHistory" class="business-sub" aria-live="polite"></div>`;
+ <div id="businessChart" class="business-chart"></div><div id="businessCacheStatus" class="business-sub" aria-live="polite"></div>`;
  const title=reports.querySelector('h2');if(title)title.insertAdjacentElement('afterend',root);else reports.prepend(root);businessInstallDaySwipe();return root;
-}
-let businessFinanceHistoryAt=0,businessFinanceHistoryLoading=false;
-function businessFinanceHistoryText(rows){
- return (rows||[]).map(row=>{
-  const name=row.market==='WB'?'WB1':row.market;
-  const range=row.dateFrom&&row.dateTo?` (${row.dateFrom} — ${row.dateTo})`:'';
-  if(row.status==='complete')return `${name}: финансовые отчёты за 365 дней загружены${range}`;
-  if(row.status==='pending')return `${name}: финансовые отчёты за 365 дней ожидают загрузки`;
-  const next=Number(row.nextAllowedAt)>Date.now()?` · продолжение после ${new Date(Number(row.nextAllowedAt)).toLocaleString('ru-RU',{timeZone:'Asia/Almaty',day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit'})}`:'';
-  return `${name}: ${row.status==='retry'?'повтор загрузки':'загрузка'} финансовых отчётов за 365 дней · ${Number(row.rows)||0} строк${next}`;
- }).join(' · ');
-}
-async function businessLoadFinanceHistory(force=false){
- const el=document.getElementById('businessFinanceHistory');
- if(!el||typeof apiJson!=='function'||businessFinanceHistoryLoading||(!force&&Date.now()-businessFinanceHistoryAt<60000))return;
- businessFinanceHistoryLoading=true;
- try{
-  const [finance,orders]=await Promise.allSettled([apiJson(MILLIONER_API+'/api/wb-finance-history'),apiJson(MILLIONER_API+'/api/wb-order-history')]);
-  const parts=[finance.status==='fulfilled'?businessFinanceHistoryText(finance.value.markets):'Статус финансовых отчётов WB временно недоступен'];
-  if(orders.status==='fulfilled')for(const row of orders.value.markets||[]){
-   const name=row.market==='WB'?'WB1':row.market,date=row.from?new Date(row.from).toLocaleDateString('ru-RU',{timeZone:'Asia/Almaty'}):'';
-   const next=Number(row.nextAllowedAt)>Date.now()?' · следующая попытка '+new Date(Number(row.nextAllowedAt)).toLocaleString('ru-RU',{timeZone:'Asia/Almaty',day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit'}):'';
-   parts.push(name+': история заказов '+(row.status==='complete'?'загружена':row.status==='retry'?'ожидает повтора':row.status==='pending'?'ожидает запуска':'догружается')+' · '+Number(row.rows||0)+' заказов'+(date?' · проверено с '+date:'')+(row.error?' · '+row.error:'')+next);
-  }
-  else parts.push('Статус истории заказов WB временно недоступен');
-  const open=Boolean(el.querySelector('details')?.open),details=document.createElement('details'),summary=document.createElement('summary'),body=document.createElement('div');
-  const rows=[...(finance.status==='fulfilled'?finance.value.markets||[]:[]),...(orders.status==='fulfilled'?orders.value.markets||[]:[])];
-  summary.textContent=(finance.status!=='fulfilled'||orders.status!=='fulfilled'?'Статус истории WB недоступен':rows.some(r=>r.status==='retry')?'Загрузка истории WB ожидает повтора':rows.length===4&&rows.every(r=>r.status==='complete')?'Архив WB загружен':rows.some(r=>r.status==='pending')?'История WB ожидает загрузки':'История WB загружается')+' · Подробности';
-  body.textContent=parts.filter(Boolean).join('\n');body.style.whiteSpace='pre-line';body.style.marginTop='8px';details.open=open;details.append(summary,body);el.replaceChildren(details);businessFinanceHistoryAt=Date.now();
- }catch{el.textContent='Статус загрузки истории WB временно недоступен'}
- finally{businessFinanceHistoryLoading=false}
 }
 function businessInstallDaySwipe(){
  const chart=document.getElementById('businessChart');if(!chart||chart.dataset.daySwipe==='1')return;chart.dataset.daySwipe='1';
@@ -411,7 +380,7 @@ async function businessLoadWeekOrderHistory(bounds,force=false){
  if(!force&&cached&&Date.now()-cached.at<60000)return cached.rows;
  const data=await apiJson(MILLIONER_API+'/api/orders?limit=15000&history=1&before='+encodeURIComponent(bounds.end)+'&after='+encodeURIComponent(bounds.start));
  if(data?.ok===false||!Array.isArray(data?.orders)||data.orders.length>=15000)throw new Error('Не удалось загрузить полную историю заказов');
- if(Array.isArray(data.historyCoverage))for(const item of data.historyCoverage){if(!(Number(item.from)>0)||Number(item.from)>bounds.start){const error=new Error('Нет полной истории '+(item.market==='WB'?'WB1':item.market)+' за этот период');error.businessHistoryPending=true;throw error}}
+ if(Array.isArray(data.historyCoverage))for(const item of data.historyCoverage){if(!(Number(item.from)>0)||Number(item.from)>bounds.start){const error=new Error('Нет полной истории '+(item.market==='WB'?'WB1':item.market)+' за этот период');error.businessHistoryPending=true;error.businessHistoryUnavailable=!['pending','loading','retry'].includes(item.status);throw error}}
  const rows=data.orders.filter(row=>['Kaspi','WB','WB2'].includes(String(row.market)));
  businessWeekOrderCache.set(key,{rows,at:Date.now()});return rows;
 }
@@ -570,7 +539,7 @@ function businessRememberModel(key,model,at=Date.now()){
 }
 function businessCacheStatus(key,state='ready'){
  const el=document.getElementById('businessCacheStatus');if(!el)return;const at=businessModelMeta.get(key)?.at;
- el.textContent=(at?'Сводка '+new Date(at).toLocaleString('ru-RU',{timeZone:'Asia/Almaty',day:'numeric',month:'short',hour:'2-digit',minute:'2-digit'}):'')+(state==='updating'?(at?' · обновляю…':'Считаю…'):state==='history'?(at?' · история заказов ещё догружается':'История заказов ещё догружается'):state==='offline'?' · не удалось обновить':'');
+ el.textContent=(at?'Сводка '+new Date(at).toLocaleString('ru-RU',{timeZone:'Asia/Almaty',day:'numeric',month:'short',hour:'2-digit',minute:'2-digit'}):'')+(state==='updating'?(at?' · обновляю…':'Считаю…'):state==='history'?(at?' · история заказов ещё догружается':'История заказов ещё догружается'):state==='unavailable'?'':state==='offline'?' · не удалось обновить':'');
 }
 async function businessReadOnline(period,start){
  if(typeof fetch!=='function')return null;
@@ -589,7 +558,6 @@ async function businessResolveModel(force,period,offset,key){
 }
 window.renderBusinessDashboard=async function(force=false){
  const root=businessEnsureUi();if(!root)return;if(!document.getElementById('reports')?.classList.contains('active')){businessPaintTabs();return}
- void businessLoadFinanceHistory(force);
  const seq=++businessRenderSeq,period=businessPeriod,key=businessModelKey(),offset=businessSelectedOffset();businessHydrateModels();businessLastModel=null;businessPaintTabs();
  const shared=typeof window.loadBusinessMarketplaceDaily==='function'?businessModelFromDays(period,offset):null,cached=shared||businessModels.get(key),metaRow=businessModelMeta.get(key);
  if(cached){businessPaint(cached);businessCacheStatus(key,'updating');if(!force&&!cached.pending&&Date.now()-Number(metaRow?.at||0)<30000&&typeof fetch!=='function'){businessCacheStatus(key);return cached}}
@@ -597,7 +565,7 @@ window.renderBusinessDashboard=async function(force=false){
   if(metric)metric.textContent='Считаю бизнес-показатели…';if(label)label.textContent=businessPeriodBounds().label;if(value)value.textContent='…';if(meta)meta.textContent='';if(yValue)yValue.textContent='…';const yLabel=document.getElementById('businessYesterdayLabel'),yMeta=document.getElementById('businessYesterdayMeta');if(yLabel)yLabel.textContent=period==='year'?'Прошлый год':period==='month'?'Прошлый месяц':period==='week'?'Прошлая неделя':'Вчера';if(yMeta)yMeta.textContent='';if(compare)compare.innerHTML='';if(chart)chart.innerHTML='';businessCacheStatus(key,'updating');}
  let job=businessBuildJobs.get(key);if(!job){job=businessResolveModel(force,period,offset,key).finally(()=>{businessBuildJobs.delete(key)});businessBuildJobs.set(key,job)}
  try{const model=await job;if(seq!==businessRenderSeq||key!==businessModelKey())return;businessPaint(model);businessCacheStatus(key);return model}
- catch(error){if(seq!==businessRenderSeq||key!==businessModelKey())return;const pendingHere=businessLastModel?.pending&&businessLastModel.period+':'+businessLastModel.bounds?.start===key?businessLastModel:null;if(cached||pendingHere){const keep=cached||pendingHere;businessPaint(keep);businessCacheStatus(key,error.businessHistoryPending?'history':'offline');return keep}const label=document.getElementById('businessValueLabel'),value=document.getElementById('businessValue');if(label)label.textContent=error.businessHistoryPending?error.message:'Не удалось посчитать';if(value)value.textContent='—';businessCacheStatus(key,error.businessHistoryPending?'history':'offline')}
+ catch(error){if(seq!==businessRenderSeq||key!==businessModelKey())return;const pendingHere=businessLastModel?.pending&&businessLastModel.period+':'+businessLastModel.bounds?.start===key?businessLastModel:null;if(cached||pendingHere){const keep=cached||pendingHere;businessPaint(keep);businessCacheStatus(key,error.businessHistoryUnavailable?'unavailable':error.businessHistoryPending?'history':'offline');return keep}const metric=document.getElementById('businessValueMetric'),label=document.getElementById('businessValueLabel'),value=document.getElementById('businessValue'),previous=document.getElementById('businessYesterdayValue');if(metric)metric.textContent={orders:'Заказы',buyouts:'Выкупы',orderProfit:'Прибыль с заказов · прогноз',buyoutProfit:'Прибыль с выкупов'}[businessMetric];if(label)label.textContent=error.businessHistoryPending?error.message:'Не удалось посчитать';if(value)value.textContent='—';if(previous)previous.textContent='—';businessCacheStatus(key,error.businessHistoryUnavailable?'unavailable':error.businessHistoryPending?'history':'offline')}
 };
 
 
