@@ -1,3 +1,4 @@
+import {startKaspiHistoryLoop} from './kaspi-order-history.js';
 import { plannerRouter } from './ozon-planner/router.js';
 import { startPlannerLoop } from './ozon-planner/service.js';
 import { startWbDeliveryTariffLoop } from './wb-delivery-tariffs.js';
@@ -345,6 +346,7 @@ const server = app.listen(config.port, '0.0.0.0', () => {
   startWbPriceSyncLoop();
   startWbDeliveryTariffLoop();
   startWbOrderHistoryLoop();
+  startKaspiHistoryLoop();
   startWbPromotionLoop();
   startWbAdsLimitLoop();
   let checkingLinks=false;
