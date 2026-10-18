@@ -1,5 +1,6 @@
 import { plannerRouter } from './ozon-planner/router.js';
 import { startPlannerLoop } from './ozon-planner/service.js';
+import { startWbDeliveryTariffLoop } from './wb-delivery-tariffs.js';
 import { ozonRouter, startOzonSyncLoop } from './ozon-fbo.js';
 import { ozonPerformanceRouter } from './ozon-performance.js';
 import express from 'express';
@@ -340,6 +341,7 @@ const server = app.listen(config.port, '0.0.0.0', () => {
   startKaspiSyncLoop();
   startWbSyncLoop();
   startWbPriceSyncLoop();
+  startWbDeliveryTariffLoop();
   startWbPromotionLoop();
   startWbAdsLimitLoop();
   let checkingLinks=false;

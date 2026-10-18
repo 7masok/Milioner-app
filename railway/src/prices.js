@@ -1,4 +1,5 @@
 import { loadWbPriceProfit } from './wb-price-profit.js';
+import { loadWbDeliveryTariffs } from './wb-delivery-tariffs.js';
 import express from 'express';
 import { createHash } from 'node:crypto';
 import { config } from './config.js';
@@ -1483,6 +1484,12 @@ pricesRouter.get('/market-prices/profit-estimates', asyncRoute(async (req,res)=>
   const market=cleanText(req.query.market);
   if(!['WB','WB2'].includes(market))return res.status(400).json({ok:false,error:'Выберите магазин WB'});
   try{return res.json(await loadWbPriceProfit(market,pool))}catch(error){return sendPriceError(res,error)}
+}));
+
+pricesRouter.get('/market-prices/delivery-tariffs', asyncRoute(async(req,res)=>{
+  const market=cleanText(req.query.market);
+  if(!['WB','WB2'].includes(market))return res.status(400).json({ok:false,error:'Выберите магазин WB'});
+  return res.json(await loadWbDeliveryTariffs(market,pool));
 }));
 
 pricesRouter.post('/market-prices/update', requireWritesEnabled, asyncRoute(async (req, res) => {

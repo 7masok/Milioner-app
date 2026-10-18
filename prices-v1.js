@@ -5,6 +5,7 @@ const PRICE_UI_KEY=(typeof KEY==='string'?KEY:'sklad_mvp_v2')+'_prices_ui_v1';
 const PRICE_MARKETS=['Kaspi','WB','WB2','Ozon'];
 const PRICE_CLIENT_TTL_MS=2*60*1000;
 let priceUi={market:'Kaspi',q:'',sort:'asc',hidden:{},groupFilter:'all',groupId:''};
+Object.assign(priceUi,{deliveryRank:'',deliverySettings:{}});
 let priceExpanded=null;
 const priceSelected={Kaspi:new Set(),WB:new Set(),WB2:new Set()};
 try{
@@ -15,6 +16,8 @@ try{
   if(saved.hidden&&typeof saved.hidden==='object')priceUi.hidden=saved.hidden;
   if(['all','grouped','ungrouped'].includes(saved.groupFilter))priceUi.groupFilter=saved.groupFilter;
   priceUi.groupId=String(saved.groupId||'');
+  if(['share','amount'].includes(saved.deliveryRank))priceUi.deliveryRank=saved.deliveryRank;
+  if(saved.deliverySettings&&typeof saved.deliverySettings==='object')priceUi.deliverySettings=saved.deliverySettings;
 }catch{}
 const priceCache=new Map();
 const priceFetchInFlight=new Map();
@@ -166,6 +169,7 @@ function setPriceStatus(text,kind=''){
   el.className='price-status'+(kind?' '+kind:'');
 }
 function setPriceTabs(){
+  priceDeliveryControls();
   document.querySelectorAll('[data-price-market]').forEach(button=>{
     button.classList.toggle('active',button.dataset.priceMarket===priceUi.market);
   });
@@ -305,9 +309,10 @@ function priceCard(row,index){
       '<div class="price-item-head"><div class="grow"><div class="name">'+pEsc(row.name||row.sku||'Товар')+'</div>'+
       '<div class="muted">'+pEsc(account?(row.account+' · '):'')+pEsc(row.sku?('Арт. '+row.sku):row.remoteId||'')+(linked?'':' · не привязан к товару склада')+group+promo+night+protection+discountBlock+'</div>'+sync+'</div><span class="price-chevron">'+(expanded?'⌄':'›')+'</span></div>'+
       '<div class="price-values">'+lines+'</div>'+
-    '</button>'+priceInlineEditor(row,index)+'</div>';
+    '</button>'+(priceIsWbMarket(row.market)?'<div class="price-delivery-slot" data-delivery-index="'+index+'">'+priceDeliveryHtml(row)+'</div>':'')+priceInlineEditor(row,index)+'</div>';
 }
 function paintPrices(){
+  priceDeliveryModels.clear();
   setPriceTabs();
   const rows=activeRows(),visibleRows=rows.filter(row=>!priceIsHidden(row)&&priceMatchesGroup(row)),q=priceUi.q.trim().toLocaleLowerCase('ru-RU');
   const indexed=rows.map((row,index)=>({row,index})).filter(({row})=>{
@@ -315,6 +320,7 @@ function paintPrices(){
     if(!q)return true;
     return [row.name,row.sku,row.remoteId,row.account,row.groupName].some(value=>String(value||'').toLocaleLowerCase('ru-RU').includes(q));
   }).sort((a,b)=>{
+    if(priceIsWbMarket()&&priceUi.deliveryRank)return priceDeliveryCompare(a,b);
     const av=priceSortValue(a.row),bv=priceSortValue(b.row),aMissing=!(av>0),bMissing=!(bv>0);
     if(aMissing!==bMissing)return aMissing?1:-1;
     if(!aMissing&&Math.abs(av-bv)>.000001)return priceUi.sort==='desc'?bv-av:av-bv;
@@ -380,6 +386,7 @@ async function priceFetch(market,force=false){
 
 window.renderPrices=async function(force=false){
   const view=document.getElementById('prices');if(!view||!view.classList.contains('active'))return;
+  if(priceIsWbMarket())void loadPriceDelivery(priceUi.market,force);
   setPriceTabs();
   const market=priceUi.market,seq=++priceLoadSeq,existing=priceCache.get(market);
   if(existing&&!force&&priceSnapshotFresh(existing)){
@@ -444,7 +451,7 @@ window.priceSearch=function(value){
   priceUi.q=String(value||'');rememberPriceUi();paintPrices();
 };
 window.priceToggleSort=function(){
-  priceUi.sort=priceUi.sort==='desc'?'asc':'desc';rememberPriceUi();setPriceTabs();paintPrices();
+  priceUi.deliveryRank='';priceUi.sort=priceUi.sort==='desc'?'asc':'desc';rememberPriceUi();setPriceTabs();paintPrices();
 };
 window.priceSelectRow=function(index,checked){
   const row=activeRows()[Number(index)];if(!row||row.error||!priceCanSelect(row.market))return;
@@ -461,6 +468,91 @@ window.priceSelectAllVisible=function(checked){
   }
   paintPrices();
 };
+// Tariff estimates are separate from historical profit averages and never write business data.
+const priceDeliveryCache=new Map(),priceDeliveryLoads=new Map(),priceDeliveryModels=new Map();
+function priceDeliverySetting(market=priceUi.market){return priceUi.deliverySettings?.[market]||{scheme:'fbs',warehouse:''};}
+function priceDeliveryEstimate(row,data,setting,now=Date.now()){
+  const unknown=reason=>({available:false,reason});
+  if(!data)return unknown('Загружаю тарифы WB…');
+  if(data.error)return unknown(data.error);
+  if(!setting.warehouse)return unknown('Выберите склад в «Доставке WB»');
+  const warehouse=data.warehouses?.find(w=>w.id===setting.warehouse),tariff=warehouse?.[setting.scheme==='fbw'?'fbw':'fbs'];
+  if(!warehouse)return unknown('Выбранного склада нет в текущих тарифах');
+  if(!(data.fetchedAt>0)||now-data.fetchedAt>26*3600000)return unknown(data.lastError||'Ожидается свежий тариф WB');
+  if(!(data.cardsFetchedAt>0)||now-data.cardsFetchedAt>86400000)return unknown('Ожидаются свежие габариты WB');
+  const d=data.cards?.find(c=>String(c.nmId)===String(row.remoteId))?.dimensions;
+  if(!d||![d.length,d.width,d.height].every(n=>Number.isFinite(Number(n))&&Number(n)>0))return unknown('В карточке WB не заполнены габариты');
+  const sides=[Number(d.length),Number(d.width),Number(d.height)],weight=Number(d.weightBrutto)||null;
+  if(Math.max(...sides)>120||sides.reduce((a,b)=>a+b,0)>200||weight>=25)return unknown('Крупный или тяжёлый товар: нужен отдельный расчёт');
+  if(!(tariff?.base>0)||tariff.liter===null||!(tariff.liter>=0))return unknown('Для этой схемы у склада нет тарифа');
+  const volume=sides.reduce((a,b)=>a*b,1)/1000;let rub,formula;
+  if(volume<=1){
+    // WB published 13.10.2026. Fail closed if the live first/additional litre rates
+    // no longer match that schedule; do not extrapolate a new small-parcel tariff.
+    const c=Number(tariff.coefficient)/100;
+    if(!(c>0)||Math.abs(tariff.base-46*c)>.11||Math.abs(tariff.liter-14*c)>.11||now>Date.parse('2026-11-13T00:00:00+05:00'))return unknown('Тариф до 1 л требует проверки по шкале WB');
+    const base=volume<=.2?23:volume<=.4?26:volume<=.6?29:volume<=.8?30:32;
+    rub=base*c;formula=base+' ₽ × '+tariff.coefficient+'% · шкала до 1 л';
+  }else{
+    rub=tariff.base+(volume-1)*tariff.liter;
+    formula=tariff.base+' ₽ + '+(volume-1).toLocaleString('ru-RU',{maximumFractionDigits:4})+' л × '+tariff.liter+' ₽';
+  }
+  const confirmedPrice=Number(row.confirmedPrice??row.price),discount=Number(row.confirmedDiscount??row.discount),currency=String(row.currency||'').toUpperCase();
+  const price=confirmedPrice*(1-discount/100),range=Number(row.confirmedPriceMax??row.priceMax??confirmedPrice)>confirmedPrice+.001;
+  const fx=data.fx?.rate>0&&now-Number(data.fx.observedAt||data.fx.at||0)<=7*86400000?data.fx:null;
+  const kzt=fx?rub*fx.rate:null,priceRub=currency==='RUB'?price:currency==='KZT'&&fx?price/fx.rate:null;
+  return {available:true,rub,kzt,share:priceRub>0&&!range?rub/priceRub*100:null,volume,sides,weight,formula,warehouse,scheme:setting.scheme==='fbw'?'FBW':'FBS',fx,stale:now-data.fetchedAt>2*3600000};
+}
+function priceDeliveryModel(row){
+  if(!priceDeliveryModels.has(row))priceDeliveryModels.set(row,priceDeliveryEstimate(row,priceDeliveryCache.get(row.market)?.data,priceDeliverySetting(row.market)));
+  return priceDeliveryModels.get(row);
+}
+function priceDeliveryCompare(a,b){
+  const x=priceDeliveryModel(a.row),y=priceDeliveryModel(b.row),key=priceUi.deliveryRank==='amount'?'rub':'share';
+  const av=x.available?x[key]:null,bv=y.available?y[key]:null;
+  if(av===null&&bv!==null)return 1;if(av!==null&&bv===null)return -1;
+  return (av!==null&&bv!==null?bv-av:0)||String(a.row.name||a.row.sku||'').localeCompare(String(b.row.name||b.row.sku||''),'ru')||a.index-b.index;
+}
+function priceDeliveryHtml(row){
+  const m=priceDeliveryModel(row);
+  if(!m.available)return '<div class="price-delivery-unknown">Доставка WB · '+pEsc(m.reason)+'</div>';
+  const share=m.share===null?'доля цены —':m.share.toLocaleString('ru-RU',{maximumFractionDigits:1})+'% цены';
+  const tone=m.share>=30?'high':m.share>=15?'medium':'low',data=priceDeliveryCache.get(row.market)?.data;
+  return '<details class="price-delivery '+tone+'"><summary><span>Доставка WB ≈ <b>'+pMoney(m.rub,'RUB')+'</b>'+(m.kzt!==null?' · '+pMoney(m.kzt,'KZT'):'')+'</span><span class="price-delivery-share">'+share+'</span></summary><div class="price-delivery-details">'+
+    pEsc(m.sides.join(' × '))+' см · '+m.volume.toLocaleString('ru-RU',{maximumFractionDigits:4})+' л · '+(m.weight?m.weight+' кг':'вес не указан; расчёт для МГТ')+'<br>'+pEsc(m.warehouse.name)+' · '+m.scheme+' · коробы<br>'+pEsc(m.formula)+'<br>Коэффициент склада уже учтён. Тариф на '+pEsc(data.date)+(m.stale?' · обновление задерживается':'')+'<br>'+
+    (m.fx?'Курс ≈ '+Number(m.fx.rate).toLocaleString('ru-RU',{maximumFractionDigits:4})+' ₸/₽ · '+pEsc(m.fx.day)+'<br>':'Нет свежего курса WB для перевода в ₸<br>')+
+    'Одна прямая доставка. Без возвратов, хранения, приёмки и дополнительных услуг. Для FBW — текущий тариф, без фиксации старой поставки.'+
+    '</div></details>';
+}
+function priceDeliveryControls(){
+  const host=document.getElementById('priceDeliveryTools');if(!host)return;
+  host.hidden=!priceIsWbMarket();if(host.hidden)return;
+  const data=priceDeliveryCache.get(priceUi.market)?.data,setting=priceDeliverySetting(),rank=priceUi.deliveryRank,opened=host.querySelector?.('details')?.open;
+  const warehouses=[...(data?.warehouses||[])].sort((a,b)=>(/Казахстан/i.test(b.country)?1:0)-(/Казахстан/i.test(a.country)?1:0)||a.name.localeCompare(b.name,'ru'));
+  host.innerHTML='<div class="price-delivery-buttons"><button class="chip '+(rank?'active':'')+'" type="button" onclick="priceToggleDelivery()" aria-pressed="'+Boolean(rank)+'">Дорогая доставка '+(rank?'↓':'')+'</button><details class="price-delivery-settings" '+(opened||(!setting.warehouse&&rank)?'open':'')+'><summary>Доставка WB · настройки</summary><div class="price-delivery-config"><label>Схема<select class="select" onchange="priceDeliveryChange(\'scheme\',this.value)"><option value="fbs" '+(setting.scheme!=='fbw'?'selected':'')+'>FBS · свой склад</option><option value="fbw" '+(setting.scheme==='fbw'?'selected':'')+'>FBW · склад WB</option></select></label><label>Склад / пункт приёма<select class="select" onchange="priceDeliveryChange(\'warehouse\',this.value)"><option value="">Выберите свой склад</option>'+warehouses.map(w=>'<option value="'+pEsc(w.id)+'" '+(w.id===setting.warehouse?'selected':'')+'>'+pEsc(w.country+' · '+w.name)+'</option>').join('')+'</select></label><label>Дорогие сверху<select class="select" onchange="priceDeliveryChange(\'rank\',this.value)"><option value="share" '+(rank!=='amount'?'selected':'')+'>По доле доставки в цене, %</option><option value="amount" '+(rank==='amount'?'selected':'')+'>По стоимости доставки, ₽</option></select></label><div class="muted">'+pEsc(data?.error||data?.lastError||(!data?'Загружаю тарифы…':!warehouses.length?'Тарифы загружаются в фоне. Повторите через минуту.':'Выберите место отгрузки. Это сравнение по текущему тарифу WB.'))+'</div></div></details></div>'+
+    (rank?'<div class="price-delivery-note">'+(rank==='amount'?'Сначала самая дорогая доставка за штуку':'Сначала доставка с наибольшей долей в цене')+' · без данных — внизу</div>':'');
+}
+window.priceToggleDelivery=function(){priceUi.deliveryRank=priceUi.deliveryRank?'':'share';priceExpanded=null;rememberPriceUi();paintPrices();};
+window.priceDeliveryChange=function(key,value){
+  if(key==='rank'){priceUi.deliveryRank=value==='amount'?'amount':'share';}
+  else {const setting={...priceDeliverySetting()};if(key==='scheme')setting.scheme=value==='fbw'?'fbw':'fbs';if(key==='warehouse')setting.warehouse=String(value);priceUi.deliverySettings={...priceUi.deliverySettings,[priceUi.market]:setting};}
+  priceExpanded=null;rememberPriceUi();paintPrices();
+};
+async function loadPriceDelivery(market,force=false){
+  if(priceDeliveryLoads.has(market))return priceDeliveryLoads.get(market);
+  const hit=priceDeliveryCache.get(market);if(!force&&hit&&Date.now()-hit.at<120000)return;
+  const task=(async()=>{
+    let data;
+    try{const response=await fetch(MILLIONER_API+'/api/market-prices/delivery-tariffs?market='+encodeURIComponent(market),{cache:'no-store'});data=await response.json();if(!response.ok||data.ok===false)throw new Error('Не удалось прочитать тарифы WB');}
+    catch{data={error:'Не удалось загрузить тарифы. Нажмите ↻ для повтора.'};}
+    priceDeliveryCache.set(market,{at:Date.now(),data});
+    if(market===priceUi.market){
+      if(priceExpanded){priceDeliveryModels.clear();priceDeliveryControls();document.querySelectorAll('[data-delivery-index]').forEach(el=>{const row=activeRows()[Number(el.dataset.deliveryIndex)];if(row)el.innerHTML=priceDeliveryHtml(row);});}
+      else paintPrices();
+    }
+  })();priceDeliveryLoads.set(market,task);try{await task}finally{priceDeliveryLoads.delete(market)}
+}
+
 const priceProfitCache=new Map(),priceProfitLoads=new Map();
 function priceProfitAmount(value,signed=false){return (signed&&value>0?'+':'')+Number(value).toLocaleString('ru-RU',{maximumFractionDigits:0})+' ₸';}
 function priceProfitHtml(row,finalPrice){
