@@ -24,14 +24,24 @@ function costs(state,product){
  for(const row of recipe(state,product)){const p=catalog(state).find(p=>p.id===row.packagingId);result[row.scope==='order'?'order':'item']+=(Number(p?.unitCost)||0)*(Number(row.qty)||0)}
  return result;
 }
+function receiptCosts(qty,buyTotal,delivery=0){
+ qty=Number(qty);
+ if(!Number.isSafeInteger(qty)||qty<1||qty>100000000)throw Error('Укажите целое положительное количество упаковки.');
+ if(String(buyTotal??'').trim()==='')throw Error('Укажите сумму закупки упаковки.');
+ buyTotal=Number(buyTotal);delivery=Number(delivery);
+ if(!Number.isFinite(buyTotal)||buyTotal<0||buyTotal>1e12||!Number.isFinite(delivery)||delivery<0||delivery>1e12)throw Error('Сумма закупки и доставка должны быть неотрицательными числами.');
+ const totalCost=buyTotal+delivery;
+ return {qty,buyTotal,delivery,totalCost,unitCost:totalCost/qty};
+}
 function adjust(item,input,now,entryId){
- const qty=Number(input.qty),cost=Number(input.unitCost),stock=Number(item.stock)||0;
+ const receipt=input.type==='receipt'&&Object.hasOwn(input,'buyTotal')?receiptCosts(input.qty,input.buyTotal,input.delivery??0):null;
+ const qty=Number(input.qty),cost=receipt?receipt.unitCost:Number(input.unitCost),stock=Number(item.stock)||0;
  if(!['receipt','inventory','writeoff'].includes(input.type)||!Number.isSafeInteger(qty)||qty<0||qty>100000000||input.type!=='inventory'&&qty===0)throw Error('Проверьте целое количество упаковки.');
  if(input.type==='receipt'&&(!Number.isFinite(cost)||cost<0||cost>1e9))throw Error('Проверьте стоимость упаковки.');
  if(input.type==='writeoff'&&qty>stock)throw Error('Для списания не хватает упаковки.');
  const nextStock=input.type==='inventory'?qty:stock+(input.type==='writeoff'?-qty:qty);
  const unitCost=input.type==='receipt'?(stock*(Number(item.unitCost)||0)+qty*cost)/nextStock:Number(item.unitCost)||0;
- return {item:{...item,stock:nextStock,unitCost,updatedAt:now},movement:{id:entryId,packagingId:item.id,type:input.type,qty:nextStock-stock,before:stock,after:nextStock,unitCost:input.type==='receipt'?cost:unitCost,note:String(input.note||'').trim().slice(0,300),date:now}};
+ return {item:{...item,stock:nextStock,unitCost,updatedAt:now},movement:{id:entryId,packagingId:item.id,type:input.type,qty:nextStock-stock,before:stock,after:nextStock,unitCost:input.type==='receipt'?cost:unitCost,...(receipt?{buyTotal:receipt.buyTotal,delivery:receipt.delivery,totalCost:receipt.totalCost}:{}),note:String(input.note||'').trim().slice(0,300),date:now}};
 }
 function updateGroup(state,groupId,input){
  const group=rows(state.products).find(p=>String(p.id)===String(groupId));
@@ -48,5 +58,5 @@ function updateGroup(state,groupId,input){
  }
  return updates;
 }
-root.PackagingModel={catalog,recipe,validateRecipe,costs,adjust,updateGroup};
+root.PackagingModel={catalog,recipe,validateRecipe,costs,receiptCosts,adjust,updateGroup};
 })(globalThis);

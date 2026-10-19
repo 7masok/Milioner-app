@@ -18,6 +18,19 @@ test('recipe validation rejects missing packaging, duplicate scope, fractional/n
 test('receipt computes weighted average and permanent movement without mutating the input',()=>{
  const s=fixture(),p=s.settings.packagingV1.items[0],before=structuredClone(p),result=M.adjust(p,{type:'receipt',qty:10,unitCost:200,note:'Поставщик'},1000,'m');assert.equal(result.item.stock,20);assert.equal(result.item.unitCost,150);assert.equal(result.movement.qty,10);assert.equal(result.movement.before,10);assert.equal(result.movement.after,20);assert.equal(result.movement.unitCost,200);assert.deepEqual(p,before);
 });
+test('packaging receipt includes separate delivery in exact unit cost and preserves both amounts in history',()=>{
+ const p={id:'box',name:'Коробочки',stock:0,unitCost:0},before=structuredClone(p),r=M.adjust(p,{type:'receipt',qty:50,buyTotal:2383,delivery:500},1000,'delivery');
+ assert.equal(r.item.stock,50);assert.equal(r.item.unitCost,57.66);assert.equal(r.movement.buyTotal,2383);assert.equal(r.movement.delivery,500);assert.equal(r.movement.totalCost,2883);assert.equal(r.movement.unitCost,57.66);assert.deepEqual(p,before);
+});
+test('delivery-aware receipts preserve weighted stock valuation, zero delivery, and fractional precision',()=>{
+ const p={id:'box',stock:10,unitCost:100},r=M.adjust(p,{type:'receipt',qty:50,buyTotal:2383,delivery:500},1000,'weighted');assert.equal(r.item.unitCost,(1000+2883)/60);
+ assert.equal(M.receiptCosts(50,2383,0).unitCost,47.66);assert.equal(M.receiptCosts(3,10,1).unitCost,11/3);assert.equal(M.receiptCosts(1,0,0).totalCost,0);
+});
+test('invalid receipt totals, missing buy amount, negative delivery and invalid quantities never change packaging',()=>{
+ const p={id:'box',stock:10,unitCost:100},before=structuredClone(p);
+ for(const values of [{buyTotal:''},{buyTotal:null},{buyTotal:-1},{buyTotal:NaN},{delivery:-1},{delivery:Infinity},{qty:0},{qty:1.5}])assert.throws(()=>M.adjust(p,{type:'receipt',qty:50,buyTotal:2383,delivery:500,...values},1000,'invalid'));
+ assert.deepEqual(p,before);
+});
 test('writeoff cannot overdraw; physical recount records a delta and keeps valuation',()=>{
  const p=fixture().settings.packagingV1.items[0];assert.throws(()=>M.adjust(p,{type:'writeoff',qty:11},1000,'m'));assert.throws(()=>M.adjust(p,{type:'receipt',qty:1,unitCost:NaN},1000,'m'));assert.throws(()=>M.adjust(p,{type:'inventory',qty:1.5},1000,'m'));const r=M.adjust(p,{type:'inventory',qty:0},1000,'m');assert.equal(r.item.stock,0);assert.equal(r.item.unitCost,100);assert.equal(r.movement.qty,-10);assert.equal(M.adjust(p,{type:'writeoff',qty:2},1000,'m').item.stock,8);
 });
