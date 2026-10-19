@@ -52,3 +52,11 @@ test('PDF route reads only WB1 snapshots and canonical products and returns an a
   assert.ok(queries.every(q=>/^SELECT/.test(q.sql)));
  }finally{pool.query=original}
 });
+
+test('PDF sorts product names alphabetically with natural numbers while preserving quantity and source rows',()=>{
+ const products=[{id:'z',name:'Якорь'},{id:'b10',name:'Буква 10'},{id:'b2',name:'буква 2'},{id:'a',name:'Балерина'}];
+ const items=products.map((p,i)=>({productId:p.id,qty:i+1,buyTotal:(i+1)*100})),before=structuredClone(items);
+ const data=preparePurchasePdf({items},products,[]);
+ assert.deepEqual(data.rows.map(r=>r.productId),['a','b2','b10','z']);assert.equal(data.qty,10);assert.equal(data.buy,1000);assert.deepEqual(items,before);
+ assert.deepEqual(data.rows.map(r=>r.qty),[4,3,2,1]);
+});
