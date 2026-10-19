@@ -14,7 +14,7 @@ try{
   priceUi.q=String(saved.q||'');
   if(saved.sort==='desc'||saved.sort==='asc')priceUi.sort=saved.sort;
   if(saved.hidden&&typeof saved.hidden==='object')priceUi.hidden=saved.hidden;
-  if(['all','grouped','ungrouped'].includes(saved.groupFilter))priceUi.groupFilter=saved.groupFilter;
+  if(saved.groupFilter==='ungrouped')priceUi.groupFilter='ungrouped';
   priceUi.groupId=String(saved.groupId||'');
   if(['share','amount'].includes(saved.deliveryRank))priceUi.deliveryRank=saved.deliveryRank;
   if(saved.deliverySettings&&typeof saved.deliverySettings==='object')priceUi.deliverySettings=saved.deliverySettings;
@@ -83,7 +83,6 @@ function priceGroupLabel(row){return String(row?.groupName||'').trim()||('Гру
 function priceMatchesGroup(row){
   if(!priceIsWbMarket(row?.market))return true;
   if(priceUi.groupId)return String(row?.groupImtId||'')===String(priceUi.groupId);
-  if(priceUi.groupFilter==='grouped')return Boolean(row?.grouped);
   if(priceUi.groupFilter==='ungrouped')return !row?.grouped;
   return true;
 }
@@ -96,11 +95,10 @@ function priceVisibleRows(){
   });
 }
 function updatePriceGroupTools(){
-  const tools=document.getElementById('priceGroupTools'),filter=document.getElementById('priceGroupFilter'),select=document.getElementById('priceGroupSelect'),
+  const tools=document.getElementById('priceGroupTools'),select=document.getElementById('priceGroupSelect'),
     merge=document.getElementById('priceGroupMerge'),detach=document.getElementById('priceGroupDetach');
   const isWb=priceIsWbMarket(),selection=priceSelection();
   if(tools)tools.hidden=!isWb;if(!isWb)return;
-  if(filter)filter.value=priceUi.groupFilter||'all';
   if(select){
     const groups=new Map(),q=priceUi.q.trim().toLocaleLowerCase('ru-RU');
     for(const row of activeRows()){
@@ -440,9 +438,6 @@ window.priceSetMarket=function(market){
   priceSelection(priceUi.market).clear();
   priceSelection(market).clear();
   priceExpanded=null;priceUi.market=market;priceUi.groupFilter='all';priceUi.groupId='';rememberPriceUi();setPriceTabs();window.renderPrices(false);
-};
-window.priceSetGroupFilter=function(value){
-  priceUi.groupFilter=['grouped','ungrouped'].includes(value)?value:'all';priceUi.groupId='';rememberPriceUi();paintPrices();
 };
 window.priceSetGroup=function(value){
   priceUi.groupFilter=value==='__ungrouped__'?'ungrouped':'all';
