@@ -98,3 +98,20 @@ test('Kaspi order title and composition button open the editor without changing 
  vm.runInNewContext(source+';renderMarketplaceOrders()',ctx);assert.match(list.innerHTML,/onclick="openKaspiOrderContents\('order'\)"/);assert.match(list.innerHTML,/>Состав<\/button>/);assert.match(list.innerHTML,/Состав изменён/);assert.doesNotMatch(list.innerHTML,/>>/);
  ctx.selectedOrderMarket='WB';ctx.groupMarketplaceOrders=()=>[group('WB')];vm.runInNewContext('renderMarketplaceOrders()',ctx);assert.doesNotMatch(list.innerHTML,/openKaspiOrderContents/);
 });
+
+for(const market of ['WB','WB2']){
+ test(`${market} deductions ignore Kaspi replacements and keep original product, quantity and fees`,async()=>{
+  const f=fixture(false);f.state.reservations=[];f.state.settings.kaspiOrderContents={[contentKey('order','entry')]:{productId:'b',qty:99}};
+  Object.assign(f.row,{market,status:'complete',state:'sorted'});
+  await fakeDb(f.state,[f.row],async queries=>{const result=await reconcileMarketplaceSales(market);assert.equal(result.sold,2);
+   const p=JSON.parse(queries.find(q=>q.sql.includes('INSERT INTO warehouse_products')).args[0]);assert.equal(p.find(x=>x.id==='a').stock,6);assert.equal(p.find(x=>x.id==='b').stock,10);
+   const sales=JSON.parse(queries.find(q=>q.sql.includes('INSERT INTO warehouse_sales')).args[0]);assert.equal(sales[0].productId,'a');assert.equal(sales[0].qty,2);assert.equal(sales[0].price,500);assert.equal(sales[0].fee,125);assert.equal(sales[0].channel,market);
+  });
+ });
+ test(`${market} premature-sale restoration remains unchanged and never touches the Kaspi replacement product`,async()=>{
+  const f=fixture();f.state.settings.kaspiOrderContents={[contentKey('order','entry')]:{productId:'b',qty:99}};f.state.sales[0].externalKey=`${market}:order:entry`;f.state.sales[0].channel=market;f.state.movements[0].externalKey=`${market}:order:entry`;Object.assign(f.row,{market,status:'complete',state:'waiting'});
+  await fakeDb(f.state,[f.row],async queries=>{const result=await reconcileMarketplaceSales(market);assert.equal(result.sold,0);assert.equal(result.restored,2);
+   const p=JSON.parse(queries.find(q=>q.sql.includes('INSERT INTO warehouse_products')).args[0]);assert.equal(p.find(x=>x.id==='a').stock,10);assert.equal(p.find(x=>x.id==='b').stock,10);
+  });
+ });
+}
