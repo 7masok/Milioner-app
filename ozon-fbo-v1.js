@@ -82,8 +82,10 @@ function populateOzonOrderFeed(){
    }
   }
  }
- for(let i=feed.length-1;i>=0;i--){const lineKey=feed[i].entryId;if(!ozonKeys.has(lineKey)){feed.splice(i,1);}}
- for(const [key,newLine] of ozonKeys){const existing=feed.find(x=>x.entryId===key);if(existing){Object.assign(existing,newLine);}else{feed.push(newLine);}}
+ const existingByKey=new Map();let kept=0;
+ for(const line of feed){if(!ozonKeys.has(line.entryId))continue;feed[kept++]=line;if(!existingByKey.has(line.entryId))existingByKey.set(line.entryId,line)}
+ feed.length=kept;
+ for(const [key,newLine] of ozonKeys){const existing=existingByKey.get(key);if(existing){Object.assign(existing,newLine);}else{feed.push(newLine);}}
 }
 function resolveOzonProductIds(){
  if(!data?.accounts)return;

@@ -7,7 +7,7 @@ function fixture(fetch){
  const status={textContent:''},dot={},timers=new Map();let timerId=0;
  const window={},noop=()=>{},ctx={window,fetch,AbortSignal,Date,Map,Set,Intl,console,state:{settings:{},products:[]},MILLIONER_API:'https://fixture.invalid',renderMarketplaceOrders:noop,applyMarketplaceTransitions:noop,productCard:noop,renderProducts:noop,attachMarketplaceSku:noop,setInterval:noop,setTimeout:(fn,delay)=>{timers.set(++timerId,{fn,delay});return timerId},clearTimeout:id=>timers.delete(id),document:{getElementById:id=>id==='dotOzonTop'?dot:id==='ozonTopStatus'?status:null,querySelector:()=>({})}};
  vm.createContext(ctx);vm.runInContext(source.replace(/\}\)\(\);\s*$/,'window.probe={load,historyRequests};})();'),ctx);
- return{window,status,dot,timers};
+ return{window,status,dot,timers,state:ctx.state};
 }
 const payload=from=>({ok:true,configured:true,syncing:false,accounts:[{account:'fixture',postings:{from,to:'2026-10-20T00:00:00Z',rows:[]},stocks:{rows:[]}}]});
 const response=value=>({ok:true,json:async()=>value});
@@ -34,4 +34,13 @@ test('a selected older range is requested once, then cached snapshots are polled
  assert.equal(f.window.probe.historyRequests.size,1);
  from='2026-03-01T00:00:00Z';await f.window.probe.load(true);
  assert.equal(f.window.ozonFboOrderHistoryCovers(bounds),true);assert.equal(f.window.probe.historyRequests.size,0);
+});
+test('an expanded archive merges order lines in place and removes absent derived rows',async()=>{
+ const rows=Array.from({length:4000},(_,i)=>({posting_number:'posting-'+i,created_at:'2026-04-01T00:00:00Z',status:'delivered',products:[{sku:'sku-'+i,quantity:1,price:10}]}));
+ const value=payload('2026-03-01T00:00:00Z');value.accounts[0].postings.rows=rows;
+ const f=fixture(async()=>response(value)),feed=[],existing={entryId:'posting-0_sku-0_0',custom:'keep',status:'awaiting_deliver'};
+ feed.push(existing,{entryId:'absent'});f.state.ozonOrderFeed=feed;
+ await f.window.ozonFboRefreshStatus();
+ assert.equal(f.state.ozonOrderFeed,feed);assert.equal(feed.length,4000);assert.equal(feed[0],existing);
+ assert.equal(existing.status,'delivered');assert.equal(existing.custom,'keep');assert.equal(feed.at(-1).entryId,'posting-3999_sku-3999_0');
 });
