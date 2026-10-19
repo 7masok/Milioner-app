@@ -44,6 +44,9 @@ test('opened lollipop card shows cost from the five accepted warehouse units bef
   productDisplayStock:p=>p.stock,productAverageDailySales:()=>0,reportPeriodStart:()=>0,reportPeriodEnd:()=>Date.now(),
   purchaseAtWarehouseQty:()=>5,productAvailableStock:()=>0,wbRelinkNotice:()=>'',esc:x=>String(x),fmt:x=>x+' ₸',showSheet:html=>{sheet=html;}
  });
+ vm.runInContext(fs.readFileSync(new URL('../../packaging-model.js',import.meta.url),'utf8'),f.context);
+ vm.runInContext(fs.readFileSync(new URL('../../packaging-v1.js',import.meta.url),'utf8'),f.context);
+ f.context.packagingProductBlock=p=>f.context.window.packagingProductBlock(p);
  const start=html.indexOf('async function openProduct(');
  vm.runInContext(html.slice(start,html.indexOf('\nfunction ',start)),f.context);
  await f.context.openProduct('red');
