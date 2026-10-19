@@ -16,6 +16,8 @@ function receivedRows(rows){
 function purchaseDeletionBlockReason(rows){
   if(!rows.length)return 'Поставка не найдена.';
   if(rows.some(x=>x?.inventoryAdjustment))return 'Инвентаризационные партии удаляются только через инвентаризацию.';
+  if(rows.some(x=>Number(x?.warehouseWrittenOffQty)>0))return 'Из этой поставки уже было списание со склада. Удалить её целиком нельзя: сохраните историю списания.';
+  if(rows.some(x=>x?.relocation))return 'Это перемещение существующего товара. Верните товар в продажу вместо удаления перемещения.';
 
   const received=receivedRows(rows);
   if(!received.length)return '';
@@ -41,11 +43,13 @@ function purchaseDeletionBlockReason(rows){
     const p=prod(pid);
     if(!p)return 'Один из товаров этой закупки больше не найден в справочнике. Автоматическое удаление заблокировано.';
     if(Math.max(0,Number(p.stock)||0)+1e-9<qty)return `Нельзя безопасно откатить приход «${p.name||'товар'}»: текущий остаток меньше количества из удаляемой партии.`;
+    if(typeof reserved==='function'&&Math.max(0,Number(p.stock)||0)-qty+1e-9<Math.max(0,Number(reserved(p))||0))return `«${p.name||'Товар'}» уже нужен для активных заказов. Сначала проверьте резерв.`;
   }
   return '';
 }
 
 window.deletePurchaseShipment=function(encodedKey){
+  if(typeof requireWarehouseEditReady==='function'&&!requireWarehouseEditReady())return;
   const rows=purchaseShipmentRows(encodedKey);
   if(!rows.length)return alert('Поставка не найдена');
 
@@ -71,6 +75,7 @@ window.deletePurchaseShipment=function(encodedKey){
   }
 
   // Remove purchase rows first so average cost is recalculated without the deleted FIFO lots.
+  if(typeof rememberPurchaseDeletes==='function')rememberPurchaseDeletes([...ids]);
   state.purchases=(state.purchases||[]).filter(x=>!ids.has(String(x.id||'')));
 
   for(const [pid,qty] of rollbackByProduct){
@@ -101,7 +106,7 @@ openPurchaseShipment=function(encodedKey){
   btn.type='button';
   btn.className='btn danger full';
   btn.dataset.deletePurchaseShipment='1';
-  btn.textContent='Удалить закупку';
+  btn.textContent='Удалить поставку полностью';
   btn.onclick=()=>window.deletePurchaseShipment(encodedKey);
   sheet.appendChild(btn);
 };
