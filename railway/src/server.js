@@ -1,3 +1,4 @@
+import {purchasePdfRouter} from './purchase-pdf.js';
 import {startKaspiHistoryLoop} from './kaspi-order-history.js';
 import { plannerRouter } from './ozon-planner/router.js';
 import { startPlannerLoop } from './ozon-planner/service.js';
@@ -58,6 +59,7 @@ const frontendFiles = Object.freeze([
   'purchase-delete-v1.js',
   'purchase-plan-ignore-v1.js',
   'purchase-arrival-sort-v1.js',
+  'purchase-pdf-v1.js',
   'kaspi-status-compat-v1.js',
   'kaspi-ads-v2-original.js',
   'reservation-compat-v1.js',
@@ -252,6 +254,7 @@ app.use('/api', wbVariantsRouter);
 app.use('/api', wbReturnsRouter);
 app.use('/api', wbAdsRouter);
 app.use('/api', warehouseRouter);
+app.use('/api', purchasePdfRouter);
 app.use('/api', financeLedgerRouter);
 app.use('/api', financeRouter);
 app.use('/api', ordersRouter);
