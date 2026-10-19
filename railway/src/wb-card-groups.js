@@ -251,12 +251,18 @@ wbCardGroupsRouter.post('/market-prices/card-groups/move',requireWritesEnabled,a
   const createNewGroup=req.body?.createNewGroup===true;
   if(targetImt&&createNewGroup)return res.status(400).json({ok:false,error:'Нельзя одновременно выбрать существующую и новую группу'});
   if(createNewGroup&&ids.length<2)return res.status(400).json({ok:false,error:'Для новой группы выберите минимум 2 карточки'});
-  let action='',target=null,operationSelected=selected,alreadyVerified=false;
+  let action='',target=null,operationSelected=selected,alreadyVerified=false,expectedTargetIds=[];
   if(targetImt){
-    target=snapshot.cards.find(card=>cleanText(card.imtId)===targetImt)||null;
-    if(!target)return res.status(409).json({ok:false,error:'Целевая группа отсутствует в последнем снимке WB'});
-    ensureSameSubject(selected,target);
-    const moving=selected.filter(card=>cleanText(card.imtId)!==targetImt).map(card=>Number(card.nmId));
+    let liveCards;
+    try{liveCards=await fetchAndSaveGroups(market)}catch(error){await markWbCardGroupError(market,error).catch(()=>{});throw error}
+    const live=cardMap(liveCards);operationSelected=ids.map(id=>live.get(String(id))).filter(Boolean);
+    if(operationSelected.length!==ids.length)return res.status(409).json({ok:false,error:'Часть выбранных карточек отсутствует в актуальном каталоге WB'});
+    target=liveCards.find(card=>cleanText(card.imtId)===targetImt)||null;
+    if(!target)return res.status(409).json({ok:false,error:'Целевая группа отсутствует в актуальном каталоге WB'});
+    ensureSameSubject(operationSelected,target);
+    expectedTargetIds=[...new Set([...liveCards.filter(card=>cleanText(card.imtId)===targetImt).map(card=>cleanText(card.nmId)),...ids.map(String)])];
+    if(expectedTargetIds.length>30)return res.status(400).json({ok:false,error:'В группе WB может быть не более 30 карточек'});
+    const moving=operationSelected.filter(card=>cleanText(card.imtId)!==targetImt).map(card=>Number(card.nmId));
     if(moving.length)await moveCards(market,{targetIMT:Number(targetImt),nmIDs:moving});
     action='merge';
   }else if(createNewGroup){
@@ -297,12 +303,12 @@ wbCardGroupsRouter.post('/market-prices/card-groups/move',requireWritesEnabled,a
   }catch(error){await markWbCardGroupError(market,error).catch(()=>{});throw error}
   const after=cardMap(refreshed),actual=ids.map(id=>after.get(String(id))).filter(Boolean);
   let verified=false;
-  if(targetImt)verified=actual.length===ids.length&&actual.every(card=>cleanText(card.imtId)===targetImt);
+  if(targetImt)verified=actual.length===ids.length&&expectedTargetIds.every(id=>cleanText(after.get(id)?.imtId)===targetImt);
   else if(separateEach)verified=actual.length===ids.length&&new Set(actual.map(card=>cleanText(card.imtId)).filter(Boolean)).size===ids.length;
   else if(createNewGroup)verified=selectedGroupState(refreshed,ids).exactGroup;
   else verified=actual.length===ids.length&&new Set(actual.map(card=>cleanText(card.imtId)).filter(Boolean)).size===1;
   const payload={remoteIds:ids.map(String),targetImt:targetImt||null,separateEach,createNewGroup,verified,
-    before:operationSelected.map(card=>({nmId:card.nmId,imtId:card.imtId})),
+    ...(targetImt?{expectedTargetIds}:{}),before:operationSelected.map(card=>({nmId:card.nmId,imtId:card.imtId})),
     after:actual.map(card=>({nmId:card.nmId,imtId:card.imtId}))};
   await writeHistory(market,ids,action,actorFrom(req),payload);
   const fresh=await wbCardGroupSnapshot(market);

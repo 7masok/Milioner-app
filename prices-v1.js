@@ -809,27 +809,48 @@ window.recheckPriceGroups=async function(){
     showPriceGroupFailure(error,priceGroupRecheckIds);
   }
 };
+let priceGroupMergeContext=null;
 window.openPriceGroupMerge=function(){
   if(!priceIsWbMarket())return;
   const selected=selectedPriceRows();if(!selected.length)return;
-  if(selected.length<2)return alert('Выберите минимум 2 карточки.');
   if(selected.length>30)return alert('WB позволяет объединить не более 30 карточек.');
   if(!sameSelectedSubject(selected))return alert('WB разрешает объединять только карточки одного предмета.');
-  showSheet('<h3>Объединить · '+selected.length+'</h3>'+
-    '<div class="muted">Будет создана новая группа только из выбранных товаров. Они выйдут из текущих групп, а невыбранные товары останутся в своих группах.</div>'+
+  const subject=String(selected.find(row=>row.groupSubjectId)?.groupSubjectId||''),groups=new Map();
+  for(const row of activeRows()){
+    if(row.error||!row.grouped||!row.groupImtId)continue;
+    if(subject&&row.groupSubjectId&&String(row.groupSubjectId)!==subject)continue;
+    const id=String(row.groupImtId);if(!groups.has(id))groups.set(id,{id,label:priceGroupLabel(row),size:Number(row.groupSize)||0});
+  }
+  const options=[selected.length>=2?'<option value="__new__">Новая группа из выбранных</option>':'<option value="">Выберите готовую группу</option>',
+    ...[...groups.values()].sort((a,b)=>a.label.localeCompare(b.label,'ru')).map(g=>'<option value="'+pEsc(g.id)+'">'+pEsc(g.label)+' · '+g.size+' товаров</option>')];
+  priceGroupMergeContext={market:priceUi.market,ids:selected.map(row=>String(row.remoteId)),groups,busy:false};
+  showSheet('<h3>'+(selected.length===1?'Добавить в группу':'Объединить · '+selected.length)+'</h3>'+
     '<div class="price-group-preview">'+selected.map(groupPreviewRow).join('')+'</div>'+
-    '<div class="actions"><button type="button" class="btn" onclick="closeModal()">Отмена</button><button type="button" class="btn dark" onclick="submitPriceGroupMerge()">Объединить выбранные</button></div>');
+    '<div class="field"><label>Куда добавить</label><select id="priceGroupTarget" class="select" onchange="priceGroupMergeTargetChanged()">'+options.join('')+'</select></div>'+
+    '<div class="muted">В готовой группе сохранятся остальные товары. Для новой группы используются только отмеченные карточки.</div>'+
+    (!groups.size?'<div class="muted">Подходящих готовых групп в этом кабинете нет.</div>':'')+
+    '<div class="actions"><button type="button" class="btn" onclick="closeModal()">Отмена</button><button id="priceGroupMergeSubmit" type="button" class="btn dark" onclick="submitPriceGroupMerge()">'+(selected.length===1?'Добавить в группу':'Объединить выбранные')+'</button></div>');
+};
+window.priceGroupMergeTargetChanged=function(){
+  const button=document.getElementById('priceGroupMergeSubmit'),value=document.getElementById('priceGroupTarget')?.value;
+  if(button)button.textContent=value==='__new__'?'Объединить выбранные':'Добавить в группу';
 };
 window.submitPriceGroupMerge=async function(){
-  const rows=selectedPriceRows(),ids=rows.map(row=>String(row.remoteId||'')).filter(Boolean);
-  if(ids.length<2)return alert('Выберите минимум 2 карточки.');
-  if(ids.length>30)return alert('WB позволяет объединить не более 30 карточек.');
-  if(!confirm('Создать новую группу WB только из '+ids.length+' выбранных карточек? Невыбранные товары останутся в своих группах.'))return;
+  const context=priceGroupMergeContext,value=document.getElementById('priceGroupTarget')?.value;
+  if(!context||context.busy)return;
+  const ids=context.ids,target=value&&value!=='__new__'?context.groups.get(value):null;
+  if(!target&&value!=='__new__')return alert('Выберите готовую группу.');
+  if(!target&&ids.length<2)return alert('Для новой группы выберите минимум 2 карточки.');
+  if(!confirm(target?'Добавить '+ids.length+' выбранных карточек в «'+target.label+'»? Остальные товары группы сохранятся.':'Создать новую группу WB только из '+ids.length+' выбранных карточек? Невыбранные товары останутся в своих группах.'))return;
+  const button=document.getElementById('priceGroupMergeSubmit');context.busy=true;if(button)button.disabled=true;
   try{
-    await remoteGroupMove({market:priceUi.market,remoteIds:ids,createNewGroup:true});
-    priceSelection().clear();closeModal();bumpPriceEpoch(priceUi.market);await window.renderPrices(true);
-    setPriceStatus('WB создал новую группу только из выбранных карточек и подтвердил её состав','ok');
-  }catch(error){showPriceGroupFailure(error,ids)}
+    await remoteGroupMove({market:context.market,remoteIds:ids,...(target?{targetImt:target.id}:{createNewGroup:true})});
+    for(const id of ids)priceSelection(context.market).delete(id);
+    bumpPriceEpoch(context.market);
+    if(priceGroupMergeContext===context&&priceUi.market===context.market){priceGroupMergeContext=null;closeModal();await window.renderPrices(true);
+      setPriceStatus(target?'Карточки добавлены в группу. Состав подтверждён WB.':'WB создал новую группу только из выбранных карточек и подтвердил её состав','ok');}
+  }catch(error){if(priceGroupMergeContext===context&&priceUi.market===context.market)showPriceGroupFailure(error,ids)}
+  finally{context.busy=false;if(button)button.disabled=false}
 };
 window.openPriceGroupDetach=function(){
   if(!priceIsWbMarket())return;
