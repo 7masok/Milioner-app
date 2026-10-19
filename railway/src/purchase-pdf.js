@@ -30,6 +30,7 @@ export function preparePurchasePdf(input,products,cards,links=[]){
   for(const key of [...new Set(keys)]){const found=cards.filter(c=>text(c.vendorCode)===key||text(c.nmId)===key);if(found.length===1){card=found[0];break;}}
   return {productId:String(product.id),name:text(product.name).slice(0,300)||'Товар',sku:text(card?.vendorCode||product.wb),qty,buyTotal,photo:purchasePhotoUrl(card?.photo)};
  });
+ rows.sort((a,b)=>a.name.localeCompare(b.name,'ru',{numeric:true,sensitivity:'base'}));
  const delivery=Number(input.delivery??0);if(!Number.isFinite(delivery)||delivery<0||delivery>1e12)throw invalid('Проверьте сумму доставки');
  const date=text(input.date);if(date&&(!/^\d{4}-\d{2}-\d{2}$/.test(date)||!Number.isFinite(Date.parse(date+'T00:00:00Z'))))throw invalid('Проверьте дату закупки');
  return {title:text(input.title).slice(0,120)||'Закупка',date,draft:input.draft===true,rows,delivery,buy:rows.reduce((n,r)=>n+r.buyTotal,0),qty:rows.reduce((n,r)=>n+r.qty,0)};

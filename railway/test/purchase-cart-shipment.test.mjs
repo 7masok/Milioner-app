@@ -35,12 +35,12 @@ test('a new item joins the same seller cart shipment, preserving old IDs, stage,
   const f=fixture(),{ctx,state,draft,element}=f,before=structuredClone(state);
   ctx.openSelectedPurchaseCartShipment();assert.match(f.screens.at(-1),/Выберите закупку у нужного продавца/);assert.match(f.screens.at(-1),/Товар А, Товар Б/);assert.doesNotMatch(f.screens.at(-1),/paid-shipment/);
   ctx.addSelectedPurchaseToCartShipment('seller-one');
-  assert.deepEqual(draft.map(r=>[r.productId,r.qty]),[['a',4],['b',5],['c',7]]);
+  assert.deepEqual(draft.map(r=>[r.productId,r.qty]),[['c',7],['a',4],['b',5]],'editor displays Новый товар В, Товар А, Товар Б in alphabetical order');
   assert.deepEqual(state,before,'opening the draft does not write purchases');
   assert.equal(element('editPorBuyTotal').value,'900','historical estimates do not auto-fill the actual invoice');
   element('editPorBuyTotal').value='1600';element('editPorDelivery').value='160';
   ctx.savePurchaseShipmentEdit('seller-one');
-  const rows=state.purchases.filter(r=>r.shipmentId==='seller-one');assert.equal(rows.length,3);
+  const rows=state.purchases.filter(r=>r.shipmentId==='seller-one').sort((a,b)=>a.productId.localeCompare(b.productId));assert.equal(rows.length,3);
   assert.deepEqual(rows.map(r=>r.id).slice(0,2),['old-a','old-b']);assert.equal(rows[2].qty,7);
   assert.ok(rows.every(r=>r.status==='to_forwarder'&&r.workflowStageId==='cart'&&r.workflowStageAt===123&&r.remainingQty===0));
   assert.equal(rows.reduce((s,r)=>s+r.buyTotal,0),1600);assert.equal(rows.reduce((s,r)=>s+r.delivery,0),160);
