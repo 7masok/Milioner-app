@@ -3,7 +3,7 @@ import { pool } from './db.js';
 import { credentialFor } from './connections.js';
 import { asyncRoute, requireTrustedOrigin } from './http.js';
 export const ozonRouter=express.Router();
-let ready, running;
+let ready, running, historyTimer;
 function ensureTable(){return ready ||= pool.query('CREATE TABLE IF NOT EXISTS ozon_fbo_cache (account TEXT PRIMARY KEY, payload JSONB NOT NULL, updated_at BIGINT NOT NULL)').catch(e=>{ready=null;throw e});}
 async function accounts(){return (await pool.query("SELECT id,label FROM marketplace_credentials WHERE provider='OZON' AND enabled=1 AND encrypted_token IS NOT NULL")).rows;}
 async function request(credentials,path,body){
@@ -25,13 +25,17 @@ export async function fetchPostings(credentials,from,to){
  }throw new Error('Ozon: превышен лимит страниц отправлений');
 }
 export async function fetchPostingHistory(credentials,from,to,previous={},fetchRows=fetchPostings){
- const target=Date.parse(to)-155*86400000,fresh=await fetchRows(credentials,from,to),cachedFrom=Date.parse(previous.from||'');
+ const requested=Date.parse(previous.targetFrom||'');
+ const target=Math.min(Date.parse(to)-366*86400000,Number.isFinite(requested)?requested:Infinity),fresh=await fetchRows(credentials,from,to),cachedFrom=Date.parse(previous.from||'');
  let older=Array.isArray(previous.rows)?previous.rows:[],coveredFrom=Number.isFinite(cachedFrom)?Math.min(cachedFrom,Date.parse(from)):Date.parse(from);
  // One bounded older chunk per normal sync. Do not claim the target until fetched.
  if(coveredFrom>target){const olderTo=new Date(coveredFrom).toISOString(),olderFrom=new Date(Math.max(target,coveredFrom-30*86400000)).toISOString();older=[...older,...await fetchRows(credentials,olderFrom,olderTo)];coveredFrom=Date.parse(olderFrom)}
- const historyFrom=new Date(Math.max(target,coveredFrom)).toISOString();
+ const historyFrom=new Date(coveredFrom).toISOString();
+ // Keep all previously collected orders. Coverage is advanced only by complete
+ // requests; the age of an individual saved row is not proof of coverage.
  const retained=older.filter(row=>{const created=Date.parse(row.created_at||row.in_process_at||'');return created>=Date.parse(historyFrom)&&created<Date.parse(from)});
- return {rows:[...new Map([...retained,...fresh].map(row=>[row.posting_number,row])).values()],from:historyFrom,to};
+ const outsideCoverage=older.filter(row=>Date.parse(row.created_at||row.in_process_at||'')<Date.parse(historyFrom));
+ return {rows:[...new Map([...outsideCoverage,...retained,...fresh].map(row=>[row.posting_number,row])).values()],from:historyFrom,to,targetFrom:new Date(target).toISOString()};
 }
 export async function fetchStocks(credentials){
  const rows=[];let cursor='';
@@ -144,27 +148,53 @@ export async function fetchFinance(credentials,from,to){
  }
  return rows;
 }
-async function run(){
- await ensureTable();const results=[];
+function scheduleHistory(delay=60000){
+ if(historyTimer)return;
+ historyTimer=setTimeout(()=>{historyTimer=null;syncOzon(true).catch(e=>console.error('Ozon history sync failed',String(e.message||e)))},delay);
+ historyTimer.unref();
+}
+async function run(historyOnly=false){
+ await ensureTable();const results=[];let pending=false,historyFailed=false;
  for(const account of await accounts()){
   const previous=(await pool.query('SELECT payload FROM ozon_fbo_cache WHERE account=$1',[account.id])).rows[0]?.payload||{};
+  const targetFrom=new Date(Math.min(Date.now()-366*86400000,Date.parse(previous.historyTargetFrom||'')||Infinity)).toISOString();
+  if(historyOnly&&Date.parse(previous.postings?.from||'')<=Date.parse(targetFrom))continue;
+  const allowedAt=Math.max(Number(previous.historyRetryAt)||0,historyOnly?(Number(previous.postings?.updatedAt)||0)+60000:0);
+  if(Date.now()<allowedAt){scheduleHistory(allowedAt-Date.now());if(historyOnly)continue}
   let credentials;
   try{credentials=JSON.parse(await credentialFor(account.id));if(!credentials.clientId||!credentials.apiKey)throw new Error('missing');}catch{results.push({account:account.id,error:'Проверьте Client ID и API-ключ'});continue;}
   const to=new Date().toISOString(),from=new Date(Date.now()-30*86400000).toISOString();
-  const payload={...previous,account:account.id,label:account.label,scheme:'FBO',attemptAt:Date.now(),errors:{}};
-  for(const [key,fn] of [['postings',()=>fetchPostingHistory(credentials,from,to,previous.postings)],['stocks',()=>fetchStocks(credentials)],['finance',()=>fetchFinance(credentials,from,to)],['supplies',()=>fetchSupplyOrders(credentials,previous.supplies?.rows||[])]]){
+  const payload={...previous,account:account.id,label:account.label,scheme:'FBO',attemptAt:Date.now(),historyTargetFrom:targetFrom,errors:historyOnly?{...previous.errors}:{}};
+  for(const [key,fn] of [['postings',()=>fetchPostingHistory(credentials,from,to,{...previous.postings,targetFrom})],...(!historyOnly?[['stocks',()=>fetchStocks(credentials)],['finance',()=>fetchFinance(credentials,from,to)],['supplies',()=>fetchSupplyOrders(credentials,previous.supplies?.rows||[])]]:[])]){
+   if(key==='postings'&&Number(previous.historyRetryAt)>Date.now()){payload.errors.postings=previous.errors?.postings||'История Ozon ожидает повторной попытки';continue}
+   delete payload.errors[key];
    try{const result=await fn();payload[key]={...(key==='postings'?result:{rows:result,from,to}),updatedAt:Date.now()};}
    catch(e){payload.errors[key]=String(e.message||e);}
   }
-  await pool.query('INSERT INTO ozon_fbo_cache(account,payload,updated_at) VALUES($1,$2::jsonb,$3) ON CONFLICT(account) DO UPDATE SET payload=EXCLUDED.payload,updated_at=EXCLUDED.updated_at',[account.id,JSON.stringify(payload),Date.now()]);
+  payload.historyRetryAt=payload.errors.postings?(Number(previous.historyRetryAt)>Date.now()?Number(previous.historyRetryAt):Date.now()+15*60*1000):0;
+  // Preserve an earlier target requested while this sync was in flight.
+  await pool.query("INSERT INTO ozon_fbo_cache(account,payload,updated_at) VALUES($1,$2::jsonb,$3) ON CONFLICT(account) DO UPDATE SET payload=EXCLUDED.payload || jsonb_build_object('historyTargetFrom',LEAST(ozon_fbo_cache.payload->>'historyTargetFrom',EXCLUDED.payload->>'historyTargetFrom')),updated_at=EXCLUDED.updated_at",[account.id,JSON.stringify(payload),Date.now()]);
+  if(!payload.postings?.from||Date.parse(payload.postings.from)>Date.parse(targetFrom)){pending=true;if(payload.errors.postings)historyFailed=true}
+  if(historyOnly)console.info('Ozon order history progress',JSON.stringify({account:account.id,from:payload.postings?.from,targetFrom,pending,failed:Boolean(payload.errors.postings)}));
   const result={account:account.id,postings:payload.postings?.rows?.length||0,stocks:payload.stocks?.rows?.length||0,finance:payload.finance?.rows?.length||0,supplies:payload.supplies?.rows?.length||0,errors:payload.errors};
   results.push(result);if(result.error||Object.keys(result.errors||{}).length)console.warn('Ozon FBO sync issue',JSON.stringify(result));
  }
+ if(pending)scheduleHistory(historyFailed?15*60*1000:60000);
  return {ok:results.every(x=>!x.error&&!Object.keys(x.errors||{}).length),results};
 }
-export function syncOzon(){if(!running)running=run().finally(()=>{running=null});return running;}
+export function syncOzon(historyOnly=false){if(!running)running=run(historyOnly).finally(()=>{running=null});return running;}
 export function startOzonSyncLoop(){const tick=()=>syncOzon().catch(e=>console.error('Ozon FBO sync failed',String(e.message||e)));setTimeout(tick,5000).unref();setInterval(tick,10*60*1000).unref();}
 ozonRouter.use(requireTrustedOrigin);
+ozonRouter.post('/ozon-order-history',asyncRoute(async(req,res)=>{
+ const from=Number(req.body?.from);
+ if(!Number.isFinite(from)||from<Date.UTC(2000,0,1)||from>Date.now())return res.status(400).json({ok:false,error:'Некорректная дата истории Ozon'});
+ await ensureTable();const configured=await accounts(),target=new Date(from).toISOString();
+ await pool.query("INSERT INTO ozon_fbo_cache(account,payload,updated_at) SELECT id,jsonb_build_object('account',id,'historyTargetFrom',$1::text),0 FROM unnest($2::text[]) AS selected(id) WHERE true ON CONFLICT(account) DO UPDATE SET payload=ozon_fbo_cache.payload || jsonb_build_object('historyTargetFrom',LEAST(ozon_fbo_cache.payload->>'historyTargetFrom',EXCLUDED.payload->>'historyTargetFrom'))",[target,configured.map(x=>x.id)]);
+ // The live snapshot remains immediately available. Only the server collects
+ // older orders, in bounded chunks, using the existing single sync mutex.
+ if(configured.length)scheduleHistory();
+ res.status(202).json({ok:true,configured:configured.length>0,pending:configured.length>0});
+}));
 ozonRouter.get('/ozon-fbo',asyncRoute(async(_req,res)=>{
  await ensureTable();const configured=await accounts();
  const rows=(await pool.query('SELECT payload FROM ozon_fbo_cache')).rows;

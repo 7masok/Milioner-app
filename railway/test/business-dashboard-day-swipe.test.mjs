@@ -25,7 +25,7 @@ function fixture(saved={},loader=null){
  }};
  const ctx={window,Date:Clock,Intl,Map,Set,console,state,financialSales:()=>sales,groupMarketplaceOrders:rows=>rows,marketplaceLifecycleStage:()=>'',MILLIONER_API:'https://fixture.invalid',apiJson:async url=>{requests.push({orderHistoryUrl:url});return {ok:true,orders:state.kaspiOrderFeed.map((row,i)=>({...row,entryId:String(i),orderId:String(i)}))}},fmt:n=>String(n)+' ₸',localStorage:{getItem:k=>storage.get(k),setItem:(k,v)=>storage.set(k,v)},document:{readyState:'loading',getElementById:id=>elements.get(id)||null,querySelectorAll:()=>[],addEventListener(){}},setTimeout() {}};
  vm.createContext(ctx);
- vm.runInContext(source.replace(/\}\)\(\);\s*$/, "window.testApi={businessDayBounds,businessSelectedDayOffset,businessWeekBounds,businessSelectedWeekOffset,businessMonthBounds,businessSelectedMonthOffset,businessBuildModel,businessInstallDaySwipe,businessModels,businessPaintTabs,businessRememberModel,businessModelMeta,businessModelFromDays,businessDays};})();"),ctx);
+ vm.runInContext(source.replace(/\}\)\(\);\s*$/, "window.testApi={businessDayBounds,businessSelectedDayOffset,businessWeekBounds,businessSelectedWeekOffset,businessMonthBounds,businessSelectedMonthOffset,businessBuildModel,businessInstallDaySwipe,businessModels,businessPaintTabs,businessRememberModel,businessModelMeta,businessModelFromDays,businessDays,businessAwait};})();"),ctx);
  const chart=element('businessChart');window.testApi.businessInstallDaySwipe();
  const touch=(x,y,id=1)=>({clientX:x,clientY:y,identifier:id});
  function event(type,touches,changedTouches=[]){let prevented=false;chart.listeners.get(type)({touches,changedTouches,cancelable:true,preventDefault(){prevented=true}});return prevented}
@@ -156,7 +156,7 @@ test('late weekly history cannot replace the current week, and incomplete histor
  const f=fixture({period:'week'});await f.window.renderBusinessDashboard();const current=f.element('businessValue').textContent;
  let resolve;f.ctx.apiJson=()=>new Promise(done=>{resolve=done});const pending=f.window.shiftBusinessDashboardWeek(-1);await flush();
  await f.window.setBusinessDashboardPeriod('week');resolve({ok:true,orders:[]});await pending;assert.equal(f.element('businessValue').textContent,current);assert.match(f.element('businessValueLabel').textContent,/эта неделя/);
- const missing=fixture({period:'week'});missing.window.ozonFboOrderHistoryCovers=()=>false;await missing.window.shiftBusinessDashboardWeek(-1);assert.match(missing.element('businessValueLabel').textContent,/История Ozon.*загружается/);assert.equal(missing.element('businessValue').textContent,'—');assert.equal(missing.element('businessChart').innerHTML,'');
+ const missing=fixture({period:'week'});missing.window.ozonFboOrderHistoryCovers=()=>false;await missing.window.shiftBusinessDashboardWeek(-1);assert.match(missing.element('businessValueLabel').textContent,/Нет полной истории Ozon/);assert.equal(missing.element('businessValue').textContent,'—');assert.equal(missing.element('businessChart').innerHTML,'');
  const truncated=fixture({period:'week'});truncated.ctx.apiJson=async()=>({ok:true,orders:Array(15000).fill({})});await truncated.window.shiftBusinessDashboardWeek(-1);assert.equal(truncated.element('businessValue').textContent,'—');assert.equal(truncated.element('businessChart').innerHTML,'');
 });
 
@@ -239,7 +239,7 @@ test('a recently generated server day with obsolete source revision still rebuil
 test('first month build yields to actual UI tasks, permits switching day before completion and reads local financial sales once',async()=>{
  const f=sharedFixture();let yielded=0,salesReads=0,dayJob,switchedWhileBuilding=false,done=false;
  const read=f.ctx.financialSales;f.ctx.financialSales=()=>{salesReads++;return read()};
- f.window.setTimeout=fn=>setImmediate(()=>{yielded++;if(yielded===2){dayJob=f.window.setBusinessDashboardPeriod('day');switchedWhileBuilding=!done&&f.element('businessPeriodTitle').textContent!=='Месяц'}fn()});
+ f.window.clearTimeout=clearTimeout;f.window.setTimeout=(fn,delay=0)=>delay>0?setTimeout(fn,delay).unref():setImmediate(()=>{yielded++;if(yielded===2){dayJob=f.window.setBusinessDashboardPeriod('day');switchedWhileBuilding=!done&&f.element('businessPeriodTitle').textContent!=='Месяц'}fn()});
  const month=f.window.setBusinessDashboardPeriod('month');await month;done=true;await dayJob;
  assert.equal(switchedWhileBuilding,true);assert.ok(yielded>30);assert.equal(salesReads,1);assert.equal(f.loads,1);assert.match(f.element('businessValueLabel').textContent,/сегодня/);assert.equal(f.api.businessDays.get(today).data.orders.amount,1000);
 });
@@ -270,4 +270,25 @@ test('failed month navigation cannot restore a pending week under the month sele
  assert.equal(f.element('businessChart').innerHTML,'');
  f.finish();await week;
  assert.equal(f.element('businessValueLabel').textContent,'Не удалось посчитать');
+});
+
+test('missing historical Ozon orders request the selected month and stop showing calculation placeholders',async()=>{
+ const f=sharedFixture();let requested;
+ f.window.ozonFboOrderHistoryCovers=()=>false;
+ f.window.ozonFboRequestOrderHistory=async bounds=>{requested=bounds;return true};
+ await f.window.setBusinessDashboardPeriod('month');for(let i=0;i<5;i++)await f.window.shiftBusinessDashboardMonth(-1);
+ assert.ok(requested.start<=f.api.businessMonthBounds(-5).start);
+ assert.match(f.element('businessValueLabel').textContent,/История Ozon.*догружается/);
+ assert.equal(f.element('businessValue').textContent,'—');
+ assert.equal(f.element('businessYesterdayValue').textContent,'—');
+ assert.equal(f.element('businessValueMetric').textContent,'Заказы');
+});
+test('a hung dashboard request ends with unavailable values instead of infinite calculation',async()=>{
+ const f=sharedFixture();f.window.clearTimeout=clearTimeout;
+ f.window.setTimeout=(fn,delay)=>setTimeout(fn,delay?5:0);
+ f.ctx.fetch=()=>new Promise(()=>{});
+ await f.window.renderBusinessDashboard();
+ assert.equal(f.element('businessValueMetric').textContent,'Заказы');
+ assert.equal(f.element('businessValue').textContent,'—');assert.equal(f.element('businessYesterdayValue').textContent,'—');
+ assert.doesNotMatch(f.element('businessValueLabel').textContent,/Считаю/);
 });
