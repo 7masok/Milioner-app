@@ -68,8 +68,9 @@ test('Ozon Performance quota protection stops daily-limit retry storms for histo
   assert.match(source,/error\.retryAt = nextMoscowReset\(\)/);
   assert.match(source,/if \(error\.code === 'DAILY_LIMIT'\) throw error/);
   assert.match(source,/performanceCooldown = \{ until: retryAt, error: message \}/);
-  assert.match(source,/hit\?\.error && Number\(hit\.retryAt\) > Date\.now\(\)/);
-  assert.match(source,/source: 'error'/);
+  const cacheSource=readFileSync(new URL('../src/ozon-performance-cache.js',import.meta.url),'utf8');
+  assert.match(cacheSource,/Number\(entry.retryAt\)>now\(\)/);
+  assert.match(cacheSource,/source:'error'/);
 });
 
 test('Ozon direct SKU endpoint is used first for today or yesterday and falls back once to the product report',()=>{

@@ -170,6 +170,7 @@ async function load(force=false){
  return data;
 }
 window.ozonFboPaintStatus=updateOzonHeaderIndicator;
+window.ozonFboSnapshot=()=>data?{payload:data,loadedAt}:null;
 window.ozonFboRefreshStatus=async()=>{await load();updateOzonHeaderIndicator();return data;};
 window.ozonFboSync=async()=>{
  try{

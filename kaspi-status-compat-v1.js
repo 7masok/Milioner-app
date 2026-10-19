@@ -121,10 +121,16 @@ try{
     if(raw===-1)return{start:today-86400000,end:today};
     const n=Math.max(1,raw||1);return{start:today-(n-1)*86400000,end:today+86400000};
   }
+  let ozonProfitLoadPromise=null;
   async function loadOzonProfitData(force=false){
     if(!force&&ozonProfitData&&Date.now()-ozonProfitLoadedAt<60000)return ozonProfitData;
-    ozonProfitData=await apiJson(MILLIONER_API+'/api/ozon-fbo');ozonProfitLoadedAt=Date.now();return ozonProfitData;
+    const shared=typeof window.ozonFboSnapshot==='function'?window.ozonFboSnapshot():null;
+    if(!force&&shared?.payload&&Date.now()-shared.loadedAt<60000){ozonProfitData=shared.payload;ozonProfitLoadedAt=shared.loadedAt;return ozonProfitData}
+    if(ozonProfitLoadPromise)return ozonProfitLoadPromise;
+    ozonProfitLoadPromise=apiJson(MILLIONER_API+'/api/ozon-fbo').then(data=>{ozonProfitData=data;ozonProfitLoadedAt=Date.now();return data}).finally(()=>{ozonProfitLoadPromise=null});
+    return ozonProfitLoadPromise;
   }
+
   function ozonUnitCost(product){
     const pid=String(product?.id||'');let total=0,qty=0;
     for(const row of state.purchases||[]){
@@ -261,10 +267,16 @@ try{
     return [...loose.values()];
   }
   function ozonDay(ts){const d=new Date(ts);return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');}
+  const ozonSkuAdsCache=new Map();
+  function ozonAdsPeriod(days,range){const bounds=ozonBounds(days,range),from=ozonDay(bounds.start),to=ozonDay(bounds.end-1);return{from,to,key:from+'|'+to}}
   async function loadOzonSkuAds(days,range=null){
-    const bounds=ozonBounds(days,range),from=ozonDay(bounds.start),to=ozonDay(bounds.end-1);
-    return apiJson(MILLIONER_API+'/api/ozon-ads?from='+from+'&to='+to);
+    const {from,to,key}=ozonAdsPeriod(days,range),hit=ozonSkuAdsCache.get(key);
+    if(hit?.promise)return hit.promise;
+    if(hit?.data&&(Number(hit.data.retryAt)>Date.now()||!hit.data.error&&!hit.data.pending&&!hit.data.refreshing&&Date.now()-hit.at<60000))return hit.data;
+    const promise=apiJson(MILLIONER_API+'/api/ozon-ads?from='+from+'&to='+to).then(data=>{ozonSkuAdsCache.set(key,{data,at:Date.now()});return data}).catch(error=>{ozonSkuAdsCache.delete(key);throw error});
+    ozonSkuAdsCache.set(key,{...hit,promise});return promise;
   }
+
   function ozonSummaryFrom(payload,days,adPayload,range=null,prepared=null){
     const model=ozonProfitModel(payload,days,range,prepared);
     let adSource='';
@@ -278,23 +290,25 @@ try{
     model.performanceAdsError=String(adPayload?.error||'');
     model.performanceAdsRetryAt=Math.max(0,Number(adPayload?.retryAt)||0);
     model.performanceAdsLimited=adPayload?.limited===true;
-    if(adPayload?.configured&&!adPayload?.pending&&!model.performanceAdsError&&Array.isArray(adPayload.rows)){
+    model.performanceAdsStale=Boolean(adPayload?.stale);
+    model.performanceAdsUpdatedAt=Number(adPayload?.updatedAt)||0;
+    if(adPayload?.configured&&!adPayload?.pending&&(!model.performanceAdsError||adPayload.stale)&&Array.isArray(adPayload.rows)){
       const loose=applyPerformanceAds(model,buildOzonMaps(payload),adPayload.rows);
       model.looseAds=loose;adSource='performance';
       if(!(model.performanceAdsTotal>0))model.performanceAdsTotal=adPayload.rows.reduce((sum,row)=>sum+Math.max(0,Number(row?.spent)||0),0);
     }
     window.__ozonProfitModel=model;
     const g=model.groups.find(x=>x.currency==='KZT')||model.groups[0]||null;
-    if(!g)return{sales:0,cost:0,fees:0,ads:0,profit:0,qty:0,empty:true,products:[],adSource,adsConfigured:model.performanceAdsConfigured,adsPending:model.performanceAdsPending,adsError:model.performanceAdsError,adsRetryAt:model.performanceAdsRetryAt,adsLimited:model.performanceAdsLimited,performanceAdsTotal:model.performanceAdsTotal,adsFrom:model.performanceAdsFrom,adsTo:model.performanceAdsTo,adsSource:model.performanceAdsSource};
+    if(!g)return{sales:0,cost:0,fees:0,ads:0,profit:0,qty:0,empty:true,products:[],adSource,adsConfigured:model.performanceAdsConfigured,adsPending:model.performanceAdsPending,adsError:model.performanceAdsError,adsRetryAt:model.performanceAdsRetryAt,adsLimited:model.performanceAdsLimited,performanceAdsTotal:model.performanceAdsTotal,adsFrom:model.performanceAdsFrom,adsTo:model.performanceAdsTo,adsSource:model.performanceAdsSource,adsStale:model.performanceAdsStale,adsUpdatedAt:model.performanceAdsUpdatedAt};
     const ads=Math.abs(g.ads),deductions=g.sales-g.net,fbo=Math.max(0,Number(g.fbo)||0),platformFees=Math.max(0,deductions-ads-fbo),fees=platformFees+fbo;
     const qty=model.products.reduce((n,row)=>n+Math.max(0,row.qty),0);
     const products=model.products.map(row=>{
       const financeAds=Number(row.financeAds!=null?row.financeAds:row.ads)||0;
-      const fbo=Math.max(0,Number(row.fbo)||0);return {productId:String(row.product?.id||''),name:row.product?.name||'Товар',qty:row.qty,sales:row.sales,cost:Number(row.cogs)||0,fbo,fees:Math.max(0,(row.sales||0)-(row.net||0)-Math.abs(financeAds)-fbo),ads:Math.abs(row.ads||0),profit:row.profit};
+      const fbo=Math.max(0,Number(row.fbo)||0);return {productId:String(row.product?.id||''),name:row.product?.name||'Товар',qty:row.qty,sales:row.sales,cost:Number(row.cogs)||0,fbo,fees:Math.max(0,(row.sales||0)-(row.net||0)-Math.abs(financeAds)-fbo),ads:Math.abs(row.ads||0),adsKnown:adSource==='performance'||Math.abs(financeAds)>0,profit:row.profit};
     });
     for(const row of model.looseAds||[])products.push({productId:'',name:row.name||'Товар Ozon',qty:0,sales:0,cost:0,fbo:0,fees:0,ads:row.spent,profit:-row.spent});
     const performanceAdsTotal=Math.max(0,Number(model.performanceAdsTotal)||0),unallocatedAds=adSource==='performance'?Math.max(0,ads-performanceAdsTotal):Math.abs(model.unallocatedAds||0),performanceAdsOver=Math.max(0,performanceAdsTotal-ads);
-    return{sales:g.sales,cost:g.cogs,fees,platformFees,fbo,ads,profit:g.profit,qty,empty:false,products,unallocatedAds,performanceAdsOver,performanceAdsTotal,unallocatedFbo:Math.max(0,Number(model.unallocatedFbo)||0),adSource,adsConfigured:model.performanceAdsConfigured,adsPending:model.performanceAdsPending,adsError:model.performanceAdsError,adsRetryAt:model.performanceAdsRetryAt,adsLimited:model.performanceAdsLimited,adsFrom:model.performanceAdsFrom,adsTo:model.performanceAdsTo,adsSource:model.performanceAdsSource};
+    return{sales:g.sales,cost:g.cogs,fees,platformFees,fbo,ads,profit:g.profit,qty,empty:false,products,unallocatedAds,performanceAdsOver,performanceAdsTotal,unallocatedFbo:Math.max(0,Number(model.unallocatedFbo)||0),adSource,adsConfigured:model.performanceAdsConfigured,adsPending:model.performanceAdsPending,adsError:model.performanceAdsError,adsRetryAt:model.performanceAdsRetryAt,adsLimited:model.performanceAdsLimited,adsFrom:model.performanceAdsFrom,adsTo:model.performanceAdsTo,adsSource:model.performanceAdsSource,adsStale:model.performanceAdsStale,adsUpdatedAt:model.performanceAdsUpdatedAt};
   }
   const ozonAdsJobs=new Map();
   function watchOzonAds(days,payload,range=null){
@@ -305,16 +319,15 @@ try{
     const tick=async()=>{
       try{
         const ads=await loadOzonSkuAds(days,range);
-        if(ads?.pending){if(++n<24){setTimeout(tick,4000);return;}ozonAdsJobs.delete(key);return;}
-        ozonAdsJobs.delete(key);
-        if(!ads?.configured)return;
-        if(ads?.error||!Array.isArray(ads.rows)){
-          const next=ozonSummaryFrom(payload,days,ads,range);
-          if(typeof window.onOzonSummary==='function')window.onOzonSummary(Number(days),next,range);
-          return;
+        if(ads?.pending||ads?.refreshing){
+          if(ads.refreshing&&typeof window.onOzonSummary==='function')window.onOzonSummary(Number(days),ozonSummaryFrom(ozonProfitData||payload,days,ads,range),range);
+          if(++n<90){setTimeout(tick,4000);return;}ozonAdsJobs.delete(key);return;
         }
-        const next=ozonSummaryFrom(payload,days,ads,range);
+        const next=ozonSummaryFrom(ozonProfitData||payload,days,ads,range);
         if(typeof window.onOzonSummary==='function')window.onOzonSummary(Number(days),next,range);
+        const retryDelay=Math.max(4000,Number(ads?.retryAt)-Date.now());
+        if(ads?.error&&retryDelay<=10*60*1000&&Number(ads.retryAt)>Date.now()&&++n<90){setTimeout(tick,retryDelay);return}
+        ozonAdsJobs.delete(key);
       }catch(error){if(++n<8){setTimeout(tick,4000);return;}ozonAdsJobs.delete(key);console.warn('Ozon ads',error);}
     };
     tick();
@@ -340,12 +353,10 @@ try{
     return {rows,linked,uncertain:[...uncertain.values()],history:[{market:'Ozon',firstDate:starts.length&&starts.every(x=>x>0)?Math.max(...starts):null,lastDate:ends.length&&ends.every(x=>x>0)?Math.min(...ends):null}],configured:payload.configured};
   };
   window.summarizeOzonReport=async function(days,range=null){
-    const payload=await loadOzonProfitData();
-    let ads=null;
-    try{ads=await loadOzonSkuAds(days,range)}catch(error){console.warn('Ozon ads initial load',error)}
-    if(ads?.configured&&!ads?.pending&&(ads?.error||Array.isArray(ads.rows)))return ozonSummaryFrom(payload,days,ads,range);
-    if(ads?.configured&&ads?.pending)watchOzonAds(days,payload,range);
-    return ozonSummaryFrom(payload,days,ads||{configured:false,pending:false,rows:[]},range);
+    const payload=await loadOzonProfitData(),period=ozonAdsPeriod(days,range),hit=ozonSkuAdsCache.get(period.key);
+    const ads=hit?.data||{configured:true,pending:true,rows:[],from:period.from,to:period.to};
+    if(!hit?.data||ads.pending||ads.refreshing||Date.now()-Number(hit.at)>60000)watchOzonAds(days,payload,range);
+    return ozonSummaryFrom(payload,days,ads,range);
   };
   function ozonYieldUi(){return typeof window.setTimeout==='function'?new Promise(resolve=>window.setTimeout(resolve,0)):Promise.resolve()}
   window.loadOzonBusinessDaily=async function(range){
@@ -389,7 +400,7 @@ try{
   }
   window.openOzonProductProfit=function(){
     const model=window.__ozonProfitModel;if(!model){if(typeof openStoreDetail==='function')return openStoreDetail('Ozon',typeof reportPeriod!=='undefined'?reportPeriod:30);return renderOzonProfitReport();}
-    const adText=r=>model.performanceAdsPending?'загрузка…':(model.performanceAdsError?(model.performanceAdsLimited?'лимит Ozon':'недоступно'):(!model.performanceAdsConfigured?'не подключена':ozonMoney(Math.abs(r.ads),'KZT'))),periodText=model.performanceAdsFrom&&model.performanceAdsTo?model.performanceAdsFrom+' — '+model.performanceAdsTo:'';
+    const adKnown=r=>Math.abs(Number(r.financeAds)||0)>0||(model.performanceAdsConfigured&&model.performanceAdsReady&&(!model.performanceAdsError||model.performanceAdsStale)),adText=r=>adKnown(r)?ozonMoney(Math.abs(r.ads),'KZT'):(model.performanceAdsPending?'загрузка…':(model.performanceAdsError?(model.performanceAdsLimited?'лимит Ozon':'недоступно'):(!model.performanceAdsConfigured?'не подключена':'нет разбивки'))),periodText=model.performanceAdsFrom&&model.performanceAdsTo?model.performanceAdsFrom+' — '+model.performanceAdsTo:'';
     const financeAds=Math.abs((model.groups.find(x=>x.currency==='KZT')||model.groups[0]||{}).ads||0),performanceAds=Math.max(0,Number(model.performanceAdsTotal)||0),adsGap=Math.max(0,financeAds-performanceAds),adsOver=Math.max(0,performanceAds-financeAds);
     const body=model.products.length?model.products.map(r=>'<div class="item" style="margin-top:8px"><div class="row"><div class="grow"><b>'+esc(r.product?.name||'Товар')+'</b><div class="muted">Продано: '+r.qty.toLocaleString('ru-RU')+' шт.</div></div><b>'+ozonMoney(r.profit,'KZT')+'</b></div><div class="row" style="margin-top:6px"><span class="grow muted">Продажи</span><b>'+ozonMoney(r.sales,'KZT')+'</b></div><div class="row" style="margin-top:4px"><span class="grow muted">Расходы Ozon</span><b>'+ozonMoney(r.net-r.sales,'KZT')+'</b></div><div class="row" style="margin-top:4px"><span class="grow muted">Реклама</span><b>'+adText(r)+'</b></div><div class="row" style="margin-top:4px"><span class="grow muted">Себестоимость</span><b>-'+ozonMoney(r.cogs,'KZT').replace(/^-/,'')+'</b></div><div class="row" style="margin-top:4px"><span class="grow muted">FBO / кросс-докинг</span><b>-'+ozonMoney(r.fbo,'KZT').replace(/^-/,'')+'</b></div><div class="row" style="margin-top:6px"><span class="grow muted">Маржа</span><b>'+r.margin.toLocaleString('ru-RU',{maximumFractionDigits:1})+'%</b></div></div>').join(''):'<div class="empty">Нет привязанных продаж Ozon за выбранный период.</div>';
     const retryText=model.performanceAdsRetryAt?new Date(model.performanceAdsRetryAt).toLocaleString('ru-RU'):'';
