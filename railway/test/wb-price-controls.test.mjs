@@ -96,7 +96,7 @@ test('Prices UI isolates WB shops and exposes group and protection controls',()=
   assert.match(ui,/createNewGroup:true/);
   assert.match(ui,/Объединить выбранные/);
   assert.doesNotMatch(ui,/Итоговая группа/);
-  assert.doesNotMatch(ui,/priceGroupTarget/);
+  assert.match(ui,/priceGroupTarget/);
   assert.match(ui,/submitPriceGroupDetach\(true\)/);
   assert.match(ui,/recheckPriceGroups/);
   assert.match(ui,/Повторно проверить в WB/);
