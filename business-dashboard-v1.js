@@ -10,6 +10,7 @@ const BUSINESS_UI_KEY='milioner_business_dashboard_v1';
 const BUSINESS_MONTH_NAMES=['янв','фев','мар','апр','май','июн','июл','авг','сен','окт','ноя','дек'];
 const BUSINESS_CACHE_VERSION='calendar-v2',BUSINESS_CACHE_KEY='milioner_business_snapshots_calendar_v2';
 const businessModelMeta=new Map(),businessBuildJobs=new Map();let businessCacheHydrated=false;
+let businessYearChain=Promise.resolve();
 let businessRenderSeq=0,businessSummaryCache=new Map(),businessLastModel=null;
 let businessPeriod='day',businessMetric='orders',businessModels=new Map(),businessDayDate='',businessWeekDate='',businessMonthDate='',businessYearDate='',businessWeekOrderCache=new Map();
 try{
@@ -382,7 +383,7 @@ async function businessLoadWeekOrderHistory(bounds,force=false){
  if(data?.ok===false||!Array.isArray(data?.orders)||data.orders.length>=15000)throw new Error('Не удалось загрузить полную историю заказов');
  if(Array.isArray(data.historyCoverage))for(const item of data.historyCoverage){if(!(Number(item.from)>0)||Number(item.from)>bounds.start){const error=new Error('Нет полной истории '+(item.market==='WB'?'WB1':item.market)+' за этот период');error.businessHistoryPending=true;error.businessHistoryUnavailable=!['pending','loading','retry'].includes(item.status);throw error}}
  const rows=data.orders.filter(row=>['Kaspi','WB','WB2'].includes(String(row.market)));
- businessWeekOrderCache.set(key,{rows,at:Date.now()});return rows;
+ businessWeekOrderCache.delete(key);businessWeekOrderCache.set(key,{rows,at:Date.now()});while(businessWeekOrderCache.size>2)businessWeekOrderCache.delete(businessWeekOrderCache.keys().next().value);return rows;
 }
 const businessDays=new Map(),businessDayJobs=new Map(),BUSINESS_DAYS_KEY='milioner_business_days_v2';let businessDaysHydrated=false;
 function businessHydrateDays(){if(businessDaysHydrated)return;businessDaysHydrated=true;try{const value=JSON.parse(localStorage.getItem(BUSINESS_DAYS_KEY)||'null');if(value?.version===BUSINESS_CACHE_VERSION)for(const row of value.days||[])if(row?.data?.period==='day'&&row.data.buckets?.length===24&&Number(row.at)>0)businessDays.set(row.data.bounds.start,row)}catch(_){}}
@@ -407,29 +408,29 @@ async function businessRequireOzonHistory(bounds){
  error.businessHistoryPending=true;error.businessHistoryUnavailable=!requested;throw error;
 }
 function businessMakeDay(start,groups,summary=null,preparedSales=null){const bounds={start,end:start+86400000,days:0,label:businessShortDate(start)},selected=groups.filter(g=>Number(g.creationDate)>=start&&Number(g.creationDate)<start+86400000),buckets=businessBuckets('day',bounds),orders=businessEstimateOrders(selected,buckets,window.allMarketUnitProfit30),local=summary?businessLocalBuyouts(bounds,buckets,window.allMarketUnitProfit30,preparedSales):null,hourly=summary?businessNormalizeBuyoutBuckets(buckets,local,summary):{ozonHourlyComplete:false};return{period:'day',bounds,buckets,orders,events:businessOrderEvents(selected,window.allMarketUnitProfit30),local,summary:summary||{revenue:null,qty:null,profit:null},netProfit:summary?.profit??null,hourly,pending:!summary}}
-async function businessLoadDayBase(bounds,force=false,preview=null){businessHydrateDays();const key=bounds.start+':'+bounds.end;if(businessDayJobs.has(key))return businessDayJobs.get(key);for(const [span,job]of businessDayJobs){const [start,end]=span.split(':').map(Number);if(bounds.start>=start&&bounds.end<=end)return job}const task=(async()=>{
+async function businessLoadDayBase(bounds,force=false,preview=null,work=null){work?.assert();businessHydrateDays();const key=bounds.start+':'+bounds.end;if(businessDayJobs.has(key))return businessDayJobs.get(key);for(const [span,job]of businessDayJobs){const [start,end]=span.split(':').map(Number);if(bounds.start>=start&&bounds.end<=end)return job}const task=(async()=>{
  let online=null;try{if(typeof fetch==='function'){const r=await fetch(MILLIONER_API+'/api/business-dashboard-days?from='+bounds.start+'&to='+bounds.end,{cache:'no-store'});if(r.ok)online=await r.json()}}catch(_){}
  let all=true;for(let t=bounds.start;t<bounds.end;t+=86400000){const remote=online?.days?.find(r=>r.day?.bounds?.start===t),prior=businessDays.get(t);if(remote&&remote.day.buckets?.length===24&&(!prior||Number(remote.generatedAt)>prior.at))businessDays.set(t,{data:remote.day,at:remote.generatedAt,revision:remote.fresh?online.sourceRevision:null});const local=businessDays.get(t),ttl=t+86400000>Date.now()?60000:15*60000,ready=local&&!local.data.pending&&Date.now()-local.at<ttl&&(!online||local.revision===online.sourceRevision);if(force||!(remote?.fresh||ready))all=false}
- if(all){businessSaveDays(bounds);return}
+ work?.assert();if(all){businessSaveDays(bounds);return}
  // One source read for the interval; individual day views reuse these records.
  if(typeof window.ozonFboRefreshStatus==='function')await businessAwait(window.ozonFboRefreshStatus());
  const coverage={start:bounds.start,end:Math.min(bounds.end,businessDayBounds(0).start)};await businessRequireOzonHistory(coverage);
- const history=[...await businessLoadWeekOrderHistory(bounds,force),...(state.ozonOrderFeed||[]).map(x=>({...x,market:'Ozon'}))],groups=businessOrderGroups(bounds,history);
- const span={from:businessIsoDate(bounds.start),to:businessIsoDate(bounds.end-86400000)},financeTask=window.loadBusinessMarketplaceDaily(span,{force}).then(value=>({value}),error=>({error})),unitTask=typeof window.refreshAllMarketUnitProfit==='function'&&(!(window.allMarketUnitProfit30 instanceof Map)||force)?window.refreshAllMarketUnitProfit().catch(()=>null):Promise.resolve();
+ work?.assert();const history=[...await businessLoadWeekOrderHistory(bounds,force),...(state.ozonOrderFeed||[]).filter(x=>Number(x.creationDate)>=bounds.start&&Number(x.creationDate)<bounds.end).map(x=>({...x,market:'Ozon'}))];work?.assert();const groups=businessOrderGroups(bounds,history);
+ const span={from:businessIsoDate(bounds.start),to:businessIsoDate(bounds.end-86400000)},financeTask=window.loadBusinessMarketplaceDaily(span,{force,work}).then(value=>({value}),error=>({error})),unitTask=typeof window.refreshAllMarketUnitProfit==='function'&&(!(window.allMarketUnitProfit30 instanceof Map)||force)?window.refreshAllMarketUnitProfit().catch(()=>null):Promise.resolve();
  const grouped=new Map();for(const g of groups){const day=Math.floor((Number(g.creationDate)+18000000)/86400000)*86400000-18000000;const rows=grouped.get(day)||[];rows.push(g);grouped.set(day,rows)}
- for(let t=bounds.start;t<bounds.end;t+=86400000){await businessYieldUi();if(!businessDays.get(t)||businessDays.get(t).data.pending)businessDays.set(t,{data:businessMakeDay(t,grouped.get(t)||[]),at:Date.now(),revision:online?.sourceRevision})}
+ for(let t=bounds.start;t<bounds.end;t+=86400000){await businessYieldUi();work?.assert();if(!businessDays.get(t)||businessDays.get(t).data.pending)businessDays.set(t,{data:businessMakeDay(t,grouped.get(t)||[]),at:Date.now(),revision:online?.sourceRevision})}
  if(preview)preview();const result=await financeTask;await unitTask;if(result.error)throw result.error;
- await businessYieldUi();const preparedSales=typeof financialSales==='function'?financialSales():[];
- for(let t=bounds.start;t<bounds.end;t+=86400000){await businessYieldUi();const day=businessIsoDate(t),summary=result.value.find(x=>x.day===day)?.summary;if(!summary)throw Error('Нет дневной финансовой основы '+day);businessDays.set(t,{data:businessMakeDay(t,grouped.get(t)||[],summary,preparedSales),at:Date.now(),revision:online?.sourceRevision})}
+ await businessYieldUi();work?.assert();const preparedSales=typeof financialSales==='function'?financialSales():[];
+ for(let t=bounds.start;t<bounds.end;t+=86400000){await businessYieldUi();work?.assert();const day=businessIsoDate(t),summary=result.value.find(x=>x.day===day)?.summary;if(!summary)throw Error('Нет дневной финансовой основы '+day);businessDays.set(t,{data:businessMakeDay(t,grouped.get(t)||[],summary,preparedSales),at:Date.now(),revision:online?.sourceRevision})}
  businessSaveDays(bounds);if(typeof fetch==='function'&&online?.sourceRevision){const days=[];for(let t=bounds.start;t<bounds.end;t+=86400000)days.push(businessDays.get(t).data);void fetch(MILLIONER_API+'/api/business-dashboard-days',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({days,version:BUSINESS_CACHE_VERSION,sourceRevision:online.sourceRevision})}).catch(()=>{})}
- })().finally(()=>businessDayJobs.delete(key));businessDayJobs.set(key,task);return task}
+ })().finally(()=>{businessDayJobs.delete(key);if(work)businessSaveDays(bounds)});businessDayJobs.set(key,task);return task}
 async function businessBuildSharedModel(force,period,offset){const bounds=businessDaysBounds(period,offset),key=businessModelKey(period,offset),selected=period==='month'?businessMonthBounds(offset):period==='week'?businessWeekBounds(offset):businessDayBounds(offset),candidates=[bounds,...(period==='day'?[]:[{start:bounds.start+86400000,end:bounds.end}]),{start:selected.start,end:Math.min(selected.end,businessDayBounds(0).end)}],preview=()=>{if(key===businessModelKey()&&document.getElementById('reports')?.classList.contains('active')){const m=businessModelFromDays(period,offset);if(m){businessPaint(m);businessCacheStatus(key,'updating')}}};for(let i=0;i<candidates.length;i++){try{await businessLoadDayBase(candidates[i],force,preview);break}catch(error){if(!error.businessHistoryPending||i===candidates.length-1)throw error}}const model=businessModelFromDays(period,offset);if(!model)throw Error('Дневная основа ещё не загружена');return model}
 
 function businessYearComparisonCutoff(year){const local=new Date(Date.now()+18000000),day=Math.min(local.getUTCDate(),new Date(Date.UTC(year,local.getUTCMonth()+1,0)).getUTCDate());return Date.UTC(year,local.getUTCMonth(),day,local.getUTCHours(),local.getUTCMinutes(),local.getUTCSeconds())-18000000}
-async function businessLoadYearMonth(bounds,force){
+async function businessLoadYearMonth(bounds,force,work=null){
  const active={start:bounds.start,end:Math.min(bounds.end,businessDayBounds(0).end)},current=businessMonthBounds(0),a=new Date(bounds.start+18000000),b=new Date(current.start+18000000),offset=(a.getUTCFullYear()-b.getUTCFullYear())*12+a.getUTCMonth()-b.getUTCMonth();
  if(typeof window.loadBusinessMarketplaceDaily==='function'){
-  await businessLoadDayBase(active,force);
+  await businessLoadDayBase(active,force,null,work);
   const month=businessCalendarFromDays('month',offset);
   if(!month)throw Error('Месячная основа ещё не загружена');
   return{month,samePoint:a.getUTCMonth()===b.getUTCMonth()?businessPreviousPoint(month,'month',businessYearComparisonCutoff(a.getUTCFullYear())):month};
@@ -453,16 +454,21 @@ function businessYearFromMonths(bounds,parts){
  const summary=businessCombineSummary(rows);
  return{period:'year',bounds,buckets,orders,summary,netProfit:summary.profit,knownMonths,expectedMonths,yearPartial:knownMonths<expectedMonths,unavailable:knownMonths===0,hourly:{ozonHourlyComplete:true},pending:false};
 }
-async function businessBuildYearModel(force,offset,loadMonth=businessLoadYearMonth){
+function businessBuildYearModel(force,offset,loadMonth=businessLoadYearMonth){
+ const key='year:'+businessYearBounds(offset).start,watch=key===businessModelKey(),deadline=Date.now()+20000;
+ const work={assert(){if(watch&&key!==businessModelKey())throw Object.assign(Error('Выбран другой период'),{businessCancelled:true});if(Date.now()>=deadline)throw Object.assign(Error('Расчёт года приостановлен'),{businessBudgetExpired:true})}};
+ const task=businessYearChain.catch(()=>{}).then(()=>businessCollectYearModel(force,offset,loadMonth,work));businessYearChain=task;return task;
+}
+async function businessCollectYearModel(force,offset,loadMonth,work){
  const bounds=businessYearBounds(offset),previousBounds=businessYearBounds(offset-1),currentParts=[],previousParts=[],alignedParts=[],key='year:'+bounds.start,currentMonth=new Date(Date.now()+18000000).getUTCMonth(),watchSelection=key===businessModelKey();
- for(const [span,parts]of [[previousBounds,previousParts],[bounds,currentParts]]){
+ yearScan:for(const [span,parts]of [[bounds,currentParts],[previousBounds,previousParts]]){
   const buckets=businessBuckets('year',span);
-  for(let i=0;i<12;i++){
+  for(let i=11;i>=0;i--){
    if(buckets[i].start>Date.now())continue;
    await businessYieldUi();
    if(watchSelection&&key!==businessModelKey())throw Error('Выбран другой период');
-   try{const loaded=await loadMonth(buckets[i],force);parts[i]=loaded.month;if(span===previousBounds&&i<=currentMonth)alignedParts[i]=i===currentMonth?loaded.samePoint:loaded.month}
-   catch(error){if(!error.businessHistoryPending)console.warn('Годовой отчёт: месяц недоступен',businessIsoDate(buckets[i].start),error)}
+   try{work.assert();const loaded=await loadMonth(buckets[i],force,work);work.assert();parts[i]=loaded.month;if(span===previousBounds&&i<=currentMonth)alignedParts[i]=i===currentMonth?loaded.samePoint:loaded.month}
+   catch(error){if(error.businessCancelled)throw error;if(error.businessBudgetExpired)break yearScan;if(!error.businessHistoryPending)console.warn('Годовой отчёт: месяц недоступен',businessIsoDate(buckets[i].start),error)}
    if(span===bounds&&key===businessModelKey()&&document.getElementById('reports')?.classList.contains('active')){
     const preview=businessYearFromMonths(bounds,currentParts),previous=businessMissingComparison('year',offset-1);
     businessPaint({...preview,pending:true,yearOffset:offset,yesterday:previous,yesterdayCompare:previous});businessCacheStatus(key,'updating');
@@ -562,6 +568,7 @@ function businessStoreOnline(model,revision){
 async function businessResolveModel(force,period,offset,key){
  let online=null;
  try{online=await businessReadOnline(period,Number(key.split(':')[1]));}catch(_){}
+ if(key!==businessModelKey())throw Object.assign(Error('Выбран другой период'),{businessCancelled:true});
  const remote=online?.snapshot;if(remote&&remote.period+':'+remote.bounds?.start===key){const newer=businessModels.get(key)&&Number(businessModelMeta.get(key)?.at)>Number(online.generatedAt),chosen=newer?businessModels.get(key):remote;if(!newer)businessRememberModel(key,remote,online.generatedAt);if(key===businessModelKey()&&document.getElementById('reports')?.classList.contains('active')){businessPaint(chosen);businessCacheStatus(key,online.stale||force?'updating':'ready')}if(!force&&!online.stale){if(period!=='year'&&typeof window.loadBusinessMarketplaceDaily==='function')return businessBuildSharedModel(false,period,offset);return chosen}}
  const model=await businessBuildModel(force||Boolean(online?.stale&&remote&&typeof window.loadBusinessMarketplaceDaily!=='function'),period,period==='day'?offset:0,period==='week'?offset:0,period==='month'?offset:0,period==='year'?offset:0);
  businessRememberModel(key,model);businessStoreOnline(model,online?.sourceRevision);return model;
@@ -570,11 +577,11 @@ window.renderBusinessDashboard=async function(force=false){
  const root=businessEnsureUi();if(!root)return;if(!document.getElementById('reports')?.classList.contains('active')){businessPaintTabs();return}
  const seq=++businessRenderSeq,period=businessPeriod,key=businessModelKey(),offset=businessSelectedOffset();businessHydrateModels();businessLastModel=null;businessPaintTabs();
  const shared=typeof window.loadBusinessMarketplaceDaily==='function'?businessModelFromDays(period,offset):null,cached=shared||businessModels.get(key),metaRow=businessModelMeta.get(key);
- if(cached){businessPaint(cached);businessCacheStatus(key,'updating');if(!force&&!cached.pending&&Date.now()-Number(metaRow?.at||0)<30000&&typeof fetch!=='function'){businessCacheStatus(key);return cached}}
+ if(cached){businessPaint(cached);businessCacheStatus(key,'updating');if(!force&&!cached.pending&&Date.now()-Number(metaRow?.at||0)<30000&&(period==='year'||typeof fetch!=='function')){businessCacheStatus(key);return cached}}
  else{const metric=document.getElementById('businessValueMetric'),label=document.getElementById('businessValueLabel'),value=document.getElementById('businessValue'),meta=document.getElementById('businessValueMeta'),yValue=document.getElementById('businessYesterdayValue'),compare=document.getElementById('businessYesterdayCompare'),chart=document.getElementById('businessChart');
   if(metric)metric.textContent='Считаю бизнес-показатели…';if(label)label.textContent=businessPeriodBounds().label;if(value)value.textContent='…';if(meta)meta.textContent='';if(yValue)yValue.textContent='…';const yLabel=document.getElementById('businessYesterdayLabel'),yMeta=document.getElementById('businessYesterdayMeta');if(yLabel)yLabel.textContent=period==='year'?'Прошлый год':period==='month'?'Прошлый месяц':period==='week'?'Прошлая неделя':'Вчера';if(yMeta)yMeta.textContent='';if(compare)compare.innerHTML='';if(chart)chart.innerHTML='';businessCacheStatus(key,'updating');}
- let job=businessBuildJobs.get(key);if(!job){job=businessAwait(businessResolveModel(force,period,offset,key)).finally(()=>{businessBuildJobs.delete(key)});businessBuildJobs.set(key,job)}
- try{const model=await job;if(seq!==businessRenderSeq||key!==businessModelKey())return;businessPaint(model);businessCacheStatus(key);return model}
+ let job=businessBuildJobs.get(key);if(!job){job=businessResolveModel(force,period,offset,key).finally(()=>{businessBuildJobs.delete(key)});businessBuildJobs.set(key,job)}
+ try{const model=await businessAwait(job);if(seq!==businessRenderSeq||key!==businessModelKey())return;businessPaint(model);businessCacheStatus(key);return model}
  catch(error){if(seq!==businessRenderSeq||key!==businessModelKey())return;const pendingHere=businessLastModel?.pending&&businessLastModel.period+':'+businessLastModel.bounds?.start===key?businessLastModel:null;if(cached||pendingHere){const keep=cached||pendingHere;businessPaint(keep);businessCacheStatus(key,error.businessHistoryUnavailable?'unavailable':error.businessHistoryPending?'history':'offline');return keep}const metric=document.getElementById('businessValueMetric'),label=document.getElementById('businessValueLabel'),value=document.getElementById('businessValue'),previous=document.getElementById('businessYesterdayValue');if(metric)metric.textContent={orders:'Заказы',buyouts:'Выкупы',orderProfit:'Прибыль с заказов · прогноз',buyoutProfit:'Прибыль с выкупов'}[businessMetric];if(label)label.textContent=error.businessHistoryPending?error.message:'Не удалось посчитать';if(value)value.textContent='—';if(previous)previous.textContent='—';businessCacheStatus(key,error.businessHistoryUnavailable?'unavailable':error.businessHistoryPending?'history':'offline')}
 };
 

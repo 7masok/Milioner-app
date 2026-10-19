@@ -163,7 +163,7 @@ function load(force=false){
  updateOzonHeaderIndicator();
  try{
   const priorCoverage=JSON.stringify((data?.accounts||[]).map(a=>[a.account,a.postings?.from,a.postings?.to]));
-  const response=await fetch(MILLIONER_API+'/api/ozon-fbo',{cache:'no-store',signal:AbortSignal.timeout(20000)});
+  const response=await fetch(MILLIONER_API+'/api/ozon-fbo?compact=1',{cache:'no-store',signal:AbortSignal.timeout(20000)});
   const payload=await response.json();if(!response.ok||payload?.ok===false)throw Error(payload?.error||'HTTP '+response.status);
   data=payload;
   loadedAt=Date.now();

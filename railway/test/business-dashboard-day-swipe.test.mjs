@@ -292,3 +292,12 @@ test('a hung dashboard request ends with unavailable values instead of infinite 
  assert.equal(f.element('businessValue').textContent,'—');assert.equal(f.element('businessYesterdayValue').textContent,'—');
  assert.doesNotMatch(f.element('businessValueLabel').textContent,/Считаю/);
 });
+
+test('a display timeout does not release the active build and start another background rebuild',async()=>{
+ const f=sharedFixture(true),fetch=f.ctx.fetch;let cacheReads=0;
+ f.ctx.fetch=(url,options)=>{if(url.includes('/business-dashboard-cache'))cacheReads++;return fetch(url,options)};
+ f.window.clearTimeout=clearTimeout;f.window.setTimeout=(fn,delay=0)=>setTimeout(fn,delay?5:0);
+ await f.window.renderBusinessDashboard();assert.equal(cacheReads,1);
+ const second=f.window.renderBusinessDashboard();await flush();assert.equal(cacheReads,1);
+ f.finish();await second;assert.equal(f.loads,1);
+});

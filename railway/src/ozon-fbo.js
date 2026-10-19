@@ -195,11 +195,20 @@ ozonRouter.post('/ozon-order-history',asyncRoute(async(req,res)=>{
  if(configured.length)scheduleHistory();
  res.status(202).json({ok:true,configured:configured.length>0,pending:configured.length>0});
 }));
-ozonRouter.get('/ozon-fbo',asyncRoute(async(_req,res)=>{
+export function compactOzonAccount(account){
+ const pick=(value,keys)=>Object.fromEntries(keys.filter(key=>value?.[key]!==undefined).map(key=>[key,value[key]]));
+ if(!account.postings)return account;
+ return{...account,postings:{...account.postings,rows:(account.postings.rows||[]).map(posting=>({
+  ...pick(posting,['posting_number','created_at','in_process_at','delivered_date','status']),
+  products:(posting.products||[]).map(product=>pick(product,['sku','offer_id','name','quantity','price','currency_code','currency']))
+ }))}};
+}
+ozonRouter.get('/ozon-fbo',asyncRoute(async(req,res)=>{
  await ensureTable();const configured=await accounts();
  const rows=(await pool.query('SELECT payload FROM ozon_fbo_cache')).rows;
  const allowed=new Set(configured.map(x=>x.id));
- res.json({ok:true,configured:configured.length>0,syncing:Boolean(running),accounts:rows.map(x=>x.payload).filter(x=>allowed.has(x.account))});
+ const visible=rows.map(x=>x.payload).filter(x=>allowed.has(x.account));
+ res.json({ok:true,configured:configured.length>0,syncing:Boolean(running),accounts:req.query.compact==='1'?visible.map(compactOzonAccount):visible});
 }));
 ozonRouter.get('/ozon-supply-order',asyncRoute(async(req,res)=>{
  const accountId=String(req.query.account||''),orderId=String(req.query.orderId||'');
