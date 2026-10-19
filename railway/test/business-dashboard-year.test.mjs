@@ -90,3 +90,16 @@ test('leaving the year view cancels remaining month reads and cannot paint late 
  }),/Выбран другой период/);
  assert.equal(calls,1);assert.doesNotMatch(f.el('businessPeriodTitle').textContent,/Год/);
 });
+
+test('year budget stops further month reads and returns only completed months, newest first',async()=>{
+ const f=fixture(),seen=[];
+ const model=await f.api.businessBuildYearModel(false,0,async bounds=>{seen.push(bounds.start);if(seen.length===3)f.setNow(NOW+25000);return loader(bounds)});
+ assert.equal(seen.length,3);assert.equal(new Date(seen[0]+18000000).getUTCMonth(),9);
+ assert.equal(model.knownMonths,2);assert.equal(model.yearPartial,true);assert.equal(model.yesterday.unavailable,true);
+});
+test('different year builds share one work queue instead of overlapping raw month loads',async()=>{
+ const f=fixture();let active=0,maximum=0;
+ const read=async bounds=>{active++;maximum=Math.max(maximum,active);await new Promise(setImmediate);active--;return loader(bounds)};
+ await Promise.all([f.api.businessBuildYearModel(false,0,read),f.api.businessBuildYearModel(false,-1,read)]);
+ assert.equal(maximum,1);
+});

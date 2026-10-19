@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {fetchPostingHistory} from '../src/ozon-fbo.js';
+import {fetchPostingHistory,compactOzonAccount} from '../src/ozon-fbo.js';
 const end=Date.parse('2026-10-08T10:00:00+05:00'),iso=days=>new Date(end-days*86400000).toISOString();
 const posting=(id,age,status='delivered')=>({posting_number:id,created_at:iso(age),status,products:[{sku:'1',quantity:1,price:10}]});
 test('Ozon older history backfills only the missing segment and merges without duplicate postings',async()=>{
@@ -25,4 +25,12 @@ test('failed older backfill leaves the previous cache untouched and cannot claim
  const previous={from:iso(30),rows:[posting('cached',1)]},before=JSON.stringify(previous);let calls=0;
  await assert.rejects(fetchPostingHistory({},iso(30),iso(0),previous,async()=>{if(++calls===2)throw Error('rate limit');return [posting('fresh',1)]}),/rate limit/);
  assert.equal(JSON.stringify(previous),before);
+});
+
+test('compact browser history keeps accounting fields while excluding bulky unused posting metadata',()=>{
+ const account={account:'fixture',finance:{rows:[{amount:10}]},postings:{from:iso(500),to:iso(0),rows:Array.from({length:200},(_,i)=>({...posting(String(i),200),analytics_data:{unused:'x'.repeat(10000)},financial_data:{unused:'y'.repeat(10000)}}))}};
+ const compact=compactOzonAccount(account);
+ assert.equal(compact.postings.rows.length,200);assert.equal(compact.postings.from,account.postings.from);assert.equal(compact.finance,account.finance);
+ assert.deepEqual(compact.postings.rows[0],posting('0',200));assert.ok(account.postings.rows[0].analytics_data);
+ assert.ok(JSON.stringify(compact).length<JSON.stringify(account).length/20);
 });

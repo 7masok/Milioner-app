@@ -59,3 +59,10 @@ test('shared day writes reject duplicate days, HTML, unknown shape, excessive ra
  for(const patch of [{days:[snapshot(),snapshot()]},{days:[{...snapshot(),summary:{revenue:null,qty:2,profit:null}}]},{days:[{...snapshot(),label:'<script>'}]},{version:'calendar-v1'},{days:Array(65).fill(snapshot())}]){const out=await dailyInvoke('put',{days:[snapshot()],version:BUSINESS_CACHE_VERSION,sourceRevision:revision(),...patch});assert.equal(out.status,400);assert.equal(out.queries.length,0)}
  for(const query of [{from:start+1,to:start+DAY},{from:start-65*DAY,to:start},{from:today,to:today+2*DAY}]){const out=await dailyInvoke('get',null,query);assert.equal(out.status,400);assert.equal(out.queries.length,0)}
 });
+
+test('daily cache accepts previous-year history beyond 400 days without relaxing range or shape validation',async()=>{
+ savedDays=[];const old=today-650*DAY,read=await dailyInvoke('get',null,{from:old,to:old+DAY});
+ assert.equal(read.status,200);assert.equal(businessCacheKey('day',old),'day:'+old);
+ const put=await dailyInvoke('put',{days:[snapshot(old)],version:BUSINESS_CACHE_VERSION,sourceRevision:read.out.sourceRevision});
+ assert.equal(put.status,200);assert.ok(put.queries.some(q=>q.sql.startsWith('INSERT')));
+});

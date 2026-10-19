@@ -11,7 +11,7 @@ function ensureCache(){return ready ||= pool.query(`CREATE TABLE IF NOT EXISTS b
 export function businessCacheKey(period,start){
  start=Number(start);if(!['day','week','month','year'].includes(period)||!Number.isFinite(start)||start<1||start!==midnight(start)||start>midnight(Date.now()))return null;
  const d=new Date(start+OFFSET);if(period==='week'&&d.getUTCDay()!==1||period==='month'&&d.getUTCDate()!==1||period==='year'&&(d.getUTCMonth()!==0||d.getUTCDate()!==1))return null;
- if(start<midnight(Date.now())-(period==='year'?1200:400)*DAY)return null;return period+':'+start;
+ return period+':'+start;
 }
 export function validBusinessSnapshot(model,period,start){
  if(!model||model.period!==period||Number(model.bounds?.start)!==Number(start)||!model.yesterday||!model.yesterdayCompare)return false;
@@ -39,7 +39,7 @@ async function sourceRevision(){
  (SELECT MAX(updated_at) FROM kaspi_order_history_state) AS kaspi_history`);
  return crypto.createHash('sha256').update(JSON.stringify(r.rows[0]||{})).digest('hex');
 }
-function dailyBounds(from,to){return Number.isFinite(from)&&Number.isFinite(to)&&from===midnight(from)&&to===midnight(to)&&from>0&&to>from&&to-from<=64*DAY&&to<=midnight(Date.now())+DAY&&from>=midnight(Date.now())-400*DAY}
+function dailyBounds(from,to){return Number.isFinite(from)&&Number.isFinite(to)&&from===midnight(from)&&to===midnight(to)&&from>0&&to>from&&to-from<=64*DAY&&to<=midnight(Date.now())+DAY}
 export function validBusinessDay(day){return validBusinessSnapshot({...day,yesterday:day,yesterdayCompare:day},'day',day?.bounds?.start)}
 export function registerBusinessDashboardCache(router){
  router.get('/business-dashboard-days',asyncRoute(async(req,res)=>{
@@ -56,7 +56,7 @@ export function registerBusinessDashboardCache(router){
   await pool.query(`INSERT INTO business_dashboard_cache(cache_key,version,source_revision,payload,generated_at)
    SELECT x->>'key',$2,$3,x->'payload',$4 FROM jsonb_array_elements($1::jsonb) x
    ON CONFLICT(cache_key) DO UPDATE SET version=excluded.version,source_revision=excluded.source_revision,payload=excluded.payload,generated_at=excluded.generated_at`,[JSON.stringify(rows),version,revision,at]);
-  await pool.query('DELETE FROM business_dashboard_cache WHERE cache_key NOT IN (SELECT cache_key FROM business_dashboard_cache ORDER BY generated_at DESC LIMIT 400)');
+  await pool.query('DELETE FROM business_dashboard_cache WHERE cache_key NOT IN (SELECT cache_key FROM business_dashboard_cache ORDER BY generated_at DESC LIMIT 1600)');
   res.json({ok:true,generatedAt:at});
  }));
 
