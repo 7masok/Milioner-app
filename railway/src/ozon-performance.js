@@ -2,6 +2,7 @@ import express from 'express';
 import crypto from 'node:crypto';
 import {pool} from './db.js';
 import {createPerformanceCache} from './ozon-performance-cache.js';
+import {createPerformanceJobs} from './ozon-performance-jobs.js';
 import { asyncRoute, requireTrustedOrigin } from './http.js';
 
 const HOST = 'https://api-performance.ozon.ru';
@@ -316,19 +317,7 @@ async function downloadReport(token, link) {
 }
 
 async function productReportRows(token, from, to) {
-  const created = await api(token, '/api/client/statistic/products/generate/json', moscowRange(from, to));
-  const uuid = String(created.UUID || created.uuid || '');
-  if (!uuid) throw new Error('Ozon Performance: товарный отчёт не поставлен в очередь');
-  return spendFromPayload(await downloadReport(token, await pollReport(token, uuid, 'товарный отчёт')));
-}
-
-function payloadHint(payload) {
-  if (typeof payload?.csv === 'string') {
-    const header = payload.csv.split(/\r?\n/).map(line => line.trim()).find(line => /sku/i.test(line));
-    return header ? header.slice(0, 180) : 'csv-without-sku';
-  }
-  if (!payload || typeof payload !== 'object') return '';
-  return Object.keys(payload).slice(0, 8).join(',');
+  return componentReport(token, from, to, '/api/client/statistic/products/generate/json', moscowRange(from, to), 'товарный отчёт');
 }
 
 async function promoReportRows(token, from, to, kind) {
@@ -337,11 +326,8 @@ async function promoReportRows(token, from, to, kind) {
   query.set('timeBounds.from', range.from);
   query.set('timeBounds.to', range.to);
   const label = kind === 'orders' ? 'отчёт заказов оплаты за заказ' : 'отчёт оплаты за заказ';
-  const created = await api(token, '/api/client/statistics/all_sku_promo/' + kind + '/generate?' + query.toString());
-  const uuid = String(created.UUID || created.uuid || '');
-  if (!uuid) throw new Error('Ozon Performance: ' + label + ' не поставлен в очередь');
-  const payload = await downloadReport(token, await pollReport(token, uuid, label));
-  return { rows: spendFromPayload(payload), hint: payloadHint(payload) };
+  const rows = await componentReport(token, from, to, '/api/client/statistics/all_sku_promo/' + kind + '/generate?' + query.toString(), undefined, label);
+  return { rows, hint: rows.length ? '' : 'report-without-sku-spend' };
 }
 
 async function allSkuPromoRows(token, from, to, notes) {
@@ -359,16 +345,12 @@ async function allSkuPromoRows(token, from, to, notes) {
 }
 
 async function statisticsReportRows(token, from, to, campaigns) {
-  const created = await api(token, '/api/client/statistics/json', {
+  return componentReport(token, from, to, '/api/client/statistics/json', {
     campaigns,
     dateFrom: from,
     dateTo: to,
     groupBy: 'DATE'
-  });
-  const uuid = String(created.UUID || created.uuid || '');
-  if (!uuid) throw new Error('Ozon Performance: отчёт по кампаниям не поставлен в очередь');
-  const payload = await downloadReport(token, await pollReport(token, uuid, 'отчёт по кампаниям'));
-  return spendFromPayload(payload);
+  }, 'отчёт по кампаниям');
 }
 
 function reportListRejected(error) {
@@ -407,7 +389,7 @@ function directRangeAllowed(from, to) {
   return from === today || from === yesterday;
 }
 
-async function build(from, to) {
+export async function build(from, to) {
   const token = await tokenFor();
   const bySku = new Map();
   let source = '';
@@ -420,11 +402,11 @@ async function build(from, to) {
     error.userMessage = performanceCooldown.error;
     throw error;
   };
-  const useCampaignReport = async (label) => {
+  const useCampaignReport = async (label, skipSkuCampaigns = false) => {
     ensureCooldown();
     const groups = await campaignGroups(token);
     const notes = [];
-    if (Object.values(groups.skuByPayment || {}).some(ids => ids.length)) {
+    if (!skipSkuCampaigns && Object.values(groups.skuByPayment || {}).some(ids => ids.length)) {
       source = label;
       mergeSkuRows(bySku, await enqueue(() => campaignStatisticsRows(token, from, to, notes)));
     }
@@ -445,15 +427,17 @@ async function build(from, to) {
 
   if (directRangeAllowed(from, to)) {
     source = 'products-sku';
+    let directSucceeded = false;
     try {
       mergeSkuRows(bySku, await directSkuRows(token, from, to));
+      directSucceeded = true;
     } catch (error) {
       fallbackError = String(error?.message || error);
       if (error.code === 'DAILY_LIMIT') throw error;
       if (performanceCooldown.until > Date.now()) throw error;
     }
-    if (bySku.size === 0) await useCampaignReport('campaign-report-fallback');
-    else await useCampaignReport('products-sku+all-sku-promo');
+    if (!directSucceeded) await useCampaignReport('campaign-report-fallback');
+    else await useCampaignReport('products-sku+all-sku-promo', true);
   } else {
     await useCampaignReport('campaign-report');
   }
@@ -473,6 +457,28 @@ async function build(from, to) {
 
 let cacheTableReady;
 function ensurePerformanceCache(){return cacheTableReady||=(pool.query(`CREATE TABLE IF NOT EXISTS ozon_performance_cache (cache_key TEXT PRIMARY KEY,payload JSONB NOT NULL,updated_at BIGINT NOT NULL)`)).catch(error=>{cacheTableReady=null;throw error})}
+async function readPerformanceEntry(key) {
+  await ensurePerformanceCache();
+  return (await pool.query('SELECT payload FROM ozon_performance_cache WHERE cache_key=$1', [key])).rows[0]?.payload;
+}
+async function writePerformanceEntry(key, value) {
+  await ensurePerformanceCache();
+  await pool.query('INSERT INTO ozon_performance_cache(cache_key,payload,updated_at) VALUES($1,$2::jsonb,$3) ON CONFLICT(cache_key) DO UPDATE SET payload=excluded.payload,updated_at=excluded.updated_at', [key, JSON.stringify(value), Date.now()]);
+}
+const componentJobs = createPerformanceJobs({read: readPerformanceEntry, write: writePerformanceEntry});
+async function componentReport(token, from, to, path, body, label) {
+  const signature = JSON.stringify([credentials()?.clientId, path, body]);
+  const key = 'job:' + crypto.createHash('sha256').update(signature).digest('hex');
+  const historical = to < new Date(Date.now() - 2 * 86400000).toISOString().slice(0, 10);
+  return componentJobs.get(key, {
+    ttl: historical ? 6 * 60 * 60 * 1000 : CACHE_MS,
+    submit: async () => {
+      const created = await api(token, path, body);
+      return String(created.UUID || created.uuid || '');
+    },
+    collect: async uuid => spendFromPayload(await downloadReport(token, await pollReport(token, uuid, label)))
+  });
+}
 const reportCache=createPerformanceCache({
  scope:()=>crypto.createHash('sha256').update(credentials()?.clientId||'unconfigured').digest('hex'),
  read:async key=>{await ensurePerformanceCache();const row=(await pool.query('SELECT payload FROM ozon_performance_cache WHERE cache_key=$1',[key])).rows[0];const value=row?.payload;if(key.endsWith(':cooldown')&&Number(value?.retryAt)>Date.now())performanceCooldown={until:Number(value.retryAt),error:String(value.error||'')};return value},
