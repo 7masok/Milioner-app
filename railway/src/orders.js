@@ -1,3 +1,4 @@
+import {kaspiContentOverride} from './kaspi-order-content.js';
 import {readKaspiHistory} from './kaspi-order-history.js';
 import express from 'express';
 import {readWbOrderHistory,mergeReportingOrders} from './wb-order-history.js';
@@ -132,6 +133,15 @@ ordersRouter.get('/orders', asyncRoute(async (req, res) => {
     await pool.query(`INSERT INTO product_links(product_id,market,sku,created_at,updated_at)
       VALUES($1,$2,$3,$4,$4)
       ON CONFLICT(market,sku) DO NOTHING`, [productId, linkMarket, sku, now]);
+  }
+
+  let contentState={};try{const raw=warehouse.rows[0]?.payload;contentState=typeof raw==='string'?JSON.parse(raw):raw||{}}catch{}
+  for(let i=0;i<out.length;i++){
+    const row=out[i];if(row.market!=='Kaspi')continue;
+    const override=kaspiContentOverride(contentState,row.orderId,row.entryId);if(!override)continue;
+    const product=stateProducts.find(p=>String(p.id)===String(override.productId));
+    const revenue=Math.max(0,Number(row.totalPrice)||Number(row.unitPrice)*Number(row.qty)||0);
+    out[i]={...row,orderedProductName:row.productName,orderedQty:row.qty,orderedProductId:row.productId,productId:override.productId,productName:product?.name||'Товар удалён',qty:override.qty,unitPrice:revenue/override.qty,contentCorrectedAt:override.updatedAt,linkSource:'order-content'};
   }
 
   const historyCoverage = before ? (await pool.query("SELECT market,MIN(creation_date) AS \"from\" FROM marketplace_order_lines WHERE market=ANY($1::text[]) AND creation_date>0 GROUP BY market", [['Kaspi','WB','WB2']])).rows : undefined;

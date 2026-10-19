@@ -1,3 +1,4 @@
+import {preserveKaspiContents} from './kaspi-order-content.js';
 import crypto from 'node:crypto';
 import express from 'express';
 import { pool, transaction } from './db.js';
@@ -247,6 +248,7 @@ warehouseRouter.put('/warehouse-state', requireTrustedOrigin, requireWritesEnabl
       // orders. Browser saves may read them, but must never create, replace or
       // delete them.
       state.reservations = serverReservations;
+      preserveKaspiContents(previousStored,state);
       // Routine saves omit movements when the audit trail did not change.
       // In that case an empty movement delta is sufficient for the stock guard:
       // any stock change without a supplied movement is still rejected, while we
@@ -260,6 +262,7 @@ warehouseRouter.put('/warehouse-state', requireTrustedOrigin, requireWritesEnabl
       preserveWbValidation(previous, state);
     } else {
       state.reservations = [];
+      preserveKaspiContents({},state);
     }
     const updatedAt = Date.now();
     const movementRows = isPatch ? incomingState?.movements : state.movements;

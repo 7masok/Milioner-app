@@ -1,3 +1,4 @@
+import {kaspiContentOverride} from './kaspi-order-content.js';
 import crypto from 'node:crypto';
 import { transaction } from './db.js';
 import { pruneWarehouseBackups } from './warehouse-backups.js';
@@ -218,12 +219,14 @@ export async function reconcileKaspiReservations(activeEntries) {
       const sku = String(row.sku || '').trim();
       const canonicalProductId = sku ? exactKaspi.owners.get(sku) : '';
       if (sku && exactKaspi.ambiguous.has(sku)) ambiguous++;
-      const productId = canonicalProductId || '';
+      const override=kaspiContentOverride(state,row.order_id,row.entry_id);
+      const productId = override?.productId || canonicalProductId || '';
+      if(override)row.qty=override.qty;
       if (!productId || qty === 0) {
         unlinked++;
         continue;
       }
-      if (String(row.product_id || '') !== String(productId)) repairedLinks.set(sku, String(productId));
+      if (!override && String(row.product_id || '') !== String(productId)) repairedLinks.set(sku, String(productId));
       const reservation = stableReservation('Kaspi', row, productId);
       expected.set(key, reservation);
     }
