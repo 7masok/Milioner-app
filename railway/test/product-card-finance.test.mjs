@@ -145,8 +145,9 @@ test('Ozon cross-docking is automatic from finance accruals and remains product-
 test('Ozon product-profit sheet does not show advertising zero before Performance data is ready',()=>{
   assert.match(compat,/model\.performanceAdsConfigured=Boolean\(adPayload\?\.configured\)/);
   assert.match(compat,/model\.performanceAdsPending=Boolean\(adPayload\?\.configured&&adPayload\?\.pending\)/);
-  assert.match(compat,/let ads=null;\s*try\{ads=await loadOzonSkuAds\(days,range\)\}/);
-  assert.match(compat,/if\(ads\?\.configured&&!ads\?\.pending&&\(ads\?\.error\|\|Array\.isArray\(ads\.rows\)\)\)return ozonSummaryFrom/);
+  assert.match(compat,/const ads=hit\?\.data\|\|\{configured:true,pending:true/);
+  assert.match(compat,/return ozonSummaryFrom\(payload,days,ads,range\)/);
+  const summary=compat.slice(compat.indexOf('  window.summarizeOzonReport='),compat.indexOf('  function ozonYieldUi'));assert.doesNotMatch(summary,/await loadOzonSkuAds/);
   assert.match(compat,/model\.performanceAdsPending\?'загрузка…'/);
   assert.match(compat,/model\.performanceAdsError/);
   assert.match(compat,/model\.performanceAdsLimited\?'лимит Ozon':'недоступно'/);
@@ -164,7 +165,7 @@ test('Ozon SKU advertising uses the same selected period and reconciles to finan
   assert.match(compat,/model\.performanceAdsTotal=Math\.max\(0,Number\(adPayload\?\.totalSpent\)\|\|0\)/);
   assert.match(compat,/unallocatedAds=adSource==='performance'\?Math\.max\(0,ads-performanceAdsTotal\)/);
   assert.match(compat,/performanceAdsOver=Math\.max\(0,performanceAdsTotal-ads\)/);
-  assert.match(compat,/if\(ads\?\.configured&&ads\?\.pending\)watchOzonAds\(days,payload,range\)/);
+  assert.match(compat,/watchOzonAds\(days,payload,range\)/);
   assert.match(compat,/window\.onOzonSummary\(Number\(days\),next,range\)/);
   assert.match(report,/window\.onOzonSummary=function\(days,summary,range=null\)/);
   assert.match(report,/const key=periodCacheKey\(days,range\)/);

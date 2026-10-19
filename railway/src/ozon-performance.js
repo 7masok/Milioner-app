@@ -1,9 +1,11 @@
 import express from 'express';
+import crypto from 'node:crypto';
+import {pool} from './db.js';
+import {createPerformanceCache} from './ozon-performance-cache.js';
 import { asyncRoute, requireTrustedOrigin } from './http.js';
 
 const HOST = 'https://api-performance.ozon.ru';
 const CACHE_MS = 15 * 60 * 1000;
-const cache = new Map();
 let statsChain = Promise.resolve();
 let access = { value: '', exp: 0 };
 let performanceCooldown = { until: 0, error: '' };
@@ -159,6 +161,7 @@ function performanceError(path, status, text) {
 }
 
 async function api(token, path, body, attempt = 0) {
+  if(performanceCooldown.until>Date.now())throw Object.assign(new Error(performanceCooldown.error),{code:'COOLDOWN',retryAt:performanceCooldown.until,userMessage:performanceCooldown.error});
   const response = await fetch(HOST + path, {
     method: body ? 'POST' : 'GET',
     headers: {
@@ -172,11 +175,10 @@ async function api(token, path, body, attempt = 0) {
   const text = await response.text();
   if (response.status === 429) {
     const error = performanceError(path, response.status, text);
+    const raw=response.headers.get('Retry-After'),seconds=Number(raw),headerAt=raw?(Number.isFinite(seconds)?Date.now()+seconds*1000:Date.parse(raw)):0;
+    error.retryAt=Math.max(Number(error.retryAt)||0,Number(headerAt)||0);
+    performanceCooldown={until:error.retryAt||Date.now()+60000,error:error.userMessage||error.message};
     if (error.code === 'DAILY_LIMIT') throw error;
-    if (attempt < 2) {
-      await new Promise(resolve => setTimeout(resolve, 2000 * (attempt + 1)));
-      return api(token, path, body, attempt + 1);
-    }
     throw error;
   }
   if (!response.ok) throw performanceError(path, response.status, text);
@@ -469,35 +471,15 @@ async function build(from, to) {
   };
 }
 
-export async function ozonSkuSpend(from, to) {
-  const key = from + '|' + to;
-  const hit = cache.get(key);
-  if (hit?.data && Date.now() - hit.at < CACHE_MS) return hit.data;
-  if (hit?.error && Number(hit.retryAt) > Date.now()) return {
-    from, to, rows: [], totalSpent: 0, source: 'error',
-    error: hit.error, retryAt: Number(hit.retryAt), limited: hit.limited === true, updatedAt: Number(hit.at) || Date.now()
-  };
-  if (performanceCooldown.until > Date.now()) return {
-    from, to, rows: [], totalSpent: 0, source: 'error',
-    error: performanceCooldown.error || 'Ozon Performance временно недоступен',
-    retryAt: performanceCooldown.until, limited: true, updatedAt: Date.now()
-  };
-  if (hit?.promise) return hit.promise;
-  const promise = build(from, to).then(data => {
-    cache.set(key, { at: Date.now(), data });
-    return data;
-  }).catch(error => {
-    const retryAt = Number(error?.retryAt) || (Date.now() + 5 * 60 * 1000);
-    const message = String(error?.userMessage || error?.message || error);
-    const limited = error?.code === 'DAILY_LIMIT' || error?.code === 'COOLDOWN';
-    if (error?.code === 'DAILY_LIMIT') performanceCooldown = { until: retryAt, error: message };
-    console.warn('[ozon-performance]', JSON.stringify({ from, to, code:String(error?.code||''), status:Number(error?.status)||0, limited, message:message.slice(0,260) }));
-    cache.set(key, { at: Date.now(), error: message, retryAt, limited });
-    return { from, to, rows: [], totalSpent: 0, source: 'error', error: message, retryAt, limited, updatedAt: Date.now() };
-  });
-  cache.set(key, { promise });
-  return promise;
-}
+let cacheTableReady;
+function ensurePerformanceCache(){return cacheTableReady||=(pool.query(`CREATE TABLE IF NOT EXISTS ozon_performance_cache (cache_key TEXT PRIMARY KEY,payload JSONB NOT NULL,updated_at BIGINT NOT NULL)`)).catch(error=>{cacheTableReady=null;throw error})}
+const reportCache=createPerformanceCache({
+ scope:()=>crypto.createHash('sha256').update(credentials()?.clientId||'unconfigured').digest('hex'),
+ read:async key=>{await ensurePerformanceCache();const row=(await pool.query('SELECT payload FROM ozon_performance_cache WHERE cache_key=$1',[key])).rows[0];const value=row?.payload;if(key.endsWith(':cooldown')&&Number(value?.retryAt)>Date.now())performanceCooldown={until:Number(value.retryAt),error:String(value.error||'')};return value},
+ write:async(key,value)=>{await ensurePerformanceCache();await pool.query('INSERT INTO ozon_performance_cache(cache_key,payload,updated_at) VALUES($1,$2::jsonb,$3) ON CONFLICT(cache_key) DO UPDATE SET payload=excluded.payload,updated_at=excluded.updated_at',[key,JSON.stringify(value),Date.now()])},
+ build:async(from,to)=>{try{return await build(from,to)}catch(error){const retryAt=Number(error?.retryAt)||(Date.now()+5*60*1000),message=String(error?.userMessage||error?.message||error),limited=['DAILY_LIMIT','RATE_LIMIT','COOLDOWN'].includes(error?.code);if(limited)performanceCooldown = { until: retryAt, error: message };console.warn('[ozon-performance]',JSON.stringify({from,to,code:String(error?.code||''),limited,message:message.slice(0,260)}));throw error}}
+});
+export async function ozonSkuSpend(from,to){return reportCache.get(from,to)}
 
 ozonPerformanceRouter.use(requireTrustedOrigin);
 ozonPerformanceRouter.get('/ozon-ads', asyncRoute(async (req, res) => {
@@ -509,11 +491,6 @@ ozonPerformanceRouter.get('/ozon-ads', asyncRoute(async (req, res) => {
   const span = (Date.parse(to + 'T00:00:00Z') - Date.parse(from + 'T00:00:00Z')) / 86400000;
   if (span > 62) return res.status(400).json({ ok: false, error: 'Период рекламы не длиннее 62 дней' });
   if (!credentials()) return res.json({ ok: true, configured: false, from, to, rows: [] });
-  const data = ozonSkuSpend(from, to);
-  const ready = await Promise.race([
-    data.then(value => ({ value })),
-    new Promise(resolve => setTimeout(() => resolve(null), 8000))
-  ]);
-  if (!ready) return res.json({ ok: true, configured: true, from, to, rows: [], pending: true });
-  res.json({ ok: true, configured: true, pending: false, ...ready.value });
+  const data = await ozonSkuSpend(from, to);
+  res.json({ ok: true, configured: true, ...data });
 }));
