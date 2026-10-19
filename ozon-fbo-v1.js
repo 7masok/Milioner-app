@@ -1,5 +1,6 @@
 (()=>{
-let data=null,loading=false,loadedAt=0,message='',pollTimer=null;
+let data=null,loading=false,loadedAt=0,message='',pollTimer=null,loadPromise=null;
+const historyRequests=new Map();
 let fboByKey=new Map(),fboTotal=0,ozonReportActive=String(state?.settings?.reportMarket||'')==='Ozon';
 const baseRenderOrders=renderMarketplaceOrders;
 const baseTransition=applyMarketplaceTransitions;
@@ -27,6 +28,15 @@ function ozonFboQtyForProduct(p){return productOzonKeys(p).reduce((n,key)=>n+(fb
 window.ozonFboQtyForProduct=ozonFboQtyForProduct;
 window.ozonFboDataReady=()=>Boolean(data);
 window.ozonFboOrderHistoryCovers=bounds=>Boolean(data?.accounts)&&data.accounts.every(account=>Array.isArray(account.postings?.rows)&&Date.parse(account.postings.from)<=bounds.start&&Date.parse(account.postings.to)>=bounds.end);
+window.ozonFboRequestOrderHistory=async bounds=>{
+ const from=Number(bounds?.start);if(!Number.isFinite(from))return false;
+ if(historyRequests.has(from)&&Date.now()-historyRequests.get(from).at<60000)return true;
+ const response=await fetch(MILLIONER_API+'/api/ozon-order-history',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({from}),signal:AbortSignal.timeout(20000)});
+ if(!response.ok)throw Error('Не удалось запросить историю Ozon');
+ const result=await response.json();if(result.ok!==true)throw Error('Не удалось запросить историю Ozon');
+ if(result.pending===true){historyRequests.set(from,{at:Date.now(),bounds});clearTimeout(pollTimer);pollTimer=setTimeout(()=>load(true),5000)}
+ return result.pending===true;
+};
 window.ozonFboFinanceHistoryCovers=bounds=>Boolean(data?.accounts)&&data.accounts.every(account=>Array.isArray(account.finance?.rows)&&Date.parse(account.finance.from)<=bounds.start&&Date.parse(account.finance.to)>=Math.min(bounds.end,Date.now()));
 function updateFboMetric(){const el=document.getElementById('productFboQty');if(el)el.textContent=data?fboTotal.toLocaleString('ru-RU')+' шт.':'—';}
 function populateOzonOrderFeed(){
@@ -113,9 +123,11 @@ function updateOzonHeaderIndicator(){
  const statusEl=document.getElementById('ozonTopStatus');
  if(!statusEl)return;
  let status='',text='';
- if(!data||loading){
-  status='warn';
-  text='подключение...';
+ if(!data){
+  status=message?'bad':'warn';
+  text=message?'ошибка':'подключение...';
+ }else if(loading){
+  status='warn';text='обновление…';
  }else if(!data.configured){
   status='off';
   text='не подключён';
@@ -142,18 +154,23 @@ function ensureOzonHeaderIndicator(){
  syncEl.insertAdjacentHTML('beforeend',' · <span id="dotOzonTop" class="dot warn"></span>Ozon: <span id="ozonTopStatus">подключение...</span>');
  updateOzonHeaderIndicator();
 }
-async function load(force=false){
- if(loading)return data;if(!force&&data&&Date.now()-loadedAt<60000)return data;
+function load(force=false){
+ if(loadPromise)return loadPromise;if(!force&&data&&Date.now()-loadedAt<60000)return Promise.resolve(data);
+ loadPromise=(async()=>{
  loading=true;
  updateOzonHeaderIndicator();
  try{
-  data=await apiJson(MILLIONER_API+'/api/ozon-fbo');
+  const priorCoverage=JSON.stringify((data?.accounts||[]).map(a=>[a.account,a.postings?.from,a.postings?.to]));
+  const response=await fetch(MILLIONER_API+'/api/ozon-fbo',{cache:'no-store',signal:AbortSignal.timeout(20000)});
+  const payload=await response.json();if(!response.ok||payload?.ok===false)throw Error(payload?.error||'HTTP '+response.status);
+  data=payload;
   loadedAt=Date.now();
   message='';
   rebuildFboMap();
   populateOzonOrderFeed();
   resolveOzonProductIds();
   updateFboMetric();
+  if(priorCoverage!==JSON.stringify((data?.accounts||[]).map(a=>[a.account,a.postings?.from,a.postings?.to]))&&document.getElementById('reports')?.classList.contains('active'))setTimeout(()=>window.renderBusinessDashboard?.(false),0);
   if(document.getElementById('products')?.classList.contains('active')){if(typeof invalidateProductRenderStats==='function')invalidateProductRenderStats();baseRenderProducts(false);}
  }
  catch(e){
@@ -163,11 +180,14 @@ async function load(force=false){
   loading=false;
   updateOzonHeaderIndicator();
  }
- if(data?.syncing||(data?.configured&&!data.accounts.length)){
+ for(const [from,request] of historyRequests)if(window.ozonFboOrderHistoryCovers(request.bounds))historyRequests.delete(from);
+ if(data?.syncing||(data?.configured&&!data.accounts.length)||historyRequests.size){
   clearTimeout(pollTimer);
-  pollTimer=setTimeout(()=>load(true),5000);
+  pollTimer=setTimeout(()=>load(true),historyRequests.size?30000:5000);
  }
  return data;
+ })().finally(()=>{loadPromise=null});
+ return loadPromise;
 }
 window.ozonFboPaintStatus=updateOzonHeaderIndicator;
 window.ozonFboSnapshot=()=>data?{payload:data,loadedAt}:null;

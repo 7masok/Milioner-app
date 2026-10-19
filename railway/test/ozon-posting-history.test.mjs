@@ -7,13 +7,19 @@ test('Ozon older history backfills only the missing segment and merges without d
  const previous={from:iso(30),rows:[posting('old',35),posting('updated',10,'awaiting_deliver'),posting('expired',200)]},before=JSON.stringify(previous),calls=[];
  const result=await fetchPostingHistory({},iso(30),iso(0),previous,async(_,from,to)=>{calls.push([from,to]);return calls.length===1?[posting('updated',10),posting('new',1)]:[posting('old',35),posting('older',45)]});
  assert.deepEqual(calls,[[iso(30),iso(0)],[iso(60),iso(30)]]);assert.equal(result.from,iso(60));assert.equal(result.to,iso(0));
- assert.deepEqual(result.rows.map(row=>row.posting_number),['old','older','updated','new']);assert.equal(result.rows.find(row=>row.posting_number==='updated').status,'delivered');assert.equal(JSON.stringify(previous),before);
+ assert.deepEqual(result.rows.map(row=>row.posting_number),['expired','old','older','updated','new']);assert.equal(result.rows.find(row=>row.posting_number==='updated').status,'delivered');assert.equal(JSON.stringify(previous),before);
  let refreshCalls=0;const refreshed=await fetchPostingHistory({},iso(30),iso(0),result,async()=>{refreshCalls++;return [posting('updated',10),posting('new',1)]});
- assert.equal(refreshed.rows.filter(row=>row.posting_number==='old').length,1);assert.equal(refreshed.rows.length,4);assert.equal(refreshCalls,2);assert.equal(refreshed.from,iso(90));
+ assert.equal(refreshed.rows.filter(row=>row.posting_number==='old').length,1);assert.equal(refreshed.rows.length,5);assert.equal(refreshCalls,2);assert.equal(refreshed.from,iso(90));
 });
-test('Ozon keeps covered older history without another backfill and drops rows older than 155 days',async()=>{
- let calls=0;const result=await fetchPostingHistory({},iso(30),iso(0),{from:iso(156),rows:[posting('keep',150),posting('drop',156)]},async()=>{calls++;return [posting('fresh',1)]});
- assert.equal(calls,1);assert.deepEqual(result.rows.map(row=>row.posting_number),['keep','fresh']);
+test('Ozon keeps all collected history beyond one year without requesting already covered segments',async()=>{
+ let calls=0;const result=await fetchPostingHistory({},iso(30),iso(0),{from:iso(400),rows:[posting('keep',150),posting('archive',500)]},async()=>{calls++;return [posting('fresh',1)]});
+ assert.equal(calls,1);assert.equal(result.from,iso(400));assert.deepEqual(result.rows.map(row=>row.posting_number),['archive','keep','fresh']);
+});
+test('Ozon extends the old 155-day boundary and can target a selected period older than one year',async()=>{
+ const calls=[];const previous={from:iso(155),targetFrom:iso(800),rows:[posting('saved',154)]};
+ const result=await fetchPostingHistory({},iso(30),iso(0),previous,async(_,from,to)=>{calls.push([from,to]);return []});
+ assert.deepEqual(calls,[[iso(30),iso(0)],[iso(185),iso(155)]]);assert.equal(result.from,iso(185));assert.equal(result.targetFrom,iso(800));
+ assert.equal(result.rows[0].posting_number,'saved');
 });
 test('failed older backfill leaves the previous cache untouched and cannot claim full coverage',async()=>{
  const previous={from:iso(30),rows:[posting('cached',1)]},before=JSON.stringify(previous);let calls=0;
