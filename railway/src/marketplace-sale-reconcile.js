@@ -1,3 +1,4 @@
+import {effectiveKaspiRow} from './kaspi-order-content.js';
 import crypto from 'node:crypto';
 import { transaction } from './db.js';
 import { pruneWarehouseBackups } from './warehouse-backups.js';
@@ -122,7 +123,7 @@ export async function reconcileMarketplaceSales(market) {
     const stored = await client.query('SELECT payload,revision FROM warehouse_state WHERE id=1 FOR UPDATE');
     if (!stored.rowCount) return { changed: false, market, reason: 'warehouse-not-initialized' };
     const rows = await client.query(`SELECT o.order_id,o.entry_id,o.code,o.status,o.state,o.creation_date,o.qty,o.unit_price,
-        o.seller_delivery_cost,o.marketplace_fee,o.fee_source,l.product_id
+        o.seller_delivery_cost,o.marketplace_fee,o.fee_source,o.total_price,l.product_id
       FROM marketplace_order_lines o
       LEFT JOIN product_links l ON l.market=o.market AND l.sku=o.sku
       WHERE o.market=$1 AND o.creation_date >= $2
@@ -137,7 +138,8 @@ export async function reconcileMarketplaceSales(market) {
     const existing = new Set(state.sales.map(sale => String(sale?.externalKey || '')).filter(Boolean));
     let sold = 0, unlinked = 0;
     const now = Date.now();
-    for (const row of rows.rows) {
+    for (const rawRow of rows.rows) {
+      const row=market==='Kaspi'?effectiveKaspiRow(state,rawRow):rawRow;
       if (!isCollected(market, row.status, row.state)) continue;
       const key = externalKey(market, row);
       if (existing.has(key)) continue;
