@@ -6,7 +6,7 @@ import { startPlannerLoop } from './ozon-planner/service.js';
 import { startWbDeliveryTariffLoop } from './wb-delivery-tariffs.js';
 import { wbOrderHistoryRouter,startWbOrderHistoryLoop } from './wb-order-history.js';
 import { ozonRouter, startOzonSyncLoop } from './ozon-fbo.js';
-import { ozonPerformanceRouter } from './ozon-performance.js';
+import { ozonPerformanceRouter, resumeOzonPerformanceRetries } from './ozon-performance.js';
 import express from 'express';
 import helmet from 'helmet';
 import path from 'node:path';
@@ -349,6 +349,7 @@ const server = app.listen(config.port, '0.0.0.0', () => {
   setTimeout(()=>verifyBackupRestoreReadiness(),4000).unref();
   setTimeout(()=>logWbHourlyOrders(30),7000).unref();
   startOzonSyncLoop();
+  resumeOzonPerformanceRetries().catch(()=>console.warn('Ozon Performance: не удалось восстановить очередь повторов'));
   startPlannerLoop();
   startKaspiSyncLoop();
   startWbSyncLoop();

@@ -1,14 +1,14 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {createPerformanceJobs} from '../src/ozon-performance-jobs.js';
-import {build} from '../src/ozon-performance.js';
+import {build,resumeOzonPerformanceRetries} from '../src/ozon-performance.js';
 import {pool} from '../src/db.js';
 
 function fixture() {
   const db = new Map();
   let time = 1000;
   const options = {read: async key => structuredClone(db.get(key)), write: async (key, value) => db.set(key, structuredClone(value)), now: () => time};
-  return {restart: () => createPerformanceJobs(options), advance: ms => time += ms};
+  return {store:db,restart: () => createPerformanceJobs(options), advance: ms => time += ms};
 }
 
 test('timeout and restart resume the same UUID instead of generating another report', async () => {
@@ -65,6 +65,23 @@ test('concurrent consumers create only one component report', async () => {
   assert.equal(submits, 1);
 });
 
+test('a quota wait longer than the component TTL preserves completed batches until the combined report succeeds', async () => {
+  const f=fixture();let submits=0;
+  const options={ttl:6*3600000,retainUntilComplete:true,submit:async()=> 'job-'+ ++submits,collect:async()=>[{sku:'10001',spent:300}]};
+  await f.restart().get('a',options);
+  // Completed components written by the previous deployment have no marker.
+  f.store.set('legacy',{rows:[{sku:'10002',spent:15}],at:1000});
+  await assert.rejects(f.restart().get('b',{...options,collect:async()=>{throw Object.assign(Error('quota'),{code:'DAILY_LIMIT'})}}));
+  f.advance(18*3600000);
+  const resumed=f.restart();
+  assert.equal((await resumed.get('legacy',{...options,collect:async()=>assert.fail('legacy saved batch must survive the rollout')}))[0].spent,15);
+  assert.equal((await resumed.get('a',{...options,collect:async()=>assert.fail('must reuse the completed batch after quota')}))[0].spent,300);
+  await resumed.get('b',{...options,collect:async uuid=>{assert.equal(uuid,'job-2');return[]}});
+  assert.equal(submits,2);
+  await resumed.complete(['a','b','legacy']);f.advance(7*3600000);
+  await f.restart().get('a',options);assert.equal(submits,3);
+});
+
 test('successful direct SKU statistics do not generate duplicate campaign reports, including zero spend', async () => {
   const original = {fetch: globalThis.fetch, query: pool.query, timeout: globalThis.setTimeout, id: process.env.OZON_PERFORMANCE_CLIENT_ID, secret: process.env.OZON_PERFORMANCE_CLIENT_SECRET};
   const db = new Map(), paths = [];
@@ -106,4 +123,18 @@ test('successful direct SKU statistics do not generate duplicate campaign report
       if (value === undefined) delete process.env[key]; else process.env[key] = value;
     }
   }
+});
+
+test('startup restores the saved period and provider deadline without calling Ozon during cooldown',async()=>{
+ const prior={query:pool.query,fetch:globalThis.fetch,info:console.info,id:process.env.OZON_PERFORMANCE_CLIENT_ID,secret:process.env.OZON_PERFORMANCE_CLIENT_SECRET};
+ const retryAt=Date.now()+18*3600000,logs=[];let restored=false;
+ process.env.OZON_PERFORMANCE_CLIENT_ID='restart-fixture';process.env.OZON_PERFORMANCE_CLIENT_SECRET='fixture-secret';
+ pool.query=async(sql,args)=>{
+  if(sql.startsWith('SELECT cache_key')){assert.match(sql,/LIMIT 8/);restored=true;return{rows:[{cache_key:args[0].slice(0,-1)+'2026-10-11:2026-10-11'}]}}
+  if(sql.startsWith('SELECT payload'))return{rows:[{payload:{error:'provider quota',limited:true,retryAt}}]};
+  return{rows:[]};
+ };
+ globalThis.fetch=async()=>assert.fail('cooldown forbids an upstream request');console.info=(label,value)=>logs.push({label,value:JSON.parse(value)});
+ try{await resumeOzonPerformanceRetries();assert.equal(restored,true);assert.equal(logs.length,1);assert.equal(logs[0].value.retryAt,retryAt);assert.equal(logs[0].value.from,'2026-10-11');assert.equal(logs[0].value.limited,true)}
+ finally{pool.query=prior.query;globalThis.fetch=prior.fetch;console.info=prior.info;for(const[key,value]of[['OZON_PERFORMANCE_CLIENT_ID',prior.id],['OZON_PERFORMANCE_CLIENT_SECRET',prior.secret]])if(value===undefined)delete process.env[key];else process.env[key]=value}
 });

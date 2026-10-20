@@ -2,9 +2,9 @@
 // must resume the UUID already issued by Ozon instead of consuming another job.
 export function createPerformanceJobs({read, write, now = Date.now}) {
   const running = new Map();
-  async function run(key, {submit, collect, ttl}) {
+  async function run(key, {submit, collect, ttl, retainUntilComplete = false}) {
     let entry = await read(key) || {};
-    if (Array.isArray(entry.rows) && now() - entry.at < ttl) return entry.rows;
+    if (Array.isArray(entry.rows) && (retainUntilComplete && entry.complete !== true || now() - entry.at < ttl)) return entry.rows;
     if (!entry.uuid || now() - entry.createdAt >= 24 * 60 * 60 * 1000) {
       const uuid = await submit();
       if (!uuid) throw new Error('Ozon Performance: отчёт не поставлен в очередь');
@@ -14,7 +14,7 @@ export function createPerformanceJobs({read, write, now = Date.now}) {
     }
     try {
       const rows = await collect(entry.uuid);
-      await write(key, {rows, at: now()});
+      await write(key, {rows, at: now(), complete: !retainUntilComplete});
       return rows;
     } catch (error) {
       // A failed/missing job can be recreated. Timeouts, download errors and
@@ -24,6 +24,12 @@ export function createPerformanceJobs({read, write, now = Date.now}) {
     }
   }
   return {
+    async complete(keys) {
+      for (const key of keys) {
+        const entry = await read(key);
+        if (Array.isArray(entry?.rows) && entry.complete !== true) await write(key, {...entry, complete: true, at: now()});
+      }
+    },
     get(key, options) {
       if (running.has(key)) return running.get(key);
       const task = run(key, options).finally(() => running.delete(key));
