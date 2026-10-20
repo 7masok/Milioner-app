@@ -31,7 +31,7 @@ test('the existing filter persists decline ordering and selected days without wr
  const html=readFileSync(new URL('../../index.html',import.meta.url),'utf8'),line=n=>html.split('\n').find(s=>s.startsWith('function '+n+'('));let sheet='',saved=null,requested=0;
  const fields={productRankMetric:{value:'decline'},productRankDaysInput:{value:'14'},productRankDirectionInput:{value:'desc'}};
  const ctx={productRankSort:'decline',productRankDays:7,productRankDirection:'desc',productRankStatsErrorKey:'',productCardProfitStats:null,productCardProfitStatsKey:'',productCardProfitStatsAt:0,productPage:3,document:{getElementById:id=>fields[id]},showSheet:s=>{sheet=s},rememberProductUi:patch=>{saved=patch},closeModal(){},syncProductRankButton(){},productRankHint:()=>'',productUiFrame:fn=>fn(),renderProducts(){},ensureProductRankStats(){requested++},alert:s=>{throw Error(s)},save(){throw Error('Filter must not write stock')}};
- vm.runInNewContext(line('openProductRankFilter')+'\n'+line('applyProductRankFilter'),ctx);ctx.openProductRankFilter();assert.match(sheet,/<option value="decline" selected>Падение заказов, %/);ctx.applyProductRankFilter();assert.equal(saved.rankSort,'decline');assert.equal(saved.rankDays,14);assert.equal(saved.rankDirection,'desc');assert.equal(saved.page,1);assert.equal(requested,1);assert.match(html,/savedRankSort=\['sales','profit','decline','growth','idle'\]/);
+ vm.runInNewContext(line('openProductRankFilter')+'\n'+line('applyProductRankFilter'),ctx);ctx.openProductRankFilter();assert.match(sheet,/<option value="decline" selected>Падение заказов, %/);ctx.applyProductRankFilter();assert.equal(saved.rankSort,'decline');assert.equal(saved.rankDays,14);assert.equal(saved.rankDirection,'desc');assert.equal(saved.page,1);assert.equal(requested,1);assert.match(html,/savedRankSort=\['sales','profit','decline','growth','idle','orderIdle'\]/);
 });
 
 test('a real source history gap remains unknown but adjoining intervals permit a percentage',()=>{
@@ -75,4 +75,15 @@ test('new sort modes persist alongside category and do not write warehouse state
   vm.runInNewContext(['productRankHint','openProductRankFilter','applyProductRankFilter'].map(line).join('\n'),ctx);ctx.openProductRankFilter();assert.match(sheet,new RegExp('value="'+mode+'" selected'));
   ctx.applyProductRankFilter();assert.equal(saved.rankSort,mode);assert.equal(saved.rankDays,14);assert.equal(saved.rankDirection,'asc');assert.equal(saved.page,1);assert.equal(Object.hasOwn(saved,'categoryFilter'),false);
  }
+});
+
+test('days without orders sort known gaps before unknown history and show lower bounds honestly',async()=>{
+ const f=fixture();await f.ctx.window.ensureProductSalesTrends({days:7});
+ const api=f.ctx.window,unknown={id:'unknown',name:'Unknown',wb:'missing'};
+ const sorted=[unknown,...f.products].sort((a,b)=>api.compareProductOrderIdleDays(a,b,'desc',{days:7}));
+ assert.notEqual(sorted[0].id,'unknown');assert.equal(sorted.at(-1).id,'unknown');
+ assert.match(api.productOrderIdleHtml(unknown,{days:7}),/Без заказов <b>—/);
+ assert.match(api.productOrderIdleHtml(f.products[0],{days:7}),/Без заказов <b>0 дн\./);
+ const reverse=[...f.products].sort((a,b)=>api.compareProductOrderIdleDays(a,b,'asc',{days:7}));
+ assert.equal(reverse[0].id,'a');
 });
