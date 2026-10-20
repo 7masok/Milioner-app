@@ -66,3 +66,21 @@ test('daily cache accepts previous-year history beyond 400 days without relaxing
  const put=await dailyInvoke('put',{days:[snapshot(old)],version:BUSINESS_CACHE_VERSION,sourceRevision:read.out.sourceRevision});
  assert.equal(put.status,200);assert.ok(put.queries.some(q=>q.sql.startsWith('INSERT')));
 });
+
+
+test('saving an overview retains the same 1600 derived records as saving shared days',async()=>{
+ const overview=await invoke('put',{period:'day',start,version:BUSINESS_CACHE_VERSION,sourceRevision:revision(),snapshot:model()});
+ const days=await dailyInvoke('put',{days:[snapshot()],version:BUSINESS_CACHE_VERSION,sourceRevision:revision()});
+ for(const queries of [overview.calls,days.queries])assert.match(queries.find(q=>q.sql.startsWith('DELETE FROM business_dashboard_cache')).sql,/LIMIT 1600/);
+});
+
+test('month batch reads only bounded compact saved month totals, including a known previous month',async()=>{
+ const makeMonth=(year,month)=>{const begin=Date.UTC(year,month,1)-18000000,end=Date.UTC(year,month+1,1)-18000000;return{...snapshot(begin),period:'month',bounds:{start:begin,end},buckets:Array.from({length:(end-begin)/DAY},(_,i)=>({start:begin+i*DAY,end:begin+(i+1)*DAY,orders:5,buyouts:4})),pending:false}};
+ const year=new Date(today+18000000).getUTCFullYear()-1,current=makeMonth(year,8),previous=makeMonth(year,7),payload={...current,yesterday:previous,yesterdayCompare:previous};
+ const route=reportsRouter.stack.find(x=>x.route?.path==='/business-dashboard-months').route,old=pool.query,queries=[];let out,status=200;
+ pool.query=async(sql,args)=>{queries.push({sql,args});return{rows:sql.includes(' AS warehouse,')?[marker]:sql.startsWith('SELECT cache_key')?[{cache_key:'month:'+current.bounds.start,version:BUSINESS_CACHE_VERSION,source_revision:revision(),payload,generated_at:Date.now()}]:[]}};
+ try{await route.stack.at(-1).handle({query:{from:Date.UTC(year,0,1)-18000000,to:Date.UTC(year+2,0,1)-18000000}},{status(n){status=n;return this},json(x){out=x}},e=>{throw e})}finally{pool.query=old}
+ assert.equal(status,200);assert.equal(out.months.length,2);assert.ok(out.months.every(x=>!x.month.yesterday&&!x.month.events));assert.equal(out.sourceRevision,revision());
+ assert.ok(queries.every(q=>!/FROM (wb_finance_rows|marketplace_order_lines)/.test(q.sql)));assert.equal(queries.find(q=>q.sql.startsWith('SELECT cache_key')).args[0].length,24);
+ let rejected;await route.stack.at(-1).handle({query:{from:today,to:today+1000*DAY}},{status(n){rejected=n;return this},json(){}},e=>{throw e});assert.equal(rejected,400);
+});

@@ -42,6 +42,20 @@ async function sourceRevision(){
 function dailyBounds(from,to){return Number.isFinite(from)&&Number.isFinite(to)&&from===midnight(from)&&to===midnight(to)&&from>0&&to>from&&to-from<=64*DAY&&to<=midnight(Date.now())+DAY}
 export function validBusinessDay(day){return validBusinessSnapshot({...day,yesterday:day,yesterdayCompare:day},'day',day?.bounds?.start)}
 export function registerBusinessDashboardCache(router){
+ router.get('/business-dashboard-months',asyncRoute(async(req,res)=>{
+  const from=Number(req.query.from),to=Number(req.query.to);
+  if(!businessCacheKey('year',from)||!Number.isFinite(to)||to<=from||to-from>732*DAY||new Date(to+OFFSET).getUTCMonth()!==0||new Date(to+OFFSET).getUTCDate()!==1||to!==midnight(to))return res.status(400).json({ok:false,error:'Некорректный диапазон месяцев'});
+  const keys=[];for(let t=from;t<to;){keys.push('month:'+t);const d=new Date(t+OFFSET);t=Date.UTC(d.getUTCFullYear(),d.getUTCMonth()+1,1)-OFFSET}
+  await ensureCache();const [revision,result]=await Promise.all([sourceRevision(),pool.query('SELECT cache_key,version,source_revision,payload,generated_at FROM business_dashboard_cache WHERE cache_key=ANY($1::text[])',[keys])]);
+  const months=new Map();
+  for(const row of result.rows){const at=Number(row.generated_at),model=row.payload;if(row.version!==BUSINESS_CACHE_VERSION||!validBusinessSnapshot(model,'month',Number(row.cache_key.split(':')[1])))continue;
+   for(const candidate of [model,model.yesterday]){if(candidate?.period!=='month'||candidate.pending||candidate.unavailable||candidate.bounds.start<from||candidate.bounds.start>=to)continue;const prior=months.get(candidate.bounds.start);if(prior&&prior.generatedAt>=at)continue;
+    const {period,bounds,buckets,orders,summary,netProfit,hourly}=candidate;
+    months.set(bounds.start,{month:{period,bounds,buckets,orders,summary,netProfit,hourly,pending:false},generatedAt:at,fresh:row.source_revision===revision&&Date.now()-at<(bounds.end>Date.now()?60000:15*60000)&&!(at<bounds.end&&bounds.end<=Date.now())});
+   }
+  }
+  res.json({ok:true,version:BUSINESS_CACHE_VERSION,sourceRevision:revision,months:[...months.values()]});
+ }));
  router.get('/business-dashboard-days',asyncRoute(async(req,res)=>{
   const from=Number(req.query.from),to=Number(req.query.to);if(!dailyBounds(from,to))return res.status(400).json({ok:false,error:'Некорректный дневной диапазон'});
   await ensureCache();const keys=[];for(let t=from;t<to;t+=DAY)keys.push('base:'+t);
@@ -74,7 +88,7 @@ export function registerBusinessDashboardCache(router){
   await ensureCache();const current=await sourceRevision();if(current!==revision)return res.status(409).json({ok:false,error:'Данные обновились во время расчёта'});
   const at=Date.now();await pool.query(`INSERT INTO business_dashboard_cache(cache_key,version,source_revision,payload,generated_at) VALUES($1,$2,$3,$4::jsonb,$5)
    ON CONFLICT(cache_key) DO UPDATE SET version=excluded.version,source_revision=excluded.source_revision,payload=excluded.payload,generated_at=excluded.generated_at`,[key,version,revision,JSON.stringify(snapshot),at]);
-  await pool.query('DELETE FROM business_dashboard_cache WHERE cache_key NOT IN (SELECT cache_key FROM business_dashboard_cache ORDER BY generated_at DESC LIMIT 400)');
+  await pool.query('DELETE FROM business_dashboard_cache WHERE cache_key NOT IN (SELECT cache_key FROM business_dashboard_cache ORDER BY generated_at DESC LIMIT 1600)');
   res.json({ok:true,generatedAt:at});
  }));
 }
