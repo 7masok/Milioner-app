@@ -1,5 +1,5 @@
 import express from 'express';
-import {reportHistoryGoal,historyBackfillWake} from './report-history-range.js';
+import {reportHistoryGoal,historyBackfillWake,WB_REPORT_HISTORY_FROM} from './report-history-range.js';
 import {pool} from './db.js';
 import {config} from './config.js';
 import {credentialFor} from './connections.js';
@@ -21,7 +21,7 @@ function pageCursor(value,current,count,scope){
  return BigInt(raw)<=BigInt(Number.MAX_SAFE_INTEGER)?Number(raw):raw;
 }
 export function initialWbOrderHistory(now){
- const anchor=Math.floor(now/1000)*1000,goal=reportHistoryGoal(now);
+ const anchor=Math.floor(now/1000)*1000,goal=reportHistoryGoal(now,WB_REPORT_HISTORY_FROM);
  return {version:2,anchor,goal,coveredFrom:anchor,from:Math.max(goal,anchor-29*DAY),to:anchor,cursor:0,phase:'orders',pending:[],rows:0,complete:false,nextAllowedAt:0,lastError:''};
 }
 function resumeWbBackfill(state){
@@ -29,7 +29,7 @@ function resumeWbBackfill(state){
  delete state.archiveMonths;delete state.archiveIndex;delete state.archiveCursor;delete state.pageNext;
 }
 export function extendWbOrderHistory(input,now){
- const state=structuredClone(input);state.goal=Math.min(Number(state.goal)||Infinity,reportHistoryGoal(now));
+ const state=structuredClone(input);state.goal=Math.min(Number(state.goal)||Infinity,reportHistoryGoal(now,WB_REPORT_HISTORY_FROM));
  if(state.complete&&!state.mode&&state.coveredFrom>state.goal){resumeWbBackfill(state);state.nextAllowedAt=historyBackfillWake(input,now,SLOT)}
  return state;
 }
