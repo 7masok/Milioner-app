@@ -22,13 +22,13 @@ function fixture({delivery=80,ads=20,cost=100,orders=true,returns=[]}={}){
  return {ctx,state,model,snapshot,get sheet(){return sheet},paint(days=0){ctx.paintKaspiSheet(model,days);return sheet}};
 }
 const clean=s=>s.replaceAll('\u00a0',' ');
-test('Kaspi product press reveals the actual period row articles inline, with no WB route or double fee subtotal',()=>{
+test('Kaspi product summary shows profit and opens orders of that product inline without a WB route',()=>{
  const f=fixture(),before=JSON.stringify(f.state);let view;const paint=f.ctx.paintStoreSheet;
  f.ctx.paintStoreSheet=(_market,days,v)=>{assert.equal(_market,'Kaspi');assert.equal(days,0);view=v;paint(_market,days,v)};
  const html=clean(f.paint()),card=view.products[0];
  assert.match(html,/<details class="item" data-kaspi-period-breakdown/);assert.ok(!html.includes('data-wb-period-breakdown'));assert.ok(!html.includes('По ШК'));
- assert.match(html,/<summary[^>]*>[\s\S]*Расчёт прибыли <span class="arrow">▾<\/span>[\s\S]*<\/summary>/);assert.ok(!html.match(/<summary[^>]*>[\s\S]*?<\/summary>/)[0].includes('onclick='));
- assert.ok(html.includes('Мой период'));assert.ok(html.includes('data-test-days="0"'));
+ assert.match(html,/<summary[^>]*>[\s\S]*По заказам <span class="arrow">▾<\/span>[\s\S]*<\/summary>/);assert.ok(!html.match(/<summary[^>]*>[\s\S]*?<\/summary>/)[0].includes('onclick='));
+ assert.ok(!html.includes('openKaspiBuyouts'));assert.match(html,/ontoggle="loadKaspiProductBuyouts\(this\)"/);assert.match(html,/<summary[^>]*>[\s\S]*≈ 644,11 ₸[\s\S]*<\/summary>/);assert.ok(html.includes('Мой период'));assert.ok(html.includes('data-test-days="0"'));
  assert.deepEqual(Array.from(card.breakdown,r=>r.label),['Выручка','Себестоимость','Комиссия Kaspi','Kaspi Pay · эквайринг','Логистика','Сервисные удержания','Реклама']);
  const expected=[1000,-100,-145.586,-9.5,-80,-.8,-20];
  const parse=t=>Number(t.replace(/[^0-9,.−-]/g,'').replace('−','-').replace(',','.'));
@@ -75,23 +75,30 @@ test('fallback delivery, revenue normalization and pending/unknown cost stay hon
  assert.equal(model.buyouts.find(x=>x.id==='pending').unknownCost,true);
  const noCost=fixture({cost:0});assert.equal(noCost.ctx.buildModel(noCost.snapshot,1,null,null,true).buyouts[0].unknownCost,true);
 });
-test('buyout summary exposes profit before disclosure and escapes order and product text',()=>{
- const f=fixture();vm.runInContext(source.slice(source.indexOf('function kaspiBuyoutCard('),source.indexOf('\nwindow.paintKaspiBuyouts=')),f.ctx);
- const model=f.ctx.buildModel(f.snapshot,1,null,null,true),order=model.buyouts[0];order.code='<order>';order.lines[0].name='<product>';
- const html=clean(f.ctx.kaspiBuyoutCard(order)),summary=html.slice(0,html.indexOf('</summary>'));
- assert.match(summary,/До рекламы/);assert.match(summary,/≈ 664,11 ₸/);assert.ok(!summary.includes('<order>'));assert.ok(html.includes('&lt;product>'));
- assert.match(html,/report-disclosure-body/);assert.match(html,/class="arrow"/);
+test('individual order rows expose profit and escape the order number',()=>{
+ const f=fixture();vm.runInContext(source.slice(source.indexOf('function kaspiBuyoutCard('),source.indexOf('function kaspiBuyoutsByProduct(')),f.ctx);
+ const model=f.ctx.buildModel(f.snapshot,1,null,null,true),order=model.buyouts[0];order.code='<order>';
+ const html=clean(f.ctx.kaspiBuyoutCard(order));assert.match(html,/До рекламы/);assert.match(html,/≈ 664,11 ₸/);assert.ok(!html.includes('<order>'));
  order.unknownCost=true;assert.match(f.ctx.kaspiBuyoutCard(order),/До рекламы<\/div><b>—<\/b>/);
 });
 
-test('Kaspi buyout pages use one snapshot, keep at most 15 cards and discard late responses after closing',async()=>{
- const f=fixture();let sheet='',open=true,loads=0,finish;const node={scrollTop:99};
- Object.assign(f.ctx,{storeDetailSeq:0,reportPeriod:7,reportCustomFrom:'2026-10-01',reportCustomTo:'2026-10-20',reportAdsPeriodLabel:()=> '7 дней',periodCacheKey:days=>String(days),
-  showSheet:html=>{sheet=html},document:{getElementById:id=>id==='modal'?{classList:{contains:()=>open}}:id==='sheet'?node:id==='kaspiBuyoutLoading'&&sheet.includes('kaspiBuyoutLoading')?{dataset:{request:sheet.match(/data-request="(\d+)"/)[1]}}:null},
-  loadKaspiOrders:()=>{loads++;return new Promise(resolve=>{finish=resolve})}});
- f.ctx.window=f.ctx;vm.runInContext(source.slice(source.indexOf('let kaspiBuyoutView='),source.indexOf('function paintKaspiSheet(')),f.ctx);
- const pending=f.ctx.openKaspiBuyouts(7);open=false;finish(f.snapshot);await pending;assert.match(sheet,/Готовлю список/);
- open=true;const next=f.ctx.openKaspiBuyouts(7),snapshot={...f.snapshot,orders:Array.from({length:32},(_,i)=>({...f.snapshot.orders[0],id:'order'+i,code:String(i),completionDate:i+1}))};finish(snapshot);await next;
- assert.equal((sheet.match(/data-kaspi-buyout /g)||[]).length,15);assert.match(sheet,/Страница 1 из 3/);assert.match(sheet,/Реклама учитывается в общем отчёте/);
- f.ctx.paintKaspiBuyouts(3);assert.equal(loads,2);assert.equal((sheet.match(/data-kaspi-buyout /g)||[]).length,2);assert.match(sheet,/Страница 3 из 3/);assert.equal(node.scrollTop,0);
+test('each product disclosure contains only its share of multi-product orders and retains per-entry cost',()=>{
+ const f=fixture();f.state.products.push({id:'other',name:'Other',kaspi:'other',cost:50});
+ f.snapshot.orders[0].totalPrice=1500;f.snapshot.orders[0].lines.push({merchantCode:'other',entryId:'other',quantity:1,totalPrice:500});
+ f.snapshot.orders.push({id:'only-other',totalPrice:500,lines:[{merchantCode:'other',quantity:1,totalPrice:500}]});
+ vm.runInContext(line('kaspiBuyoutsByProduct'),f.ctx);const detail=f.ctx.buildModel(f.snapshot,7,null,null,true),index=f.ctx.kaspiBuyoutsByProduct(detail);
+ assert.equal(index.get('pink').length,1);assert.equal(index.get('other').length,2);assert.equal(index.get('pink')[0].revenue,1000);assert.equal(index.get('pink')[0].cost,100);
+ for(const row of detail.rows.filter(x=>x.qty>0)){const orders=index.get(row.rowKey);for(const key of ['qty','revenue','cost','fees'])assert.ok(Math.abs(orders.reduce((n,o)=>n+o[key],0)-row[key])<1e-8,key);assert.ok(Math.abs(orders.reduce((n,o)=>n+o.profit,0)-(row.profit+row.ads))<1e-8)}
+});
+
+test('inline order pages reuse one snapshot across products, preserve the sheet and discard detached responses',async()=>{
+ const f=fixture();let open=true,loads=0,finish;const body={innerHTML:''},details={open:true,isConnected:true,dataset:{productKey:'pink'},querySelector:()=>body};
+ Object.assign(f.ctx,{document:{getElementById:()=>({classList:{contains:()=>open}})},loadKaspiOrders:()=>{loads++;return new Promise(resolve=>{finish=resolve})}});
+ f.ctx.window=f.ctx;vm.runInContext(source.slice(source.indexOf('function kaspiBuyoutCard('),source.indexOf('function paintKaspiSheet(')),f.ctx);
+ f.paint(7);const sheet=f.sheet,pending=f.ctx.loadKaspiProductBuyouts(details);details.isConnected=false;finish(f.snapshot);await pending;assert.equal(body.innerHTML,'');assert.equal(f.sheet,sheet);
+ details.isConnected=true;await f.ctx.loadKaspiProductBuyouts(details);assert.equal(loads,1);assert.match(body.innerHTML,/Заказ order/);
+ f.paint(7);const next=f.ctx.loadKaspiProductBuyouts(details),snapshot={...f.snapshot,orders:Array.from({length:32},(_,i)=>({...f.snapshot.orders[0],id:'order'+i,code:String(i),completionDate:i+1}))};finish(snapshot);await next;
+ assert.equal((body.innerHTML.match(/data-kaspi-buyout /g)||[]).length,15);assert.match(body.innerHTML,/1 \/ 3/);
+ await f.ctx.loadKaspiProductBuyouts(details,3);assert.equal(loads,2);assert.equal((body.innerHTML.match(/data-kaspi-buyout /g)||[]).length,2);assert.match(body.innerHTML,/3 \/ 3/);
+ const prior=body.innerHTML;f.paint(1);const last=f.ctx.loadKaspiProductBuyouts(details);open=false;finish(f.snapshot);await last;assert.equal(body.innerHTML,prior);
 });

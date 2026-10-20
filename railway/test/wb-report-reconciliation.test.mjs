@@ -103,3 +103,11 @@ test('daily finance endpoint reads the whole range once, groups by financial day
  assert.equal(result.daily.length,3);assert.equal(result.daily[0].products[0].realizedCostKzt,cost);assert.equal(result.daily[0].summary.financeRowCount,6);assert.equal(result.daily[1].summary.financeAvailable,false);assert.equal(result.daily[1].summary.retailAmount,0);assert.equal(calls.filter(c=>c.sql.startsWith('SELECT f.*')).length,1);
  const grouped=calls.find(c=>c.sql.startsWith('SELECT to_char'));assert.match(grouped.sql,/GROUP BY to_char/);assert.match(grouped.sql,/sale_date-7200000/);assert.deepEqual(grouped.args,['WB',START,START+3*DAY]);assert.ok(calls.every(c=>c.sql.startsWith('SELECT ')));
 });
+
+test('Kaspi inline order changes do not attach handlers or replace WB barcode actions',()=>{
+ const [product]=reconcileWbReportProducts(options),f=ui();f.c.wbReportProductAuditAction=()=>"openBarcodeAudit('WB')";
+ f.c.paintWbSheet({financeAvailable:true,complete:true,products:[product]},'WB',7);
+ assert.ok(f.sheet.includes('data-wb-period-breakdown'));assert.ok(f.sheet.includes('По ШК'));assert.ok(f.sheet.includes("openBarcodeAudit('WB')"));
+ assert.ok(!f.sheet.includes('loadKaspiProductBuyouts'));assert.ok(!f.sheet.includes('data-kaspi-order-list'));assert.ok(!f.sheet.includes('data-product-key'));
+ assert.match(f.sheet,/<summary[^>]*><div class="row">/);
+});
