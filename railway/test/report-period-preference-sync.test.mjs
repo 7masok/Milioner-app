@@ -15,7 +15,7 @@ function fixture(storageFails=false){
  const ctx={state:{settings:{reportPeriodUpdatedAt:10}},REPORT_PERIOD_UI_KEY:'period',reportPeriodUiPreference:{...old},reportPeriodPreset:0,reportPeriod:0,reportCustomFrom:old.from,reportCustomTo:old.to,
   localStorage:{setItem(_key,value){if(storageFails)throw Error('storage disabled');saved=JSON.parse(value)}}};
  vm.createContext(ctx);vm.runInContext(remember,ctx);
- return {ctx,get saved(){return saved},select(preset,at,from=old.from,to=from){Object.assign(ctx,{reportPeriodPreset:preset,reportPeriod:preset,reportCustomFrom:from,reportCustomTo:to});ctx.state.settings.reportPeriodUpdatedAt=at;ctx.rememberReportPeriodUiPreference()},apply(preset=0,at=10,from=old.from,to=from){ctx.state={settings:{reportPeriodPreset:preset,reportPeriodUpdatedAt:at,reportCustomFrom:from,reportCustomTo:to}};vm.runInContext(restore,ctx)}};
+ return {ctx,get saved(){return saved},select(preset,at,from=old.from,to=from){Object.assign(ctx,{reportPeriodPreset:preset,reportPeriod:preset,reportCustomFrom:from,reportCustomTo:to});ctx.state.settings.reportPeriodUpdatedAt=at;ctx.rememberReportPeriodUiPreference()},apply(preset=0,at=10,from=old.from,to=from){ctx.state={settings:{reportPeriodPreset:preset,reportPeriodUpdatedAt:at,reportCustomFrom:from,reportCustomTo:to}};vm.runInContext('{'+restore+'}',ctx)}};
 }
 test('choosing Today updates the live preference and survives repeated older warehouse snapshots',()=>{
  const f=fixture();f.select(1,30);assert.equal(f.ctx.reportPeriodUiPreference.preset,1);assert.equal(f.ctx.reportPeriodUiPreference.updatedAt,30);
