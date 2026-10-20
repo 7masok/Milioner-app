@@ -20,8 +20,21 @@ test('last confirmed SKU amounts remain visible when a refresh returns a quota e
 });
 test('unknown SKU advertising is labeled separately from known finance advertising and product profit',()=>{
  let view;const ctx={paintStoreSheet:(_market,_days,v)=>view=v,fmt:String,esc:String,Date};const start=report.indexOf('function paintOzonSheet('),end=report.indexOf('\nfunction ',start+10);vm.runInNewContext(report.slice(start,end),ctx);
- ctx.paintOzonSheet({sales:100,ads:20,cost:10,profit:70,adsError:'limited',products:[{name:'unknown',sales:100,cost:10,profit:90,ads:0,adsKnown:false},{name:'known',ads:7,adsKnown:true}]},0);assert.equal(view.products[0].ads,'нет разбивки');assert.equal(view.products[0].profitLabel,'До рекламы');assert.equal(view.products[1].ads,'7');assert.equal(view.lines.find(r=>r.label==='Реклама Ozon').text,'20');
+ ctx.paintOzonSheet({sales:100,ads:20,cost:10,profit:70,adsConfigured:true,adsLimited:true,adsError:'limited',products:[{name:'unknown',sales:100,cost:10,profit:90,ads:0,adsKnown:false},{name:'known',ads:7,adsKnown:true}]},0);assert.equal(view.products[0].ads,'лимит Ozon');assert.equal(view.products[0].profitLabel,'До рекламы');assert.equal(view.products[1].ads,'7');assert.equal(view.lines.find(r=>r.label==='Реклама Ozon').text,'20');
+ ctx.paintOzonSheet({sales:100,adsConfigured:true,products:[{adsKnown:false}]},0);assert.equal(view.products[0].ads,'нет разбивки');
+ ctx.paintOzonSheet({sales:100,products:[{adsKnown:false}]},0);assert.equal(view.products[0].ads,'не подключена');
+ ctx.paintOzonSheet({sales:100,adsPending:true,products:[{adsKnown:false}]},0);assert.equal(view.products[0].ads,'загрузка…');
+ ctx.paintOzonSheet({sales:100,adsError:'timeout',products:[{adsKnown:false}]},0);assert.equal(view.products[0].ads,'недоступно');
 });
 test('simultaneous report requests reuse the shared FBO snapshot without downloading it again',async()=>{
  const f=fixture();let calls=0;f.ctx.window.ozonFboSnapshot=()=>({payload:f.payload,loadedAt:Date.now()});f.ctx.apiJson=async url=>{if(url.includes('ozon-fbo'))calls++;return{configured:false,rows:[]}};const [a,b]=await Promise.all([f.ctx.window.summarizeOzonReport(0,range),f.ctx.window.summarizeOzonReport(0,range)]);assert.equal(a.sales,b.sales);assert.equal(calls,0);
+});
+
+test('the selected Ozon advertising dates stay in Almaty even in a browser in another time zone',async()=>{
+ const old=process.env.TZ;process.env.TZ='America/Los_Angeles';
+ try{
+  const f=fixture(),requests=[];f.ctx.apiJson=async url=>{if(url.includes('ozon-ads')){requests.push(url);return{configured:true,rows:[],pending:false}}return f.payload};
+  await f.ctx.window.summarizeOzonReport(0,range);await new Promise(r=>setImmediate(r));
+  assert.match(requests[0],/from=2026-10-11&to=2026-10-11$/);
+ }finally{if(old===undefined)delete process.env.TZ;else process.env.TZ=old}
 });

@@ -1,5 +1,6 @@
 import express from 'express';
 import crypto from 'node:crypto';
+import {AsyncLocalStorage} from 'node:async_hooks';
 import {pool} from './db.js';
 import {createPerformanceCache} from './ozon-performance-cache.js';
 import {createPerformanceJobs} from './ozon-performance-jobs.js';
@@ -389,7 +390,15 @@ function directRangeAllowed(from, to) {
   return from === today || from === yesterday;
 }
 
+const componentContext = new AsyncLocalStorage();
 export async function build(from, to) {
+  return componentContext.run(new Set(), async () => {
+    const result = await buildReport(from, to);
+    if (!result.error) await componentJobs.complete(componentContext.getStore());
+    return result;
+  });
+}
+async function buildReport(from, to) {
   const token = await tokenFor();
   const bySku = new Map();
   let source = '';
@@ -469,8 +478,10 @@ const componentJobs = createPerformanceJobs({read: readPerformanceEntry, write: 
 async function componentReport(token, from, to, path, body, label) {
   const signature = JSON.stringify([credentials()?.clientId, path, body]);
   const key = 'job:' + crypto.createHash('sha256').update(signature).digest('hex');
+  componentContext.getStore()?.add(key);
   const historical = to < new Date(Date.now() - 2 * 86400000).toISOString().slice(0, 10);
   return componentJobs.get(key, {
+    retainUntilComplete: true,
     ttl: historical ? 6 * 60 * 60 * 1000 : CACHE_MS,
     submit: async () => {
       const created = await api(token, path, body);
@@ -486,6 +497,18 @@ const reportCache=createPerformanceCache({
  build:async(from,to)=>{try{return await build(from,to)}catch(error){const retryAt=Number(error?.retryAt)||(Date.now()+5*60*1000),message=String(error?.userMessage||error?.message||error),limited=['DAILY_LIMIT','RATE_LIMIT','COOLDOWN'].includes(error?.code);if(limited)performanceCooldown = { until: retryAt, error: message };console.warn('[ozon-performance]',JSON.stringify({from,to,code:String(error?.code||''),limited,message:message.slice(0,260)}));throw error}}
 });
 export async function ozonSkuSpend(from,to){return reportCache.get(from,to)}
+export async function resumeOzonPerformanceRetries(){
+  if(!credentials())return;
+  await ensurePerformanceCache();
+  const prefix=crypto.createHash('sha256').update(credentials().clientId).digest('hex')+':';
+  const rows=(await pool.query("SELECT cache_key FROM ozon_performance_cache WHERE cache_key LIKE $1 AND payload ? 'error' AND updated_at >= $2 ORDER BY updated_at DESC LIMIT 8",[prefix+'%',Date.now()-7*86400000])).rows;
+  for(const row of rows){
+    const [from,to]=String(row.cache_key).slice(prefix.length).split(':');
+    if(!validDay(from)||!validDay(to))continue;
+    const result=await ozonSkuSpend(from,to);
+    console.info('[ozon-performance-resume]',JSON.stringify({from,to,pending:Boolean(result.pending),cached:Boolean(result.cached),rows:result.rows?.length||0,limited:Boolean(result.limited),retryAt:result.retryAt||0,error:result.error||''}));
+  }
+}
 
 ozonPerformanceRouter.use(requireTrustedOrigin);
 ozonPerformanceRouter.get('/ozon-ads', asyncRoute(async (req, res) => {

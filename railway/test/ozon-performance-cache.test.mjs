@@ -23,3 +23,13 @@ test('queued periods do not call Ozon after an earlier job hits the shared quota
 test('a transient failure retries only after its saved deadline and accepts a confirmed zero report',async()=>{
  let calls=0;const s=setup(async()=>{if(++calls===1)throw Error('timeout');return{rows:[],totalSpent:0}});await s.cache.get(day,day);await s.cache.settled();const failed=await s.cache.get(day,day);assert.equal(failed.pending,false);assert.equal(calls,1);s.advance(6*60*1000);await s.cache.get(day,day);await s.cache.settled();const ready=await s.cache.get(day,day);assert.deepEqual(ready.rows,[]);assert.equal(ready.pending,false);assert.equal(ready.error,undefined);assert.equal(calls,2);
 });
+
+test('a saved provider deadline retries in the background without another browser read or bypassing the shared cooldown',async()=>{
+ let time=Date.parse('2026-10-20T09:00:00Z'),calls=0,timerId=0;const db=new Map(),timers=new Map();
+ const cache=createPerformanceCache({scope:()=> 'seller',now:()=>time,read:async k=>db.get(k),write:async(k,v)=>db.set(k,structuredClone(v)),schedule:(fn,delay)=>{timers.set(++timerId,{fn,at:time+delay});return timerId},cancel:id=>timers.delete(id),build:async()=>{if(++calls===1)throw Object.assign(Error('quota'),{code:'DAILY_LIMIT',retryAt:time+18*3600000});return {rows:[{sku:'100',spent:123}],totalSpent:123}}});
+ await cache.get(day,day);await cache.settled();assert.equal(calls,1);
+ const failed=await cache.get(day,day);assert.equal(failed.limited,true);assert.equal(failed.pending,false);
+ const request=[...timers.values()][0];time=request.at-1;assert.equal(calls,1);
+ time++;timers.clear();request.fn();await cache.settled();assert.equal(calls,2);
+ const ready=await cache.get(day,day);assert.equal(ready.totalSpent,123);assert.equal(ready.pending,false);assert.equal(ready.error,undefined);
+});

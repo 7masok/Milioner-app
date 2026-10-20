@@ -117,7 +117,7 @@ try{
     if(range?.from&&range?.to){const start=Date.parse(String(range.from)+'T00:00:00+05:00'),end=Date.parse(String(range.to)+'T00:00:00+05:00')+86400000;if(Number.isFinite(start)&&Number.isFinite(end)&&end>start)return{start,end};}
     const raw=Number(days);
     if(raw===0&&typeof reportCustomBounds==='function')return reportCustomBounds();
-    const d=new Date();d.setHours(0,0,0,0);const today=d.getTime();
+    const today=Math.floor((Date.now()+18000000)/86400000)*86400000-18000000;
     if(raw===-1)return{start:today-86400000,end:today};
     const n=Math.max(1,raw||1);return{start:today-(n-1)*86400000,end:today+86400000};
   }
@@ -266,7 +266,7 @@ try{
     model.products.sort((a,b)=>(b.sales-a.sales)||((Number(b.ads)||0)-(Number(a.ads)||0)));
     return [...loose.values()];
   }
-  function ozonDay(ts){const d=new Date(ts);return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');}
+  function ozonDay(ts){return new Date(ts+18000000).toISOString().slice(0,10);}
   const ozonSkuAdsCache=new Map();
   function ozonAdsPeriod(days,range){const bounds=ozonBounds(days,range),from=ozonDay(bounds.start),to=ozonDay(bounds.end-1);return{from,to,key:from+'|'+to}}
   async function loadOzonSkuAds(days,range=null){
@@ -326,7 +326,7 @@ try{
         const next=ozonSummaryFrom(ozonProfitData||payload,days,ads,range);
         if(typeof window.onOzonSummary==='function')window.onOzonSummary(Number(days),next,range);
         const retryDelay=Math.max(4000,Number(ads?.retryAt)-Date.now());
-        if(ads?.error&&retryDelay<=10*60*1000&&Number(ads.retryAt)>Date.now()&&++n<90){setTimeout(tick,retryDelay);return}
+        if(ads?.error&&Number(ads.retryAt)>Date.now()&&++n<90){setTimeout(tick,retryDelay);return}
         ozonAdsJobs.delete(key);
       }catch(error){if(++n<8){setTimeout(tick,4000);return;}ozonAdsJobs.delete(key);console.warn('Ozon ads',error);}
     };
@@ -404,7 +404,7 @@ try{
     const adKnown=r=>Math.abs(Number(r.financeAds)||0)>0||(model.performanceAdsConfigured&&model.performanceAdsReady&&(!model.performanceAdsError||model.performanceAdsStale)),adText=r=>adKnown(r)?ozonMoney(Math.abs(r.ads),'KZT'):(model.performanceAdsPending?'загрузка…':(model.performanceAdsError?(model.performanceAdsLimited?'лимит Ozon':'недоступно'):(!model.performanceAdsConfigured?'не подключена':'нет разбивки'))),periodText=model.performanceAdsFrom&&model.performanceAdsTo?model.performanceAdsFrom+' — '+model.performanceAdsTo:'';
     const financeAds=Math.abs((model.groups.find(x=>x.currency==='KZT')||model.groups[0]||{}).ads||0),performanceAds=Math.max(0,Number(model.performanceAdsTotal)||0),adsGap=Math.max(0,financeAds-performanceAds),adsOver=Math.max(0,performanceAds-financeAds);
     const body=model.products.length?model.products.map(r=>'<div class="item" style="margin-top:8px"><div class="row"><div class="grow"><b>'+esc(r.product?.name||'Товар')+'</b><div class="muted">Продано: '+r.qty.toLocaleString('ru-RU')+' шт.</div></div><b>'+ozonMoney(r.profit,'KZT')+'</b></div><div class="row" style="margin-top:6px"><span class="grow muted">Продажи</span><b>'+ozonMoney(r.sales,'KZT')+'</b></div><div class="row" style="margin-top:4px"><span class="grow muted">Расходы Ozon</span><b>'+ozonMoney(r.net-r.sales,'KZT')+'</b></div><div class="row" style="margin-top:4px"><span class="grow muted">Реклама</span><b>'+adText(r)+'</b></div><div class="row" style="margin-top:4px"><span class="grow muted">Себестоимость</span><b>-'+ozonMoney(r.cogs,'KZT').replace(/^-/,'')+'</b></div><div class="row" style="margin-top:4px"><span class="grow muted">FBO / кросс-докинг</span><b>-'+ozonMoney(r.fbo,'KZT').replace(/^-/,'')+'</b></div><div class="row" style="margin-top:6px"><span class="grow muted">Маржа</span><b>'+r.margin.toLocaleString('ru-RU',{maximumFractionDigits:1})+'%</b></div></div>').join(''):'<div class="empty">Нет привязанных продаж Ozon за выбранный период.</div>';
-    const retryText=model.performanceAdsRetryAt?new Date(model.performanceAdsRetryAt).toLocaleString('ru-RU'):'';
+    const retryText=model.performanceAdsRetryAt?new Date(model.performanceAdsRetryAt).toLocaleString('ru-RU',{timeZone:'Asia/Almaty'})+' по Алматы':'';
     const note=model.performanceAdsPending?'<div class="link-note">Реклама Ozon загружается из Performance API. Суммы и прибыль по товарам обновятся автоматически.</div>':(model.performanceAdsError?'<div class="link-note">'+esc(model.performanceAdsError)+(retryText?' · повтор после '+esc(retryText):'')+'. Общая реклама из финансов Ozon уже учтена в чистой прибыли.</div>':(!model.performanceAdsConfigured?'<div class="link-note">Performance API Ozon не подключён — расходы рекламы по SKU недоступны.</div>':('<div class="link-note">Реклама по SKU: '+ozonMoney(performanceAds,'KZT')+(periodText?' · период '+esc(periodText):'')+(adsGap>0.5?' · без привязки '+ozonMoney(adsGap,'KZT'):'')+(adsOver>0.5?' · Performance выше финансов Ozon на '+ozonMoney(adsOver,'KZT'):'')+'</div>')));
     showSheet('<h3>Ozon FBO · прибыль по товарам</h3>'+note+body);
   };
