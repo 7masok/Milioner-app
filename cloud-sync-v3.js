@@ -76,6 +76,9 @@ applyWarehouseSnapshot=function(remote){
   if(keepNewerUiPreference){
     reportPeriodPreset=Number(reportPeriodUiPreference.preset);reportPeriod=reportPeriodPreset===0?0:reportPeriodPreset;
     reportCustomFrom=String(reportPeriodUiPreference.from||'');reportCustomTo=String(reportPeriodUiPreference.to||'');
+    state.settings.reportPeriodPreset=reportPeriodPreset;state.settings.reportPeriod=reportPeriod;
+    state.settings.reportCustomFrom=reportCustomFrom;state.settings.reportCustomTo=reportCustomTo;
+    state.settings.reportPeriodUpdatedAt=localReportPeriodUpdatedAt;
   }else if([-1,0,1,7,30].includes(persistedReportPeriod)){
     reportPeriodPreset=persistedReportPeriod;reportPeriod=reportPeriodPreset===0?0:reportPeriodPreset;
     reportCustomFrom=String(state.settings?.reportCustomFrom||'');reportCustomTo=String(state.settings?.reportCustomTo||'');
