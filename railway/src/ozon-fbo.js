@@ -1,4 +1,5 @@
 import express from 'express';
+import {REPORT_HISTORY_FROM} from './report-history-range.js';
 import { pool } from './db.js';
 import { credentialFor } from './connections.js';
 import { asyncRoute, requireTrustedOrigin } from './http.js';
@@ -26,7 +27,7 @@ export async function fetchPostings(credentials,from,to){
 }
 export async function fetchPostingHistory(credentials,from,to,previous={},fetchRows=fetchPostings){
  const requested=Date.parse(previous.targetFrom||'');
- const target=Math.min(Date.parse(to)-366*86400000,Number.isFinite(requested)?requested:Infinity),fresh=await fetchRows(credentials,from,to),cachedFrom=Date.parse(previous.from||'');
+ const target=Math.min(REPORT_HISTORY_FROM,Date.parse(to)-366*86400000,Number.isFinite(requested)?requested:Infinity),fresh=await fetchRows(credentials,from,to),cachedFrom=Date.parse(previous.from||'');
  let older=Array.isArray(previous.rows)?previous.rows:[],coveredFrom=Number.isFinite(cachedFrom)?Math.min(cachedFrom,Date.parse(from)):Date.parse(from);
  // One bounded older chunk per normal sync. Do not claim the target until fetched.
  if(coveredFrom>target){const olderTo=new Date(coveredFrom).toISOString(),olderFrom=new Date(Math.max(target,coveredFrom-30*86400000)).toISOString();older=[...older,...await fetchRows(credentials,olderFrom,olderTo)];coveredFrom=Date.parse(olderFrom)}
@@ -157,7 +158,7 @@ async function run(historyOnly=false){
  await ensureTable();const results=[];let pending=false,historyFailed=false;
  for(const account of await accounts()){
   const previous=(await pool.query('SELECT payload FROM ozon_fbo_cache WHERE account=$1',[account.id])).rows[0]?.payload||{};
-  const targetFrom=new Date(Math.min(Date.now()-366*86400000,Date.parse(previous.historyTargetFrom||'')||Infinity)).toISOString();
+  const targetFrom=new Date(Math.min(REPORT_HISTORY_FROM,Date.now()-366*86400000,Date.parse(previous.historyTargetFrom||'')||Infinity)).toISOString();
   if(historyOnly&&Date.parse(previous.postings?.from||'')<=Date.parse(targetFrom))continue;
   const allowedAt=Math.max(Number(previous.historyRetryAt)||0,historyOnly?(Number(previous.postings?.updatedAt)||0)+60000:0);
   if(Date.now()<allowedAt){scheduleHistory(allowedAt-Date.now());if(historyOnly)continue}

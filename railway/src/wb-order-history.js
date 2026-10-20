@@ -1,4 +1,5 @@
 import express from 'express';
+import {reportHistoryGoal,historyBackfillWake} from './report-history-range.js';
 import {pool} from './db.js';
 import {config} from './config.js';
 import {credentialFor} from './connections.js';
@@ -20,8 +21,17 @@ function pageCursor(value,current,count,scope){
  return BigInt(raw)<=BigInt(Number.MAX_SAFE_INTEGER)?Number(raw):raw;
 }
 export function initialWbOrderHistory(now){
- const anchor=Math.floor(now/1000)*1000,goal=Math.floor((now+18000000)/DAY)*DAY-18000000-364*DAY;
+ const anchor=Math.floor(now/1000)*1000,goal=reportHistoryGoal(now);
  return {version:2,anchor,goal,coveredFrom:anchor,from:Math.max(goal,anchor-29*DAY),to:anchor,cursor:0,phase:'orders',pending:[],rows:0,complete:false,nextAllowedAt:0,lastError:''};
+}
+function resumeWbBackfill(state){
+ state.complete=false;state.to=state.coveredFrom;state.from=Math.max(state.goal,state.to-29*DAY);state.cursor=0;state.phase='orders';state.pending=[];
+ delete state.archiveMonths;delete state.archiveIndex;delete state.archiveCursor;delete state.pageNext;
+}
+export function extendWbOrderHistory(input,now){
+ const state=structuredClone(input);state.goal=Math.min(Number(state.goal)||Infinity,reportHistoryGoal(now));
+ if(state.complete&&!state.mode&&state.coveredFrom>state.goal){resumeWbBackfill(state);state.nextAllowedAt=historyBackfillWake(input,now,SLOT)}
+ return state;
 }
 function compactOrder(raw){
  return Object.fromEntries(['id','orderUid','article','nmId','techSize','skus','createdAt','price','finalPrice','convertedPrice','convertedFinalPrice','currencyCode','convertedCurrencyCode'].map(k=>[k,raw[k]]).filter(([,v])=>v!==undefined));
@@ -41,7 +51,8 @@ export function historicalWbOrder(market,order,status){
 }
 function finishWindow(state,now){
  if(state.mode==='refresh'){
-  state.anchor=state.to;state.complete=state.coveredFrom<=state.goal;delete state.mode;state.nextAllowedAt=now+DAY;
+  state.anchor=state.to;state.complete=state.coveredFrom<=state.goal;delete state.mode;
+  if(state.complete)state.nextAllowedAt=now+DAY;else{resumeWbBackfill(state);state.nextAllowedAt=now+SLOT}
  }else{
   state.coveredFrom=state.from;state.complete=state.from<=state.goal;
   if(!state.complete){state.to=state.from;state.from=Math.max(state.goal,state.to-29*DAY)}
@@ -107,7 +118,7 @@ export async function stepWbOrderHistory(input,{market,fetchPage,fetchStatuses,f
 }
 export function wbOrderHistoryStatus(market,input){
  const s=object(input);return {market,status:!s.anchor?'pending':s.lastError?'retry':s.complete?'complete':'loading',
-  from:Number(s.coveredFrom)||0,to:Number(s.anchor)||0,rows:Number(s.rows)||0,nextAllowedAt:Number(s.nextAllowedAt)||0,error:s.lastError||''};
+  from:Number(s.coveredFrom)||0,to:Number(s.anchor)||0,targetFrom:Number(s.goal)||0,rows:Number(s.rows)||0,nextAllowedAt:Number(s.nextAllowedAt)||0,error:s.lastError||''};
 }
 function retryAt(headers,now){
  return Math.max(now+5*60000,...['retry-after','x-ratelimit-retry'].map(k=>{const v=headers?.get(k);return !v?0:Number.isFinite(Number(v))?now+Math.max(0,Number(v))*1000:Date.parse(v)||0}));
@@ -122,6 +133,7 @@ export async function syncWbOrderHistory(market,{client=pool,token,fetcher=fetch
   const old=(await db.query('SELECT payload FROM wb_order_history_state WHERE market=$1',[market])).rows[0];
   state=old?object(old.payload):initialWbOrderHistory(now);
   if(state.version!==2){const prior=state;state={...initialWbOrderHistory(now),rows:Number(prior.rows)||0,nextAllowedAt:Number(prior.nextAllowedAt)||0};}
+  state=extendWbOrderHistory(state,now);
   if(state.nextAllowedAt>now)return;
   state.nextAllowedAt=now+SLOT;await persist();recovery=structuredClone(state); // Reserve before upstream; survives a restart.
   const request=async(path,body)=>{

@@ -11,9 +11,9 @@ test('Ozon older history backfills only the missing segment and merges without d
  let refreshCalls=0;const refreshed=await fetchPostingHistory({},iso(30),iso(0),result,async()=>{refreshCalls++;return [posting('updated',10),posting('new',1)]});
  assert.equal(refreshed.rows.filter(row=>row.posting_number==='old').length,1);assert.equal(refreshed.rows.length,5);assert.equal(refreshCalls,2);assert.equal(refreshed.from,iso(90));
 });
-test('Ozon keeps all collected history beyond one year without requesting already covered segments',async()=>{
- let calls=0;const result=await fetchPostingHistory({},iso(30),iso(0),{from:iso(400),rows:[posting('keep',150),posting('archive',500)]},async()=>{calls++;return [posting('fresh',1)]});
- assert.equal(calls,1);assert.equal(result.from,iso(400));assert.deepEqual(result.rows.map(row=>row.posting_number),['archive','keep','fresh']);
+test('Ozon keeps all collected history before the requested 2025 boundary without requesting covered segments',async()=>{
+ let calls=0;const result=await fetchPostingHistory({},iso(30),iso(0),{from:iso(800),rows:[posting('archive',500),posting('keep',150)]},async()=>{calls++;return [posting('fresh',1)]});
+ assert.equal(calls,1);assert.equal(result.from,iso(800));assert.deepEqual(result.rows.map(row=>row.posting_number),['archive','keep','fresh']);
 });
 test('Ozon extends the old 155-day boundary and can target a selected period older than one year',async()=>{
  const calls=[];const previous={from:iso(155),targetFrom:iso(800),rows:[posting('saved',154)]};

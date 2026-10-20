@@ -6,10 +6,10 @@ const NOW=Date.parse('2026-10-19T01:40:00+05:00'),DAY=86400000;
 const raw=(extra={})=>({id:'order-1',attributes:{code:'1001',state:'ARCHIVE',status:'COMPLETED',creationDate:Date.parse('2026-06-12T10:00:00Z'),completionDate:Date.parse('2026-06-15T10:00:00Z'),totalPrice:110,...extra}});
 const lines=[{id:'entry1',merchantCode:'toy',quantity:2,totalPrice:50},{id:'entry2',merchantCode:'cat',quantity:1,totalPrice:60}];
 const page=data=>({data,meta:{pageCount:data.length?1:0}});
-test('initial scan fills the oldest live gap first, with 14-day inclusive intervals and a fixed Almaty year',()=>{
+test('initial scan fills the oldest live gap first, with 14-day intervals and the full 2025 Almaty year',()=>{
  const live=Date.parse('2026-07-01T00:00:00+05:00'),s=initialKaspiHistory(NOW,live);
  assert.equal(s.to,live+DAY);assert.equal(s.to-s.from,14*DAY-1);assert.equal(s.coveredFrom,live);
- assert.equal(s.goal,Date.parse('2025-10-20T00:00:00+05:00'));
+ assert.equal(s.goal,Date.parse('2025-01-01T00:00:00+05:00'));
  assert.equal(initialKaspiHistory(NOW).to,Math.floor(NOW/1000)*1000);
 });
 test('state-date queries retain earlier creation dates, compact pending data and resume entries after restart',async()=>{
