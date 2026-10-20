@@ -84,3 +84,13 @@ test('month batch reads only bounded compact saved month totals, including a kno
  assert.ok(queries.every(q=>!/FROM (wb_finance_rows|marketplace_order_lines)/.test(q.sql)));assert.equal(queries.find(q=>q.sql.startsWith('SELECT cache_key')).args[0].length,24);
  let rejected;await route.stack.at(-1).handle({query:{from:today,to:today+1000*DAY}},{status(n){rejected=n;return this},json(){}},e=>{throw e});assert.equal(rejected,400);
 });
+
+
+test('confirmed order-only snapshots persist unknown finance and cannot masquerade as completed financial days',async()=>{
+ const partial={...snapshot(),pending:true,ordersReady:true,summary:{revenue:null,qty:null,profit:null}},screen={...partial,yesterday:snapshot(start-DAY),yesterdayCompare:snapshot(start-DAY)};
+ assert.equal(validBusinessDay(partial),true);assert.equal(validBusinessDay({...partial,ordersReady:false}),false);
+ const put=await invoke('put',{period:'day',start,version:BUSINESS_CACHE_VERSION,sourceRevision:revision(),snapshot:screen});assert.equal(put.status,200);
+ const read=await invoke('get');assert.equal(read.out.snapshot.orders.amount,120);assert.equal(read.out.snapshot.summary.revenue,null);assert.equal(read.out.stale,true);
+ const daily=await dailyInvoke('put',{days:[partial],version:BUSINESS_CACHE_VERSION,sourceRevision:revision()});assert.equal(daily.status,200);
+ const get=await dailyInvoke('get');assert.equal(get.out.days[0].day.ordersReady,true);assert.equal(get.out.days[0].fresh,false);
+});
