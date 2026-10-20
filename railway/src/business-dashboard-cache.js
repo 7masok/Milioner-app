@@ -17,7 +17,7 @@ export function validBusinessSnapshot(model,period,start){
  if(!model||model.period!==period||Number(model.bounds?.start)!==Number(start)||!model.yesterday||!model.yesterdayCompare)return false;
  const finite=(o,fields)=>fields.every(k=>typeof o?.[k]==='number'&&Number.isFinite(o[k]));
  const size=JSON.stringify(model).length;if(size>500000)return false;
- function snapshot(x){return x&&Number.isFinite(x.bounds?.start)&&Number.isFinite(x.bounds?.end)&&x.bounds.end>x.bounds.start&&x.bounds.end-x.bounds.start<=(period==='year'?366:32)*DAY&&Array.isArray(x.buckets)&&x.buckets.length>0&&x.buckets.length<=31&&finite(x.orders,['amount','qty','profit','orderCount','coverage'])&&finite(x.summary,['revenue','qty'])&&(x.summary.profit===null||typeof x.summary.profit==='number'&&Number.isFinite(x.summary.profit))&&x.buckets.every(b=>Number.isFinite(b.start)&&Number.isFinite(b.end)&&b.end>b.start)}
+ function snapshot(x){return x&&Number.isFinite(x.bounds?.start)&&Number.isFinite(x.bounds?.end)&&x.bounds.end>x.bounds.start&&x.bounds.end-x.bounds.start<=(period==='year'?366:32)*DAY&&Array.isArray(x.buckets)&&x.buckets.length>0&&x.buckets.length<=31&&finite(x.orders,['amount','qty','profit','orderCount','coverage'])&&(finite(x.summary,['revenue','qty'])||x.pending===true&&x.ordersReady===true&&x.summary?.revenue===null&&x.summary?.qty===null)&&(x.summary.profit===null||typeof x.summary.profit==='number'&&Number.isFinite(x.summary.profit))&&x.buckets.every(b=>Number.isFinite(b.start)&&Number.isFinite(b.end)&&b.end>b.start)}
  if(![model,model.yesterday,model.yesterdayCompare].every(snapshot))return false;
  const expected=period==='year'?12:period==='day'?24:period==='week'?7:new Date(new Date(Number(start)+OFFSET).getUTCFullYear(),new Date(Number(start)+OFFSET).getUTCMonth()+1,0).getDate();
  if(model.buckets.length!==expected)return false;
@@ -49,9 +49,9 @@ export function registerBusinessDashboardCache(router){
   await ensureCache();const [revision,result]=await Promise.all([sourceRevision(),pool.query('SELECT cache_key,version,source_revision,payload,generated_at FROM business_dashboard_cache WHERE cache_key=ANY($1::text[])',[keys])]);
   const months=new Map();
   for(const row of result.rows){const at=Number(row.generated_at),model=row.payload;if(row.version!==BUSINESS_CACHE_VERSION||!validBusinessSnapshot(model,'month',Number(row.cache_key.split(':')[1])))continue;
-   for(const candidate of [model,model.yesterday]){if(candidate?.period!=='month'||candidate.pending||candidate.unavailable||candidate.bounds.start<from||candidate.bounds.start>=to)continue;const prior=months.get(candidate.bounds.start);if(prior&&prior.generatedAt>=at)continue;
-    const {period,bounds,buckets,orders,summary,netProfit,hourly}=candidate;
-    months.set(bounds.start,{month:{period,bounds,buckets,orders,summary,netProfit,hourly,pending:false},generatedAt:at,fresh:row.source_revision===revision&&Date.now()-at<(bounds.end>Date.now()?60000:15*60000)&&!(at<bounds.end&&bounds.end<=Date.now())});
+   for(const candidate of [model,model.yesterday]){if(candidate?.period!=='month'||candidate.pending&&!candidate.ordersReady||candidate.unavailable||candidate.bounds.start<from||candidate.bounds.start>=to)continue;const prior=months.get(candidate.bounds.start);if(prior&&prior.generatedAt>=at)continue;
+    const {period,bounds,buckets,orders,summary,netProfit,hourly,pending,ordersReady}=candidate;
+    months.set(bounds.start,{month:{period,bounds,buckets,orders,summary,netProfit,hourly,pending:Boolean(pending),ordersReady:ordersReady===true||!pending},generatedAt:at,fresh:row.source_revision===revision&&Date.now()-at<(bounds.end>Date.now()?60000:15*60000)&&!(at<bounds.end&&bounds.end<=Date.now())});
    }
   }
   res.json({ok:true,version:BUSINESS_CACHE_VERSION,sourceRevision:revision,months:[...months.values()]});
@@ -60,7 +60,7 @@ export function registerBusinessDashboardCache(router){
   const from=Number(req.query.from),to=Number(req.query.to);if(!dailyBounds(from,to))return res.status(400).json({ok:false,error:'Некорректный дневной диапазон'});
   await ensureCache();const keys=[];for(let t=from;t<to;t+=DAY)keys.push('base:'+t);
   const [revision,result]=await Promise.all([sourceRevision(),pool.query('SELECT cache_key,version,source_revision,payload,generated_at FROM business_dashboard_cache WHERE cache_key=ANY($1::text[])',[keys])]);
-  res.json({ok:true,version:BUSINESS_CACHE_VERSION,sourceRevision:revision,days:result.rows.filter(r=>r.version===BUSINESS_CACHE_VERSION&&validBusinessDay(r.payload)).map(r=>({day:r.payload,generatedAt:Number(r.generated_at),fresh:r.source_revision===revision&&Date.now()-Number(r.generated_at)<(r.payload.bounds.end>Date.now()?60000:15*60000)&&!(Number(r.generated_at)<r.payload.bounds.end&&r.payload.bounds.end<=Date.now())}))});
+  res.json({ok:true,version:BUSINESS_CACHE_VERSION,sourceRevision:revision,days:result.rows.filter(r=>r.version===BUSINESS_CACHE_VERSION&&validBusinessDay(r.payload)).map(r=>({day:r.payload,generatedAt:Number(r.generated_at),fresh:!r.payload.pending&&r.source_revision===revision&&Date.now()-Number(r.generated_at)<(r.payload.bounds.end>Date.now()?60000:15*60000)&&!(Number(r.generated_at)<r.payload.bounds.end&&r.payload.bounds.end<=Date.now())}))});
  }));
  router.put('/business-dashboard-days',requireTrustedOrigin,asyncRoute(async(req,res)=>{
   const {days,version,sourceRevision:revision}=req.body||{};
@@ -79,7 +79,7 @@ export function registerBusinessDashboardCache(router){
   await ensureCache();const [revision,result]=await Promise.all([sourceRevision(),pool.query('SELECT version,source_revision,payload,generated_at FROM business_dashboard_cache WHERE cache_key=$1',[key])]);
   const row=result.rows[0],payload=row?.version===BUSINESS_CACHE_VERSION&&validBusinessSnapshot(row.payload,req.query.period,req.query.start)?row.payload:null;
   const at=Number(row?.generated_at)||0,current=Number(payload?.bounds?.end)>Date.now(),ttl=current?60000:15*60000;
-  const stale=!payload||row.source_revision!==revision||Date.now()-at>ttl||current&&midnight(at)!==midnight(Date.now())||payload&&at<payload.bounds.end&&payload.bounds.end<=Date.now();
+  const stale=!payload||payload.pending===true||row.source_revision!==revision||Date.now()-at>ttl||current&&midnight(at)!==midnight(Date.now())||payload&&at<payload.bounds.end&&payload.bounds.end<=Date.now();
   res.json({ok:true,version:BUSINESS_CACHE_VERSION,sourceRevision:revision,snapshot:payload,generatedAt:at||null,stale});
  }));
  router.put('/business-dashboard-cache',requireTrustedOrigin,asyncRoute(async(req,res)=>{
