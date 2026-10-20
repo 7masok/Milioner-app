@@ -9,7 +9,14 @@ let showingReadOnlyCache=false;
 
 function serverSnapshot(source){
   const input=source&&typeof source==='object'&&!Array.isArray(source)?source:{};
-  const snapshot=JSON.parse(JSON.stringify(input));
+  // Exclude read-only feeds and local finance before cloning: they can contain
+  // a year of marketplace orders and are never part of a warehouse write.
+  const filtered={...input,settings:{...(input.settings||{})}};
+  for(const key of SERVER_MANAGED_CACHE_KEYS)delete filtered[key];
+  delete filtered.kaspiPayImports;
+  for(const key of WAREHOUSE_VOLATILE_SETTINGS||[])delete filtered.settings[key];
+  if(typeof FINANCE_STORAGE_KEYS!=='undefined')for(const key of FINANCE_STORAGE_KEYS)delete filtered.settings[key];
+  const snapshot=JSON.parse(JSON.stringify(filtered));
   snapshot.products=Array.isArray(snapshot.products)?snapshot.products:[];
   snapshot.movements=Array.isArray(snapshot.movements)?snapshot.movements:[];
   snapshot.sales=Array.isArray(snapshot.sales)?snapshot.sales:[];

@@ -301,3 +301,25 @@ test('a display timeout does not release the active build and start another back
  const second=f.window.renderBusinessDashboard();await flush();assert.equal(cacheReads,1);
  f.finish();await second;assert.equal(f.loads,1);
 });
+
+
+test('loading every month retains compact totals for immediate year display after daily eviction and reload',async()=>{
+ const f=sharedFixture();await f.window.setBusinessDashboardPeriod('month');
+ for(let i=0;i<9;i++)await f.window.shiftBusinessDashboardMonth(-1);
+ assert.ok(f.api.businessDays.size<=80);
+ const january=f.api.businessModelFromDays('month',-9);assert.ok(january&&!january.unavailable);
+ const year=f.api.businessModelFromDays('year',0);assert.equal(year.knownMonths,10);assert.equal(year.yearPartial,false);
+ const loads=f.loads,pending=f.window.setBusinessDashboardPeriod('year');
+ assert.doesNotMatch(f.element('businessValueMeta').textContent,/неполный год/);
+ assert.notEqual(f.element('businessValue').textContent,'…');await pending;assert.equal(f.loads,loads);
+ const reloaded=sharedFixture();reloaded.storage.set('milioner_business_month_bases_v1',f.storage.get('milioner_business_month_bases_v1'));
+ assert.equal(reloaded.api.businessModelFromDays('year',0).knownMonths,10);
+ const september=reloaded.api.businessModelFromDays('month',-1);assert.ok(september.yesterday.orders);assert.equal(september.yesterday.unavailable,undefined);
+ assert.ok(f.storage.get('milioner_business_month_bases_v1').length<1000000);
+});
+
+test('leaving Reports stops remaining daily calculations and prevents background cache writes',async()=>{
+ const f=sharedFixture(true),pending=f.window.renderBusinessDashboard();await flush();assert.equal(f.loads,1);
+ f.element('reports').classList.contains=()=>false;f.finish();await pending;
+ assert.equal(f.stored.size,0);assert.ok([...f.api.businessDays.values()].every(r=>r.data.pending));
+});
