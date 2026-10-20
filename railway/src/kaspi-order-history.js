@@ -1,4 +1,5 @@
 import {pool} from './db.js';
+import {reportHistoryGoal,historyBackfillWake} from './report-history-range.js';
 import {config} from './config.js';
 import {credentialFor} from './connections.js';
 
@@ -9,9 +10,17 @@ const object=v=>typeof v==='string'?JSON.parse(v):v;
 const cancelled=new Set(['CANCELLED','CANCELLING','RETURNED','KASPI_DELIVERY_RETURN_REQUESTED']);
 const statuses=new Set(['APPROVED_BY_BANK','ACCEPTED_BY_MERCHANT','COMPLETED','CANCELLED','CANCELLING','KASPI_DELIVERY_RETURN_REQUESTED','RETURNED']);
 export function initialKaspiHistory(now,liveFrom=0){
- const anchor=Math.floor(now/1000)*1000,goal=Math.floor((now+18000000)/DAY)*DAY-18000000-364*DAY;
+ const anchor=Math.floor(now/1000)*1000,goal=reportHistoryGoal(now);
  const to=liveFrom>goal&&liveFrom<anchor?Math.min(anchor,liveFrom+DAY):anchor;
  return {version:1,anchor,goal,to,from:Math.max(goal,to-14*DAY+1),coveredFrom:liveFrom>0?Math.min(anchor,liveFrom):anchor,stateIndex:0,page:0,pending:[],pageCount:0,rows:0,complete:false,nextAllowedAt:0,lastError:''};
+}
+function resumeKaspiBackfill(state){
+ state.complete=false;state.to=state.coveredFrom-1;state.from=Math.max(state.goal,state.to-14*DAY+1);state.stateIndex=0;state.page=0;state.pending=[];state.pageCount=0;
+}
+export function extendKaspiHistory(input,now){
+ const state=structuredClone(input);state.goal=Math.min(Number(state.goal)||Infinity,reportHistoryGoal(now));
+ if(state.complete&&!state.mode&&state.coveredFrom>state.goal){resumeKaspiBackfill(state);state.nextAllowedAt=historyBackfillWake(input,now,3000)}
+ return state;
 }
 function compact(raw){
  const a=raw?.attributes||{},at=Number(a.creationDate);
@@ -36,7 +45,7 @@ function advancePage(s,now){
  s.page=0;s.pageCount=0;s.stateIndex++;
  if(s.stateIndex<KASPI_HISTORY_STATES.length)return;
  s.stateIndex=0;s.coveredFrom=Math.min(s.coveredFrom,s.from);
- if(s.mode==='refresh'){s.anchor=s.to;s.complete=true;delete s.mode;s.nextAllowedAt=now+DAY;return;}
+ if(s.mode==='refresh'){s.anchor=s.to;s.complete=s.coveredFrom<=s.goal;delete s.mode;if(s.complete)s.nextAllowedAt=now+DAY;else{resumeKaspiBackfill(s);s.nextAllowedAt=now+3000}return;}
  if(s.from<=s.goal){s.complete=true;s.nextAllowedAt=now+DAY;return;}
  s.to=s.from-1;s.from=Math.max(s.goal,s.to-14*DAY+1);
 }
@@ -67,7 +76,7 @@ export async function stepKaspiHistory(input,{now,fetchPage,fetchEntries}){
  }
  state.lastError='';return{state,orders};
 }
-export function kaspiHistoryStatus(s){return {market:'Kaspi',from:Number(s?.coveredFrom)||0,to:Number(s?.anchor)||0,rows:Number(s?.rows)||0,status:!s?'pending':s.lastError?'retry':s.complete?'complete':'loading',error:s?.lastError||'',nextAllowedAt:Number(s?.nextAllowedAt)||0};}
+export function kaspiHistoryStatus(s){return {market:'Kaspi',from:Number(s?.coveredFrom)||0,to:Number(s?.anchor)||0,targetFrom:Number(s?.goal)||0,rows:Number(s?.rows)||0,status:!s?'pending':s.lastError?'retry':s.complete?'complete':'loading',error:s?.lastError||'',nextAllowedAt:Number(s?.nextAllowedAt)||0};}
 const productCache=new Map();let lastRequest=0;
 export async function syncKaspiHistory({client=pool,token,fetcher=fetch,now=Date.now()}={}){
  token=token??await credentialFor('Kaspi',config.kaspiToken);if(!token)return;
@@ -78,6 +87,7 @@ export async function syncKaspiHistory({client=pool,token,fetcher=fetch,now=Date
   const found=(await db.query('SELECT payload FROM kaspi_order_history_state WHERE id=1')).rows[0];
   if(found)state=object(found.payload);
   else{const live=(await db.query("SELECT MIN(creation_date) AS first FROM marketplace_order_lines WHERE market='Kaspi' AND creation_date>0")).rows[0];state=initialKaspiHistory(now,Number(live?.first)||0);}
+  state=extendKaspiHistory(state,now);
   if(state.nextAllowedAt>now)return;
   state.nextAllowedAt=now+60000;await persist();recovery=structuredClone(state);
   const request=async path=>{
