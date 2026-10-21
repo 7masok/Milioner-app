@@ -94,3 +94,11 @@ test('confirmed order-only snapshots persist unknown finance and cannot masquera
  const daily=await dailyInvoke('put',{days:[partial],version:BUSINESS_CACHE_VERSION,sourceRevision:revision()});assert.equal(daily.status,200);
  const get=await dailyInvoke('get');assert.equal(get.out.days[0].day.ordersReady,true);assert.equal(get.out.days[0].fresh,false);
 });
+
+test('store-specific screen and day cache keys cannot overwrite All or another store',async()=>{
+ const screen=await invoke('put',{market:'WB',period:'day',start,version:BUSINESS_CACHE_VERSION,sourceRevision:revision(),snapshot:model()});assert.equal(screen.status,200);assert.equal(screen.calls.find(q=>q.sql.startsWith('INSERT')).args[0],'day:'+start+':WB');
+ const query=await invoke('get',null,{market:'Kaspi',period:'day',start});assert.equal(query.calls.find(q=>q.sql.startsWith('SELECT version')).args[0],'day:'+start+':Kaspi');
+ savedDays=[];const put=await dailyInvoke('put',{market:'WB',days:[snapshot()],version:BUSINESS_CACHE_VERSION,sourceRevision:revision()});assert.equal(put.status,200);assert.equal(savedDays[0].cache_key,'base:'+start+':WB');
+ assert.equal((await dailyInvoke('get',null,{market:'WB',from:start,to:start+DAY})).out.days.length,1);assert.equal((await dailyInvoke('get',null,{market:'Kaspi',from:start,to:start+DAY})).out.days.length,0);assert.equal((await dailyInvoke('get')).out.days.length,0);
+ assert.equal((await dailyInvoke('get',null,{market:'invalid',from:start,to:start+DAY})).status,400);
+});

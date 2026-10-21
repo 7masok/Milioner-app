@@ -31,3 +31,11 @@ test('reading many Kaspi months retains only four completed raw snapshots',async
  for(let month=1;month<=24;month++){const date=new Date(Date.UTC(2024+Math.floor((month-1)/12),(month-1)%12,1)).toISOString().slice(0,10);await ctx.loadKaspiOrders(0,{range:{from:date,to:date}})}
  assert.equal(ctx.orderCache.size,4);assert.equal([...ctx.orderCache.values()].reduce((n,x)=>n+x.data.orders.length,0),8000);
 });
+
+test('selected store reads only its own finance while All preserves known amounts with unknown Kaspi',async()=>{
+ const calls=[],ctx={window:{},localOrderGroups:()=>new Map(),savedSalesMap:()=>new Map(),Date,Map,Set,MILLIONER_API:'https://fixture.invalid',loadKaspiOrders:async()=>{calls.push('Kaspi');return{orders:[],returns:[],historyIncomplete:true}},buildModel:()=>({qty:0,revenue:0,cost:0,fees:0,ads:0,profit:0}),reportProfitView:()=>({value:0}),wbExpenseModel:summary=>summary,resolvedWbReportStats:m=>m,apiJson:async url=>{const market=new URL(url).searchParams.get('market');calls.push(market);return{daily:['2026-10-11','2026-10-12','2026-10-13'].map(day=>({day,products:[],summary:{qty:1,revenue:market==='WB'?50:70,cost:5,fees:2,ads:0,profit:43,complete:true,financeAvailable:true}}))}}};
+ ctx.window.loadOzonBusinessDaily=async()=>{calls.push('Ozon');throw Error('fixture missing')};vm.createContext(ctx);vm.runInContext(lines(['explicitRangeBounds','reportQuery','reportYieldUi'])+'\n'+source.slice(source.indexOf('function businessDailyTotal('),source.indexOf('const productPeriodStatsCache=')),ctx);
+ const selected=await ctx.window.loadBusinessMarketplaceDaily(range,{market:'WB'});assert.deepEqual(calls,['WB']);assert.equal(selected[0].summary.revenue,50);assert.deepEqual(Object.keys(selected[0].summary.sources),['WB']);assert.equal(selected[0].summary.missingMarkets.length,0);
+ calls.length=0;const all=await ctx.window.loadBusinessMarketplaceDaily(range);assert.equal(all[0].summary.revenue,120);assert.equal(all[0].summary.sources.Kaspi.revenue,null);assert.equal(all[0].summary.sources.Ozon.revenue,null);assert.equal(all[0].summary.partial.revenue,true);assert.deepEqual(Array.from(all[0].summary.missingMarkets).sort(),['Kaspi','Ozon']);
+ const kaspi=await ctx.window.loadBusinessMarketplaceDaily(range,{market:'Kaspi'});assert.equal(kaspi[0].summary.revenue,null);assert.equal(kaspi[0].summary.qty,null);
+});
