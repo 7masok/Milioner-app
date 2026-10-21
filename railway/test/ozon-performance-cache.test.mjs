@@ -33,3 +33,8 @@ test('a saved provider deadline retries in the background without another browse
  time++;timers.clear();request.fn();await cache.settled();assert.equal(calls,2);
  const ready=await cache.get(day,day);assert.equal(ready.totalSpent,123);assert.equal(ready.pending,false);assert.equal(ready.error,undefined);
 });
+
+test('forcing a recent daily refresh still obeys the persisted shared cooldown',async()=>{
+ let fail=false,calls=0;const s=setup(async()=>{calls++;if(fail)throw Object.assign(Error('quota'),{code:'DAILY_LIMIT',retryAt:Date.parse('2026-10-21T12:00:00Z')});return{rows:[{sku:'p',spent:7}],totalSpent:7}});
+ await s.cache.get(day,day);await s.cache.settled();assert.equal(calls,1);fail=true;await s.cache.get(day,day,{force:true});await s.cache.settled();assert.equal(calls,2);const old=await s.cache.get(day,day,{force:true});await s.cache.settled();assert.equal(old.totalSpent,7);assert.equal(old.limited,true);assert.equal(calls,2);
+});

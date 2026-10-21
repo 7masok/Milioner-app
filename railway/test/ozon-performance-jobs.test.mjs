@@ -130,6 +130,7 @@ test('startup restores the saved period and provider deadline without calling Oz
  const retryAt=Date.now()+18*3600000,logs=[];let restored=false;
  process.env.OZON_PERFORMANCE_CLIENT_ID='restart-fixture';process.env.OZON_PERFORMANCE_CLIENT_SECRET='fixture-secret';
  pool.query=async(sql,args)=>{
+  if(sql.includes('cache_key=ANY'))return{rows:[]};
   if(sql.startsWith('SELECT cache_key')){assert.match(sql,/LIMIT 8/);restored=true;return{rows:[{cache_key:args[0].slice(0,-1)+'2026-10-11:2026-10-11'}]}}
   if(sql.startsWith('SELECT payload'))return{rows:[{payload:{error:'provider quota',limited:true,retryAt}}]};
   return{rows:[]};

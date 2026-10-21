@@ -4,6 +4,7 @@ import {AsyncLocalStorage} from 'node:async_hooks';
 import {pool} from './db.js';
 import {createPerformanceCache} from './ozon-performance-cache.js';
 import {createPerformanceJobs} from './ozon-performance-jobs.js';
+import {createPerformanceDaily} from './ozon-performance-daily.js';
 import { asyncRoute, requireTrustedOrigin } from './http.js';
 
 const HOST = 'https://api-performance.ozon.ru';
@@ -496,9 +497,18 @@ const reportCache=createPerformanceCache({
  write:async(key,value)=>{await ensurePerformanceCache();await pool.query('INSERT INTO ozon_performance_cache(cache_key,payload,updated_at) VALUES($1,$2::jsonb,$3) ON CONFLICT(cache_key) DO UPDATE SET payload=excluded.payload,updated_at=excluded.updated_at',[key,JSON.stringify(value),Date.now()])},
  build:async(from,to)=>{try{return await build(from,to)}catch(error){const retryAt=Number(error?.retryAt)||(Date.now()+5*60*1000),message=String(error?.userMessage||error?.message||error),limited=['DAILY_LIMIT','RATE_LIMIT','COOLDOWN'].includes(error?.code);if(limited)performanceCooldown = { until: retryAt, error: message };console.warn('[ozon-performance]',JSON.stringify({from,to,code:String(error?.code||''),limited,message:message.slice(0,260)}));throw error}}
 });
-export async function ozonSkuSpend(from,to){return reportCache.get(from,to)}
+const dailyReports=createPerformanceDaily({
+ enabled:()=>Boolean(credentials()),
+ onProgress:progress=>console.info('Ozon advertising daily progress',JSON.stringify(progress)),
+ scope:()=>crypto.createHash('sha256').update(credentials()?.clientId||'unconfigured').digest('hex'),
+ read:readPerformanceEntry,write:writePerformanceEntry,
+ readDays:async(from,to)=>{await ensurePerformanceCache();const prefix=crypto.createHash('sha256').update(credentials()?.clientId||'unconfigured').digest('hex')+':',keys=[];for(let t=Date.parse(from+'T00:00:00Z');t<=Date.parse(to+'T00:00:00Z');t+=86400000){const day=new Date(t).toISOString().slice(0,10);keys.push(prefix+day+':'+day)}const rows=(await pool.query('SELECT cache_key,payload FROM ozon_performance_cache WHERE cache_key=ANY($1::text[])',[keys])).rows;return new Map(rows.map(r=>[r.cache_key.slice(prefix.length).split(':')[0],r.payload]))},
+ loadDay:(day,options)=>reportCache.get(day,day,options),settled:()=>reportCache.settled()
+});
+export async function ozonSkuSpend(from,to){return dailyReports.get(from,to)}
 export async function resumeOzonPerformanceRetries(){
   if(!credentials())return;
+  await dailyReports.start();
   await ensurePerformanceCache();
   const prefix=crypto.createHash('sha256').update(credentials().clientId).digest('hex')+':';
   const rows=(await pool.query("SELECT cache_key FROM ozon_performance_cache WHERE cache_key LIKE $1 AND payload ? 'error' AND updated_at >= $2 ORDER BY updated_at DESC LIMIT 8",[prefix+'%',Date.now()-7*86400000])).rows;
