@@ -382,7 +382,7 @@ function reportDateTimestamp(value){const m=String(value||'').match(/^(\d{4})-(\
 function reportCustomBounds(){if(!reportCustomFrom)reportCustomFrom=reportDateValue();if(!reportCustomTo)reportCustomTo=reportCustomFrom;let start=reportDateTimestamp(reportCustomFrom),last=reportDateTimestamp(reportCustomTo);if(start===null||last===null){start=new Date().setHours(0,0,0,0);last=start}if(start>last){const x=start;start=last;last=x}return{start,end:last+86400000}}
 function reportCustomRangeHtml(){const b=reportCustomBounds();return '<div class="two" style="margin:8px 0 12px"><div class="field"><label>Дата с</label><input type="date" value="'+esc(reportCustomFrom)+'" onchange="setReportCustomDate(\'from\',this.value,true)"></div><div class="field"><label>Дата по</label><input type="date" value="'+esc(reportCustomTo)+'" onchange="setReportCustomDate(\'to\',this.value,true)"></div></div><div class="muted" style="margin:-6px 0 10px">Период: '+new Date(b.start).toLocaleDateString('ru-RU')+' — '+new Date(b.end-1).toLocaleDateString('ru-RU')+'</div>'}
 function renderReportCustomRange(){const box=document.getElementById('reportCustomRange'),from=document.getElementById('reportDateFrom'),to=document.getElementById('reportDateTo');reportCustomBounds();if(from&&from.value!==reportCustomFrom)from.value=reportCustomFrom;if(to&&to.value!==reportCustomTo)to.value=reportCustomTo;if(box)box.style.display=reportPeriodPreset===0?'grid':'none'}
-function setReportCustomDate(which,value,insideSheet=false){if(!reportDateTimestamp(value))return;if(which==='from'){reportCustomFrom=value;if(reportDateTimestamp(reportCustomTo)<reportDateTimestamp(value))reportCustomTo=value}else{reportCustomTo=value;if(reportDateTimestamp(reportCustomFrom)>reportDateTimestamp(value))reportCustomFrom=value}reportPeriodPreset=0;reportPeriod=0;state.settings.reportPeriodPreset=0;state.settings.reportPeriod=0;state.settings.reportCustomFrom=reportCustomFrom;state.settings.reportCustomTo=reportCustomTo;state.settings.reportPeriodUpdatedAt=Date.now();rememberReportPeriodUiPreference();renderReportCustomRange();if(insideSheet&&marketplaceReportContext?.market==='Kaspi'){marketplaceReportContext.days=0;renderMarketplaceReportSheet()}else renderReports()}
+function setReportCustomDate(which,value,insideSheet=false){if(!reportDateTimestamp(value))return;if(which==='from'){reportCustomFrom=value;if(reportDateTimestamp(reportCustomTo)<reportDateTimestamp(value))reportCustomTo=value}else{reportCustomTo=value;if(reportDateTimestamp(reportCustomFrom)>reportDateTimestamp(value))reportCustomFrom=value}reportPeriodPreset=0;reportPeriod=0;state.settings.reportPeriodPreset=0;state.settings.reportPeriod=0;state.settings.reportCustomFrom=reportCustomFrom;state.settings.reportCustomTo=reportCustomTo;state.settings.reportPeriodUpdatedAt=Date.now();rememberReportPeriodUiPreference();renderReportCustomRange();if(insideSheet&&['Kaspi','WB','WB2','Ozon'].includes(marketplaceReportContext?.market)){marketplaceReportContext.days=0;renderMarketplaceReportSheet()}else renderReports()}
 function reportPeriodStart(days){const raw=Number(days);if(raw===0)return reportCustomBounds().start;const d=new Date();d.setHours(0,0,0,0);if(raw===-1){d.setDate(d.getDate()-1);return d.getTime()}const n=Math.max(1,raw||1);d.setDate(d.getDate()-(n-1));return d.getTime()}
 function reportSaleUnitCost(productId,old){const recorded=Math.max(0,Number(old?.cost)||0);if(recorded>0)return recorded;const p=productId?prod(productId):null;return p?Math.max(0,productDisplayCost(p)):0}
 function kaspiCommissionPct(productId){const map=state.settings?.kaspiCommissionPctByProduct||{},raw=Number(map[String(productId||'')]),fallback=Number(state.settings?.kaspiDefaultCommissionPct||12.5);return raw>0&&raw<50?raw:(fallback>0&&fallback<50?fallback:12.5)}
@@ -1846,7 +1846,7 @@ function enhanceArrivalProductSearch(){}
 <script src="./packaging-model.js?v=20261019-receipt-delivery"></script>
 <script src="./packaging-v1.js?v=20261019-receipt-delivery"></script>
 <script src="./wb-variants-v1.js?v=20261019-packaging"></script>
-<script src="./kaspi-report-v2.js?v=20261021-report-market"></script>
+<script src="./kaspi-report-v2.js?v=20261021-detail-dates"></script>
 <script src="./product-sales-trend-v1.js?v=20261016-order-trends"></script>
 <script src="./wb-operation-audit-v1.js?v=20261015-report-reconciliation"></script>
 <script src="./stock-alerts-rescue-v1.js?v=20261019-reserve-restock"></script>
@@ -1857,7 +1857,7 @@ function enhanceArrivalProductSearch(){}
 <script src="./finance-edit-split-v1.js?v=20261007-edit-split-fix"></script>
 <script src="./purchase-delete-v1.js?v=20261019-full-shipment-delete"></script>
 <script src="./purchase-plan-ignore-v1.js?v=20260923-plan-compact"></script>
-<script src="./kaspi-status-compat-v1.js?v=20261020-year-memory"></script>
+<script src="./kaspi-status-compat-v1.js?v=20261021-daily-ads"></script>
 <script src="./kaspi-ads-v2-original.js?v=20260911-utf8-fix"></script>
 <script src="./reservation-compat-v1.js?v=20260820-2324"></script>
 <script src="./kaspi-ads-v2.js?v=20260924-home-lazy"></script>

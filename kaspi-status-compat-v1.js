@@ -315,13 +315,14 @@ try{
     const bounds=ozonBounds(days,range),from=ozonDay(bounds.start),to=ozonDay(bounds.end-1),key=from+'|'+to;
     if(ozonAdsJobs.get(key))return;
     ozonAdsJobs.set(key,1);
-    let n=0;
+    let n=0;const started=Date.now();
     const tick=async()=>{
       try{
         const ads=await loadOzonSkuAds(days,range);
         if(ads?.pending||ads?.refreshing){
+          if(typeof window.isOzonAdsRangeActive==='function'&&!window.isOzonAdsRangeActive(days,range)){ozonAdsJobs.delete(key);return}
           if(ads.refreshing&&typeof window.onOzonSummary==='function')window.onOzonSummary(Number(days),ozonSummaryFrom(ozonProfitData||payload,days,ads,range),range);
-          if(++n<90){setTimeout(tick,4000);return;}ozonAdsJobs.delete(key);return;
+          if(Date.now()-started<2*60*60*1000){setTimeout(tick,10000);return;}ozonAdsJobs.delete(key);return;
         }
         const next=ozonSummaryFrom(ozonProfitData||payload,days,ads,range);
         if(typeof window.onOzonSummary==='function')window.onOzonSummary(Number(days),next,range);
