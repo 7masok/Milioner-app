@@ -53,3 +53,12 @@ test('real exact cache integration retains day sums through expiry, restart and 
  for(let d=16;d<=22;d++){const day='2026-10-'+d,result=await second.get(day,day);assert.equal(result.totalSpent,d);assert.equal(result.pending,false)}
  const atQuota=calls;await second.tick();assert.equal(calls,atQuota);
 });
+
+test('third previous day is finalized after the 48-hour settling window',async()=>{
+ const f=fixture();
+ for(let d=18;d<=21;d++){const day='2026-10-'+d;f.store.set('seller:'+day+':'+day,{data:{rows:[],totalSpent:0},at:Date.parse('2026-10-21T12:00:00+05:00')})}
+ // 18 Oct must be revisited: it is the first day beyond the two recent days.
+ f.store.get('seller:2026-10-18:2026-10-18').at=Date.parse('2026-10-20T00:00:00+05:00');
+ await f.cache.tick();assert.equal(f.calls[0],'2026-10-18');
+ f.advance(30*86400000);assert.equal(f.cache.ready(f.store.get('seller:2026-10-18:2026-10-18'),'2026-10-18'),true);
+});

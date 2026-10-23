@@ -17,9 +17,9 @@ export function createPerformanceDaily({scope,read,write,readDays,loadDay,settle
   for(const range of state.requests){const days=await readDays(range.from,range.to);ranges.push({range,days});for(let t=stamp(range.to);t>=stamp(range.from);t-=DAY){const day=date(t);if(!usable(days.get(day))){selected={day,entry:days.get(day),archive:false};break}}if(selected)break}
   // Missing days take precedence over refreshing previously saved days.
   const today=date(now());
-  if(!selected){const recent=await readDays(date(now()-2*DAY),today);for(let t=stamp(today);t>=stamp(today)-2*DAY;t-=DAY){const day=date(t);if(!usable(recent.get(day))){selected={day,entry:recent.get(day),archive:false};break}}}
+  if(!selected){const recent=await readDays(date(now()-3*DAY),today);for(let t=stamp(today);t>=stamp(today)-3*DAY;t-=DAY){const day=date(t);if(!usable(recent.get(day))){selected={day,entry:recent.get(day),archive:false};break}}}
   if(!selected){for(const {range,days}of ranges){for(let t=stamp(range.to);t>=stamp(range.from);t-=DAY){const day=date(t);if(!ready(days.get(day),day)){selected={day,entry:days.get(day),archive:false};break}}if(selected)break}if(!selected){state.requests=[];await save()}}
-  if(!selected){const recent=await readDays(date(now()-2*DAY),today);for(let t=stamp(today);t>=stamp(today)-2*DAY;t-=DAY){const day=date(t);if(!ready(recent.get(day),day)){selected={day,entry:recent.get(day),archive:false};break}}}
+  if(!selected){const recent=await readDays(date(now()-3*DAY),today);for(let t=stamp(today);t>=stamp(today)-3*DAY;t-=DAY){const day=date(t);if(!ready(recent.get(day),day)){selected={day,entry:recent.get(day),archive:false};break}}}
   if(!selected){while(state.cursor>=historyFrom){const day=state.cursor,days=await readDays(day,day);if(!ready(days.get(day),day)){selected={day,entry:days.get(day),archive:true};break}state.cursor=date(stamp(day)-DAY)}await save()}
   if(!selected){wake(60000);return}
   const {day,entry,archive}=selected;await loadDay(day,{force:usable(entry)});await settled();
