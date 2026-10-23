@@ -259,7 +259,7 @@ const WAREHOUSE_DIRTY_KEY=KEY+'_cloud_dirty_v2',WAREHOUSE_SERVER_SYNC_KEY=KEY+'_
 const PURCHASE_DELETE_TOMBSTONES_KEY=KEY+'_purchase_delete_tombstones_v1';let warehouseDeletedPurchaseIds=new Set();try{warehouseDeletedPurchaseIds=new Set(JSON.parse(localStorage.getItem(PURCHASE_DELETE_TOMBSTONES_KEY)||'[]').map(String))}catch{}function rememberPurchaseDeletes(ids){for(const x of(ids||[]))if(x)warehouseDeletedPurchaseIds.add(String(x));try{localStorage.setItem(PURCHASE_DELETE_TOMBSTONES_KEY,JSON.stringify([...warehouseDeletedPurchaseIds]))}catch{}}function clearPurchaseDeleteTombstones(){warehouseDeletedPurchaseIds.clear();try{localStorage.removeItem(PURCHASE_DELETE_TOMBSTONES_KEY)}catch{}}
 let warehouseLocalDirty=localStorage.getItem(WAREHOUSE_DIRTY_KEY)==='1',warehouseLastCloudSnapshot=null,warehouseLastSyncedText='',warehouseLastObservedSnapshot=null;
 const WAREHOUSE_ARRAY_FIELDS=['products','movements','sales','purchases','reservations','kaspiAdExpenses'];
-const WAREHOUSE_VOLATILE_SETTINGS=new Set(['serverMarketStatus','serverWarehouseRevision','serverWarehouseUpdatedAt','serverMigratedAt','localWarehouseUpdatedAt','activeView','selectedOrderMarket','selectedWbAccount','orderPeriodMode','orderCustomFrom','orderCustomTo','selectedPeriodPreset','selectedPeriod','unmatchedOrderFilter']);
+const WAREHOUSE_VOLATILE_SETTINGS=new Set(['serverMarketStatus','serverWarehouseRevision','serverWarehouseUpdatedAt','serverMigratedAt','localWarehouseUpdatedAt','activeView','reportMarket','selectedOrderMarket','selectedWbAccount','orderPeriodMode','orderCustomFrom','orderCustomTo','selectedPeriodPreset','selectedPeriod','unmatchedOrderFilter']);
 const FINANCE_STORAGE_KEYS=new Set(['personalFinanceAccounts','personalFinanceTransactions','personalFinanceCategories','personalFinanceLegacyImports']);
 function saveLocalOnly(){const local={...state,settings:{...(state.settings||{})}};for(const k of FINANCE_STORAGE_KEYS)delete local.settings[k];try{localStorage.setItem(KEY,JSON.stringify(local))}catch(e){console.warn('local state cache write failed',e)}}
 function cloudStatus(text,mode=''){const el=document.getElementById('cloudStatus');if(!el)return;el.textContent=text;el.style.color=mode==='bad'?'var(--bad)':mode==='warn'?'var(--warn)':mode==='ok'?'var(--ok)':''}
@@ -1846,7 +1846,7 @@ function enhanceArrivalProductSearch(){}
 <script src="./packaging-model.js?v=20261019-receipt-delivery"></script>
 <script src="./packaging-v1.js?v=20261019-receipt-delivery"></script>
 <script src="./wb-variants-v1.js?v=20261019-packaging"></script>
-<script src="./kaspi-report-v2.js?v=20261023-annual-basis"></script>
+<script src="./kaspi-report-v2.js?v=20261023-report-market"></script>
 <script src="./product-sales-trend-v1.js?v=20261016-order-trends"></script>
 <script src="./wb-operation-audit-v1.js?v=20261015-report-reconciliation"></script>
 <script src="./stock-alerts-rescue-v1.js?v=20261019-reserve-restock"></script>
@@ -1867,7 +1867,7 @@ function enhanceArrivalProductSearch(){}
 <!-- runtime-hotfix-268d -->
 <!-- cloud-authoritative-sync-with-safe-startup-edits -->
 <script src="./ozon-fbo-v1.js?v=20261020-year-memory"></script>
-<script src="./business-dashboard-v1.js?v=20261023-history-progress"></script>
+<script src="./business-dashboard-v1.js?v=20261023-report-market"></script>
 <script src="./prices-v1.js?v=20261012-kaspi-bulk-price"></script>
 <script src="./purchase-pdf-v1.js?v=20261019-wb1-photos"></script>
 <script src="./kaspi-order-content-v1.js?v=20261019-content"></script>
