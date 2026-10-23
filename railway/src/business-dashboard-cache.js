@@ -1,4 +1,5 @@
 import crypto from 'node:crypto';
+import {readBusinessProgress} from './business-dashboard-progress.js';
 import {pool} from './db.js';
 import {asyncRoute,requireTrustedOrigin} from './http.js';
 export const BUSINESS_CACHE_VERSION='calendar-v2';
@@ -49,6 +50,10 @@ async function sourceRevision(){
 function dailyBounds(from,to){return Number.isFinite(from)&&Number.isFinite(to)&&from===midnight(from)&&to===midnight(to)&&from>0&&to>from&&to-from<=366*DAY&&to<=midnight(Date.now())+DAY}
 export function validBusinessDay(day){return validBusinessSnapshot({...day,yesterday:day,yesterdayCompare:day},'day',day?.bounds?.start)}
 export function registerBusinessDashboardCache(router){
+ router.get('/business-dashboard-progress',asyncRoute(async(req,res)=>{
+  const market=cacheMarket(req.query.market);if(!market)return res.status(400).json({ok:false,error:'Некорректный магазин'});
+  res.json(await readBusinessProgress(pool,market));
+ }));
  router.get('/business-dashboard-months',asyncRoute(async(req,res)=>{
   const market=cacheMarket(req.query.market);if(!market)return res.status(400).json({ok:false,error:'Некорректный магазин'});
   const from=Number(req.query.from),to=Number(req.query.to);
