@@ -1,5 +1,5 @@
 // Exact-period snapshots. A failed refresh never replaces a successful SKU report.
-export function createPerformanceCache({read,write,build,scope,now=Date.now,ttl=15*60*1000,schedule=setTimeout,cancel=clearTimeout,maxEntries=64}) {
+export function createPerformanceCache({read,write,build,scope,now=Date.now,ttl=15*60*1000,schedule=setTimeout,cancel=clearTimeout,maxEntries=64,automaticRetry=true}) {
  const entries=new Map(),jobs=new Map();let chain=Promise.resolve();
  const retries=new Map();let timer=null;
  function remember(key,value){entries.delete(key);entries.set(key,value);while(entries.size>maxEntries){const victim=[...entries.keys()].find(k=>k!==key&&!k.endsWith(':cooldown')&&!jobs.has(k));if(!victim)break;entries.delete(victim)}}
@@ -14,6 +14,7 @@ export function createPerformanceCache({read,write,build,scope,now=Date.now,ttl=
   },Math.max(1000,Math.min(2147483647,at-now())));timer?.unref?.();
  }
  function retry(key,from,to,at){
+  if(!automaticRetry)return;
   retries.delete(key);retries.set(key,{from,to,at});
   // Keep only the eight most recently requested ranges; upstream jobs remain serial.
   while(retries.size>8)retries.delete(retries.keys().next().value);
