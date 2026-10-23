@@ -119,22 +119,24 @@ window.loadBusinessMarketplaceDaily=async function(range,{force=false,work=null,
  const bounds=explicitRangeBounds(range);if(!bounds||bounds.end-bounds.start>64*86400000)throw Error('Некорректный дневной диапазон');
  const days=[];for(let t=bounds.start;t<bounds.end;t+=86400000)days.push(new Date(t+18000000).toISOString().slice(0,10));
  const query='&daily=1',today=Date.parse(new Date(Date.now()+18000000).toISOString().slice(0,10)+'T00:00:00+05:00');
- const included=m=>market==='all'||market===m,missingMarkets=[];
- const read=async(m,fn,fallback)=>{if(!included(m))return fallback;try{return await fn()}catch(error){if(market!=='all')throw error;missingMarkets.push(m);return fallback}};
+ const included=m=>market==='all'||market===m,missingMarkets=[],starts=typeof state!=='undefined'?state?.settings?.reportStoreStarts||{}:{};
+ const opening=m=>/^\d{4}-\d{2}-\d{2}$/.test(starts[m]||'')?Date.parse(starts[m]+'T00:00:00+05:00'):0,active=m=>{const start=Math.max(bounds.start,opening(m)||0);return start<bounds.end?{from:new Date(start+18000000).toISOString().slice(0,10),to:range.to}:null},zero=()=>({qty:0,revenue:0,cost:0,fees:0,ads:0,profit:0,complete:true,financeAvailable:true,estimated:false,beforeOpening:true});
+ const read=async(m,fn,fallback)=>{if(!included(m)||!active(m))return fallback;try{return await fn()}catch(error){if(market!=='all')throw error;missingMarkets.push(m);return fallback}};
  const liveTasks=[];for(const market of ['WB','WB2'].filter(included))for(const offset of [0,-1])if(today+offset*86400000>=bounds.start&&today+offset*86400000<bounds.end&&typeof ensureWbLiveOverview==='function')liveTasks.push(Promise.resolve(ensureWbLiveOverview(market,offset===0?1:-1)).then(data=>[market+':'+new Date(today+offset*86400000+18000000).toISOString().slice(0,10),data]));
  const [kaspi,wb1,wb2,ozon,livePairs]=await Promise.all([
-  read('Kaspi',()=>loadKaspiOrders(0,{force,range}),{orders:[],returns:[]}),
-  read('WB',()=>apiJson(MILLIONER_API+'/api/wb-finance-products'+reportQuery('WB',0,range)+query),{daily:[]}),
-  read('WB2',()=>apiJson(MILLIONER_API+'/api/wb-finance-products'+reportQuery('WB2',0,range)+query),{daily:[]}),
-  read('Ozon',()=>window.loadOzonBusinessDaily(range,work),[]),Promise.all(liveTasks)
+  read('Kaspi',()=>loadKaspiOrders(0,{force,range:active('Kaspi')}),{orders:[],returns:[]}),
+  read('WB',()=>apiJson(MILLIONER_API+'/api/wb-finance-products'+reportQuery('WB',0,active('WB'))+query),{daily:[]}),
+  read('WB2',()=>apiJson(MILLIONER_API+'/api/wb-finance-products'+reportQuery('WB2',0,active('WB2'))+query),{daily:[]}),
+  read('Ozon',()=>window.loadOzonBusinessDaily(active('Ozon'),work),[]),Promise.all(liveTasks)
  ]),live=new Map(livePairs),wb=[wb1,wb2];
  work?.assert();if(included('Kaspi')&&kaspi.historyIncomplete)missingMarkets.push('Kaspi');
  await reportYieldUi();const prepared={groups:localOrderGroups(),saved:savedSalesMap()},completed=new Map(),returned=new Map(),out=[];
  for(const [rows,key,target]of [[kaspi.orders,'completionDate',completed],[kaspi.returns||[],'returnDate',returned]])for(const row of rows){if(!Number.isFinite(Number(row[key])))continue;const day=new Date(Number(row[key])+18000000).toISOString().slice(0,10),list=target.get(day)||[];list.push(row);target.set(day,list)}
- for(const day of days){await reportYieldUi();work?.assert();const dayMissing=[...missingMarkets];const start=Date.parse(day+'T00:00:00+05:00'),span={from:day,to:day},snapshot={...kaspi,orders:completed.get(day)||[],returns:returned.get(day)||[]},model=buildModel(snapshot,0,span,prepared),view=reportProfitView(model),ks={qty:Math.max(0,Number(model.qty)||0),revenue:Number(model.revenue)||0,cost:Number(model.cost)||0,fees:Number(model.fees)||0,ads:Number(model.ads)||0,profit:Number(view.value)||0,complete:!(Number(model.unknownRevenue)>0),financeAvailable:true,estimated:Boolean(view.estimated)},sources=included('Kaspi')?{Kaspi:missingMarkets.includes('Kaspi')?businessUnknownSource():ks}:{};
+ for(const day of days){await reportYieldUi();work?.assert();const dayMissing=missingMarkets.filter(m=>!opening(m)||Date.parse(day+'T00:00:00+05:00')>=opening(m));const start=Date.parse(day+'T00:00:00+05:00'),span={from:day,to:day},snapshot={...kaspi,orders:completed.get(day)||[],returns:returned.get(day)||[]},model=buildModel(snapshot,0,span,prepared),view=reportProfitView(model),ks={qty:Math.max(0,Number(model.qty)||0),revenue:Number(model.revenue)||0,cost:Number(model.cost)||0,fees:Number(model.fees)||0,ads:Number(model.ads)||0,profit:Number(view.value)||0,complete:!(Number(model.unknownRevenue)>0),financeAvailable:true,estimated:Boolean(view.estimated)},sources=included('Kaspi')?{Kaspi:missingMarkets.includes('Kaspi')?businessUnknownSource():ks}:{};
   for(let i=0;i<2;i++){const market=i?'WB2':'WB';if(!included(market))continue;const entry=wb[i].daily?.find(x=>x.day===day);if(!entry){sources[market]=businessUnknownSource();if(!dayMissing.includes(market))dayMissing.push(market);continue;}const m={market,...wbExpenseModel(entry.summary,entry.products,market,0,span),products:entry.products};sources[market]=resolvedWbReportStats(m,live.get(market+':'+day),market,start===today?1:start===today-86400000?-1:0)}
   let o=null;if(included('Ozon')){o=ozon.find(x=>x.day===day);if(o){const x=o.summary,known=o.covered&&!x?.missing;sources.Ozon={qty:Math.max(0,Number(x?.qty)||0),revenue:Number(x?.sales)||0,cost:known?Number(x?.cost)||0:null,fees:known?Number(x?.fees)||0:null,ads:Number(x?.ads)||0,profit:known?Number(x?.profit)||0:null,complete:known,financeAvailable:known,estimated:!known};}else{sources.Ozon=businessUnknownSource();if(!dayMissing.includes('Ozon'))dayMissing.push('Ozon')}}
-  out.push({day,summary:{...businessDailyTotal(sources),missingMarkets:[...new Set(dayMissing)],partialOzonHistory:included('Ozon')&&!o?.covered,generatedAt:Date.now()}});
+  for(const m of ['Kaspi','WB','WB2','Ozon'].filter(included))if(opening(m)&&start<opening(m)){sources[m]=zero();const at=dayMissing.indexOf(m);if(at>=0)dayMissing.splice(at,1)}
+  out.push({day,summary:{...businessDailyTotal(sources),missingMarkets:[...new Set(dayMissing)],partialOzonHistory:included('Ozon')&&!(opening('Ozon')&&start<opening('Ozon'))&&!o?.covered,generatedAt:Date.now()}});
  }return out;
 };
 const productPeriodStatsCache=new Map(),productPeriodStatsJobs=new Map();

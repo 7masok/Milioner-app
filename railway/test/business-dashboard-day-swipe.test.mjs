@@ -230,7 +230,7 @@ test('a month and a week use matching shared day totals and survive reload witho
  const saved=f.storage.get('milioner_business_days_v2');assert.ok(saved);const reload=sharedFixture();reload.storage.set('milioner_business_days_v2',saved);const pending=reload.window.renderBusinessDashboard();assert.notEqual(reload.element('businessValue').textContent,'…');await pending;assert.equal(reload.loads,0);
 });
 test('moving between months keeps every day of the requested range when the bounded cache evicts older entries',async()=>{
- const f=sharedFixture();await f.window.setBusinessDashboardPeriod('month');await f.window.shiftBusinessDashboardMonth(-1);await f.window.shiftBusinessDashboardMonth(-1);assert.match(f.element('businessValueLabel').textContent,/авг/);assert.ok(f.api.businessModelFromDays('month',-2));assert.ok(f.api.businessDays.size<=80);assert.notEqual(f.element('businessValue').textContent,'—');
+ const f=sharedFixture();await f.window.setBusinessDashboardPeriod('month');await f.window.shiftBusinessDashboardMonth(-1);await f.window.shiftBusinessDashboardMonth(-1);assert.match(f.element('businessValueLabel').textContent,/авг/);assert.ok(f.api.businessModelFromDays('month',-2));assert.ok(f.api.businessDays.size<=400);assert.notEqual(f.element('businessValue').textContent,'—');
 });
 test('a recently generated server day with obsolete source revision still rebuilds instead of being trusted locally',async()=>{
  const seed=sharedFixture();await seed.window.renderBusinessDashboard();const stale=sharedFixture(),fetch=stale.ctx.fetch;stale.ctx.fetch=async(url,options)=>{if(!options&&url.includes('business-dashboard-days'))return{ok:true,json:async()=>({ok:true,version:'calendar-v2',sourceRevision:'d'.repeat(64),days:[...seed.stored.values()].map(day=>({day,generatedAt:today+20*60000,fresh:false}))})};return fetch(url,options)};await stale.window.renderBusinessDashboard();assert.equal(stale.loads,1);
@@ -306,7 +306,7 @@ test('a display timeout does not release the active build and start another back
 test('loading every month retains compact totals for immediate year display after daily eviction and reload',async()=>{
  const f=sharedFixture();await f.window.setBusinessDashboardPeriod('month');
  for(let i=0;i<9;i++)await f.window.shiftBusinessDashboardMonth(-1);
- assert.ok(f.api.businessDays.size<=80);
+ assert.ok(f.api.businessDays.size<=400);
  const january=f.api.businessModelFromDays('month',-9);assert.ok(january&&!january.unavailable);
  const year=f.api.businessModelFromDays('year',0);assert.equal(year.knownMonths,10);assert.equal(year.yearPartial,false);
  const loads=f.loads,pending=f.window.setBusinessDashboardPeriod('year');

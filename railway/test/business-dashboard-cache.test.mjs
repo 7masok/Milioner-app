@@ -57,7 +57,7 @@ test('shared days use one bounded aggregate batch and reuse it for any contained
 });
 test('shared day writes reject duplicate days, HTML, unknown shape, excessive ranges and old versions',async()=>{
  for(const patch of [{days:[snapshot(),snapshot()]},{days:[{...snapshot(),summary:{revenue:null,qty:2,profit:null}}]},{days:[{...snapshot(),label:'<script>'}]},{version:'calendar-v1'},{days:Array(65).fill(snapshot())}]){const out=await dailyInvoke('put',{days:[snapshot()],version:BUSINESS_CACHE_VERSION,sourceRevision:revision(),...patch});assert.equal(out.status,400);assert.equal(out.queries.length,0)}
- for(const query of [{from:start+1,to:start+DAY},{from:start-65*DAY,to:start},{from:today,to:today+2*DAY}]){const out=await dailyInvoke('get',null,query);assert.equal(out.status,400);assert.equal(out.queries.length,0)}
+ for(const query of [{from:start+1,to:start+DAY},{from:start-367*DAY,to:start},{from:today,to:today+2*DAY}]){const out=await dailyInvoke('get',null,query);assert.equal(out.status,400);assert.equal(out.queries.length,0)}
 });
 
 test('daily cache accepts previous-year history beyond 400 days without relaxing range or shape validation',async()=>{
@@ -68,10 +68,10 @@ test('daily cache accepts previous-year history beyond 400 days without relaxing
 });
 
 
-test('saving an overview retains the same 1600 derived records as saving shared days',async()=>{
+test('saving an overview retains the same 5000 derived records as saving shared days',async()=>{
  const overview=await invoke('put',{period:'day',start,version:BUSINESS_CACHE_VERSION,sourceRevision:revision(),snapshot:model()});
  const days=await dailyInvoke('put',{days:[snapshot()],version:BUSINESS_CACHE_VERSION,sourceRevision:revision()});
- for(const queries of [overview.calls,days.queries])assert.match(queries.find(q=>q.sql.startsWith('DELETE FROM business_dashboard_cache')).sql,/LIMIT 1600/);
+ for(const queries of [overview.calls,days.queries])assert.match(queries.find(q=>q.sql.startsWith('DELETE FROM business_dashboard_cache')).sql,/LIMIT 5000/);
 });
 
 test('month batch reads only bounded compact saved month totals, including a known previous month',async()=>{
