@@ -10,8 +10,8 @@ async function accounts(){return (await pool.query("SELECT id,label FROM marketp
 async function request(credentials,path,body){
  for(let attempt=0;attempt<3;attempt++){
   const response=await fetch('https://api-seller.ozon.ru'+path,{method:'POST',headers:{'Content-Type':'application/json','Client-Id':credentials.clientId,'Api-Key':credentials.apiKey},body:JSON.stringify(body),signal:AbortSignal.timeout(30000)});
-  if((response.status===429||response.status>=500)&&attempt<2){await new Promise(r=>setTimeout(r,1000*(attempt+1)));continue;}
-  if(!response.ok){const detail=await response.json().catch(()=>({}));const reason=String(detail.message||detail.error?.message||'').replaceAll(String(credentials.apiKey),'[hidden]').replaceAll(String(credentials.clientId),'[hidden]').slice(0,300);const e=new Error('Ozon '+path+': HTTP '+response.status+(reason?' · '+reason:''));e.status=502;throw e;}
+  if(response.status>=500&&attempt<2){await new Promise(r=>setTimeout(r,1000*(attempt+1)));continue;}
+  if(!response.ok){const detail=await response.json().catch(()=>({}));const reason=String(detail.message||detail.error?.message||'').replaceAll(String(credentials.apiKey),'[hidden]').replaceAll(String(credentials.clientId),'[hidden]').slice(0,300);const e=new Error('Ozon '+path+': HTTP '+response.status+(reason?' · '+reason:''));e.status=502;if(response.status===429){const retry=String(response.headers?.get('Retry-After')||'');e.retryAt=Number.isFinite(Number(retry))&&retry?Date.now()+Number(retry)*1000:Date.parse(retry)||Date.now()+15*60*1000}throw e;}
   const data=await response.json();if(data.error)throw new Error('Ozon '+path+': ошибка ответа');return data;
  }
 }
@@ -27,7 +27,7 @@ export async function fetchPostings(credentials,from,to){
 }
 export async function fetchPostingHistory(credentials,from,to,previous={},fetchRows=fetchPostings){
  const requested=Date.parse(previous.targetFrom||'');
- const target=Math.min(REPORT_HISTORY_FROM,Date.parse(to)-366*86400000,Number.isFinite(requested)?requested:Infinity),fresh=await fetchRows(credentials,from,to),cachedFrom=Date.parse(previous.from||'');
+ const target=Math.max(Number(previous.openingFrom)||0,Math.min(REPORT_HISTORY_FROM,Date.parse(to)-366*86400000,Number.isFinite(requested)?requested:Infinity)),fresh=await fetchRows(credentials,from,to),cachedFrom=Date.parse(previous.from||'');
  let older=Array.isArray(previous.rows)?previous.rows:[],coveredFrom=Number.isFinite(cachedFrom)?Math.min(cachedFrom,Date.parse(from)):Date.parse(from);
  // One bounded older chunk per normal sync. Do not claim the target until fetched.
  if(coveredFrom>target){const olderTo=new Date(coveredFrom).toISOString(),olderFrom=new Date(Math.max(target,coveredFrom-30*86400000)).toISOString();older=[...older,...await fetchRows(credentials,olderFrom,olderTo)];coveredFrom=Date.parse(olderFrom)}
@@ -149,6 +149,17 @@ export async function fetchFinance(credentials,from,to){
  }
  return rows;
 }
+// Accruals are calendar-day records. Refresh a small recent overlap, then
+// advance one seven-day archive chunk. Completed days are retained in PostgreSQL.
+export async function fetchFinanceHistory(credentials,to,previous={},fetchRows=fetchFinance,{archiveOnly=false,start=0}={}){
+ const DAY=86400000,end=Date.parse(to),today=Date.parse(new Date(end+18000000).toISOString().slice(0,10)+'T00:00:00Z'),goal=Math.max(today-364*DAY,start||0),from=Math.max(goal,today-2*DAY),oldFrom=Date.parse(String(previous.coveredFromDate||previous.from||'').slice(0,10)+'T00:00:00Z'),oldTo=Date.parse(previous.to||'');
+ let covered=Number.isFinite(oldFrom)?oldFrom:from,rows=Array.isArray(previous.rows)?previous.rows:[];
+ const replace=async(a,b)=>{const fresh=await fetchRows(credentials,new Date(a).toISOString(),new Date(b).toISOString());if(!Array.isArray(fresh))throw Error('Ozon: неизвестная финансовая история');const after=b+DAY;rows=[...rows.filter(r=>{const t=Date.parse(r.operation_date||'');return t<a||t>=after}),...fresh]};
+ let coveredTo=archiveOnly&&Number.isFinite(oldTo)&&Number.isFinite(oldFrom)?previous.to:to;
+ if(!archiveOnly||!Number.isFinite(oldTo)||!Number.isFinite(oldFrom)){const freshFrom=Number.isFinite(oldTo)?Math.max(covered,Math.min(from,Date.parse(new Date(oldTo+18000000).toISOString().slice(0,10)+'T00:00:00Z'))):from,freshTo=Math.min(today,freshFrom+6*DAY);await replace(freshFrom,freshTo);covered=Math.min(covered,freshFrom);if(freshTo<today)coveredTo=new Date(freshTo+DAY-18000000).toISOString()}
+ if(covered>goal){const next=Math.max(goal,covered-7*DAY);await replace(next,covered-DAY);covered=next}
+ return {rows,coveredFromDate:new Date(covered).toISOString().slice(0,10),from:new Date(covered-18000000).toISOString(),to:coveredTo,targetFrom:new Date(goal-18000000).toISOString()};
+}
 function scheduleHistory(delay=60000){
  if(historyTimer)return;
  historyTimer=setTimeout(()=>{historyTimer=null;syncOzon(true).catch(e=>console.error('Ozon history sync failed',String(e.message||e)))},delay);
@@ -156,26 +167,32 @@ function scheduleHistory(delay=60000){
 }
 async function run(historyOnly=false){
  await ensureTable();const results=[];let pending=false,historyFailed=false;
+ const settings=(await pool.query("SELECT payload->'settings' AS settings FROM warehouse_state WHERE id=1")).rows[0]?.settings||{},startDate=settings.reportStoreStarts?.Ozon,storeStart=/^\d{4}-\d{2}-\d{2}$/.test(startDate||'')?Date.parse(startDate+'T00:00:00Z'):0;
  for(const account of await accounts()){
   const previous=(await pool.query('SELECT payload FROM ozon_fbo_cache WHERE account=$1',[account.id])).rows[0]?.payload||{};
-  const targetFrom=new Date(Math.min(REPORT_HISTORY_FROM,Date.now()-366*86400000,Date.parse(previous.historyTargetFrom||'')||Infinity)).toISOString();
-  if(historyOnly&&Date.parse(previous.postings?.from||'')<=Date.parse(targetFrom))continue;
+  const targetFrom=new Date(Math.max(storeStart?storeStart-18000000:0,Math.min(REPORT_HISTORY_FROM,Date.now()-366*86400000,Date.parse(previous.historyTargetFrom||'')||Infinity))).toISOString();
+  const financeGoal=Math.max(storeStart||0,Date.parse(new Date(Date.now()+18000000).toISOString().slice(0,10)+'T00:00:00Z')-364*86400000)-18000000,financePending=!(Date.parse(previous.finance?.from||'')<=financeGoal)||Date.parse(previous.finance?.to||'')<Date.now()-86400000;
+  if(historyOnly&&Date.parse(previous.postings?.from||'')<=Date.parse(targetFrom)&&!financePending)continue;
   const allowedAt=Math.max(Number(previous.historyRetryAt)||0,historyOnly?(Number(previous.postings?.updatedAt)||0)+60000:0);
   if(Date.now()<allowedAt){scheduleHistory(allowedAt-Date.now());if(historyOnly)continue}
   let credentials;
   try{credentials=JSON.parse(await credentialFor(account.id));if(!credentials.clientId||!credentials.apiKey)throw new Error('missing');}catch{results.push({account:account.id,error:'Проверьте Client ID и API-ключ'});continue;}
-  const to=new Date().toISOString(),from=new Date(Date.now()-30*86400000).toISOString();
+  const to=new Date().toISOString(),from=new Date(Math.max(storeStart?storeStart-18000000:0,Date.now()-30*86400000)).toISOString();
   const payload={...previous,account:account.id,label:account.label,scheme:'FBO',attemptAt:Date.now(),historyTargetFrom:targetFrom,errors:historyOnly?{...previous.errors}:{}};
-  for(const [key,fn] of [['postings',()=>fetchPostingHistory(credentials,from,to,{...previous.postings,targetFrom})],...(!historyOnly?[['stocks',()=>fetchStocks(credentials)],['finance',()=>fetchFinance(credentials,from,to)],['supplies',()=>fetchSupplyOrders(credentials,previous.supplies?.rows||[])]]:[])]){
+  for(const [key,fn] of [...(historyOnly&&Date.parse(previous.postings?.from||'')<=Date.parse(targetFrom)?[]:[['postings',()=>fetchPostingHistory(credentials,from,to,{...previous.postings,targetFrom,openingFrom:storeStart?storeStart-18000000:0})]]),['finance',()=>fetchFinanceHistory(credentials,to,previous.finance||{},fetchFinance,{archiveOnly:historyOnly&&Date.parse(previous.finance?.to||'')>=Date.now()-86400000,start:storeStart})],...(!historyOnly?[['stocks',()=>fetchStocks(credentials)],['supplies',()=>fetchSupplyOrders(credentials,previous.supplies?.rows||[])]]:[])]){
+   if(key==='finance'&&Number(previous.financeRetryAt)>Date.now()){payload.errors.finance=previous.errors?.finance||'Финансовая история Ozon ожидает повторной попытки';continue}
    if(key==='postings'&&Number(previous.historyRetryAt)>Date.now()){payload.errors.postings=previous.errors?.postings||'История Ozon ожидает повторной попытки';continue}
    delete payload.errors[key];
-   try{const result=await fn();payload[key]={...(key==='postings'?result:{rows:result,from,to}),updatedAt:Date.now()};}
-   catch(e){payload.errors[key]=String(e.message||e);}
+   try{const result=await fn();payload[key]={...(['postings','finance'].includes(key)?result:{rows:result,from,to}),updatedAt:Date.now()};}
+   catch(e){payload.errors[key]=String(e.message||e);if(key==='finance')payload.financeRetryAt=Math.max(Number(e.retryAt)||0,Date.now()+15*60*1000);}
   }
+  if(!payload.errors.finance)payload.financeRetryAt=0;
   payload.historyRetryAt=payload.errors.postings?(Number(previous.historyRetryAt)>Date.now()?Number(previous.historyRetryAt):Date.now()+15*60*1000):0;
   // Preserve an earlier target requested while this sync was in flight.
   await pool.query("INSERT INTO ozon_fbo_cache(account,payload,updated_at) VALUES($1,$2::jsonb,$3) ON CONFLICT(account) DO UPDATE SET payload=EXCLUDED.payload || jsonb_build_object('historyTargetFrom',LEAST(ozon_fbo_cache.payload->>'historyTargetFrom',EXCLUDED.payload->>'historyTargetFrom')),updated_at=EXCLUDED.updated_at",[account.id,JSON.stringify(payload),Date.now()]);
   if(!payload.postings?.from||Date.parse(payload.postings.from)>Date.parse(targetFrom)){pending=true;if(payload.errors.postings)historyFailed=true}
+  if(!(Date.parse(payload.finance?.from||'')<=financeGoal)||Date.parse(payload.finance?.to||'')<Date.now()-86400000){pending=true;if(payload.errors.finance)historyFailed=true}
+  console.info('Ozon financial daily history progress',JSON.stringify({account:account.id,from:payload.finance?.from,targetFrom:new Date(financeGoal).toISOString(),rows:payload.finance?.rows?.length||0,retryAt:payload.financeRetryAt||null,error:payload.errors.finance||null}));
   if(historyOnly)console.info('Ozon order history progress',JSON.stringify({account:account.id,from:payload.postings?.from,targetFrom,pending,failed:Boolean(payload.errors.postings)}));
   const result={account:account.id,postings:payload.postings?.rows?.length||0,stocks:payload.stocks?.rows?.length||0,finance:payload.finance?.rows?.length||0,supplies:payload.supplies?.rows?.length||0,errors:payload.errors};
   results.push(result);if(result.error||Object.keys(result.errors||{}).length)console.warn('Ozon FBO sync issue',JSON.stringify(result));
