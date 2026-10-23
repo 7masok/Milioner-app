@@ -10,7 +10,7 @@ const BUSINESS_UI_KEY='milioner_business_dashboard_v1';
 const BUSINESS_MONTH_NAMES=['янв','фев','мар','апр','май','июн','июл','авг','сен','окт','ноя','дек'];
 const BUSINESS_CACHE_VERSION='calendar-v2';let BUSINESS_CACHE_KEY='milioner_business_snapshots_calendar_v2';
 let businessMarket='all',businessScope=0,businessOpeningSignature='{}';
-function businessSelectedMarket(){const m=state?.settings?.reportMarket;return BUSINESS_SUPPORTED_MARKETS.has(m)?m:'all'}
+function businessSelectedMarket(){const m=typeof window.getReportMarket==='function'?window.getReportMarket():state?.settings?.reportMarket;return BUSINESS_SUPPORTED_MARKETS.has(m)?m:'all'}
 function businessIncludesMarket(m){return businessMarket==='all'||businessMarket===m}
 function businessMarketLabel(m=businessMarket){return m==='all'?'Kaspi + WB1 + WB2 + Ozon':m==='WB'?'WB 1':m==='WB2'?'WB 2':m}
 function businessMarketQuery(){return businessMarket==='all'?'':'&market='+encodeURIComponent(businessMarket)}
@@ -759,7 +759,7 @@ const baseRenderReports=window.renderReports;
 window.renderReports=function(){
  const result=typeof baseRenderReports==='function'?baseRenderReports.apply(this,arguments):undefined;
  businessRemoveLegacyStoreNote();
- setTimeout(()=>{businessRemoveLegacyStoreNote();businessSyncMarket();businessPollLoadProgress();Promise.resolve(window.renderBusinessDashboard(false)).finally(()=>businessStartAnnualWarm())},0);return result;
+ businessSyncMarket();businessPollLoadProgress();Promise.resolve(window.renderBusinessDashboard(false)).finally(()=>businessStartAnnualWarm());return result;
 };
 const init=()=>{businessEnsureUi();businessInstallLegacyNoteCleanup();businessPaintTabs();if(document.getElementById('reports')?.classList.contains('active')){businessSyncMarket();businessPollLoadProgress();Promise.resolve(window.renderBusinessDashboard(false)).finally(()=>businessStartAnnualWarm())}};
 if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',init,{once:true});else init();
