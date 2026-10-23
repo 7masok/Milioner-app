@@ -492,6 +492,7 @@ async function componentReport(token, from, to, path, body, label) {
   });
 }
 const reportCache=createPerformanceCache({
+ automaticRetry:false, // The daily worker alone owns priorities and retries.
  scope:()=>crypto.createHash('sha256').update(credentials()?.clientId||'unconfigured').digest('hex'),
  read:async key=>{await ensurePerformanceCache();const row=(await pool.query('SELECT payload FROM ozon_performance_cache WHERE cache_key=$1',[key])).rows[0];const value=row?.payload;if(key.endsWith(':cooldown')&&Number(value?.retryAt)>Date.now())performanceCooldown={until:Number(value.retryAt),error:String(value.error||'')};return value},
  write:async(key,value)=>{await ensurePerformanceCache();await pool.query('INSERT INTO ozon_performance_cache(cache_key,payload,updated_at) VALUES($1,$2::jsonb,$3) ON CONFLICT(cache_key) DO UPDATE SET payload=excluded.payload,updated_at=excluded.updated_at',[key,JSON.stringify(value),Date.now()])},
