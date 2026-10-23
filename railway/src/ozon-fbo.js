@@ -1,5 +1,5 @@
 import express from 'express';
-import {REPORT_HISTORY_FROM} from './report-history-range.js';
+import {REPORT_HISTORY_FROM,reportStoreStartDate} from './report-history-range.js';
 import { pool } from './db.js';
 import { credentialFor } from './connections.js';
 import { asyncRoute, requireTrustedOrigin } from './http.js';
@@ -167,7 +167,7 @@ function scheduleHistory(delay=60000){
 }
 async function run(historyOnly=false){
  await ensureTable();const results=[];let pending=false,historyFailed=false;
- const settings=(await pool.query("SELECT payload->'settings' AS settings FROM warehouse_state WHERE id=1")).rows[0]?.settings||{},startDate=settings.reportStoreStarts?.Ozon,storeStart=/^\d{4}-\d{2}-\d{2}$/.test(startDate||'')?Date.parse(startDate+'T00:00:00Z'):0;
+ const stored=(await pool.query("SELECT payload FROM warehouse_state WHERE id=1")).rows[0]?.payload,startDate=reportStoreStartDate(stored,'Ozon'),storeStart=startDate?Date.parse(startDate+'T00:00:00Z'):0;
  for(const account of await accounts()){
   const previous=(await pool.query('SELECT payload FROM ozon_fbo_cache WHERE account=$1',[account.id])).rows[0]?.payload||{};
   const targetFrom=new Date(Math.max(storeStart?storeStart-18000000:0,Math.min(REPORT_HISTORY_FROM,Date.now()-366*86400000,Date.parse(previous.historyTargetFrom||'')||Infinity))).toISOString();

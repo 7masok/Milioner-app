@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import vm from 'node:vm';
 import {readFileSync} from 'node:fs';
+import {reportStoreStartDate} from '../src/report-history-range.js';
 import {fetchFinanceHistory} from '../src/ozon-fbo.js';
 import {reusableBusinessSnapshot} from '../src/business-dashboard-cache.js';
 const DAY=86400000,NOW=Date.parse('2026-10-23T12:00:00+05:00'),TODAY=Date.parse('2026-10-23T00:00:00+05:00');
@@ -60,4 +61,10 @@ test('a long offline gap advances financial coverage in bounded seven-day window
  const previous={rows:[operation(utcDay(80))],coveredFromDate:utcDay(100).slice(0,10),from:almatyDay(100),to:utcDay(60)},calls=[];
  const result=await fetchFinanceHistory({},utcDay(0),previous,async(_,from,to)=>{calls.push([from,to]);assert.ok(Date.parse(to)-Date.parse(from)<=6*DAY);return[]});
  assert.ok(Date.parse(result.to)<Date.parse(utcDay(0)));assert.ok(Date.parse(result.to)>Date.parse(previous.to));assert.ok(result.rows.some(r=>r.operation_id===utcDay(80)));assert.equal(calls.length,2);
+});
+
+test('store opening reads the deployed TEXT warehouse payload and rejects malformed or guessed dates',()=>{
+ const state={settings:{reportStoreStarts:{Ozon:'2025-03-01'}}};assert.equal(reportStoreStartDate(JSON.stringify(state),'Ozon'),'2025-03-01');assert.equal(reportStoreStartDate(state,'Ozon'),'2025-03-01');assert.equal(reportStoreStartDate(JSON.stringify(state),'Kaspi'),'');
+ for(const value of ['2025-02-30','2025-13-01','tomorrow','2099-01-01'])assert.equal(reportStoreStartDate(JSON.stringify({settings:{reportStoreStarts:{Ozon:value}}}),'Ozon'),'');
+ assert.equal(reportStoreStartDate('{broken','Ozon'),'');assert.equal(reportStoreStartDate(null,'Ozon'),'');
 });
