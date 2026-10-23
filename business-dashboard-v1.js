@@ -234,6 +234,7 @@ function businessEnsureStyle(){
  .business-x-axis{grid-column:1;grid-row:2;position:relative;height:24px;padding-top:6px;font-size:9px;color:var(--muted)}.business-x-label{position:absolute;top:6px;white-space:nowrap;transform:translateX(-50%);text-align:center}
  .business-month-gap{position:absolute;bottom:3px;left:0;right:0;text-align:center;font-size:12px;color:var(--muted)}
  .business-axis-caption{grid-column:2;grid-row:2;font-size:9px;color:var(--muted);padding-top:6px;text-align:right}
+ .business-load-progress{margin:12px 0 8px;padding:10px 12px;border:1px solid var(--line);border-radius:14px;font-size:12px;line-height:1.45}.business-load-title{display:flex;align-items:center;gap:7px}.business-load-dot{width:8px;height:8px;border-radius:50%;background:#858585;flex:none}.business-load-progress[data-state="loading"] .business-load-dot{background:#278b52;animation:business-loading-pulse 1.4s ease-in-out infinite}.business-load-progress[data-state="ready"] .business-load-dot{background:#278b52}.business-load-progress[data-state="paused"] .business-load-dot{background:#ad7d19}.business-load-progress progress{display:block;width:100%;height:6px;margin:7px 0;accent-color:#278b52}.business-load-progress .business-sub{overflow-wrap:anywhere;font-size:11px}@keyframes business-loading-pulse{50%{opacity:.3}}@media(prefers-reduced-motion:reduce){.business-load-progress[data-state="loading"] .business-load-dot{animation:none}}
  .business-detail-btn{border:1px solid var(--line);background:var(--bg);border-radius:12px;padding:8px 10px;font:inherit;white-space:nowrap}
  @media(max-width:560px){.business-dashboard{padding:12px;border-radius:20px}.business-value{font-size:25px}.business-chart-frame{grid-template-columns:minmax(0,1fr) 42px;grid-template-rows:158px 24px}.business-metrics button{font-size:12px;padding:8px 5px}.business-bar,.business-yesterday-bar{left:20%;width:60%}}
  `;document.head.appendChild(style);
@@ -246,7 +247,7 @@ function businessEnsureUi(){
  <div class="business-metrics">${[['orders','Заказы'],['buyouts','Выкупы'],['orderProfit','Прибыль заказов'],['buyoutProfit','Прибыль выкупов']].map(([k,v])=>`<button type="button" data-business-metric="${k}" onclick="setBusinessDashboardMetric('${k}')">${v}</button>`).join('')}</div>
  <div id="businessDayNav" class="business-day-nav"><button id="businessDayPrevious" type="button" aria-label="Предыдущий день" onclick="shiftBusinessDashboardSelection(-1)">‹</button><span id="businessDayDate"></span><button id="businessDayNext" type="button" aria-label="Следующий день" onclick="shiftBusinessDashboardSelection(1)">›</button></div>
  <div class="business-value-card"><div id="businessValueMetric" class="business-value-title">Загрузка…</div><div class="business-value-grid"><div class="business-value-side"><div id="businessValueLabel" class="business-value-label">Сегодня</div><div id="businessValue" class="business-value">—</div><div id="businessValueMeta" class="business-value-meta"></div></div><div class="business-value-side business-yesterday-side"><div id="businessYesterdayLabel" class="business-value-label">Вчера</div><div id="businessYesterdayValue" class="business-value">—</div><div id="businessYesterdayMeta" class="business-value-meta"></div></div></div><div id="businessYesterdayCompare" class="business-compare"></div></div>
- <div id="businessChart" class="business-chart"></div><div id="businessCacheStatus" class="business-sub" aria-live="polite"></div>`;
+ <div id="businessChart" class="business-chart"></div><div id="businessLoadProgress" class="business-load-progress" role="status" aria-live="polite" hidden></div><div id="businessCacheStatus" class="business-sub" aria-live="polite"></div>`;
  const title=reports.querySelector('h2');if(title)title.insertAdjacentElement('afterend',root);else reports.prepend(root);const tabs=document.getElementById('reportMarketTabs');if(tabs)root.before(tabs);businessInstallDaySwipe();return root;
 }
 function businessInstallDaySwipe(){
@@ -258,7 +259,7 @@ function businessInstallDaySwipe(){
  chart.addEventListener('touchcancel',()=>{gesture=null;},{passive:true});
 }
 function businessPaintTabs(){
- businessPaintOpening();
+ businessPaintOpening();businessPaintLoadProgress();
  document.querySelectorAll('[data-business-metric]').forEach(x=>x.classList.toggle('active',x.dataset.businessMetric===businessMetric));
  document.querySelectorAll('[data-business-period]').forEach(x=>x.classList.toggle('active',x.dataset.businessPeriod===businessPeriod));
  const title=document.getElementById('businessPeriodTitle'),sub=document.getElementById('businessPeriodSub');
@@ -617,6 +618,7 @@ function businessRememberModel(key,model,at=Date.now()){
  try{const entries=[...businessModels].map(([key,model])=>[key,{model,at:businessModelMeta.get(key)?.at||Date.now()}]),text=JSON.stringify({version:BUSINESS_CACHE_VERSION,entries});if(text.length<1500000)localStorage.setItem(BUSINESS_CACHE_KEY,text)}catch(_){}
 }
 function businessCacheStatus(key,state='ready'){
+ businessPaintLoadProgress();
  const el=document.getElementById('businessCacheStatus');if(!el)return;const at=businessModelMeta.get(key)?.at;
  if(businessLastModel?.beforeOpening){el.textContent='Магазин ещё не работал';return}if(businessLastModel?.savedOnly&&businessLastModel.unavailable){el.textContent='За этот период нет сохранённой истории';return}
  el.textContent=(at?'Сводка '+new Date(at).toLocaleString('ru-RU',{timeZone:'Asia/Almaty',day:'numeric',month:'short',hour:'2-digit',minute:'2-digit'}):'')+(state==='updating'?(at?' · обновляю…':'Считаю…'):state==='history'?(at?' · история заказов ещё догружается':'История заказов ещё догружается'):state==='unavailable'?'':state==='offline'?' · не удалось обновить':'');
@@ -688,6 +690,43 @@ window.renderBusinessDashboard=async function(force=false){
 };
 
 
+const businessProgressSnapshots=new Map(),businessPreparation=new Map();let businessProgressTimer=null,businessProgressRequest=null;
+function businessProgressKind(){return ['orders','orderProfit'].includes(businessMetric)?'orders':'finance'}
+function businessProgressStats(){
+ businessHydrateDays();const markets=businessMarket==='all'?[...BUSINESS_SUPPORTED_MARKETS]:[businessMarket],starts=markets.map(m=>businessStoreStart(m)||0),from=Math.max(businessAnnualFloor(),Math.min(...starts)),end=businessDayBounds(0).end,kind=businessProgressKind();let ready=0,total=0;
+ for(let t=from;t<end;t+=86400000){total++;const day=businessDays.get(t)?.data;if(!day||!businessScopeMatches(day))continue;const known=kind==='orders'?day.ordersReady===true&&!day.ordersPartialMarkets?.length:!day.pending&&!day.summary?.missingMarkets?.length&&!day.summary?.partialOzonHistory&&day.summary?.revenue!==null&&day.summary?.revenue!==undefined&&day.summary?.qty!==null;if(known)ready++}
+ return{ready,total,from,end,kind};
+}
+function businessProgressInfo(){
+ const stats=businessProgressStats(),snapshot=businessProgressSnapshots.get(businessMarket),run=businessPreparation.get(businessScope),sources=(snapshot?.sources||[]).filter(s=>s.kind===stats.kind),fresh=snapshot&&Date.now()-snapshot.checkedAt<60000,issue=sources.find(s=>s.error),waiting=sources.filter(s=>s.nextAt>Date.now()&&['paused','waiting'].includes(s.status)).sort((a,b)=>a.nextAt-b.nextAt)[0],loading=fresh&&sources.some(s=>s.status==='loading'),label=(stats.kind==='orders'?'Заказы':'Финансы')+' · подготовлено '+stats.ready+' из '+stats.total+' дней';
+ let state='waiting',title='Ожидаются данные',detail='';
+ if(run?.error){state='paused';title='Пауза';detail=run.error+(run.nextAt>Date.now()?' · повтор '+businessProgressTime(run.nextAt):'')}
+ else if(snapshot?.readError||snapshot&&!fresh){state='unknown';title='Статус сервера недоступен';detail='Последняя проверка '+businessProgressTime(snapshot.checkedAt)}
+ else if(issue&&stats.ready<stats.total){state='paused';title='Пауза · '+businessMarketLabel(issue.market);detail=issue.error+(issue.nextAt?' · повтор '+businessProgressTime(issue.nextAt):'')}
+ else if(stats.total>0&&stats.ready===stats.total){state='ready';title='Дневная основа готова';detail='Сохранённые дни используются повторно'}
+ else if(run?.active&&Date.now()-Number(run.at||0)<60000){state='loading';title='Подготовка сводок';detail=run.from?'Обрабатывается '+businessShortDate(run.from)+' – '+businessShortDate(run.to-86400000):'Читаю сохранённые дни'}
+ else if(loading){state='loading';title='Сервер загружает историю';const boundaries=sources.filter(s=>s.status==='loading'&&s.from).map(s=>s.from);detail=boundaries.length?'Данные получены с '+businessShortDate(Math.max(...boundaries)):''}
+ else if(run?.active){state='waiting';title='Ожидается ответ сервера';detail='Дольше обычного · готовые дни сохранены'}
+ else if(waiting){state='paused';title='Пауза до '+businessProgressTime(waiting.nextAt);detail='Следующий разрешённый запрос · '+businessMarketLabel(waiting.market)}
+ else if(sources.length&&sources.every(s=>s.status==='ready')){title='Ожидается подготовка сводок';detail=run?.nextAt?'Следующая проверка '+businessProgressTime(run.nextAt):'История на сервере уже получена'}
+ else if(!snapshot){state='unknown';title='Проверяю загрузку'}
+ else{state='unknown';title='Нет свежего подтверждения загрузки';detail='Проверено '+businessProgressTime(snapshot.checkedAt)}
+ return{...stats,state,title,label,detail,range:businessIsoDate(stats.from)+' – '+businessIsoDate(stats.end-86400000)};
+}
+function businessProgressTime(t){return new Date(t).toLocaleString('ru-RU',{timeZone:'Asia/Almaty',day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit'})}
+function businessPaintLoadProgress(){
+ const box=document.getElementById('businessLoadProgress');if(!box)return;const info=businessProgressInfo();box.hidden=false;box.dataset.state=info.state;
+ if(!box.dataset.built){box.innerHTML='<div class="business-load-title"><span class="business-load-dot" aria-hidden="true"></span><b data-load-title></b></div><div data-load-count></div><progress data-load-bar aria-label="Подготовка дневной истории"></progress><div class="business-sub" data-load-detail></div>';box.dataset.built='1'}
+ const title=box.querySelector?.('[data-load-title]'),count=box.querySelector?.('[data-load-count]'),detail=box.querySelector?.('[data-load-detail]'),bar=box.querySelector?.('[data-load-bar]');
+ if(title)title.textContent=info.title;if(count)count.textContent=info.label;if(detail)detail.textContent=info.range+(info.detail?' · '+info.detail:'');if(bar){bar.max=info.total||1;bar.value=info.ready;bar.title=info.range;bar.setAttribute('aria-valuetext',info.label)}
+ return info;
+}
+function businessPollLoadProgress(){
+ if(!document.getElementById('reports')?.classList.contains('active')||typeof fetch!=='function')return;
+ if(businessProgressTimer)window.clearTimeout?.(businessProgressTimer);const scope=businessScope,market=businessMarket;if(businessProgressRequest?.scope===scope)return businessProgressRequest.promise;
+ const promise=(async()=>{try{const response=await fetch(MILLIONER_API+'/api/business-dashboard-progress?market='+encodeURIComponent(market),{cache:'no-store',...(typeof AbortSignal!=='undefined'&&typeof AbortSignal.timeout==='function'?{signal:AbortSignal.timeout(10000)}:{})});if(!response.ok)throw Error('HTTP '+response.status);const data=await response.json();if(scope!==businessScope)return;if(data?.ok!==true||data.market!==market||!Array.isArray(data.sources))throw Error('Статус загрузки недоступен');businessProgressSnapshots.set(market,{...data,checkedAt:Date.now()})}catch(_){if(scope===businessScope)businessProgressSnapshots.set(market,{...businessProgressSnapshots.get(market),readError:true,checkedAt:Date.now()})}finally{if(scope===businessScope){businessPaintLoadProgress();businessProgressRequest=null;if(document.getElementById('reports')?.classList.contains('active'))businessProgressTimer=window.setTimeout(()=>businessPollLoadProgress(),15000)}}})();businessProgressRequest={scope,promise};return promise;
+}
+
 let businessAnnualJob=null,businessAnnualJobScope=-1,businessAnnualTimer=null;const businessAnnualRead=new Set();
 async function businessReadSavedDays(bounds,scope=businessScope){
  if(bounds.end<=bounds.start||typeof fetch!=='function')return;
@@ -699,7 +738,7 @@ function businessStartAnnualWarm(){
  if(!document.getElementById('reports')?.classList.contains('active'))return;
  if(typeof fetch!=='function'||typeof window.loadBusinessMarketplaceDaily!=='function'||typeof window.setTimeout!=='function')return;
  businessSyncMarket();const scope=businessScope;if(businessAnnualJob&&businessAnnualJobScope===scope)return businessAnnualJob;
- businessAnnualJobScope=scope;if(businessAnnualTimer)window.clearTimeout?.(businessAnnualTimer);const ledgerKey='milioner_report_year_progress_v1:'+businessMarket+':'+businessOpeningSignature;let ledger={};try{ledger=JSON.parse(localStorage.getItem(ledgerKey)||'{}')}catch(_){}
+ businessAnnualJobScope=scope;const progress={active:true,at:Date.now(),error:'',nextAt:0,from:0,to:0};businessPreparation.set(scope,progress);while(businessPreparation.size>8)businessPreparation.delete(businessPreparation.keys().next().value);businessPaintLoadProgress();if(businessAnnualTimer)window.clearTimeout?.(businessAnnualTimer);const ledgerKey='milioner_report_year_progress_v1:'+businessMarket+':'+businessOpeningSignature;let ledger={};try{ledger=JSON.parse(localStorage.getItem(ledgerKey)||'{}')}catch(_){}
  const work={assert(){if(scope!==businessScope)throw Object.assign(Error('Выбран другой магазин'),{businessCancelled:true})}};
  const task=(async()=>{
   const end=businessDayBounds(0).end,start=businessAnnualFloor();if(!businessAnnualRead.has(scope)){await businessReadSavedDays({start,end},scope);work.assert();businessAnnualRead.add(scope)}work.assert();
@@ -709,18 +748,19 @@ function businessStartAnnualWarm(){
    // Reserve before starting; a reload cannot hammer a missing provider range.
    ledger[id]=Date.now()+15*60000;try{localStorage.setItem(ledgerKey,JSON.stringify(ledger))}catch(_){}
    const needed=[];for(let t=from;t<bounds.end;t+=86400000){const row=businessDays.get(t);if(!row||!row.data.beforeOpening&&!businessClosedReady(row.data,row.at)&&!(row.data.bounds.end>Date.now()&&Date.now()-row.at<60000))needed.push(t)}const loadBounds=needed.length?{start:needed[0],end:needed.at(-1)+86400000}:bounds;
-   try{await businessLoadDayBase(loadBounds,false,null,work);ledger[id]=Date.now()+5*60000;try{localStorage.setItem(ledgerKey,JSON.stringify(ledger))}catch(_){}}catch(error){if(error.businessCancelled)throw error;console.warn('Дневная основа отчёта ожидает источник',businessIsoDate(from),error.message)}
+   progress.at=Date.now();progress.from=loadBounds.start;progress.to=loadBounds.end;progress.error='';businessPaintLoadProgress();
+   try{await businessLoadDayBase(loadBounds,false,null,work);ledger[id]=Date.now()+5*60000;try{localStorage.setItem(ledgerKey,JSON.stringify(ledger))}catch(_){}}catch(error){if(error.businessCancelled)throw error;progress.error=error.message;progress.nextAt=ledger[id];console.warn('Дневная основа отчёта ожидает источник',businessIsoDate(from),error.message)}
    work.assert();const model=businessModelFromDays(businessPeriod,businessSelectedOffset());if(model&&document.getElementById('reports')?.classList.contains('active')){businessPaint(model);businessCacheStatus(businessModelKey())}
    await new Promise(resolve=>window.setTimeout(resolve,250));
   }
- })().catch(error=>{if(!error.businessCancelled)console.warn('Дневная основа отчёта',error.message)}).finally(()=>{if(businessAnnualJob===task){businessAnnualJob=null;if(scope===businessScope&&document.getElementById('reports')?.classList.contains('active'))businessAnnualTimer=window.setTimeout(()=>businessStartAnnualWarm(),5*60000)}});businessAnnualJob=task;return task;
+ })().catch(error=>{if(!error.businessCancelled){progress.error=error.message;console.warn('Дневная основа отчёта',error.message)}}).finally(()=>{progress.active=false;progress.nextAt=progress.nextAt||Date.now()+5*60000;if(scope===businessScope)businessPaintLoadProgress();if(businessAnnualJob===task){businessAnnualJob=null;if(scope===businessScope&&document.getElementById('reports')?.classList.contains('active'))businessAnnualTimer=window.setTimeout(()=>businessStartAnnualWarm(),5*60000)}});businessAnnualJob=task;return task;
 }
 const baseRenderReports=window.renderReports;
 window.renderReports=function(){
  const result=typeof baseRenderReports==='function'?baseRenderReports.apply(this,arguments):undefined;
  businessRemoveLegacyStoreNote();
- setTimeout(()=>{businessRemoveLegacyStoreNote();Promise.resolve(window.renderBusinessDashboard(false)).finally(()=>businessStartAnnualWarm())},0);return result;
+ setTimeout(()=>{businessRemoveLegacyStoreNote();businessSyncMarket();businessPollLoadProgress();Promise.resolve(window.renderBusinessDashboard(false)).finally(()=>businessStartAnnualWarm())},0);return result;
 };
-const init=()=>{businessEnsureUi();businessInstallLegacyNoteCleanup();businessPaintTabs();if(document.getElementById('reports')?.classList.contains('active'))Promise.resolve(window.renderBusinessDashboard(false)).finally(()=>businessStartAnnualWarm())};
+const init=()=>{businessEnsureUi();businessInstallLegacyNoteCleanup();businessPaintTabs();if(document.getElementById('reports')?.classList.contains('active')){businessSyncMarket();businessPollLoadProgress();Promise.resolve(window.renderBusinessDashboard(false)).finally(()=>businessStartAnnualWarm())}};
 if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',init,{once:true});else init();
 })();
