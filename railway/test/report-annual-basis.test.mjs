@@ -79,6 +79,13 @@ test('selecting 2025 prepares that whole year in bounded blocks, then reopens fr
  assert.ok(f.calls.filter(c=>c.finance).every(c=>c.finance.from>='2025-01-01'&&c.finance.to<='2025-12-31'&&Date.parse(c.finance.to)-Date.parse(c.finance.from)<=27*DAY));
  const reload=fixture({market:'WB',historyFrom:start,remote:f.remote,saved:ui(),starts:{WB:'2022-01-01'},now:NOW+DAY});await reload.api.businessStartAnnualWarm();assert.equal(reload.calls.filter(c=>c.finance||c.orders).length,0);assert.equal(reload.api.businessProgressStats().ready,365);assert.equal(reload.api.businessModelFromDays('year',-1).orders.amount,3650);
 });
+test('a slow saved-day read for 2025 cannot evict the newly selected 2026 daily window',async()=>{
+ const start=Date.parse('2025-01-01T00:00:00+05:00'),seed=fixture({market:'WB',historyFrom:start});await seed.api.businessLoadDayBase({start,end:start+DAY});
+ const f=fixture({market:'WB',historyFrom:start,saved:new Map([['milioner_business_dashboard_v1',JSON.stringify({period:'year',yearDate:'2025-01-01'})]])}),read=f.ctx.fetch;let finish;
+ f.ctx.fetch=(url,options)=>{const u=new URL(url);if(u.pathname==='/api/business-dashboard-days'&&Number(u.searchParams.get('from'))===start)return new Promise(resolve=>{finish=()=>resolve({ok:true,json:async()=>({ok:true,version:'calendar-v2',sourceRevision:'a'.repeat(64),days:[...seed.remote.values()]})})});return read(url,options)};
+ const old=f.window.renderBusinessDashboard();for(let i=0;i<100&&!finish;i++)await Promise.resolve();assert.ok(finish);await f.window.setBusinessDashboardPeriod('year');
+ finish();await old;assert.equal(f.api.businessDays.has(start),false);assert.match(f.el('businessDayDate').innerHTML,/2026 год/);
+});
 test('a Kaspi warning cannot enter an Ozon snapshot, and changing the confirmed opening invalidates zero snapshots',()=>{
  const f=fixture(),bounds={start:TODAY-DAY,end:TODAY};assert.equal(f.api.businessScopeMatches({ordersPartialMarkets:['Kaspi']}),false);assert.equal(f.api.businessScopeMatches({market:'Kaspi'}),false);assert.equal(f.api.businessScopeMatches({market:'Ozon',storeStarts:'{"Ozon":"2025-03-01"}'}),false);assert.equal(f.api.businessScopeMatches({market:'Ozon',summary:{sources:{Ozon:{}}}}),true);
  assert.equal(reusableBusinessSnapshot({bounds,pending:false,summary:{}},NOW,NOW),false);const old={bounds:{start:TODAY-20*DAY,end:TODAY-19*DAY},summary:{profit:null}};assert.equal(reusableBusinessSnapshot(old,NOW,NOW+30*DAY),true);assert.equal(reusableBusinessSnapshot({...old,summary:{missingMarkets:['Ozon']}},NOW,NOW+30*DAY),false);

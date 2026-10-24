@@ -683,7 +683,7 @@ async function businessResolveModel(force,period,offset,key){
  if(!force&&typeof fetch==='function'&&typeof window.loadBusinessMarketplaceDaily==='function'){
   const selected=businessBounds(period,offset);
   if(period==='year'||selected.end<=businessAnnualFloor()){
-   await businessReadSavedDays({start:selected.start,end:Math.min(selected.end,businessDayBounds(0).end)},scope);
+   await businessReadSavedDays({start:selected.start,end:Math.min(selected.end,businessDayBounds(0).end)},scope,{assert(){if(scope!==businessScope||key!==businessModelKey())throw Object.assign(Error('Выбран другой период'),{businessCancelled:true})}});
    if(scope!==businessScope)throw Object.assign(Error('Выбран другой магазин'),{businessCancelled:true});
    const current=businessModelFromDays(period,offset)||businessMissingComparison(period,offset),previous=businessModelFromDays(period,offset-1)||businessMissingComparison(period,offset-1);
    const model=businessStamp({...current,yesterday:current.yesterday||previous,yesterdayCompare:current.yesterdayCompare||previous,savedOnly:true});
