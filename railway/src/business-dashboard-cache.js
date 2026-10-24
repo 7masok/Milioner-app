@@ -52,7 +52,9 @@ export function validBusinessDay(day){return validBusinessSnapshot({...day,yeste
 export function registerBusinessDashboardCache(router){
  router.get('/business-dashboard-progress',asyncRoute(async(req,res)=>{
   const market=cacheMarket(req.query.market);if(!market)return res.status(400).json({ok:false,error:'Некорректный магазин'});
-  res.json(await readBusinessProgress(pool,market));
+  const hasRange=req.query.from!==undefined||req.query.to!==undefined,from=Number(req.query.from),to=Number(req.query.to);
+  if(hasRange&&!dailyBounds(from,to))return res.status(400).json({ok:false,error:'Некорректный диапазон прогресса'});
+  res.json(await readBusinessProgress(pool,market,Date.now(),hasRange?{from,to}:null));
  }));
  router.get('/business-dashboard-months',asyncRoute(async(req,res)=>{
   const market=cacheMarket(req.query.market);if(!market)return res.status(400).json({ok:false,error:'Некорректный магазин'});
