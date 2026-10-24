@@ -33,6 +33,13 @@ test('all prepared days show ready, while a saved provider cooldown shows its re
  const f=fixture();for(let t=GOAL;t<=TODAY;t+=DAY)f.api.businessDays.set(t,{data:{ordersReady:true,summary:{revenue:0,qty:0}}});assert.equal(f.api.businessProgressInfo().state,'ready');f.api.businessDays.delete(GOAL);
  f.api.businessProgressSnapshots.set('Ozon',{checkedAt:NOW,sources:[{kind:'orders',market:'Ozon',status:'paused',error:'HTTP 429',nextAt:NOW+3600000}]});const info=f.api.businessProgressInfo();assert.equal(info.state,'paused');assert.match(info.detail,/429.*повтор/);assert.doesNotMatch(info.detail,/Z$/);
 });
+test('completed orders stay ready during finance preparation, while an unsaved-write warning remains visible',()=>{
+ const f=fixture();for(let t=GOAL;t<=TODAY;t+=DAY)f.api.businessDays.set(t,{data:{ordersReady:true,pending:true,summary:{revenue:null,qty:null}}});
+ f.api.businessPreparation.set(1,{active:true,at:NOW,error:'Финансовая история ещё не готова'});
+ assert.equal(f.api.businessProgressInfo().state,'ready');assert.match(f.api.businessProgressInfo().detail,/финансовая часть/);
+ f.api.setMetric('buyouts');assert.equal(f.api.businessProgressInfo().ready,0);assert.equal(f.api.businessProgressInfo().state,'paused');
+ f.api.setMetric('orders');f.api.businessPreparation.set(1,{active:true,at:NOW,error:'Дни не сохранены: HTTP 409',saveError:true});assert.equal(f.api.businessProgressInfo().state,'paused');assert.match(f.api.businessProgressInfo().detail,/409/);
+});
 test('a late poll cannot show a different store or keep polling after leaving Reports',async()=>{
  const f=fixture();let resolve,requests=0;f.ctx.fetch=()=>{requests++;return new Promise(r=>{resolve=r})};const first=f.api.businessPollLoadProgress();assert.equal(f.api.businessPollLoadProgress(),first);assert.equal(requests,1);
  f.state.settings.reportMarket='WB';f.api.businessSyncMarket();resolve({ok:true,json:async()=>({ok:true,market:'Ozon',sources:[{kind:'orders',status:'loading'}]})});await first;assert.equal(f.api.businessProgressSnapshots.has('Ozon'),false);assert.equal(f.timers.length,0);
