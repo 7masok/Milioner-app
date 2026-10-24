@@ -4,19 +4,19 @@ import vm from 'node:vm';
 import {readFileSync} from 'node:fs';
 import {reportStoreStartDate} from '../src/report-history-range.js';
 import {fetchFinanceHistory} from '../src/ozon-fbo.js';
-import {reusableBusinessSnapshot} from '../src/business-dashboard-cache.js';
+import {validBusinessDay,reusableBusinessSnapshot} from '../src/business-dashboard-cache.js';
 const DAY=86400000,NOW=Date.parse('2026-10-23T12:00:00+05:00'),TODAY=Date.parse('2026-10-23T00:00:00+05:00');
 const source=readFileSync(new URL('../../business-dashboard-v1.js',import.meta.url),'utf8');
-function fixture({saved=new Map(),remote=new Map(),starts={},now=NOW}={}){
+function fixture({saved=new Map(),remote=new Map(),starts={},now=NOW,market='Ozon',financeError='',writeStatus=200}={}){
  class Clock extends Date{constructor(...args){super(...(args.length?args:[now]))}static now(){return now}}
- const elements=new Map(),calls=[],timers=[],state={settings:{reportMarket:'Ozon',reportStoreStarts:starts},ozonOrderFeed:[]};
+ const elements=new Map(),calls=[],timers=[],state={settings:{reportMarket:market,reportStoreStarts:starts},ozonOrderFeed:[]};
  for(let t=TODAY-364*DAY;t<=TODAY;t+=DAY)state.ozonOrderFeed.push({market:'Ozon',creationDate:t+3600000,status:'delivered',lines:[{productId:'p',qty:1,totalPrice:10}]});
  const el=id=>{if(!elements.has(id))elements.set(id,{id,textContent:'',innerHTML:'',dataset:{},classList:{contains:()=>true,toggle(){}},setAttribute(){},addEventListener(){}});return elements.get(id)};
  for(const id of ['reports','businessDashboard','businessChart','businessPeriodTitle','businessPeriodSub','businessDayNav','businessDayDate','businessDayPrevious','businessDayNext','businessValueMetric','businessValueLabel','businessValue','businessValueMeta','businessYesterdayLabel','businessYesterdayValue','businessYesterdayMeta','businessYesterdayCompare','businessCacheStatus'])el(id);
- const window={allMarketUnitProfit30:new Map(),setTimeout(fn,delay=0){if(delay>=1000){timers.push(fn);return 1}fn();return 0},clearTimeout(){},ozonFboOrderHistoryCovers:()=>true,ozonFboRefreshStatus:async()=>{},loadBusinessMarketplaceDaily:async range=>{calls.push({finance:range});const out=[];for(let t=Date.parse(range.from+'T00:00:00+05:00');t<=Date.parse(range.to+'T00:00:00+05:00');t+=DAY)out.push({day:new Clock(t+18000000).toISOString().slice(0,10),summary:{revenue:5,qty:1,profit:2,sources:{Ozon:{revenue:5,qty:1,profit:2}}}});return out}};
- const fetch=async(url,options)=>{const u=new URL(url);calls.push({url:u.pathname,method:options?.method||'GET'});if(options?.method==='PUT'){const body=JSON.parse(options.body);for(const day of body.days||[])remote.set(day.bounds.start,{day,generatedAt:now,fresh:true});return{ok:true}}return{ok:true,json:async()=>u.pathname.endsWith('-days')?{ok:true,version:'calendar-v2',sourceRevision:'a'.repeat(64),days:[...remote.values()].filter(r=>r.day.bounds.start>=Number(u.searchParams.get('from'))&&r.day.bounds.start<Number(u.searchParams.get('to'))).map(r=>({...r,fresh:now-r.generatedAt<60000}))}:{ok:true,version:'calendar-v2',sourceRevision:'a'.repeat(64),snapshot:null,months:[]}}};
- const ctx={window,state,Date:Clock,Intl,console:{warn(){}},fetch,MILLIONER_API:'https://fixture.invalid',groupMarketplaceOrders:rows=>rows,marketplaceLifecycleStage:()=>'',financialSales:()=>[],apiJson:async()=>assert.fail('Ozon does not load another store'),fmt:n=>n+' ₸',setTimeout:fn=>fn(),localStorage:{getItem:k=>saved.get(k),setItem:(k,v)=>saved.set(k,v),removeItem:k=>saved.delete(k)},document:{readyState:'loading',getElementById:id=>elements.get(id)||null,querySelectorAll:()=>[],addEventListener(){}}};
- vm.createContext(ctx);vm.runInContext(source.replace(/\}\)\(\);\s*$/,'window.api={businessStartAnnualWarm,businessModelFromDays,businessSyncMarket,businessDays,businessDaysBounds,businessModelKey,businessClosedReady,businessScopeMatches,businessPaint,businessPackDay,businessUnpackDay};})();'),ctx);window.api.businessSyncMarket();
+ const window={allMarketUnitProfit30:new Map(),setTimeout(fn,delay=0){if(delay>=1000){timers.push(fn);return 1}fn();return 0},clearTimeout(){},ozonFboOrderHistoryCovers:()=>true,ozonFboRefreshStatus:async()=>{},loadBusinessMarketplaceDaily:async range=>{calls.push({finance:range});if(financeError)throw Error(financeError);const out=[];for(let t=Date.parse(range.from+'T00:00:00+05:00');t<=Date.parse(range.to+'T00:00:00+05:00');t+=DAY)out.push({day:new Clock(t+18000000).toISOString().slice(0,10),summary:{revenue:5,qty:1,profit:2,sources:{[market]:{revenue:5,qty:1,profit:2}}}});return out}};
+ const fetch=async(url,options)=>{const u=new URL(url);calls.push({url:u.pathname,method:options?.method||'GET'});if(options?.method==='PUT'){const body=JSON.parse(options.body);for(const day of body.days||[])assert.equal(validBusinessDay(day),true,'actual browser payload must pass the server validator');if(writeStatus!==200)return{ok:false,status:writeStatus,json:async()=>({error:'Данные обновились во время расчёта'})};for(const day of body.days||[])remote.set(day.bounds.start,{day:JSON.parse(JSON.stringify(day)),generatedAt:now,fresh:true});return{ok:true}}return{ok:true,json:async()=>u.pathname.endsWith('-days')?{ok:true,version:'calendar-v2',sourceRevision:'a'.repeat(64),days:[...remote.values()].filter(r=>r.day.bounds.start>=Number(u.searchParams.get('from'))&&r.day.bounds.start<Number(u.searchParams.get('to'))).map(r=>({...r,fresh:now-r.generatedAt<60000}))}:{ok:true,version:'calendar-v2',sourceRevision:'a'.repeat(64),snapshot:null,months:[]}}};
+ const ctx={window,state,Date:Clock,Intl,console:{warn(){}},fetch,MILLIONER_API:'https://fixture.invalid',groupMarketplaceOrders:rows=>rows,marketplaceLifecycleStage:()=>'',financialSales:()=>[],apiJson:async url=>{assert.notEqual(market,'Ozon');calls.push({orders:String(url)});const u=new URL(url),from=Number(u.searchParams.get('after')),to=Number(u.searchParams.get('before'));return{ok:true,orders:state.ozonOrderFeed.filter(x=>x.creationDate>=from&&x.creationDate<to).map(x=>({...x,market})),historyCoverage:[{market,from:TODAY-400*DAY}]}},fmt:n=>n+' ₸',setTimeout:fn=>fn(),localStorage:{getItem:k=>saved.get(k),setItem:(k,v)=>saved.set(k,v),removeItem:k=>saved.delete(k)},document:{readyState:'loading',getElementById:id=>elements.get(id)||null,querySelectorAll:()=>[],addEventListener(){}}};
+ vm.createContext(ctx);vm.runInContext(source.replace(/\}\)\(\);\s*$/,'window.api={businessStartAnnualWarm,businessModelFromDays,businessSyncMarket,businessDays,businessDaysBounds,businessModelKey,businessClosedReady,businessScopeMatches,businessPaint,businessPackDay,businessUnpackDay,businessLoadDayBase,businessReadSavedDays,businessProgressStats};})();'),ctx);window.api.businessSyncMarket();
  return{ctx,window,api:window.api,calls,remote,saved,el,state};
 }
 test('one annual preparation persists 365 individual days, then week/month/year use their exact sums',async()=>{
@@ -28,6 +28,40 @@ test('one annual preparation persists 365 individual days, then week/month/year 
 });
 test('after TTL and a reload, only recent unsettled days are refreshed rather than the archived year',async()=>{
  const f=fixture();await f.api.businessStartAnnualWarm();const later=fixture({saved:f.saved,remote:f.remote,now:NOW+2*3600000});await later.api.businessStartAnnualWarm();const reads=later.calls.filter(c=>c.finance);assert.equal(reads.length,1);assert.equal(reads[0].finance.from,'2026-10-21');assert.equal(reads[0].finance.to,'2026-10-23');
+});
+test('WB2 restores legacy saved days after another store opening changes, refreshing only unsettled dates',async()=>{
+ const oldStarts={WB2:'2026-04-01',WB:'2022-01-01',Ozon:'2026-01-01'},first=fixture({market:'WB2',starts:oldStarts});await first.api.businessStartAnnualWarm();
+ const expected=first.api.businessModelFromDays('year',0).orders.amount;
+ // Old releases stamped every store date into each WB2 day. Reuse those
+ // records without rewriting user dates or asking the provider for the year.
+ for(const row of first.remote.values())row.day.storeStarts=JSON.stringify(oldStarts);
+ const reloaded=fixture({market:'WB2',remote:first.remote,starts:{...oldStarts,Ozon:'2025-03-01'},now:NOW+DAY});await reloaded.api.businessStartAnnualWarm();
+ const reads=reloaded.calls.filter(c=>c.finance||c.orders);
+ assert.ok(reads.length>0);assert.ok(reads.every(c=>c.finance?c.finance.from>='2026-10-21':Number(new URL(c.orders).searchParams.get('after'))>=TODAY-2*DAY));
+ assert.equal(reloaded.api.businessModelFromDays('year',0).orders.amount,expected);
+ assert.equal(reloaded.api.businessProgressStats().ready,207);assert.equal(reloaded.api.businessProgressStats().total,207);
+ assert.equal(reloaded.api.businessScopeMatches({market:'WB2',storeStarts:JSON.stringify({...oldStarts,WB2:'2026-05-01'})}),false);
+});
+test('orders are durable before finance fails; reopening with no browser cache preserves exact days without reading orders again',async()=>{
+ const bounds={start:TODAY-30*DAY,end:TODAY-28*DAY},first=fixture({market:'WB2',financeError:'Finance unavailable'});
+ await assert.rejects(first.api.businessLoadDayBase(bounds),/Finance unavailable/);assert.equal(first.remote.size,2);
+ const amounts=[...first.remote.values()].map(r=>r.day.orders.amount);assert.deepEqual(amounts,[10,10]);assert.ok([...first.remote.values()].every(r=>r.day.pending&&r.day.ordersReady&&r.day.summary.revenue===null));
+ const reloaded=fixture({market:'WB2',remote:first.remote,now:NOW+DAY});await reloaded.api.businessLoadDayBase(bounds);
+ assert.equal(reloaded.calls.filter(c=>c.orders).length,0);assert.deepEqual([...reloaded.remote.values()].map(r=>r.day.orders.amount),amounts);
+ for(let t=bounds.start;t<bounds.end;t+=DAY){const day=reloaded.api.businessDays.get(t).data;assert.equal(day.summary.revenue,5);assert.equal(day.pending,false);assert.equal(day.events.length,1)}
+});
+test('a missing neighbour does not reload or overwrite settled order days',async()=>{
+ const bounds={start:TODAY-30*DAY,end:TODAY-27*DAY},first=fixture({market:'WB2',financeError:'Finance unavailable'});
+ await assert.rejects(first.api.businessLoadDayBase(bounds));first.remote.delete(bounds.start+DAY);
+ const reloaded=fixture({market:'WB2',remote:first.remote});await reloaded.api.businessLoadDayBase(bounds);
+ const reads=reloaded.calls.filter(c=>c.orders);assert.equal(reads.length,1);const query=new URL(reads[0].orders).searchParams;assert.equal(Number(query.get('after')),bounds.start+DAY);assert.equal(Number(query.get('before')),bounds.start+2*DAY);
+ assert.equal(reloaded.api.businessModelFromDays('day',-30).orders.amount,10);
+});
+test('a rejected durable write is explicit and retains the unsaved days without bypassing source revision checks',async()=>{
+ const bounds={start:TODAY-30*DAY,end:TODAY-28*DAY},f=fixture({market:'WB2',writeStatus:409});
+ await assert.rejects(f.api.businessLoadDayBase(bounds),error=>error.businessPersistence===true&&/HTTP 409/.test(error.message));assert.equal(f.remote.size,0);assert.equal(f.api.businessDays.get(bounds.start).data.orders.amount,10);
+ assert.match(f.api.businessDays.get(bounds.start).unsaved,/409/);
+ const retry=fixture({market:'WB2',saved:f.saved});await retry.api.businessLoadDayBase(bounds);assert.equal(retry.calls.filter(c=>c.orders).length,0);assert.equal(retry.remote.size,2);assert.equal(retry.api.businessDays.get(bounds.start).unsaved,undefined);
 });
 test('a confirmed opening in March 2025 gives an immediate 2024 zero with no network or finance requests',async()=>{
  const f=fixture({starts:{Ozon:'2025-03-01'}});f.saved.set('milioner_business_dashboard_v1',JSON.stringify({period:'year',yearDate:'2024-01-01'}));

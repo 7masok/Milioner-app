@@ -318,10 +318,10 @@ test('loading every month retains compact totals for immediate year display afte
  assert.ok(f.storage.get('milioner_business_month_bases_v1').length<1000000);
 });
 
-test('leaving Reports stops remaining daily calculations and prevents background cache writes',async()=>{
+test('leaving Reports preserves saved orders and prevents any later finance or cache writes',async()=>{
  const f=sharedFixture(true),pending=f.window.renderBusinessDashboard();await flush();assert.equal(f.loads,1);
- f.element('reports').classList.contains=()=>false;f.finish();await pending;
- assert.equal(f.stored.size,0);assert.ok([...f.api.businessDays.values()].every(r=>r.data.pending));
+ const savedBeforeLeaving=JSON.stringify([...f.stored]);f.element('reports').classList.contains=()=>false;f.finish();await pending;
+ assert.equal(JSON.stringify([...f.stored]),savedBeforeLeaving);assert.ok([...f.api.businessDays.values()].every(r=>r.data.pending));
 });
 
 
@@ -337,7 +337,7 @@ test('closed cached month opens from local storage after TTL without a cache or 
 test('a calculation completing after the display timeout paints the selected month without another swipe',async()=>{
  const f=sharedFixture(true,{period:'month',monthDate:'2026-02-01',metric:'buyouts'});f.window.clearTimeout=clearTimeout;f.window.setTimeout=(fn,delay=0)=>setTimeout(fn,delay?5:0);
  const request=f.window.renderBusinessDashboard();for(let i=0;i<100&&f.loads===0;i++)await new Promise(r=>setTimeout(r,1));assert.equal(f.loads,1);
- await request;f.finish();for(let i=0;i<250;i++){await new Promise(r=>setTimeout(r,1));if(f.stored.size>0)break}await flush();
+ await request;f.finish();for(let i=0;i<250;i++){await new Promise(r=>setTimeout(r,1));if([...f.stored.values()].some(day=>!day.pending)&&f.element('businessValue').textContent!=='—')break}await flush();
  assert.ok(f.stored.size>0);assert.notEqual(f.element('businessValue').textContent,'—');assert.doesNotMatch(f.element('businessValueLabel').textContent,/Не удалось/);assert.equal(f.loads,1);
 });
 
@@ -369,7 +369,7 @@ test('a closed saved server month is shown without reloading its daily finance e
 test('a cached month loads only its missing comparison and never requests the already loaded selected month again',async()=>{
  const f=sharedFixture();await f.window.setBusinessDashboardPeriod('month');const before=f.requests.length;
  await f.window.shiftBusinessDashboardMonth(-1);const history=f.requests.slice(before).filter(x=>x.orderHistoryUrl).map(x=>new URL(x.orderHistoryUrl));
- assert.equal(history.length,1);assert.equal(Number(history[0].searchParams.get('after')),Date.parse('2026-08-01T00:00:00+05:00'));assert.equal(Number(history[0].searchParams.get('before')),Date.parse('2026-09-01T00:00:00+05:00'));
+ assert.equal(history.length,1);assert.equal(Number(history[0].searchParams.get('after')),Date.parse('2026-08-01T00:00:00+05:00'));assert.equal(Number(history[0].searchParams.get('before')),Date.parse('2026-08-31T00:00:00+05:00'));
 });
 
 
