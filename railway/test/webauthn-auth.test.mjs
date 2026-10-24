@@ -19,7 +19,7 @@ test('login screen is minimal and uses the access code directly', () => {
   assert.match(login, />Войти<\/button>/);
   assert.doesNotMatch(login, /Введите код доступа/);
   assert.doesNotMatch(login, /id="ownerLoginHint"/);
-  assert.doesNotMatch(login, /id="ownerLoginError"/);
+  assert.match(login, /id="ownerLoginError"[^>]*role="alert"/);
   assert.doesNotMatch(login, /class="login-mark"/);
   assert.doesNotMatch(login, /id="ownerBiometricButton"/);
   assert.doesNotMatch(login, /id="ownerBindButton"/);
@@ -36,7 +36,7 @@ test('browser refresh has no startup modal cards and validates an existing sessi
   const start = html.indexOf('async function initOwnerAuth(){');
   const end = html.indexOf('function rememberOwnerSession', start);
   const init = html.slice(start, end);
-  assert.ok(init.indexOf("if(ownerSessionToken){const check=await nativeFetch(MILLIONER_API+'/api/auth/session'") >= 0);
+  assert.ok(init.indexOf("if(ownerSessionToken){const {response:check}=await ownerAuthRequest('/api/auth/session'") >= 0);
   assert.ok(init.indexOf("/api/auth/session") < init.indexOf("/api/auth/config"));
   assert.match(html,/function startOwnerRuntimeAfterAuth\(\)\{ownerAuthEnabled=true;cloudStatus\('онлайн','ok'\);setOwnerAuthMode\('ready'\);try\{startAppRuntime\(\)\}catch/);
   assert.ok(init.indexOf("if(check.ok){startOwnerRuntimeAfterAuth();return}") >= 0);
