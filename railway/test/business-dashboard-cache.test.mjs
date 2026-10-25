@@ -102,3 +102,30 @@ test('store-specific screen and day cache keys cannot overwrite All or another s
  assert.equal((await dailyInvoke('get',null,{market:'WB',from:start,to:start+DAY})).out.days.length,1);assert.equal((await dailyInvoke('get',null,{market:'Kaspi',from:start,to:start+DAY})).out.days.length,0);assert.equal((await dailyInvoke('get')).out.days.length,0);
  assert.equal((await dailyInvoke('get',null,{market:'invalid',from:start,to:start+DAY})).status,400);
 });
+
+function storeRow(m,begin,amount,at=Date.now(),starts={}){
+ const day={...snapshot(begin),market:m,storeStarts:JSON.stringify(starts),ordersReady:true,pending:false,orders:{amount,qty:1,profit:amount/5,orderCount:1,coveredAmount:amount/2,coveredQty:.5,coverage:.5},events:[[begin+1000,amount,1,amount/5,1,amount/2,.5]],summary:{revenue:amount/2,qty:1,profit:amount/10}};
+ for(const h of day.buckets){h.orders=0;h.orderQty=0;h.orderProfit=0;h.buyouts=0;h.buyoutQty=0;h.buyoutProfit=0}Object.assign(day.buckets[0],{orders:amount,orderQty:1,orderProfit:amount/5,buyouts:amount/2,buyoutQty:1,buyoutProfit:amount/10});
+ return {cache_key:'base:'+begin+':'+m,version:BUSINESS_CACHE_VERSION,source_revision:revision(),payload:day,generated_at:at};
+}
+const markets=['Kaspi','WB','WB2','Ozon'];
+test('All day route composes four persisted stores in one bounded read without writes or provider queries',async()=>{
+ const begin=today-10*DAY;savedDays=markets.map((m,i)=>storeRow(m,begin,(i+1)*10));const {out,queries}=await dailyInvoke('get',null,{from:begin,to:begin+DAY});
+ assert.equal(out.days.length,1);const row=out.days[0],d=row.day;assert.equal(row.composed,true);assert.equal(row.reusable,true);assert.equal(d.market,'all');assert.equal(d.orders.amount,100);assert.equal(d.orders.coverage,.5);assert.equal(d.orders.qty,4);assert.equal(d.orders.orderCount,4);assert.equal(d.summary.revenue,50);assert.equal(d.summary.profit,10);assert.equal(d.buckets[0].orders,100);assert.equal(d.events.length,1);assert.deepEqual(d.events[0],[begin+1000,100,4,20,4,50,2]);assert.equal(validBusinessDay(d),true);
+ assert.equal(queries.find(q=>q.sql.startsWith('SELECT cache_key')).args[0].length,5);assert.ok(queries.every(q=>q.sql.startsWith('SELECT')));assert.ok(queries.every(q=>!q.sql.includes('FROM marketplace_order_lines')&&!q.sql.includes('FROM wb_finance_rows')));
+});
+test('missing store days and stale opening signatures never become zero; complete All fallback survives partial finance',async()=>{
+ const {composeBusinessDays}=await import('../src/business-dashboard-cache.js'),begin=today-10*DAY,rows=markets.map((m,i)=>storeRow(m,begin,(i+1)*10));
+ assert.equal(composeBusinessDays(rows.slice(1),begin,begin+DAY,{},revision()).length,0);
+ const warehouse=JSON.stringify({settings:{reportStoreStarts:{WB:'2020-01-01'}}});assert.equal(composeBusinessDays(rows,begin,begin+DAY,warehouse,revision()).length,0);
+ rows[0].payload.pending=true;rows[0].payload.summary={revenue:null,qty:null,profit:null};let composed=composeBusinessDays(rows,begin,begin+DAY,{},revision())[0];assert.equal(composed.day.ordersReady,true);assert.equal(composed.day.pending,true);assert.equal(composed.day.summary.profit,null);assert.equal(composed.reusable,false);
+ const ready={...storeRow('all',begin,999),cache_key:'base:'+begin};delete ready.payload.ordersReady;composed=composeBusinessDays([...rows,ready],begin,begin+DAY,{},revision())[0];assert.equal(composed.day.orders.amount,999);assert.equal(composed.day.pending,false);assert.equal(composed.composed,undefined);
+});
+test('confirmed pre-opening stores contribute zero from current TEXT settings without inventing a missing active store',async()=>{
+ const {composeBusinessDays}=await import('../src/business-dashboard-cache.js'),begin=today-10*DAY,starts={Ozon:new Date(today+18000000).toISOString().slice(0,10)},warehouse=JSON.stringify({settings:{reportStoreStarts:starts}}),rows=markets.slice(0,3).map(m=>storeRow(m,begin,10,Date.now(),{}));
+ const d=composeBusinessDays(rows,begin,begin+DAY,warehouse,revision())[0].day;assert.equal(d.orders.amount,30);assert.equal(d.summary.revenue,15);assert.equal(d.storeStarts,JSON.stringify(starts));assert.equal(d.ordersReady,true);assert.equal(d.pending,false);assert.equal(composeBusinessDays(rows.slice(1),begin,begin+DAY,warehouse,revision()).length,0);
+});
+test('All preserves unknown profit, weighted coverage and oldest input time through stale revisions',async()=>{
+ const {composeBusinessDays}=await import('../src/business-dashboard-cache.js'),begin=today-10*DAY,rows=markets.map((m,i)=>storeRow(m,begin,(i+1)*10));rows[0].payload.summary.profit=null;rows[1].payload.orders.coveredAmount=0;rows[1].payload.orders.coverage=0;rows[2].generated_at=begin+DAY-1;rows[2].source_revision='old';
+ const result=composeBusinessDays(rows,begin,begin+DAY,{},revision())[0];assert.equal(result.day.summary.profit,null);assert.equal(result.day.netProfit,null);assert.equal(result.day.orders.coverage,.4);assert.equal(result.generatedAt,begin+DAY-1);assert.equal(result.fresh,false);assert.equal(result.reusable,false);assert.equal(result.day.hourly.ozonHourlyComplete,false);
+});

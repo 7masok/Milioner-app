@@ -1,4 +1,5 @@
 import crypto from 'node:crypto';
+import {reportStoreStartDate} from './report-history-range.js';
 import {readBusinessProgress} from './business-dashboard-progress.js';
 import {pool} from './db.js';
 import {asyncRoute,requireTrustedOrigin} from './http.js';
@@ -49,6 +50,49 @@ async function sourceRevision(){
 }
 function dailyBounds(from,to){return Number.isFinite(from)&&Number.isFinite(to)&&from===midnight(from)&&to===midnight(to)&&from>0&&to>from&&to-from<=366*DAY&&to<=midnight(Date.now())+DAY}
 export function validBusinessDay(day){return validBusinessSnapshot({...day,yesterday:day,yesterdayCompare:day},'day',day?.bounds?.start)}
+// Compose only persisted per-store days. No marketplace calls or business writes.
+const MARKETS=['Kaspi','WB','WB2','Ozon'];
+const ORDER_FIELDS=['amount','qty','profit','orderCount','coveredAmount','coveredQty'];
+const BUCKET_FIELDS=['orders','orderQty','orderProfit','buyouts','buyoutQty','buyoutBaseProfit','buyoutProfit','coreBuyouts','coreBuyoutQty','coreBuyoutBaseProfit','coreBuyoutProfit','ozonBuyouts','ozonBuyoutQty','ozonBuyoutBaseProfit','ozonBuyoutProfit','netProfit'];
+function openingSignature(payload,markets){return JSON.stringify(Object.fromEntries(markets.map(m=>[m,reportStoreStartDate(payload,m)]).filter(([,v])=>v)))}
+function matchesOpening(day,payload,market){
+ if(!day.storeStarts)return false;
+ try{const saved=typeof day.storeStarts==='string'?JSON.parse(day.storeStarts):day.storeStarts;
+  return openingSignature({settings:{reportStoreStarts:saved}},market==='all'?MARKETS:[market])===openingSignature(payload,market==='all'?MARKETS:[market]);
+ }catch{return false}
+}
+function dayQuality(day){return ((day.ordersReady===true||!day.pending)&&!day.ordersPartialMarkets?.length?2:0)+(!day.pending&&!partialSnapshot(day)&&!day.summary?.partialOzonHistory?1:0)}
+export function composeBusinessDays(rows,from,to,warehouse,revision,now=Date.now()){
+ const byKey=new Map(rows.filter(r=>r.version===BUSINESS_CACHE_VERSION).map(r=>[r.cache_key,r])),out=[];
+ for(let t=from;t<to;t+=DAY){
+  const parts=[],times=[],revisions=[];let missing=false;
+  for(const market of MARKETS){
+   const opening=reportStoreStartDate(warehouse,market),before=opening&&t+DAY<=Date.parse(opening+'T00:00:00+05:00');
+   if(before){parts.push({market,beforeOpening:true});continue}
+   const row=byKey.get(scopedKey('base:'+t,market)),day=row?.payload;
+   if(!row||!validBusinessDay(day)||!validScope(day,market)||day.bounds.start!==t||day.bounds.end!==t+DAY||!matchesOpening(day,warehouse,market)||!Number.isFinite(Number(row.generated_at))||Number(row.generated_at)<=0){missing=true;break}
+   parts.push({...day,market});times.push(Number(row.generated_at));revisions.push(row.source_revision);
+  }
+  const old=byKey.get('base:'+t),oldDay=old?.payload,validOld=old&&validBusinessDay(oldDay)&&oldDay.bounds.start===t&&oldDay.bounds.end===t+DAY&&validScope(oldDay,'all')&&(!oldDay.storeStarts||matchesOpening(oldDay,warehouse,'all'));
+  let chosen=validOld?old:null,composed=false;
+  if(!missing){
+   const active=parts.filter(p=>!p.beforeOpening),first=active[0],orders=Object.fromEntries(ORDER_FIELDS.map(f=>[f,0])),events=new Map();
+   for(const p of active){for(const f of ORDER_FIELDS)orders[f]+=Number(p.orders[f]??(f==='coveredAmount'?p.orders.amount*p.orders.coverage:f==='coveredQty'?p.orders.qty*p.orders.coverage:0))||0;
+    for(const e of p.events||[]){const row=events.get(e[0])||[e[0],0,0,0,0,0,0];for(let i=1;i<7;i++)row[i]+=Number(e[i])||0;events.set(e[0],row)}
+   }
+   orders.coverage=orders.amount>0?orders.coveredAmount/orders.amount:1;
+   const buckets=Array.from({length:24},(_,i)=>{const bucket={...(first?.buckets[i]||{}),start:t+i*3600000,end:t+(i+1)*3600000,label:first?.buckets[i]?.label||String(i)};for(const f of BUCKET_FIELDS)bucket[f]=active.reduce((n,p)=>n+(Number(p.buckets[i][f])||0),0);return bucket});
+   const summary={estimated:active.some(p=>p.summary.estimated),missingMarkets:[...new Set(active.flatMap(p=>p.summary.missingMarkets||[]))],partialOzonHistory:active.some(p=>p.summary.partialOzonHistory),sources:Object.fromEntries(active.map(p=>[p.market,p.summary]))};
+   for(const f of ['revenue','qty','profit'])summary[f]=active.some(p=>p.summary[f]===null||p.summary[f]===undefined)?null:active.reduce((n,p)=>n+p.summary[f],0);
+   summary.estimated=summary.estimated||summary.profit===null;
+   const day={market:'all',storeStarts:openingSignature(warehouse,MARKETS),period:'day',bounds:first?.bounds||{start:t,end:t+DAY},buckets,orders,events:[...events.values()].sort((a,b)=>a[0]-b[0]),local:null,summary,netProfit:summary.profit,hourly:{ozonHourlyComplete:active.every(p=>p.hourly?.ozonHourlyComplete!==false)},pending:active.some(p=>p.pending)||summary.revenue===null||summary.qty===null,ordersReady:active.every(p=>p.ordersReady===true||!p.pending),ordersPartialMarkets:[...new Set(active.flatMap(p=>p.ordersPartialMarkets||[]))],beforeOpening:active.length===0};
+   const at=times.length?Math.min(...times):now;
+   if(validBusinessDay(day)&&(!chosen||dayQuality(day)>dayQuality(oldDay)||dayQuality(day)===dayQuality(oldDay)&&Math.max(...times,0)>=Number(old.generated_at))){chosen={payload:day,generated_at:at,source_revision:revisions.every(r=>r===revision)?revision:null};composed=true}
+  }
+  if(chosen)out.push({day:chosen.payload,generatedAt:Number(chosen.generated_at),reusable:reusableBusinessSnapshot(chosen.payload,Number(chosen.generated_at),now),fresh:!partialSnapshot(chosen.payload)&&!chosen.payload.pending&&chosen.source_revision===revision&&now-Number(chosen.generated_at)<(t+DAY>now?60000:15*60000)&&!(Number(chosen.generated_at)<t+DAY&&t+DAY<=now),...(composed?{composed:true}:{})});
+ }
+ return out;
+}
 export function registerBusinessDashboardCache(router){
  router.get('/business-dashboard-progress',asyncRoute(async(req,res)=>{
   const market=cacheMarket(req.query.market);if(!market)return res.status(400).json({ok:false,error:'Некорректный магазин'});
@@ -74,9 +118,10 @@ export function registerBusinessDashboardCache(router){
  router.get('/business-dashboard-days',asyncRoute(async(req,res)=>{
   const market=cacheMarket(req.query.market);if(!market)return res.status(400).json({ok:false,error:'Некорректный магазин'});
   const from=Number(req.query.from),to=Number(req.query.to);if(!dailyBounds(from,to))return res.status(400).json({ok:false,error:'Некорректный дневной диапазон'});
-  await ensureCache();const keys=[];for(let t=from;t<to;t+=DAY)keys.push(scopedKey('base:'+t,market));
-  const [revision,result]=await Promise.all([sourceRevision(),pool.query('SELECT cache_key,version,source_revision,payload,generated_at FROM business_dashboard_cache WHERE cache_key=ANY($1::text[])',[keys])]);
-  res.json({ok:true,version:BUSINESS_CACHE_VERSION,sourceRevision:revision,days:result.rows.filter(r=>r.version===BUSINESS_CACHE_VERSION&&validBusinessDay(r.payload)&&validScope(r.payload,market)).map(r=>({day:r.payload,generatedAt:Number(r.generated_at),reusable:reusableBusinessSnapshot(r.payload,Number(r.generated_at)),fresh:!partialSnapshot(r.payload)&&!r.payload.pending&&r.source_revision===revision&&Date.now()-Number(r.generated_at)<(r.payload.bounds.end>Date.now()?60000:15*60000)&&!(Number(r.generated_at)<r.payload.bounds.end&&r.payload.bounds.end<=Date.now())}))});
+  await ensureCache();const keys=[];for(let t=from;t<to;t+=DAY){keys.push(scopedKey('base:'+t,market));if(market==='all')for(const m of MARKETS)keys.push(scopedKey('base:'+t,m))}
+  const [revision,result,warehouse]=await Promise.all([sourceRevision(),pool.query('SELECT cache_key,version,source_revision,payload,generated_at FROM business_dashboard_cache WHERE cache_key=ANY($1::text[])',[keys]),market==='all'?pool.query('SELECT payload FROM warehouse_state WHERE id=1'):Promise.resolve({rows:[]})]);
+  const days=market==='all'?composeBusinessDays(result.rows,from,to,warehouse.rows[0]?.payload,revision):result.rows.filter(r=>r.version===BUSINESS_CACHE_VERSION&&validBusinessDay(r.payload)&&validScope(r.payload,market)).map(r=>({day:r.payload,generatedAt:Number(r.generated_at),reusable:reusableBusinessSnapshot(r.payload,Number(r.generated_at)),fresh:!partialSnapshot(r.payload)&&!r.payload.pending&&r.source_revision===revision&&Date.now()-Number(r.generated_at)<(r.payload.bounds.end>Date.now()?60000:15*60000)&&!(Number(r.generated_at)<r.payload.bounds.end&&r.payload.bounds.end<=Date.now())}));
+  res.json({ok:true,version:BUSINESS_CACHE_VERSION,sourceRevision:revision,days});
  }));
  router.put('/business-dashboard-days',requireTrustedOrigin,asyncRoute(async(req,res)=>{
   const market=cacheMarket(req.body?.market);if(!market)return res.status(400).json({ok:false,error:'Некорректный магазин'});
