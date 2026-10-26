@@ -14,25 +14,29 @@ function harness(rows){
  vm.createContext(context);vm.runInContext(ui,context);
  return {context,group,card:()=>context.productCard(group),open:()=>{context.openProduct('g');return sheet},readonly:v=>readonly=v};
 }
-test('reload never presents stale local WB44/warehouse0 as current; authoritative stock44 is stable on second reload',()=>{
+test('reload displays cached quantities immediately with update marker, then replaces them with server data',()=>{
  const h=harness([product('1',0,44)]),before=JSON.stringify(h.context.state);
- assert.match(h.card(),/Остатки: —/);assert.doesNotMatch(h.card(),/WB: 44|В продаже: 0/);
- assert.match(h.open(),/WB: — · подключаюсь/);
+ assert.match(h.card(),/В продаже: 0/);assert.match(h.card(),/WB: 44 шт. · обновляется/);assert.match(h.card(),/Обновляется/);assert.doesNotMatch(h.card(),/Остатки: —/);
+ assert.match(h.open(),/WB: 44 шт. · обновляется/);assert.match(h.open(),/последние данные/);assert.equal(JSON.stringify(h.context.state),before);
  h.context.state.products[1]=product('1',44,undefined);h.context.warehouseRemoteReady=true;
- assert.match(h.card(),/В продаже: 44/);assert.match(h.card(),/WB: — · снимок ожидается/);assert.doesNotMatch(h.card(),/WB: 0|склад:/);
+ assert.match(h.card(),/В продаже: 44/);assert.match(h.card(),/WB: 0 шт. · снимок/);assert.doesNotMatch(h.card(),/WB: —|склад:/);
  const authoritative=JSON.stringify(h.context.state);
- h.readonly(true);assert.doesNotMatch(h.card(),/В продаже: 44/);h.readonly(false);assert.match(h.card(),/В продаже: 44/);
+ h.readonly(true);assert.match(h.card(),/В продаже: 44/);assert.match(h.card(),/Обновляется/);h.readonly(false);assert.match(h.card(),/В продаже: 44/);
  assert.equal(JSON.stringify(h.context.state),authoritative);assert.notEqual(before,authoritative);
 });
-test('only complete fresh observations from one warehouse may be summed; confirmed zero stays zero',()=>{
+test('old WB observations retain numbers with snapshot label; incomplete or mixed warehouses never manufacture totals',()=>{
  const rows=[product('1',20,0),product('2',24,0)],h=harness(rows);h.context.warehouseRemoteReady=true;
- assert.match(h.card(),/WB: 0 шт/);
- rows[1].wbVariant.stockObservation.at=Date.now()-31*60000;assert.match(h.card(),/WB: —/);
- rows[1].wbVariant.stockObservation.at=Date.now();rows[1].wbVariant.stockObservation.warehouseId='other';assert.match(h.card(),/WB: —/);
- rows[1].wbVariant.stockObservation.warehouseId='wh';rows[1].wbVariant.stockObservation.amount=null;assert.match(h.card(),/WB: —/);
+ assert.match(h.card(),/WB: 0 шт/);assert.doesNotMatch(h.card(),/снимок/);
+ rows[1].wbVariant.stockObservation.at=Date.now()-31*60000;assert.match(h.card(),/WB: 0 шт. · снимок/);assert.doesNotMatch(h.card(),/color:#a40000/);
+ rows[1].wbVariant.stockObservation.at=Date.now();rows[1].wbVariant.stockObservation.warehouseId='other';assert.match(h.card(),/WB: обновляется/);
+ rows[1].wbVariant.stockObservation.warehouseId='wh';rows[1].wbVariant.stockObservation.amount=null;assert.match(h.card(),/WB: обновляется/);
  rows[1].wbVariant.stockObservation.amount=24;rows[0].wbVariant.stockObservation.amount=20;rows[0].reserved=1;rows[0].wbVariant.stockObservation.amount=19;
  assert.match(h.card(),/В продаже: 43/);assert.doesNotMatch(h.card(),/color:#a40000/);
- rows[0].wbVariant.stockObservation.pending=true;assert.match(h.card(),/WB: обновляется/);assert.doesNotMatch(h.card(),/WB: 43/);
+ rows[0].wbVariant.stockObservation.pending=true;assert.match(h.card(),/WB: 43 шт. · обновляется/);
+});
+test('no WB history keeps warehouse quantities visible without fake marketplace zero',()=>{
+ const row=product('1',44,undefined);delete row.wbVariant.wbAmount;const h=harness([row]);
+ assert.match(h.card(),/В продаже: 44/);assert.match(h.card(),/WB: обновляется/);assert.doesNotMatch(h.card(),/WB: 0|WB: —/);
 });
 test('server observations survive an older client but cannot follow a changed characteristic',()=>{
  const old=product('1',44,44),next=structuredClone(old);next.stock=40;delete next.wbVariant.stockObservation;
