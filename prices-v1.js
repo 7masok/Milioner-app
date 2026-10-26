@@ -5,7 +5,7 @@ const PRICE_UI_KEY=(typeof KEY==='string'?KEY:'sklad_mvp_v2')+'_prices_ui_v1';
 const PRICE_MARKETS=['Kaspi','WB','WB2','Ozon'];
 const PRICE_CLIENT_TTL_MS=2*60*1000;
 let priceUi={market:'Kaspi',q:'',sort:'asc',hidden:{},groupFilter:'all',groupId:''};
-Object.assign(priceUi,{deliveryRank:'',deliverySettings:{}});
+Object.assign(priceUi,{deliveryRank:'',deliverySettings:{},sortMetric:'price'});
 let priceExpanded=null;
 const priceSelected={Kaspi:new Set(),WB:new Set(),WB2:new Set()};
 try{
@@ -13,6 +13,7 @@ try{
   if(PRICE_MARKETS.includes(saved.market))priceUi.market=saved.market;
   priceUi.q=String(saved.q||'');
   if(saved.sort==='desc'||saved.sort==='asc')priceUi.sort=saved.sort;
+  if(saved.sortMetric==='quantity')priceUi.sortMetric='quantity';
   if(saved.hidden&&typeof saved.hidden==='object')priceUi.hidden=saved.hidden;
   if(saved.groupFilter==='ungrouped')priceUi.groupFilter='ungrouped';
   priceUi.groupId=String(saved.groupId||'');
@@ -156,6 +157,15 @@ function priceSortValue(row){
   const price=pNum(row?.price);if(price>0)return price;
   const final=pNum(row?.finalPrice);return final>0?final:NaN;
 }
+function priceQuantityValue(row){const value=row?.ownAvailable;return row?.error||row?.ownStockKnown!==true||value===null||value===undefined||value===''||!Number.isFinite(Number(value))||Number(value)<0?NaN:Number(value)}
+function priceCompareRows(a,b){
+  if(priceIsWbMarket()&&priceUi.deliveryRank)return priceDeliveryCompare(a,b);
+  const quantity=priceUi.sortMetric==='quantity',av=quantity?priceQuantityValue(a.row):priceSortValue(a.row),bv=quantity?priceQuantityValue(b.row):priceSortValue(b.row),aMissing=quantity?!Number.isFinite(av):!(av>0),bMissing=quantity?!Number.isFinite(bv):!(bv>0);
+  if(aMissing!==bMissing)return aMissing?1:-1;
+  if(!aMissing&&Math.abs(av-bv)>.000001)return priceUi.sort==='desc'?bv-av:av-bv;
+  const byName=String(a.row?.name||a.row?.sku||'').localeCompare(String(b.row?.name||b.row?.sku||''),'ru',{sensitivity:'base'});
+  return byName||a.index-b.index;
+}
 function priceDiscountValue(row){
   if(Number.isFinite(Number(row?.discount)))return Math.max(0,Number(row.discount)||0);
   const old=pNum(row?.oldPrice),current=pNum(row?.finalPrice||row?.price);
@@ -174,7 +184,7 @@ function setPriceTabs(){
   const q=document.getElementById('priceSearch');
   if(q&&q.value!==priceUi.q)q.value=priceUi.q;
   const sort=document.getElementById('priceSortButton');
-  if(sort){const desc=priceUi.sort==='desc';sort.textContent=desc?'Цена ↓':'Цена ↑';sort.setAttribute('aria-label',desc?'Сортировка по цене: сначала дорогие':'Сортировка по цене: сначала дешёвые');sort.title=desc?'Сначала дорогие':'Сначала дешёвые';}
+  if(sort){const desc=priceUi.sort==='desc',quantity=priceUi.sortMetric==='quantity';sort.textContent=quantity?(desc?'Количество ↓':'Количество ↑'):(desc?'Цена ↓':'Цена ↑');const label=quantity?(desc?'Количество на моём складе: сначала больше':'Количество на моём складе: сначала меньше'):(desc?'Сортировка по цене: сначала дорогие':'Сортировка по цене: сначала дешёвые');sort.setAttribute('aria-label',label);sort.title=label;}
   const hidden=document.getElementById('priceHiddenButton'),hiddenTools=document.getElementById('priceHiddenTools'),hiddenCount=priceHiddenKeys().length;
   if(hiddenTools)hiddenTools.hidden=!hiddenCount;
   if(hidden){hidden.hidden=!hiddenCount;hidden.textContent='Скрытые · '+hiddenCount;hidden.setAttribute('aria-label','Показать скрытые товары: '+hiddenCount);}
@@ -317,14 +327,7 @@ function paintPrices(){
     if(priceIsHidden(row)||!priceMatchesGroup(row))return false;
     if(!q)return true;
     return [row.name,row.sku,row.remoteId,row.account,row.groupName].some(value=>String(value||'').toLocaleLowerCase('ru-RU').includes(q));
-  }).sort((a,b)=>{
-    if(priceIsWbMarket()&&priceUi.deliveryRank)return priceDeliveryCompare(a,b);
-    const av=priceSortValue(a.row),bv=priceSortValue(b.row),aMissing=!(av>0),bMissing=!(bv>0);
-    if(aMissing!==bMissing)return aMissing?1:-1;
-    if(!aMissing&&Math.abs(av-bv)>.000001)return priceUi.sort==='desc'?bv-av:av-bv;
-    const byName=String(a.row?.name||a.row?.sku||'').localeCompare(String(b.row?.name||b.row?.sku||''),'ru',{sensitivity:'base'});
-    return byName||a.index-b.index;
-  });
+  }).sort(priceCompareRows);
   const valid=visibleRows.filter(row=>!row.error),withDiscount=valid.filter(row=>priceDiscountValue(row)>0).length,noPrice=valid.filter(row=>!(pNum(row.price)>0||pNum(row.finalPrice)>0)).length;
   const count=document.getElementById('pricePositionCount'),discount=document.getElementById('priceDiscountCount'),missing=document.getElementById('priceMissingCount');
   if(count)count.textContent=valid.length.toLocaleString('ru-RU');
@@ -446,6 +449,8 @@ window.priceSetGroup=function(value){
 window.priceSearch=function(value){
   priceUi.q=String(value||'');rememberPriceUi();paintPrices();
 };
+window.priceToggleSortMenu=function(){const menu=document.getElementById('priceSortMenu'),button=document.getElementById('priceSortMenuButton');if(menu){menu.hidden=!menu.hidden;button?.setAttribute('aria-expanded',String(!menu.hidden))}};
+window.priceSetSortMetric=function(metric){if(!['price','quantity'].includes(metric))return;priceUi.sortMetric=metric;priceUi.deliveryRank='';const menu=document.getElementById('priceSortMenu');if(menu)menu.hidden=true;document.getElementById('priceSortMenuButton')?.setAttribute('aria-expanded','false');rememberPriceUi();paintPrices()};
 window.priceToggleSort=function(){
   priceUi.deliveryRank='';priceUi.sort=priceUi.sort==='desc'?'asc':'desc';rememberPriceUi();setPriceTabs();paintPrices();
 };
