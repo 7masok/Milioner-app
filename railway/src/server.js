@@ -56,6 +56,8 @@ const frontendFiles = Object.freeze([
   'packaging-v1.js',
   'packaging.css',
   'wb-variants-v1.js',
+  'product-size-mode-model-v1.js',
+  'product-size-mode-v1.js',
   'kaspi-report-v2.js',
   'wb-operation-audit-v1.js',
   'kaspi-ads-v2.js',
