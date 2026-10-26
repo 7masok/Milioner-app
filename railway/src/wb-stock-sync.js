@@ -143,6 +143,7 @@ export async function persistWbStockObservations(market,warehouse,items,actual,p
 async function writeStocks(token,warehouse,items){
   for(let i=0;i<items.length;i+=1000)await requestJson(MARKETPLACE_API+'/api/v3/stocks/'+encodeURIComponent(warehouse),{method:'PUT',headers:{Accept:'application/json','Content-Type':'application/json',Authorization:token},body:JSON.stringify({stocks:items.slice(i,i+1000)})},'WB stock update');
 }
+export function wbStockPublishReady(product,market){return product?.wbSizeStockPending?.[market]!==true}
 export async function syncWbStockMarket(market,{write=true}={}){
   const id=String(market||'').toUpperCase()==='WB1'?'WB':String(market||'').toUpperCase();
   if(!/^WB(?:[2-9]\d*|1\d+)?$/.test(id))throw new Error('Unsupported WB market');
@@ -162,6 +163,7 @@ export async function syncWbStockMarket(market,{write=true}={}){
   }
   const unresolved=[],candidates=[];
   for(const product of linked){
+    if(!wbStockPublishReady(product,id)){unresolved.push({sku:String(product[field]),name:String(product.name||''),reason:'size-stock-not-confirmed'});continue}
     const sku=String(product[field]).trim(),aliases=wbStockAliases(product,field);
     const validation=validateWbLink(product,field,cards);
     if(!validation?.valid){unresolved.push({sku,name:String(product.name||''),reason:validation?.reason||'relink-required'});continue}

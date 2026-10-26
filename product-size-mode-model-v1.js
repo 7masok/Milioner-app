@@ -39,7 +39,7 @@ function plan(input,sourceId,market,card,sourceSize='auto',makeId,now=Date.now()
  const rows=[];
  normalized.forEach((size,i)=>{
   let p=owners[i],created=!p;
-  if(!p){p={id:freshId(),name:group.name+' · размер '+size.size,category:group.category||'',photo:group.photo||'',kind:'simple',stock:0,cost:Math.max(0,Number(source.cost)||0),min:0,totalProfit:0,createdAt:now,kaspi:'',wb:'',wb2:'',ozon:''};products.push(p)}
+  if(!p){p={id:freshId(),name:group.name+' · размер '+size.size,category:group.category||'',photo:group.photo||'',kind:'simple',stock:0,wbSizeStockPending:{[market]:true},cost:Math.max(0,Number(source.cost)||0),min:0,totalProfit:0,createdAt:now,kaspi:'',wb:'',wb2:'',ozon:''};products.push(p)}
   const prior=p.wbVariant;
   p.variantGroupId=group.id;p.variantLabel='Размер '+size.size;p[field]=size.barcode;p[field+'Aliases']=[...new Set([...codes(p,field).filter(b=>size.barcodes.includes(b)),...size.barcodes])].filter(b=>b!==size.barcode);
   delete p[field+'RelinkRequired'];delete p[field+'Identity'];
