@@ -61,9 +61,16 @@ export function staleWbLinkRestored(previous, next) {
 }
 
 export function preserveWbValidation(previous, next) {
+  const oldMovements=new Set((previous.movements||[]).map(m=>String(m.id)));
+  const confirmations=(next.movements||[]).filter(m=>!oldMovements.has(String(m.id))&&m.type==='инвентаризация'&&Array.isArray(m.wbSizeStockConfirmation));
   const oldById = new Map((previous.products || []).map(p => [String(p.id), p]));
   for (const p of next.products || []) {
     const old = oldById.get(String(p.id));
+    const pending={...(p.wbSizeStockPending||{})};
+    for(const market of ['WB','WB2'])if(old?.wbSizeStockPending?.[market]===true){
+      if(confirmations.some(m=>String(m.productId)===String(p.id)&&m.wbSizeStockConfirmation.includes(market)))delete pending[market];else pending[market]=true;
+    }
+    if(Object.keys(pending).length)p.wbSizeStockPending=pending;else delete p.wbSizeStockPending;
     const a=old?.wbVariant,b=p.wbVariant;
     if(a?.stockObservation&&b&&['market','nmId','chrtId','barcode'].every(key=>String(a[key]||'')===String(b[key]||''))){
       b.stockObservation=a.stockObservation;
