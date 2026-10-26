@@ -81,6 +81,7 @@ function restorePrematureWbSale(state, products, row, market) {
   const qty = matches.reduce((sum, sale) => sum + Math.max(0, Number(sale?.qty) || 0), 0);
   if (!qty) return 0;
   const label = `${market} ${String(row.code || row.order_id)}`;
+  const manualReceipt=state.settings?.wbReturnReceipts?.[key];
   const now = Date.now();
   const debits = state.movements.filter(movement =>
     movement.type === 'продажа' && !movement.stockRestoredAt &&
@@ -96,21 +97,21 @@ function restorePrematureWbSale(state, products, row, market) {
       String(other.type || '').toLowerCase() === 'инвентаризация' &&
       Number(other.updatedAt || other.date) >= Number(movement.date)
     );
-    const restoredQty = product && !recounted ? taken : 0;
+    const restoredQty = product && !recounted && !manualReceipt ? taken : 0;
     if (restoredQty) product.stock = Math.max(0, Number(product.stock) || 0) + restoredQty;
     movement.stockRestoredAt = now;
     state.movements.unshift({
       id: uid('market-sale-restore', `${key}:${movement.id}`, now),
       date: now, type: 'возврат', productId, qty: restoredQty,
       externalKey: key, reversesMovementId: movement.id,
-      extra: `${label} · отмена преждевременного списания · возвращено ${restoredQty} шт.${recounted ? ' · остаток уже уточнён инвентаризацией' : ''}`
+      extra: `${label} · отмена преждевременного списания · возвращено ${restoredQty} шт.${manualReceipt ? ' · возврат уже обработан вручную, повторный приход заблокирован' : recounted ? ' · остаток уже уточнён инвентаризацией' : ''}`
     });
   }
   if (!debits.length) state.movements.unshift({
     id: uid('market-sale-restore-review', key, now), date: now,
     type: 'возврат', productId: String(matches[0].productId || ''),
     qty: 0, externalKey: key,
-    extra: `${label} · отмена преждевременной продажи · нет записи списания, остаток не изменён; требуется проверка`
+    extra: manualReceipt ? `${label} · возврат уже обработан вручную, повторный приход заблокирован` : `${label} · отмена преждевременной продажи · нет записи списания, остаток не изменён; требуется проверка`
   });
   state.sales = state.sales.filter(sale => !(sale?.serverReconciled === true && String(sale?.externalKey || '') === key));
   return qty;

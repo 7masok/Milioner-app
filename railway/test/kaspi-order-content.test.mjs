@@ -115,3 +115,13 @@ for(const market of ['WB','WB2']){
   });
  });
 }
+
+for(const market of ['WB','WB2'])for(const action of ['Возврат WB в продажу','Брак WB','Не тот товар WB','Не оприходован']){
+ test(`${market} automatic restoration respects prior manual disposition: ${action}`,async()=>{
+  const f=fixture();const k=`${market}:order:entry`;f.state.sales[0].externalKey=k;f.state.sales[0].channel=market;f.state.movements[0].externalKey=k;f.state.settings.wbReturnReceipts={[k]:{at,action}};Object.assign(f.row,{market,status:'complete',state:'waiting'});
+  const originalStock=f.state.products[0].stock;
+  await fakeDb(f.state,[f.row],async queries=>{await reconcileMarketplaceSales(market);const p=JSON.parse(queries.find(q=>q.sql.includes('INSERT INTO warehouse_products')).args[0]);assert.equal(p.find(x=>x.id==='a').stock,originalStock);
+   const moves=JSON.parse(queries.find(q=>q.sql.includes('INSERT INTO warehouse_movements')).args[0]);const returned=moves.find(m=>m.type==='возврат');assert.equal(returned.qty,0);assert.match(returned.extra,/уже обработан вручную/);
+  });
+ });
+}

@@ -1,3 +1,4 @@
+import {preserveReturnReceipts,returnReceiptViolation} from './warehouse-returns.js';
 import {preserveKaspiContents} from './kaspi-order-content.js';
 import crypto from 'node:crypto';
 import express from 'express';
@@ -257,8 +258,9 @@ warehouseRouter.put('/warehouse-state', requireTrustedOrigin, requireWritesEnabl
       if (movementsProvided && isPatch) state.movements = patchMovements(previous.movements, incomingState?.movements, incomingState?.deleted?.movements);
       if (!movementsProvided) state.movements = [];
       productsChanged = JSON.stringify(previousStored.products || []) !== JSON.stringify(state.products || []);
-      const violation = stockLedgerViolation(previous, state) || staleWbLinkRestored(previous, state);
+      const violation = returnReceiptViolation(previous, state) || stockLedgerViolation(previous, state) || staleWbLinkRestored(previous, state);
       if (violation) return { conflict: true, revision: currentRevision, stockGuard: violation };
+      preserveReturnReceipts(previous,state);
       preserveWbValidation(previous, state);
     } else {
       state.reservations = [];
