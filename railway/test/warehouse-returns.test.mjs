@@ -45,3 +45,7 @@ test('an old client cannot credit an automatically restored WB debit even when n
  assert.equal(returnReceiptViolation(previous,{settings:{wbReturnReceipts:{[key]:{at:20}}},movements:[...previous.movements,{id:'legacy',type:'возврат',qty:1}]}).reason,'return-already-processed');
  assert.equal(returnReceiptViolation(previous,{settings:{},movements:[...previous.movements,stock('modern')]}).reason,'return-already-processed');
 });
+
+test('new manual return movements and receipts retain the confirmed size and barcode for later review',()=>{
+ const f=browser();Object.assign(f.ctx.wbReturnResolved,{size:'8',sizeKnown:true,variantBarcode:'barcode-eight'});f.ctx.processWbReturn('stock');const m=f.state.movements.find(m=>m.type==='возврат');assert.equal(m.returnSize,'8');assert.equal(m.returnBarcode,'barcode-eight');assert.match(m.extra,/размер 8/);assert.equal(f.state.settings.wbReturnReceipts[key].size,'8');assert.equal(f.state.settings.wbReturnReceipts[key].sizeKnown,true);
+});

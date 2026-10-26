@@ -87,6 +87,28 @@ function lookupVariants(value){
   return [...values].filter(Boolean).slice(0,60);
 }
 
+export function wbReturnIdentity(value){
+ let raw;try{raw=typeof value==='string'?JSON.parse(value):value||{}}catch{raw={}}
+ raw=raw&&typeof raw==='object'&&!Array.isArray(raw)?raw:{};
+ const order=raw.order||raw,identity=raw.identity||{},chrtId=Number(identity.chrtId||order.chrtId||0);
+ return {nmId:String(identity.nmId||order.nmId||'').trim(),chrtId:Number.isSafeInteger(chrtId)&&chrtId>0?chrtId:0,barcode:String(identity.barcode||order.skus?.[0]||'').trim(),size:String(identity.size||order.techSize||'').trim()};
+}
+function returnSizeLabel(value){const size=String(value||'').trim().slice(0,80);return /^(0|00|ONE ?SIZE|БЕЗ РАЗМЕРА)$/i.test(size)?'Без размера':size}
+export function wbReturnSize(market,identity,products=[]){
+ const direct=returnSizeLabel(identity.size);if(direct)return {size:direct,sizeKnown:true,variantBarcode:identity.barcode};
+ const candidates=products.filter(p=>p?.wbVariant?.market===market&&(!identity.nmId||String(p.wbVariant.nmId)===identity.nmId)),byId=candidates.filter(p=>identity.chrtId&&Number(p.wbVariant.chrtId)===identity.chrtId),byBarcode=candidates.filter(p=>identity.barcode&&[p.wbVariant.barcode,...(Array.isArray(p[market==='WB2'?'wb2Aliases':'wbAliases'])?p[market==='WB2'?'wb2Aliases':'wbAliases']:[])].map(String).includes(identity.barcode));
+ const matches=identity.chrtId?byId:byBarcode,conflict=identity.chrtId&&byBarcode.some(p=>Number(p.wbVariant.chrtId)!==identity.chrtId),sizes=new Set(matches.map(p=>returnSizeLabel(p.wbVariant.size)).filter(Boolean));
+ if(conflict||!matches.length||new Set(matches.map(p=>String(p.wbVariant.nmId)+':'+String(p.wbVariant.chrtId))).size!==1||sizes.size!==1||matches.some(p=>!returnSizeLabel(p.wbVariant.size)))return {size:'',sizeKnown:false,variantBarcode:identity.barcode};
+ return {size:[...sizes][0],sizeKnown:true,variantBarcode:identity.barcode||String(matches[0].wbVariant.barcode||'')};
+}
+async function readWbReturnSize(row){
+ const identity=wbReturnIdentity(row.rawJson),direct=wbReturnSize(row.market,identity);if(direct.sizeKnown||!identity.chrtId&&!identity.barcode)return direct;
+ const result=await pool.query(`SELECT payload FROM warehouse_products WHERE payload->'wbVariant'->>'market'=$1 AND
+  (($2<>'' AND payload->'wbVariant'->>'chrtId'=$2) OR ($3<>'' AND (payload->'wbVariant'->>'barcode'=$3 OR COALESCE(payload->(CASE WHEN $1='WB2' THEN 'wb2Aliases' ELSE 'wbAliases' END),'[]'::jsonb) ? $3))) LIMIT 21`,[row.market,identity.chrtId?String(identity.chrtId):'',identity.barcode]);
+ if(result.rows.length>20)return direct;
+ return wbReturnSize(row.market,identity,result.rows.map(r=>{try{return typeof r.payload==='string'?JSON.parse(r.payload):r.payload}catch{return null}}));
+}
+
 wbReturnsRouter.get('/wb-return-lookup',requireTrustedOrigin,asyncRoute(async(req,res)=>{
   const requestedMarket=normalizeMarket(req.query.market);
   const markets=requestedMarket==='ALL'?['WB','WB2']:[requestedMarket];
@@ -97,7 +119,7 @@ wbReturnsRouter.get('/wb-return-lookup',requireTrustedOrigin,asyncRoute(async(re
 
   const rows=await pool.query(`
     SELECT o.market,o.order_id AS "orderId",o.code,o.entry_id AS "entryId",o.status,o.state,
-      o.creation_date AS "creationDate",o.sku,o.product_name AS "productName",o.qty,
+      o.creation_date AS "creationDate",o.sku,o.product_name AS "productName",o.qty,o.raw_json AS "rawJson",
       pl.product_id AS "productId",s.barcode,s.part_a AS "partA",s.part_b AS "partB"
     FROM marketplace_order_lines o
     LEFT JOIN product_links pl ON pl.market=o.market AND pl.sku=o.sku
@@ -123,6 +145,8 @@ wbReturnsRouter.get('/wb-return-lookup',requireTrustedOrigin,asyncRoute(async(re
   if(unique.size>1)return res.status(409).json({ok:false,error:'По этому QR/коду найдено несколько WB-заказов. Выберите WB1/WB2 и введите номер сборочного задания.'});
   const row=[...unique.values()][0];
   const market=String(row.market);
+  const variant=await readWbReturnSize(row);
+  const {rawJson,...publicRow}=row;
   const externalKey=market+':'+String(row.orderId)+':'+String(row.entryId);
   const sold=await pool.query(`
     SELECT 1 FROM warehouse_sales WHERE external_key=$1
@@ -135,7 +159,7 @@ wbReturnsRouter.get('/wb-return-lookup',requireTrustedOrigin,asyncRoute(async(re
   `,[externalKey]);
   return res.json({
     ok:true,
-    order:{...row,qty:Math.max(1,Number(row.qty)||1),deducted:Boolean(sold.rowCount),externalKey},
+    order:{...publicRow,...variant,qty:Math.max(1,Number(row.qty)||1),deducted:Boolean(sold.rowCount),externalKey},
     matchedCode:code
   });
 }));
