@@ -20,3 +20,10 @@ test('Movement returns show order/shop/action, support order search and include 
 test('product return history is isolated, newest first and paginated without dropping old movements',()=>{
  const f=fixture();for(let i=0;i<16;i++)f.state.movements.push({id:'r'+i,type:'возврат',productId:'a',qty:1,date:500+i,extra:'WB1 test-'+i});const before=JSON.stringify(f.state);f.ctx.openProductReturns('a');assert.match(f.sheet,/Возвраты · Малина/);assert.doesNotMatch(f.sheet,/Kaspi 123|>продажа</);assert.equal((f.sheet.match(/<b>Возврат<\/b>/g)||[]).length,15);assert.ok(f.sheet.indexOf('test-15')<f.sheet.indexOf('test-14'));assert.match(f.sheet,/1 \/ 2/);f.ctx.openProductReturns('a',2);assert.match(f.sheet,/5902118694/);assert.equal(JSON.stringify(f.state),before);
 });
+
+test('the actual compatibility renderer retains return order details and number search with period filters',()=>{
+ const f=fixture(),compat=readFileSync(new URL('../../kaspi-status-compat-v1.js',import.meta.url),'utf8'),begin=compat.indexOf('const MOVEMENT_PERIOD_KEY='),end=compat.indexOf('// Ozon profitability report.');
+ Object.assign(f.ctx,{localStorage:{getItem:()=> '0',setItem(){}},Date,window:{},console,document:{getElementById:id=>f.els[id]||null,readyState:'loading',addEventListener(){},querySelectorAll:()=>[]}});
+ vm.runInContext(compat.slice(begin,end),f.ctx);f.ctx.renderMovement();assert.match(f.els.movementList.innerHTML,/WB1 5902118694/);assert.match(f.els.movementList.innerHTML,/Kaspi 123/);
+ f.els.moveQ.value='5902118694';f.ctx.renderMovement();assert.match(f.els.movementList.innerHTML,/WB1 5902118694/);assert.doesNotMatch(f.els.movementList.innerHTML,/Kaspi 123/);
+});

@@ -140,7 +140,7 @@ test('static assets can revalidate while API responses stay no-store',()=>{
 
 test('bell is present immediately and does not pulse on first paint',()=>{
   assert.match(html,/id="stockAlertBell"/);
-  assert.match(html,/stock-alerts-rescue-v1\.js\?v=20261019-reserve-restock/);
+  assert.match(html,/stock-alerts-rescue-v1\.js\?v=20261026-restorable-hidden/);
   assert.match(bell,/let lastSignature=null/);
   assert.match(bell,/const hadPrevious=lastSignature!==null/);
   assert.match(bell,/if\(hadPrevious&&unread\.length\)/);
