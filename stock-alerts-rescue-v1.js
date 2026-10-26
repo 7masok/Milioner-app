@@ -22,7 +22,7 @@ function sharedSettings(){try{return state&&state.settings&&typeof state.setting
 function readSharedMap(key){const value=sharedSettings()?.[key];return value&&typeof value==='object'&&!Array.isArray(value)?value:{}}
 function writeSharedMap(key,value){const settings=sharedSettings();if(!settings)return false;settings[key]=value;try{if(typeof save==='function')save()}catch{}return true}
 function readHidden(){return {...readLocalMap(LEGACY_HIDDEN_KEY),...readSharedMap(SHARED_HIDDEN_KEY)}}
-function migrateLegacyHidden(){if(legacyHiddenMigrated)return;const legacy=readLocalMap(LEGACY_HIDDEN_KEY),ids=Object.keys(legacy),settings=sharedSettings();if(!ids.length||!settings)return;const shared=readSharedMap(SHARED_HIDDEN_KEY),next={...shared};let changed=false;for(const id of ids)if(!next[id]){next[id]=legacy[id];changed=true}legacyHiddenMigrated=true;if(changed)writeSharedMap(SHARED_HIDDEN_KEY,next)}
+function migrateLegacyHidden(){if(legacyHiddenMigrated||!serverReady())return;const legacy=readLocalMap(LEGACY_HIDDEN_KEY),ids=Object.keys(legacy),settings=sharedSettings();if(!ids.length||!settings)return;const shared=readSharedMap(SHARED_HIDDEN_KEY),next={...shared};let changed=false;for(const id of ids)if(!next[id]){next[id]=legacy[id];changed=true}legacyHiddenMigrated=true;if(changed)writeSharedMap(SHARED_HIDDEN_KEY,next)}
 function acknowledgeAlerts(alerts){if(!alerts?.length)return;const seen=readSharedMap(SHARED_SEEN_KEY),next={...seen};let changed=false;for(const x of alerts){const id=alertIdentity(x);if(!next[id]){next[id]={seen:true,at:Date.now()};changed=true}}if(changed){if(!writeSharedMap(SHARED_SEEN_KEY,next)){const local=readLocalMap(LOCAL_SEEN_KEY);for(const x of alerts)local[alertIdentity(x)]={seen:true,at:Date.now()};writeLocalMap(LOCAL_SEEN_KEY,local)}}}
 function shouldAlertWarehouseRelease(available,warehouse){return Math.max(0,Number(available)||0)<=0&&Math.max(0,Number(warehouse)||0)>0}
 
@@ -75,8 +75,9 @@ function reserveRestockAlerts(snapshot){
 }
 function reserveAlertRows(){try{if(!serverReady()||typeof homeOrdersSettled!=='undefined'&&!homeOrdersSettled)return [];return reserveRestockAlerts(state)}catch{return []}}
 function alertIdentity(x){return String(x.alertId||x.p.id)}
-function allAlerts(){const restocked=reserveAlertRows(),hidden=readHidden(),shown=new Set(restocked.filter(x=>!hidden[alertIdentity(x)]).map(x=>String(x.p.id)));return [...restocked,...products().map(stockAlertFor).filter(x=>x&&!shown.has(String(x.p.id)))].sort((a,b)=>String(a.p.name).localeCompare(String(b.p.name),'ru'))}
-function activeAlertsFrom(rows,hidden){return (Array.isArray(rows)?rows:[]).filter(x=>!hidden?.[alertIdentity(x)])}
+function isHiddenRecord(value){return Boolean(value&&value.dismissed!==false)}
+function allAlerts(){const restocked=reserveAlertRows(),hidden=readHidden(),shown=new Set(restocked.filter(x=>!isHiddenRecord(hidden[alertIdentity(x)])).map(x=>String(x.p.id)));return [...restocked,...products().map(stockAlertFor).filter(x=>x&&!shown.has(String(x.p.id)))].sort((a,b)=>String(a.p.name).localeCompare(String(b.p.name),'ru'))}
+function activeAlertsFrom(rows,hidden){return (Array.isArray(rows)?rows:[]).filter(x=>!isHiddenRecord(hidden?.[alertIdentity(x)]))}
 function unreadAlertsFrom(rows,seen){return (Array.isArray(rows)?rows:[]).filter(x=>!seen?.[alertIdentity(x)])}
 function activeAlerts(){return activeAlertsFrom(allAlerts(),readHidden())}
 function unreadAlerts(rows=activeAlerts()){const seen={...readLocalMap(LOCAL_SEEN_KEY),...readSharedMap(SHARED_SEEN_KEY)};return unreadAlertsFrom(rows,seen)}
@@ -101,25 +102,42 @@ function reserveRestockCard(x){
  const orders=x.orders.map(o=>`<div style="margin-top:8px"><b>${escText(o.source==='WB'?'WB1':o.source)} · заказ ${escText(o.code)}</b><div class="muted">${o.available} из ${o.qty} шт. можно выделить${o.bundle?' · для набора «'+escText(o.bundle)+'»':''}</div>${o.orderId?`<button type="button" class="btn" style="margin-top:5px" onclick="event.stopPropagation();openRestockedReserveOrder('${encodedAlertArg(o.source)}','${encodedAlertArg(o.orderId)}','${encodedAlertArg(o.code)}')">Открыть заказ</button>`:''}</div>`).join('');
  return `<div class="item stock-alert-card" style="border-left-color:#17884d"><button type="button" class="stock-alert-dismiss" aria-label="Скрыть напоминание" onclick="event.stopPropagation();hideReserveRestockAlert('${encodedId}')">×</button><div style="padding-right:38px"><div class="name">${escText(x.p.name)}</div><div class="muted">Товар поступил · есть заказы в резерве</div></div><div class="link-note" style="margin:8px 0">Проверьте состав и распечатайте заказ для отправки.</div>${orders}${x.warehouse>0?`<button type="button" class="btn dark full" style="margin-top:10px" onclick="openStockAlertWarehouse(decodeURIComponent('${pid}'))">Выставить со склада</button>`:''}</div>`;
 }
-window.hideReserveRestockAlert=function(encodedId){const id=decodeURIComponent(String(encodedId)),hidden={...readSharedMap(SHARED_HIDDEN_KEY),[id]:{dismissed:true,at:Date.now()}};writeSharedMap(SHARED_HIDDEN_KEY,hidden);paintBell();if(activeAlerts().length)window.openStockAlerts();else closeModal()};
+window.hideReserveRestockAlert=function(encodedId){hideAlert(decodeURIComponent(String(encodedId)))};
 window.openRestockedReserveOrder=function(encodedMarket,encodedId,encodedCode){
  const market=decodeURIComponent(encodedMarket),orderId=decodeURIComponent(encodedId),code=decodeURIComponent(encodedCode);closeModal();openView('home',true);
  try{selectedOrderMarket=market==='WB2'?'WB':market;if(market==='WB'||market==='WB2')selectedWbAccount=market;unmatchedOrderFilter=false;orderPage=1;orderSearchText=normalizeName(code||orderId);orderPeriodMode='custom';const rows=[...(state.kaspiOrderFeed||[]),...(state.wbOrderFeed||[])].filter(o=>String(o.market||'Kaspi')===market&&String(o.orderId)===orderId),date=rows[0]?.creationDate;if(date){orderCustomFrom=orderDateValue(date);orderCustomTo=orderCustomFrom}const input=document.getElementById('orderSearch');if(input)input.value=code||orderId;document.querySelectorAll('.market-tab[data-market]').forEach(b=>b.classList.toggle('active',b.dataset.market===selectedOrderMarket));renderOrderPeriodControls();renderMarketplaceOrders();setTimeout(()=>document.getElementById('kaspiOrderList')?.scrollIntoView({behavior:'smooth',block:'start'}),50)}catch{alert('Найдите заказ '+code+' в '+market)}
 };
-window.openStockAlerts=function(){const alerts=activeAlerts();if(!alerts.length)return alert('Сейчас нет активных предупреждений по остаткам.');acknowledgeAlerts(alerts);paintBell();showSheet(`<h3>Предупреждения по остаткам · ${alerts.length}</h3><div class="link-note">Красный счётчик показывает только новые предупреждения, но здесь всегда видны все активные. Повторное уведомление появится, если дефицит сначала исчезнет, а потом возникнет снова. Крестик × скрывает конкретный товар на всех устройствах.</div>${alerts.map(alertCard).join('')}`)};
-window.hideStockAlert=function(pid){
-  if(!findProduct(pid))return;
-  const hidden={...readSharedMap(SHARED_HIDDEN_KEY)};
-  hidden[String(pid)]={dismissed:true,at:Date.now()};
-  if(!writeSharedMap(SHARED_HIDDEN_KEY,hidden)){
-    const local=readLocalMap(LEGACY_HIDDEN_KEY);
-    local[String(pid)]=hidden[String(pid)];
-    writeLocalMap(LEGACY_HIDDEN_KEY,local);
-  }
-  paintBell();
-  const left=activeAlerts();
-  if(!left.length){closeModal();return}
-  window.openStockAlerts();
+function hiddenAlertEntries(alerts=allAlerts()){
+ const live=new Map(alerts.map(x=>[alertIdentity(x),x]));
+ return Object.entries(readHidden()).filter(([,value])=>isHiddenRecord(value)).map(([id,value])=>{
+  const current=live.get(id);let productId=String(value?.productId||current?.p.id||id);
+  if(!value?.productId&&!current&&id.startsWith('reserve-restock:'))try{productId=String(JSON.parse(id.slice('reserve-restock:'.length))[0])}catch{}
+  const p=current?.p||findProduct(productId);
+  return {id,productId,name:String(p?.name||value?.name||'Товар больше не в каталоге'),kind:current?.kind||value?.kind||(id.startsWith('reserve-restock:')?'reserve-restock':'warehouse-release'),current};
+ }).sort((a,b)=>a.name.localeCompare(b.name,'ru'));
+}
+function hideAlert(id){
+ if(typeof requireWarehouseEditReady==='function'&&!requireWarehouseEditReady())return;
+ const row=allAlerts().find(x=>alertIdentity(x)===String(id));if(!row)return;
+ const value={dismissed:true,at:Date.now(),productId:String(row.p.id),name:String(row.p.name||''),kind:row.kind||'warehouse-release'},hidden={...readSharedMap(SHARED_HIDDEN_KEY),[String(id)]:value};
+ if(!writeSharedMap(SHARED_HIDDEN_KEY,hidden))writeLocalMap(LEGACY_HIDDEN_KEY,{...readLocalMap(LEGACY_HIDDEN_KEY),[String(id)]:value});
+ paintBell();window.openStockAlerts();
+}
+window.openStockAlerts=function(view='active'){
+ const all=allAlerts(),alerts=activeAlertsFrom(all,readHidden()),hidden=hiddenAlertEntries(all),isHidden=view==='hidden';
+ if(!isHidden)acknowledgeAlerts(alerts);paintBell();
+ const tabs=`<div class="actions" style="margin-bottom:12px"><button type="button" class="btn ${isHidden?'':'dark'}" onclick="openStockAlerts()">Активные · ${alerts.length}</button><button type="button" class="btn ${isHidden?'dark':''}" onclick="openStockAlerts('hidden')">Скрытые · ${hidden.length}</button></div>`;
+ const body=isHidden?hidden.map(x=>`<div class="item row" style="margin-top:8px"><div class="grow"><b>${escText(x.name)}</b><div class="muted">${x.kind==='reserve-restock'?'Товар поступил · есть заказы в резерве':'Выставить со склада'}${x.current?'':' · сейчас не требуется'}</div></div><button type="button" class="btn" onclick="restoreHiddenStockAlert('${encodedAlertArg(x.id)}')">Вернуть</button></div>`).join(''):alerts.map(alertCard).join('');
+ showSheet('<h3>Предупреждения по остаткам</h3>'+tabs+(body||`<div class="empty">${isHidden?'Скрытых предупреждений нет.':'Сейчас нет активных предупреждений.'}</div>`));
+};
+window.hideStockAlert=function(pid){hideAlert(String(pid))};
+window.restoreHiddenStockAlert=function(encodedId){
+ if(typeof requireWarehouseEditReady==='function'&&!requireWarehouseEditReady())return;
+ const id=decodeURIComponent(String(encodedId)),value={dismissed:false,at:Date.now()},hidden={...readSharedMap(SHARED_HIDDEN_KEY),[id]:value};
+ // A shared tombstone overrides legacy local dismissals on other devices too.
+ if(!writeSharedMap(SHARED_HIDDEN_KEY,hidden))writeLocalMap(LEGACY_HIDDEN_KEY,{...readLocalMap(LEGACY_HIDDEN_KEY),[id]:value});
+ else{const local=readLocalMap(LEGACY_HIDDEN_KEY);delete local[id];writeLocalMap(LEGACY_HIDDEN_KEY,local)}
+ paintBell();window.openStockAlerts(hiddenAlertEntries().length?'hidden':'active');
 };
 function focusProduct(pid){const p=findProduct(pid);if(!p)return false;openView('products',true);const q=document.getElementById('q'),filter=document.getElementById('filter');if(q)q.value=String(p.name||'');if(filter)filter.value='all';try{productPage=1}catch{}try{render()}catch{}setTimeout(()=>document.getElementById('productList')?.scrollIntoView({behavior:'smooth',block:'start'}),80);return true}
 function decorateInventory(pid){const p=findProduct(pid),input=document.getElementById('iq');if(!p||!input)return;const expected=Math.max(0,safeNum(p.stock)),reserve=activeReserved(p),available=availableStock(p),warehouse=atWarehouse(pid);let note=document.getElementById('inventoryExpectedNote');if(!note){note=document.createElement('div');note.id='inventoryExpectedNote';note.className='inventory-diff-note';input.closest('.two')?.insertAdjacentElement('afterend',note)}const update=()=>{const actual=Math.max(0,safeNum(input.value)),diff=actual-expected;note.className='inventory-diff-note '+(diff===0?'ok':'bad');note.innerHTML=`<b>Проверка учёта</b><br>По системе: ${expected} шт. · резерв ${reserve} шт. · свободно ${available} шт.${warehouse?` · отдельно на складе ${warehouse} шт.`:''}<br><b>${diff===0?'Совпадает с учётом':`Расхождение: ${diff>0?'+':''}${diff} шт.`}</b>`};input.addEventListener('input',update);update();input.focus();input.select()}
