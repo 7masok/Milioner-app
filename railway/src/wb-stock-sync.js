@@ -116,9 +116,29 @@ async function readStocks(token,warehouse,ids){
   const values=new Map(),all=[...new Set(ids.map(Number).filter(Boolean))];
   for(let i=0;i<all.length;i+=1000){
     const data=await requestJson(MARKETPLACE_API+'/api/v3/stocks/'+encodeURIComponent(warehouse),{method:'POST',headers:{Accept:'application/json','Content-Type':'application/json',Authorization:token},body:JSON.stringify({chrtIds:all.slice(i,i+1000)})},'WB stocks');
-    for(const row of Array.isArray(data?.stocks)?data.stocks:[]){const id=Number(row?.chrtId||0);if(id)values.set(id,Math.max(0,Math.floor(Number(row?.amount)||0)))}
+    for(const row of Array.isArray(data?.stocks)?data.stocks:[]){const id=Number(row?.chrtId||0),amount=row?.amount;if(id&&amount!==null&&amount!==undefined&&Number.isInteger(Number(amount))&&Number(amount)>=0)values.set(id,Number(amount))}
   }
   return values;
+}
+// Observation metadata only. Never import marketplace stock into the ledger.
+export async function persistWbStockObservations(market,warehouse,items,actual,pending,at){
+  return transaction(async client=>{
+    await client.query('SELECT pg_advisory_xact_lock($1)',[730021]);
+    const current=await client.query('SELECT payload FROM warehouse_state WHERE id=1 FOR UPDATE');
+    if(!current.rowCount)return;
+    const state=await hydrateWarehouseProducts(client,parse(current.rows[0].payload));
+    const byId=new Map((state.products||[]).map(p=>[String(p.id),p]));let changed=false;
+    for(const item of items){
+      const product=byId.get(item.productId),variant=product?.wbVariant;
+      if(!actual.has(item.chrtId)||!variant||variant.market!==market||Number(variant.chrtId)!==item.chrtId||linkFingerprint(product,market==='WB2'?'wb2':'wb')!==item.fingerprint||Number(variant.stockObservation?.at||0)>at)continue;
+      variant.stockObservation={amount:actual.get(item.chrtId),at,warehouseId:String(warehouse),pending:pending.has(item.chrtId)};
+      changed=true;
+    }
+    if(changed){
+      await persistWarehouseProducts(client,state.products,Date.now());
+      await client.query('UPDATE warehouse_state SET payload=$1,revision=revision+1,updated_at=$2 WHERE id=1',[JSON.stringify(warehousePayloadForStorage(state)),Date.now()]);
+    }
+  });
 }
 async function writeStocks(token,warehouse,items){
   for(let i=0;i<items.length;i+=1000)await requestJson(MARKETPLACE_API+'/api/v3/stocks/'+encodeURIComponent(warehouse),{method:'PUT',headers:{Accept:'application/json','Content-Type':'application/json',Authorization:token},body:JSON.stringify({stocks:items.slice(i,i+1000)})},'WB stock update');
@@ -152,7 +172,7 @@ export async function syncWbStockMarket(market,{write=true}={}){
       hit=single?{card:single,size:single.sizes[0]}:aliases.map(value=>byBarcode.get(value)).find(Boolean);
     }
     if(!hit){unresolved.push({sku,name:String(product?.name||''),reason:'article-or-barcode-not-found'});continue}
-    candidates.push({chrtId:Number(hit.size.chrtId),amount:availability.amount(product.id),sku,name:String(product?.name||'')});
+    candidates.push({chrtId:Number(hit.size.chrtId),amount:availability.amount(product.id),sku,name:String(product?.name||''),productId:String(product.id),fingerprint:linkFingerprint(product,field)});
   }
   const duplicates=new Set(),seenChrt=new Set();
   for(const item of candidates){if(seenChrt.has(item.chrtId))duplicates.add(item.chrtId);seenChrt.add(item.chrtId)}
@@ -164,7 +184,9 @@ export async function syncWbStockMarket(market,{write=true}={}){
   const warehouse=await warehouseId(token,id);
   if(!warehouse)return {ok:false,market:id,skipped:true,reason:'warehouse-not-unique',linked:linked.length};
   const actual=await readStocks(token,warehouse,items.map(item=>item.chrtId));
-  const changed=items.filter(item=>(actual.get(item.chrtId)||0)!==item.amount);
+  const observedAt=Date.now();
+  const changed=items.filter(item=>actual.has(item.chrtId)&&actual.get(item.chrtId)!==item.amount);
   if(write&&changed.length)await writeStocks(token,warehouse,changed.map(item=>({chrtId:item.chrtId,amount:item.amount})));
-  return {ok:true,market:id,warehouseId:warehouse,linked:linked.length,mapped:items.length,unresolved:unresolved.slice(0,50),changed:changed.length,sent:write&&changed.length>0,items:items.slice(0,100)};
+  await persistWbStockObservations(id,warehouse,items,actual,new Set(write?changed.map(item=>item.chrtId):[]),observedAt);
+  return {ok:true,market:id,warehouseId:warehouse,linked:linked.length,mapped:items.length,unresolved:unresolved.slice(0,50),changed:changed.length,sent:write&&changed.length>0,items:items.slice(0,100).map(({fingerprint,productId,...item})=>item)};
 }
