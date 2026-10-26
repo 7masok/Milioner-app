@@ -64,6 +64,10 @@ export function preserveWbValidation(previous, next) {
   const oldById = new Map((previous.products || []).map(p => [String(p.id), p]));
   for (const p of next.products || []) {
     const old = oldById.get(String(p.id));
+    const a=old?.wbVariant,b=p.wbVariant;
+    if(a?.stockObservation&&b&&['market','nmId','chrtId','barcode'].every(key=>String(a[key]||'')===String(b[key]||''))){
+      b.stockObservation=a.stockObservation;
+    }else if(b){delete b.stockObservation;}
     for (const f of ['wb', 'wb2']) {
       if (old?.[f + 'RelinkRequired'] && !p[f]) {
         p[f + 'RelinkRequired'] = old[f + 'RelinkRequired'];
