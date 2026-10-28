@@ -1,3 +1,4 @@
+import { withGrowthAnalyticsPage } from './growth-analytics-page.js';
 import {kaspiOrderContentRouter} from './kaspi-order-content-router.js';
 import {purchasePdfRouter} from './purchase-pdf.js';
 import {startKaspiHistoryLoop} from './kaspi-order-history.js';
@@ -51,6 +52,9 @@ const frontendFiles = Object.freeze([
   'ozon-supplies-v1.js',
   'warehouse-insights.js',
   'product-sales-trend-v1.js',
+  'growth-analytics-model.js',
+  'growth-analytics-v1.js',
+  'growth-analytics.css',
   'cloud-sync-v3.js',
   'packaging-model.js',
   'packaging-v1.js',
@@ -103,7 +107,9 @@ app.use(exactCors);
 app.use(express.json({ limit: '7mb', strict: true }));
 
 const frontendRevalidateHeaders = { 'Cache-Control': 'public, max-age=0, must-revalidate' };
-app.get(['/', '/index.html'], (_req, res) => res.sendFile(path.join(repositoryRoot, 'index.html'), { headers: frontendRevalidateHeaders }));
+app.get(['/', '/index.html'], async (_req,res,next)=>{
+  try{const page=withGrowthAnalyticsPage(await readFile(path.join(repositoryRoot,'index.html'),'utf8'));res.set(frontendRevalidateHeaders).type('html').send(page)}catch(error){next(error)}
+});
 app.get('/ozon-fbo-v1.js', async (_req,res,next)=>{
   try{
     const [rawBase,supplies]=await Promise.all([
