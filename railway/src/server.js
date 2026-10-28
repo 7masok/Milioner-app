@@ -1,3 +1,5 @@
+import { fboDashboardRouter } from './ozon-planner/dashboard.js';
+import { withFboPage } from './fbo-page.js';
 import { withGrowthAnalyticsPage } from './growth-analytics-page.js';
 import {kaspiOrderContentRouter} from './kaspi-order-content-router.js';
 import {purchasePdfRouter} from './purchase-pdf.js';
@@ -55,6 +57,9 @@ const frontendFiles = Object.freeze([
   'growth-analytics-model.js',
   'growth-analytics-v1.js',
   'growth-analytics.css',
+  'fbo-dashboard-v1.js',
+  'fbo-dashboard-model.js',
+  'fbo-dashboard.css',
   'cloud-sync-v3.js',
   'packaging-model.js',
   'packaging-v1.js',
@@ -108,7 +113,7 @@ app.use(express.json({ limit: '7mb', strict: true }));
 
 const frontendRevalidateHeaders = { 'Cache-Control': 'public, max-age=0, must-revalidate' };
 app.get(['/', '/index.html'], async (_req,res,next)=>{
-  try{const page=withGrowthAnalyticsPage(await readFile(path.join(repositoryRoot,'index.html'),'utf8'));res.set(frontendRevalidateHeaders).type('html').send(page)}catch(error){next(error)}
+  try{const page=withFboPage(withGrowthAnalyticsPage(await readFile(path.join(repositoryRoot,'index.html'),'utf8')));res.set(frontendRevalidateHeaders).type('html').send(page)}catch(error){next(error)}
 });
 app.get('/ozon-fbo-v1.js', async (_req,res,next)=>{
   try{
@@ -136,6 +141,7 @@ app.post('/api/auth/webauthn/login-verify', requireTrustedOrigin, webauthnLoginV
 // Device tokens are scoped to the planner; warehouse routes keep their session gate.
 app.use('/api/ozon-planner', plannerRouter);
 app.use('/api', requireAppSession);
+app.use('/api/fbo-dashboard', fboDashboardRouter);
 registerDeveloperGuideRoutes(app, repositoryRoot);
 app.get('/api/auth/webauthn/credentials', requireTrustedOrigin, listWebauthnCredentials);
 app.delete('/api/auth/webauthn/credentials/:id', requireTrustedOrigin, deleteWebauthnCredential);

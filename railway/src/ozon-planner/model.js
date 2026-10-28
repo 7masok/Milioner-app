@@ -52,3 +52,9 @@ export function buildPrepared(config,source,oldState={}){
  });
  return {state,plans,calculatedDay:day,configHash:configurationHash(config)};
 }
+
+// Read-only view helpers share exactly the APK's route/date semantics.
+export function displayPlannerState(state){
+ const shipments=Supplies.withRouteDates(state.shipments,state.inboundRoutes||[]);
+ return {shipments:shipments.map(s=>({...s,statusLabel:Supplies.labels[s.ozonState]||s.status,category:Supplies.group(s,today()),reason:Supplies.reason(s,today())})),routes:Supplies.routesForState(state)};
+}
