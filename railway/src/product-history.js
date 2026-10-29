@@ -6,7 +6,7 @@ import {asyncRoute,requireTrustedOrigin,noStore} from './http.js';
 export const HISTORY_ENTITIES=new Set(['product','purchase','reservation','movement','sale']);
 export const HISTORY_ACTIONS=new Set(['created','updated','deleted','baseline']);
 export function historyQuery(input={}){
- const where=[],values=[];
+ const where=["h.action<>'baseline'","visible.changes<>'{}'::jsonb"],values=[];
  const add=(sql,value)=>{values.push(value);where.push(sql.replace('?',`$${values.length}`))};
  const productId=String(input.productId||'').trim(),q=String(input.q||'').trim();
  if(productId.length>200||q.length>200)throw Object.assign(Error('Слишком длинный запрос'),{status:400});
@@ -16,8 +16,9 @@ export function historyQuery(input={}){
  if(input.action){if(!HISTORY_ACTIONS.has(input.action))throw Object.assign(Error('Неизвестное действие'),{status:400});add('h.action=?',input.action)}
  if(input.before){if(!/^[1-9][0-9]{0,18}$/.test(String(input.before)))throw Object.assign(Error('Некорректная страница'),{status:400});add('h.id<?::bigint',String(input.before))}
  const limit=50;values.push(limit+1);
- return {text:`SELECT h.id::text,h.product_id AS "productId",h.product_name AS "productName",h.entity,h.entity_id AS "entityId",h.action,h.happened_at AS "happenedAt",h.source,h.channel,h.revision,h.changes
+ return {text:`SELECT h.id::text,h.product_id AS "productId",h.product_name AS "productName",h.entity,h.entity_id AS "entityId",h.action,h.happened_at AS "happenedAt",h.source,h.channel,h.revision,visible.changes
  FROM product_history h LEFT JOIN warehouse_products p ON p.id=h.product_id
+ CROSS JOIN LATERAL (SELECT product_history_visible_changes(h.changes) AS changes) visible
  ${where.length?'WHERE '+where.join(' AND '):''} ORDER BY h.id DESC LIMIT $${values.length}`,values,limit};
 }
 export function createProductHistoryRouter({db=pool}={}){
