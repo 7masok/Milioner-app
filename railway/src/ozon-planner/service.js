@@ -1,4 +1,5 @@
 import {readWarehouseContext,enrichPreparedWithWarehouse} from '../fbo-warehouse/store.js';
+import {runAutoAccounting} from '../fbo-warehouse/automatic.js';
 import crypto from 'node:crypto';
 import { pool } from '../db.js';
 import { credentialFor } from '../connections.js';
@@ -42,6 +43,7 @@ async function run(){
    const payload=await collectSnapshot(createOzonReader(account.credentials),{previous:source?.payload,cache,extraSkus,today:today(),saveBundle:async(supplyId,entry)=>pool.query(`INSERT INTO ozon_planner_bundles(account,client_id,supply_id,payload) VALUES($1,$2,$3,$4::jsonb) ON CONFLICT(account,client_id,supply_id) DO UPDATE SET payload=EXCLUDED.payload`,[account.id,account.clientId,supplyId,JSON.stringify(entry)])});
    const stamp=Date.parse(payload.updatedAt);
    await pool.query('UPDATE ozon_planner_sources SET payload=$2::jsonb,updated_at=$3,next_allowed_at=$4,last_error=$5 WHERE account=$1 AND client_id=$6',[account.id,JSON.stringify(payload),stamp,stamp+15*60000,'',account.clientId]);
+   try{await runAutoAccounting(account,{payload,updated_at:stamp})}catch{console.warn('FBO automatic accounting unavailable',account.id)}
    const devices=(await pool.query('SELECT * FROM ozon_planner_devices WHERE account=$1 AND client_id=$2 AND NOT revoked',[account.id,account.clientId])).rows;
    for(const device of devices)await prepareDevice(device,{payload,updated_at:stamp});
    console.info('Ozon planner snapshot ready',JSON.stringify({account:account.id,stocks:payload.rows.length,supplies:payload.supplies.length,downloaded:payload.compositionSync.downloaded,reused:payload.compositionSync.reused,seconds:payload.compositionSync.seconds}));
