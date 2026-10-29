@@ -15,7 +15,7 @@ async function fixture(seed=false){
  for(const file of ['126_warehouse_products.sql','122_warehouse_purchases.sql','124_warehouse_reservations.sql','100_warehouse_movements.sql','123_warehouse_sales.sql'])await db.exec(read('../migrations/'+file).split('--')[0]);
  await db.exec("CREATE TABLE warehouse_audit(revision BIGINT PRIMARY KEY,updated_at BIGINT NOT NULL,payload_sha256 TEXT NOT NULL,source TEXT NOT NULL)");
  if(seed)await db.query("INSERT INTO warehouse_products(id,name,stock,payload) VALUES('one','Малина 24',5,$1::jsonb)",[JSON.stringify({id:'one',name:'Малина 24',stock:5,ozon:'111'})]);
- await db.exec(migration);return db;
+ await db.exec(migration);await db.exec(read('../migrations/152_product_history_business_events.sql'));return db;
 }
 test('real PostgreSQL triggers preserve creations, field changes and deletion of one of two same-name products',async()=>{
  const db=await fixture(true);try{
@@ -87,5 +87,22 @@ test('history translates purchase receipt fields and keeps raw IDs and codes beh
  assert.match(main,/На складе/);assert.match(main,/В продаже/);assert.match(main,/Дата поступления в продажу/);assert.match(main,/Остаток партии/);assert.match(main,/Количество: 2/);assert.match(main,/Дополнительное поле/);
  assert.doesNotMatch(main,/at_warehouse|receivedAt|mysteryField|opaque-|ревизия|\{&quot;/);
  assert.match(html,/<details class="ph-technical"><summary>Технические сведения<\/summary>/);assert.match(html,/opaque-product-id/);assert.match(html,/25639/);assert.match(html,/at_warehouse/);assert.match(html,/mysteryField/);
+});
+test('polling metadata creates no events; historic noise and baselines are filtered before pagination',async()=>{
+ const db=await fixture(true);try{
+  const variant={market:'WB',nmId:'1892746343',chrtId:3297018063,barcode:'2058617146453',size:'0',vendorCode:'Чехол',checkedAt:100,wbAmount:6,stockObservation:{amount:6,at:100,warehouseId:'595101',pending:false}};
+  await db.query("UPDATE warehouse_products SET payload=payload||$1::jsonb WHERE id='one'",[JSON.stringify({wbVariant:variant})]);
+  const n=Number((await db.query('SELECT count(*) n FROM product_history')).rows[0].n);
+  for(let i=0;i<3;i++)await db.query("UPDATE warehouse_products SET payload=payload||$1::jsonb WHERE id='one'",[JSON.stringify({checkedAt:200+i,wbVariant:{...variant,checkedAt:200+i,wbAmount:10+i,stockObservation:{...variant.stockObservation,amount:10+i,at:200+i}}})]);
+  assert.equal(Number((await db.query('SELECT count(*) n FROM product_history')).rows[0].n),n);
+  await db.query("UPDATE warehouse_products SET stock=9,payload=payload||$1::jsonb WHERE id='one'",[JSON.stringify({wbVariant:{...variant,barcode:'new-barcode',checkedAt:500}})]);
+  let query=historyQuery({productId:'one'}),rows=(await db.query(query.text,query.values)).rows;
+  assert.equal(rows.length,2);assert.equal(rows[0].changes.stock.after,9);assert.equal(rows[0].changes.wbVariant.after.barcode,'new-barcode');assert.equal(rows[0].changes.wbVariant.after.checkedAt,undefined);assert.equal(rows[0].changes.wbVariant.after.stockObservation,undefined);
+  const noise={wbVariant:{before:variant,after:{...variant,checkedAt:999,stockObservation:{...variant.stockObservation,at:999}},beforeExists:true,afterExists:true}};
+  for(let i=0;i<60;i++)await db.query("INSERT INTO product_history(product_id,product_name,entity,entity_id,action,changes) VALUES('one','Малина','product','one','updated',$1::jsonb)",[JSON.stringify(noise)]);
+  query=historyQuery({productId:'one'});rows=(await db.query(query.text,query.values)).rows;assert.equal(rows.length,2);assert.ok(rows.every(r=>r.action!=='baseline'));assert.equal((await db.query(historyQuery({productId:'one',before:rows[1].id}).text,historyQuery({productId:'one',before:rows[1].id}).values)).rows.length,0);
+  await db.exec("BEGIN;UPDATE warehouse_products SET stock=8 WHERE id='one';INSERT INTO warehouse_audit VALUES(33,100,'hash','fbo-automatic');COMMIT;");
+  rows=(await db.query(query.text,query.values)).rows;assert.equal(rows[0].source,'fbo-automatic');assert.equal(rows[0].changes.stock.after,8);
+ }finally{await db.close()}
 });
 test.after(()=>pool.end());
