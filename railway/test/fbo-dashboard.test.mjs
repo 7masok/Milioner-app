@@ -30,7 +30,7 @@ test('unknown stock/rate is not zero; one cluster cannot subtract another cluste
 });
 test('served page has 10 aligned destinations, FBO restoration and static scripts before auth',()=>{
  const page=withFboPage(withGrowthAnalyticsPage(read('index.html')));assert.equal((page.slice(page.indexOf('<nav>'),page.indexOf('</nav>')).match(/data-view="/g)||[]).length,10);assert.equal((page.match(/data-view="fbo"/g)||[]).length,1);assert.match(page,/'purchases','fbo','reports'/);assert.match(page,/activeView==='fbo'/);
- for(const f of ['fbo-dashboard-model.js','fbo-dashboard-v1.js'])assert.ok(page.indexOf('./'+f)<page.lastIndexOf('initOwnerAuth();'));assert.match(read('fbo-dashboard.css'),/grid-template-columns:repeat\(5,minmax\(0,1fr\)\)/);assert.match(read('fbo-dashboard.css'),/grid-template-rows:repeat\(2,55px\)/);assert.match(read('fbo-dashboard.css'),/safe-area-inset-bottom/);
+ for(const f of ['fbo-dashboard-model.js','fbo-dashboard-v1.js','fbo-warehouse-v1.js'])assert.ok(page.indexOf('./'+f)<page.lastIndexOf('initOwnerAuth();'));assert.match(read('fbo-dashboard.css'),/grid-template-columns:repeat\(5,minmax\(0,1fr\)\)/);assert.match(read('fbo-dashboard.css'),/grid-template-rows:repeat\(2,55px\)/);assert.match(read('fbo-dashboard.css'),/safe-area-inset-bottom/);
 });
 test('owner read endpoint selects only one shop, reads cache, cannot pair or mutate business data',async()=>{
  const express=(await import('express')).default;let queries=[];const db={query:async(sql)=>{queries.push(sql);return{rows:[{configuration:config()}]}}};

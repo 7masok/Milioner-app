@@ -7,7 +7,7 @@ const transfers=()=>{state.settings=state.settings||{};return state.settings.ozo
 const text=v=>esc(String(v??''));
 const storedTransfers=()=>state.settings?.ozonFboTransfers||{};
 function productKeys(p){return [...new Set([p?.ozon,...(Array.isArray(p?.ozonAliases)?p.ozonAliases:[])].map(x=>String(x||'').trim()).filter(Boolean))];}
-function transferKey(account,order,supply,bundle,sku){return [account,order,supply,bundle,sku].map(x=>String(x||'')).join('|');}
+function transferKey(account,order,supply,bundle,sku){const exact=[account,order,supply,bundle,sku].map(x=>String(x||'')).join('|');if(!supply||!sku)return exact;const old=Object.entries(state.settings?.ozonFboTransfers||{}).find(([key,r])=>r?.serverDraftId&&String(r.account||key.split('|')[0])===String(account)&&String(r.supplyId||key.split('|')[2])===String(supply)&&String(r.sku||key.split('|')[4])===String(sku));return old?.[0]||exact;}
 function stockRowFor(account,sku){
  const a=(cache?.accounts||[]).find(x=>String(x.account)===String(account));
  return (a?.stocks?.rows||[]).find(r=>(r.stocks||[]).some(s=>String(s.sku)===String(sku)));
@@ -18,7 +18,7 @@ function itemIdentifiers(account,item){
 }
 function matchProduct(account,item){
  const ids=itemIdentifiers(account,item);
- return (state.products||[]).find(p=>productKeys(p).some(k=>ids.includes(k)))||null;
+ const found=(state.products||[]).filter(p=>productKeys(p).some(k=>ids.includes(k)));return found.length===1?found[0]:null;
 }
 function warehouseLabel(s){return s?.storage_warehouse?.name||s?.storage_warehouse?.address||('Склад #'+String(s?.storage_warehouse?.warehouse_id||'—'));}
 function stateLabel(v){const key=String(v||'').toUpperCase();return ({IN_TRANSIT:'В пути',ACCEPTED_AT_SUPPLY_WAREHOUSE:'Принято в точке отгрузки',ACCEPTANCE_AT_STORAGE_WAREHOUSE:'На приёмке',REPORTS_CONFIRMATION_AWAITING:'Ожидает подтверждения приёмки',REPORT_REJECTED:'Приёмка на уточнении',COMPLETED:'Доставлено',CANCELLED:'Отменено',REJECTED_AT_SUPPLY_WAREHOUSE:'Отклонено',OVERDUE:'Просрочено',READY_TO_SUPPLY:'Готово к отправке'})[key]||key.replaceAll('_',' ')||'—';}
@@ -37,8 +37,9 @@ function orderStateLabel(order){
  return stateLabel(parent);
 }
 function accountingSummary(account,order){
- const saved=state.settings?.ozonFboTransfers||{},prefix=String(account)+'|'+String(order.order_id)+'|',records=Object.entries(saved).filter(([key,row])=>key.startsWith(prefix)&&row);
+ const saved=state.settings?.ozonFboTransfers||{},prefix=String(account)+'|'+String(order.order_id)+'|';
  const lines=allLines(order).filter(x=>Number(x.item.quantity)>0),keys=new Set(lines.map(x=>transferKey(account,order.order_id,x.s.supply_id,x.s.bundle_id,x.item.sku)));
+ const records=Object.entries(saved).filter(([key,row])=>row&&(key.startsWith(prefix)||keys.has(key)));
  const compositionComplete=(order.supplies||[]).length>0&&(order.supplies||[]).every(s=>Array.isArray(s.items)&&s.items.length>0&&!s.bundle_error&&!s.bundle_pending);
  const qty=lines.reduce((n,x)=>n+Number(x.item.quantity),0),recordedQty=records.reduce((n,[,row])=>n+Math.max(0,Number(row.qty)||0),0);
  const complete=compositionComplete&&lines.length>0&&lines.every(x=>{
@@ -85,7 +86,7 @@ function renderOrder(){
    const p=matchProduct(current.account,item),key=transferKey(current.account,order.order_id,s.supply_id,s.bundle_id,item.sku),done=storedTransfers()[key],qty=Math.max(0,Number(item.quantity)||0);
    const action=done?`<b style="color:${Number(done.qty)===qty?'#218838':'#a86400'}">Учтено ${Math.max(0,Number(done.qty)||0)} из ${qty} шт.</b>`:p?`<button class="btn" onclick="accountOzonFboLine('${encodeURIComponent(key)}')">Учесть ${qty} шт.</button>`:`<button class="btn" onclick="linkOzonFboItem('${encodeURIComponent(String(s.supply_id||''))}','${encodeURIComponent(String(s.bundle_id||''))}','${encodeURIComponent(String(item.sku||''))}')">Привязать</button>`;
    const source=p&&!done?`<label class="muted" for="ozonFboSource-${encodeURIComponent(key)}">Откуда отправляем</label><select id="ozonFboSource-${encodeURIComponent(key)}" class="select" style="width:100%;margin-top:5px">${sourceOptions(p)}</select>`:'';
-   return `<div style="padding:9px 0;border-top:1px solid #eee"><div class="row"><div class="grow"><b>${text(item.name||item.offer_id||('SKU '+item.sku))}</b><div class="muted">SKU ${text(item.sku)}${item.offer_id?' · арт. '+text(item.offer_id):''} · ${qty} шт.<br>${p?'Товар склада: '+text(p.name):'Нужно привязать к товару склада'}</div></div>${action}</div>${source}</div>`;
+   return `<div style="padding:9px 0;border-top:1px solid #eee"><div class="row"><div class="grow"><b>${text(p?.name||item.name||item.offer_id||('SKU '+item.sku))}</b><div class="muted">SKU ${text(item.sku)}${item.offer_id?' · арт. '+text(item.offer_id):''} · ${qty} шт.<br>${p?'Товар склада: '+text(p.name):'Нужно привязать к товару склада'}</div></div>${action}</div>${source}</div>`;
   }).join('')||'<div class="muted">Состав не получен'+(s.bundle_error?' · '+text(s.bundle_error):'')+'</div>';
   return `<div class="item" style="margin-top:9px"><b>${text(warehouseLabel(s))}</b><div class="muted">${s.is_crossdock?'Кросс-докинг · ':''}${text(stateLabel(s.state))} · поставка ${text(s.supply_id)}</div>${items}</div>`;
  }).join('');
@@ -123,7 +124,7 @@ window.chooseOzonFboProduct=pid=>{
 };
 function lineByKey(key){return allLines(current.order).find(x=>transferKey(current.account,current.order.order_id,x.s.supply_id,x.s.bundle_id,x.item.sku)===key);}
 function saleStock(p){return Math.max(0,(Number(p?.stock)||0)-(typeof reserved==='function'?Math.max(0,Number(reserved(p))||0):0));}
-function warehouseStock(p){return typeof purchaseAtWarehouseQty==='function'?purchaseAtWarehouseQty(p.id):0;}
+function warehouseStock(p){const total=typeof purchaseAtWarehouseQty==='function'?purchaseAtWarehouseQty(p.id):0,held=(state.reservations||[]).filter(r=>r.active&&r.source==='FBO'&&String(r.productId)===String(p.id)).reduce((n,r)=>n+Math.max(0,Number(r.warehouseQty)||0),0);return Math.max(0,total-held);}
 function sourceOptions(p){return `<option value="auto">По наличию</option><option value="at_warehouse">На складе · ${warehouseStock(p)} шт.</option><option value="sale">В продаже · ${saleStock(p)} шт.</option>`;}
 function stockPlan(p,qty,source='auto'){
  if(!Number.isInteger(qty)||qty<=0)throw Error('Количество отправки должно быть целым положительным числом.');

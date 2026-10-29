@@ -1,3 +1,7 @@
+import {withOzonProtectionPage} from './ozon-protection/page.js';
+import {ozonProtectionRouter} from './ozon-protection/router.js';
+import {startOzonProtectionLoop} from './ozon-protection/service.js';
+import { fboWarehouseRouter } from './fbo-warehouse/router.js';
 import { fboDashboardRouter } from './ozon-planner/dashboard.js';
 import { withFboPage } from './fbo-page.js';
 import { withGrowthAnalyticsPage } from './growth-analytics-page.js';
@@ -60,6 +64,7 @@ const frontendFiles = Object.freeze([
   'fbo-dashboard-v1.js',
   'fbo-dashboard-model.js',
   'fbo-dashboard.css',
+  'fbo-warehouse-v1.js',
   'cloud-sync-v3.js',
   'packaging-model.js',
   'packaging-v1.js',
@@ -82,6 +87,7 @@ const frontendFiles = Object.freeze([
   'stock-alerts-rescue-v1.js',
   'ai-assistant-v1.js',
   'prices-v1.js',
+  'ozon-price-protection-v1.js',
   'finance-import-tools-v1.js',
   'finance-split-model.js',
   'finance-statement-transfers.js',
@@ -113,7 +119,7 @@ app.use(express.json({ limit: '7mb', strict: true }));
 
 const frontendRevalidateHeaders = { 'Cache-Control': 'public, max-age=0, must-revalidate' };
 app.get(['/', '/index.html'], async (_req,res,next)=>{
-  try{const page=withFboPage(withGrowthAnalyticsPage(await readFile(path.join(repositoryRoot,'index.html'),'utf8')));res.set(frontendRevalidateHeaders).type('html').send(page)}catch(error){next(error)}
+  try{const page=withOzonProtectionPage(withFboPage(withGrowthAnalyticsPage(await readFile(path.join(repositoryRoot,'index.html'),'utf8'))));res.set(frontendRevalidateHeaders).type('html').send(page)}catch(error){next(error)}
 });
 app.get('/ozon-fbo-v1.js', async (_req,res,next)=>{
   try{
@@ -142,6 +148,7 @@ app.post('/api/auth/webauthn/login-verify', requireTrustedOrigin, webauthnLoginV
 app.use('/api/ozon-planner', plannerRouter);
 app.use('/api', requireAppSession);
 app.use('/api/fbo-dashboard', fboDashboardRouter);
+app.use('/api/fbo-warehouse', fboWarehouseRouter);
 registerDeveloperGuideRoutes(app, repositoryRoot);
 app.get('/api/auth/webauthn/credentials', requireTrustedOrigin, listWebauthnCredentials);
 app.delete('/api/auth/webauthn/credentials/:id', requireTrustedOrigin, deleteWebauthnCredential);
@@ -282,6 +289,7 @@ app.use('/api', wbOrderHistoryRouter);
 app.use('/api', reportsRouter);
 app.use('/api', stockRouter);
 app.use('/api', pricesRouter);
+app.use('/api', ozonProtectionRouter);
 app.use('/api', wbPromotionsRouter);
 app.use('/api', wbPriceProtectionRouter);
 app.use('/api', wbCardGroupsRouter);
@@ -368,6 +376,7 @@ const server = app.listen(config.port, '0.0.0.0', () => {
   startKaspiSyncLoop();
   startWbSyncLoop();
   startWbPriceSyncLoop();
+  startOzonProtectionLoop();
   startWbDeliveryTariffLoop();
   startWbOrderHistoryLoop();
   startKaspiHistoryLoop();

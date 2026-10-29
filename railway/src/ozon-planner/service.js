@@ -1,3 +1,4 @@
+import {readWarehouseContext,enrichPreparedWithWarehouse} from '../fbo-warehouse/store.js';
 import crypto from 'node:crypto';
 import { pool } from '../db.js';
 import { credentialFor } from '../connections.js';
@@ -11,9 +12,10 @@ export async function plannerAccounts(){
  return result;
 }
 export async function sourceFor(account){return (await pool.query('SELECT * FROM ozon_planner_sources WHERE account=$1 AND client_id=$2',[account.id,account.clientId])).rows[0]||null;}
-export async function prepareDevice(device,source){
+export async function prepareDevice(device,source,warehouse=null){
  const config=typeof device.configuration==='string'?JSON.parse(device.configuration):device.configuration;
- const prepared=buildPrepared(config,source?.payload,device.prepared?.state||{}),sourceAt=Number(source?.updated_at||0);
+ const context=warehouse||await readWarehouseContext(pool,device.account);
+ const prepared=enrichPreparedWithWarehouse(buildPrepared(config,source?.payload,device.prepared?.state||{}),context,device.account),sourceAt=Number(source?.updated_at||0);
  const result=await pool.query(`UPDATE ozon_planner_devices SET prepared=$2::jsonb,source_updated_at=$3,calculated_day=$4,revision=revision+1 WHERE id=$1 AND config_hash=$5 AND NOT revoked RETURNING *`,[device.id,JSON.stringify(prepared),sourceAt,prepared.calculatedDay,configurationHash(config)]);
  return result.rows[0]||null;
 }

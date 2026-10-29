@@ -1,3 +1,4 @@
+import {readWarehouseContext} from '../fbo-warehouse/store.js';
 import express from 'express';
 import crypto from 'node:crypto';
 import { pool } from '../db.js';
@@ -30,9 +31,10 @@ plannerRouter.post('/read',asyncRoute(async(req,res)=>{
   if(hash!==device.config_hash){device=(await pool.query('UPDATE ozon_planner_devices SET configuration=$2::jsonb,config_hash=$3 WHERE id=$1 AND NOT revoked RETURNING *',[device.id,JSON.stringify(configuration),hash])).rows[0];}
  }
  if(!source?.payload)return res.status(202).json({ok:true,pending:true,refreshing:true,error:source?.last_error||'',message:'Сервер загружает Ozon. Данные появятся автоматически'});
- if(!device.prepared||device.source_updated_at!==Number(source.updated_at)||device.calculated_day!==today()||device.prepared.configHash!==device.config_hash){
+ const warehouse=await readWarehouseContext(pool,req.plannerAccount.id);
+ if(!device.prepared||device.prepared.warehouseRevision!==warehouse.revision||device.source_updated_at!==Number(source.updated_at)||device.calculated_day!==today()||device.prepared.configHash!==device.config_hash){
   // Include the configuration hash in the stored result to invalidate only changed preferences.
-  device=await prepareDevice(device,source);if(!device)return res.status(409).json({ok:false,error:'Настройки изменились. Повтори обновление'});
+  device=await prepareDevice(device,source,warehouse);if(!device)return res.status(409).json({ok:false,error:'Настройки изменились. Повтори обновление'});
  }
  await pool.query('UPDATE ozon_planner_devices SET last_used_at=$2 WHERE id=$1',[device.id,Date.now()]);
  res.json({ok:true,...device.prepared,revision:Number(device.revision),sourceUpdatedAt:new Date(Number(source.updated_at)).toISOString(),refreshing:Number(source.attempt_at)>Number(source.updated_at)&&!source.last_error,lastError:source.last_error||'',account:{id:req.plannerAccount.id,label:req.plannerAccount.label}});

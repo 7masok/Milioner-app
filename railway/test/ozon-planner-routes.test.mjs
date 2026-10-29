@@ -12,7 +12,7 @@ function vault(value){const key=crypto.createHash('sha256').update('millioner-ma
 test('actual planner routes: pair requires owner auth; read is cached, config safe; revocation and origin enforced',async()=>{
  let device=null,source={account:'Ozon',client_id:'100',updated_at:Date.now(),attempt_at:Date.now()-1,last_error:'',payload:{asOf:'2026-10-17',updatedAt:new Date().toISOString(),rows:[{sku:'123',name:'Товар',cluster:'Уфа',clusterId:'42',stock:10,daily:1}],supplies:[],stockRequestedSkus:['123'],missingOrderIds:[]}},queries=[];
  const original=pool.query;pool.query=async(sql,params=[])=>{
-  queries.push(sql);if(sql.includes("WHERE provider='OZON'"))return {rows:[{id:'Ozon',label:'Первый магазин'}]};
+  queries.push(sql);if(sql.startsWith('SELECT payload,revision FROM warehouse_state'))return{rows:[]};if(sql.includes("WHERE provider='OZON'"))return {rows:[{id:'Ozon',label:'Первый магазин'}]};
   if(sql.startsWith('SELECT encrypted_token'))return {rows:[{encrypted_token:vault({clientId:'100',apiKey:'fixture-only-not-real'})}]};
   if(sql.startsWith('INSERT INTO ozon_planner_devices')){device={id:params[0],token_hash:params[1],account:params[2],client_id:params[3],configuration:JSON.parse(params[4]),config_hash:params[5],prepared:null,source_updated_at:0,revision:0,revoked:false};return {rows:[],rowCount:1};}
   if(sql.startsWith('SELECT * FROM ozon_planner_devices'))return {rows:device&&!device.revoked&&device.token_hash===params[0]?[structuredClone(device)]:[]};

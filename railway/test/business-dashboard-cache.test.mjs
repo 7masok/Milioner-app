@@ -122,7 +122,7 @@ test('missing store days and stale opening signatures never become zero; complet
  const ready={...storeRow('all',begin,999),cache_key:'base:'+begin};delete ready.payload.ordersReady;composed=composeBusinessDays([...rows,ready],begin,begin+DAY,{},revision())[0];assert.equal(composed.day.orders.amount,999);assert.equal(composed.day.pending,false);assert.equal(composed.composed,undefined);
 });
 test('confirmed pre-opening stores contribute zero from current TEXT settings without inventing a missing active store',async()=>{
- const {composeBusinessDays}=await import('../src/business-dashboard-cache.js'),begin=today-10*DAY,starts={Ozon:new Date(today+18000000).toISOString().slice(0,10)},warehouse=JSON.stringify({settings:{reportStoreStarts:starts}}),rows=markets.slice(0,3).map(m=>storeRow(m,begin,10,Date.now(),{}));
+ const {composeBusinessDays}=await import('../src/business-dashboard-cache.js'),begin=today-10*DAY,starts={Ozon:new Date(today-DAY+18000000).toISOString().slice(0,10)},warehouse=JSON.stringify({settings:{reportStoreStarts:starts}}),rows=markets.slice(0,3).map(m=>storeRow(m,begin,10,Date.now(),{}));
  const d=composeBusinessDays(rows,begin,begin+DAY,warehouse,revision())[0].day;assert.equal(d.orders.amount,30);assert.equal(d.summary.revenue,15);assert.equal(d.storeStarts,JSON.stringify(starts));assert.equal(d.ordersReady,true);assert.equal(d.pending,false);assert.equal(composeBusinessDays(rows.slice(1),begin,begin+DAY,warehouse,revision()).length,0);
 });
 test('All preserves unknown profit, weighted coverage and oldest input time through stale revisions',async()=>{
