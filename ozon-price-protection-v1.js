@@ -25,7 +25,7 @@ window.renderOzonProtectionTools=(market,indexed)=>{
  if(!panel){panel=document.createElement('div');panel.id='ozonProtectionTools';list.parentNode.insertBefore(panel,list)}
  panel.hidden=market!=='Ozon';if(panel.hidden)return;
  visible=indexed.map(x=>x.row).filter(r=>!r.error&&r.sku&&r.remoteId);
- panel.innerHTML='<div class="price-inline-actions"><button type="button" class="btn dark" onclick="openOzonProtectionBulk()" '+(!visible.length||busy?'disabled':'')+'>Защитить показанные · '+visible.length+'</button></div>';
+ panel.innerHTML='<div class="price-inline-actions"><button type="button" class="btn dark" onclick="openOzonProtectionBulk()" '+(!visible.length||busy?'disabled':'')+'>Выбрать товары · '+visible.length+'</button></div>';
 };
 const capture=(r,p)=>({accountId:r.accountId,sku:r.sku,remoteId:r.remoteId,price:p,currency:r.currency,name:r.name});
 async function apply(items,enabled){
@@ -36,8 +36,8 @@ async function apply(items,enabled){
    const response=await fetch(MILLIONER_API+'/api/ozon-price-protection',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({confirm:true,enabled,accountId,items:selected.map(({sku,remoteId,price,currency})=>({sku,remoteId,price,currency}))}),signal:AbortSignal.timeout(30000)}),out=await response.json();
    if(!response.ok||!out.ok)throw Error(out.error||'Не удалось сохранить защиту');applied.push(...selected);window.ozonProtectionSaved?.(selected,enabled);
   }
-  closeModal();alert(enabled?'Защита сохранена. Сервер проверит и обработает акции; результат появится в карточках.':'Автоконтроль отключён. Товары обратно в акции не добавляются.');
- }catch(e){alert((applied.length?'Сохранено '+applied.length+' товаров. Остальные не подтверждены. ':'')+String(e.message||e))}
+  closeModal();alert(enabled?'Защита сохранена. Сервер проверит и обработает акции; результат появится в карточках.':'Автоконтроль отключён. Товары обратно в акции не добавляются.');return{ok:true,applied};
+ }catch(e){alert((applied.length?'Сохранено '+applied.length+' товаров. Остальные не подтверждены. ':'')+String(e.message||e));return{ok:false,applied}}
  finally{busy=false;window.ozonProtectionSaved?.([],enabled)}
 }
 window.saveOzonPriceProtection=async(index,enabled)=>{
@@ -47,12 +47,36 @@ window.saveOzonPriceProtection=async(index,enabled)=>{
  if(!confirm(enabled?'Зафиксировать цену продавца '+price(p,row.currency)+' для «'+row.name+'» и включить постоянный выход из акций?':'Отключить автоконтроль для «'+row.name+'»?'))return;
  await apply([capture(row,p)],enabled);
 };
+let bulk=null;
+const bulkKey=r=>JSON.stringify([r.accountId,r.sku,r.remoteId]);
+function bulkCount(){
+ if(!bulk)return;const selected=bulk.items.filter(r=>r.selected),all=document.getElementById('ozonGuardSelectAll'),button=document.getElementById('ozonGuardBulkConfirm');
+ if(all){all.checked=selected.length===bulk.items.length;all.indeterminate=selected.length>0&&selected.length<bulk.items.length}
+ const count=document.getElementById('ozonGuardSelectedCount');if(count)count.textContent='Выбрано '+selected.length+' из '+bulk.items.length;
+ if(button){button.disabled=busy||!selected.length;button.textContent='Защитить выбранные · '+selected.length}
+}
+window.ozonGuardSelect=(index,checked)=>{if(!bulk||busy||!bulk.items[index])return;bulk.items[index].selected=!!checked;bulkCount()};
+window.ozonGuardSelectAll=checked=>{if(!bulk||busy)return;for(const [i,r] of bulk.items.entries()){r.selected=!!checked;const box=document.getElementById('ozonGuardCheck-'+i);if(box)box.checked=!!checked}bulkCount()};
+window.ozonGuardSetPrice=(index,value)=>{if(!bulk||busy||!bulk.items[index])return;bulk.items[index].price=value};
+function drawBulk(){
+ if(!bulk)return;
+ showSheet('<h3>Защита цен Ozon</h3><div style="position:sticky;top:0;background:#fff;z-index:2;padding:10px 0;border-bottom:1px solid #eee"><div class="row" style="gap:12px;flex-wrap:wrap"><label style="display:flex;align-items:center;gap:8px"><input id="ozonGuardSelectAll" type="checkbox" onchange="ozonGuardSelectAll(this.checked)">Выбрать все</label><button type="button" class="btn" onclick="ozonGuardSelectAll(false)">Снять выбор</button><span id="ozonGuardSelectedCount" class="muted"></span></div></div>'+
+ '<p class="muted">Отметьте товары и при необходимости измените цену защиты. Каждая цена — в валюте своего магазина.</p>'+
+ bulk.items.map((r,i)=>'<div class="item" style="display:grid;grid-template-columns:24px minmax(0,1fr);gap:10px;align-items:start;margin:8px 0"><input id="ozonGuardCheck-'+i+'" type="checkbox" '+(r.selected?'checked':'')+' onchange="ozonGuardSelect('+i+',this.checked)" aria-label="Выбрать '+esc(r.name||r.sku)+'" style="margin-top:5px"><div><label for="ozonGuardCheck-'+i+'"><b>'+esc(r.name||r.sku)+'</b></label><div class="muted" style="overflow-wrap:anywhere">'+esc(r.sku)+'</div><div class="field" style="margin:8px 0 0"><label for="ozonGuardBulkPrice-'+i+'">Цена защиты, '+esc(r.currency)+'</label><input id="ozonGuardBulkPrice-'+i+'" type="number" min="0.01" step="0.01" inputmode="decimal" value="'+esc(r.price)+'" oninput="ozonGuardSetPrice('+i+',this.value)"></div></div></div>').join('')+
+ '<p class="muted">После подтверждения сервер установит указанные цены и включит выход из акций только для отмеченных товаров. Снятые с выбора позиции не изменятся.</p><button type="button" id="ozonGuardBulkConfirm" class="btn dark full">Защитить выбранные</button>');
+ bulkCount();document.getElementById('ozonGuardBulkConfirm').onclick=async()=>{
+  if(busy||!bulk)return;const context=bulk,selected=context.items.filter(r=>r.selected).map(r=>({...r,price:Number(r.price)}));if(!selected.length)return;
+  const invalid=selected.find(r=>!Number.isFinite(r.price)||r.price<=0||r.price>1e12||Math.abs(r.price*100-Math.round(r.price*100))>.0001);
+  if(invalid)return alert('Проверьте цену «'+(invalid.name||invalid.sku)+'»: больше 0, не более двух знаков после запятой.');
+  const button=document.getElementById('ozonGuardBulkConfirm');button.disabled=true;const out=await apply(selected,true);
+  if(out?.ok){if(bulk===context)bulk=null;return}
+  if(bulk!==context)return;const applied=new Set((out?.applied||[]).map(bulkKey));for(const r of context.items)if(applied.has(bulkKey(r)))r.selected=false;
+  drawBulk();
+ };
+}
 window.openOzonProtectionBulk=()=>{
- if(busy||!visible.length)return;const selected=visible.map(r=>capture(r,r.ozonProtection?.enabled?r.ozonProtection.price:r.price));
- if(selected.length>1000)return alert('За один раз выберите до 1000 товаров через поиск');
- showSheet('<h3>Защита Ozon · '+selected.length+' товаров</h3><p class="muted">Для каждого товара будет сохранена своя указанная цена. Сервер не станет повышать её каждый день. Уже включённая защита сохраняет свою цену.</p>'+
- selected.map(r=>'<div class="item"><b>'+esc(r.name||r.sku)+'</b><div>'+esc(r.sku)+' · '+price(r.price,r.currency)+'</div></div>').join('')+
- '<p class="muted">Цены будут восстановлены до указанных, перечёркнутая старая цена убрана. Выход и последующая проверка происходят на сервере. Если для выхода нужна более высокая цена, карточка покажет предупреждение.</p><button type="button" id="ozonGuardBulkConfirm" class="btn dark full">Подтвердить защиту и выход из акций</button>');
- document.getElementById('ozonGuardBulkConfirm').onclick=async()=>{const button=document.getElementById('ozonGuardBulkConfirm');button.disabled=true;await apply(selected,true);if(document.body.contains(button))button.disabled=false};
+ if(busy||!visible.length)return;const items=visible.map(r=>({...capture(r,r.ozonProtection?.enabled?r.ozonProtection.price:r.price),selected:true}));
+ if(items.length>1000)return alert('За один раз выберите до 1000 товаров через поиск');
+ bulk={items};drawBulk();
 };
 })();
