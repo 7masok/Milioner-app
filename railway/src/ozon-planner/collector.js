@@ -110,13 +110,13 @@ export async function collectSnapshot(api,{previous=null,cache=new Map(),saveBun
  }catch(error){if(error.retryAt)throw error;mappingWarning='Не все кластеры определены';}}
  const names=new Map();for(const r of [...(previous?.rows||[]),...extraSkus])if(/^[1-9][0-9]{0,18}$/.test(String(r.sku||'')))names.set(String(r.sku),r.name||String(r.sku));
  for(const p of parts){p.cluster=clusters.get(p.clusterId)||warehouses.get(p.warehouseId)||previous?.supplies?.find(old=>old.supplyId===p.supplyId&&old.clusterId===p.clusterId)?.cluster||'';for(const i of p.items)names.set(i.sku,i.name||i.sku);}
- cursor='';ended=false;const unresolved=[];
+ cursor='';ended=false;const unresolved=[],catalogSkus=new Set();
  for(let page=0;page<200;page++){
   const data=await api('/v3/product/list',{filter:{visibility:'ALL'},limit:1000,...(cursor?{last_id:cursor}:{})}),result=data.result,items=array(result?.items,'каталога');
-  for(const i of items){if(i.archived||i.is_discounted)continue;if(i.sku&&Number(i.sku)>0)names.set(id(i.sku),names.get(String(i.sku))||i.offer_id||String(i.sku));else if(i.product_id)unresolved.push(id(i.product_id));}
-  const next=result.last_id||'';if(!items.length||items.length<1000||!next){ended=true;break;}if(next===cursor)throw Error('Ozon: повтор страницы каталога');cursor=next;
+  for(const i of items){if(i.archived||i.is_discounted)continue;if(i.sku&&Number(i.sku)>0){catalogSkus.add(id(i.sku));names.set(id(i.sku),names.get(String(i.sku))||i.offer_id||String(i.sku));}else if(i.product_id)unresolved.push(id(i.product_id));}
+  const next=result.last_id||'';if(!items.length||!next){ended=true;break;}if(next===cursor)throw Error('Ozon: повтор страницы каталога');cursor=next;
  }if(!ended)throw Error('Ozon: слишком большой каталог');
- for(let start=0;start<unresolved.length;start+=100){const data=await api('/v3/product/info/list',{product_id:unresolved.slice(start,start+100)});for(const i of array(data.items,'карточек'))if(i.sku)names.set(id(i.sku),i.name||i.offer_id||String(i.sku));}
+ for(let start=0;start<unresolved.length;start+=100){const data=await api('/v3/product/info/list',{product_id:unresolved.slice(start,start+100)});for(const i of array(data.items,'карточек'))if(i.sku){catalogSkus.add(id(i.sku));names.set(id(i.sku),i.name||i.offer_id||String(i.sku));}}
  const skus=[...names.keys()],stocks=new Map();
  for(let start=0;start<skus.length;start+=100){
   const batch=skus.slice(start,start+100),data=await api('/v1/analytics/stocks',{skus:batch});
@@ -128,5 +128,5 @@ export async function collectSnapshot(api,{previous=null,cache=new Map(),saveBun
    else stocks.set(key,{sku,cluster,clusterId,name:i.name||names.get(sku),stock,daily});
   }
  }
- return {asOf:today,rows:[...stocks.values()],stockRequestedSkus:skus,supplies:parts,missingOrderIds:orderIds.filter(i=>!seen.has(i)),mappingWarning,compositionSync:{reused,downloaded,seconds:Math.round((now()-started)/1000)},updatedAt:new Date(now()).toISOString()};
+ return {asOf:today,catalog:[...catalogSkus].map(sku=>({sku,name:names.get(sku)||sku})),rows:[...stocks.values()],stockRequestedSkus:skus,supplies:parts,missingOrderIds:orderIds.filter(i=>!seen.has(i)),mappingWarning,compositionSync:{reused,downloaded,seconds:Math.round((now()-started)/1000)},updatedAt:new Date(now()).toISOString()};
 }

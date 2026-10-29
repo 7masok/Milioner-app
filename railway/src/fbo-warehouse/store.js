@@ -27,7 +27,8 @@ export function enrichWarehouseDashboard(data,context,account){
  const shipments=data.shipments.map(s=>{const p=lookup(s.sku).product;return{...s,warehouseProductId:p?String(p.id):null,warehouseName:p?.name||null,ozonName:s.name}});
  const drafts=draftGroups(state).filter(d=>!account||d.account===account).map(({rows,signature,...d})=>d);
  const catalog=(state.products||[]).filter(p=>p.kind!=='variant-group').map(p=>({id:String(p.id),name:p.name,available:availability(state,p.id,pool).available,ozon:p.ozon||'',ozonAliases:Array.isArray(p.ozonAliases)?p.ozonAliases:String(p.ozonAliases||'').split(/[;,\n]/).filter(Boolean)}));
- return{...data,plans,shipments,warehouse:{ready:true,revision:context.revision,catalog,drafts}};
+ const productCatalog=(data.catalog||[]).map(i=>{const link=lookup(i.sku),p=link.product;return {...i,warehouseProductId:p?String(p.id):null,warehouseName:p?.name||null,warehouseAvailable:p?availability(state,p.id,pool).available:null,linkAmbiguous:link.ambiguous}});
+ return{...data,catalog:productCatalog,plans,shipments,warehouse:{ready:true,revision:context.revision,catalog,drafts}};
 }
 export async function persistFboOperation(client,context,{products=false,purchases=false,movements=[],source='fbo-reserve'}={}){
  const state=context.state,now=Date.now();await persistWarehouseReservations(client,(state.reservations||[]).filter(r=>r.source==='FBO'),now);
