@@ -79,7 +79,7 @@ test('owner, trusted origin and explicit confirmation guard local preference wri
 });
 test('UI only writes after explicit action and companion loads before auth with cache versioning',()=>{
  const source=readFileSync(new URL('../../ozon-price-protection-v1.js',import.meta.url),'utf8');let requests=0;const window={},context={window,document:{},Date,console,fetch:()=>{requests++;throw Error('unexpected')}};vm.runInNewContext(source,context);assert.equal(requests,0);assert.match(window.ozonProtectionEditor({price:1000,currency:'RUB',ozonProtection:{enabled:true,price:1000,status:'error',message:'Denied <tag>'}},0),/Denied &lt;tag&gt;/);
- const page=withOzonProtectionPage('<script src="./prices-v1.js?v=old"></script><script>initOwnerAuth();</script>');assert.match(page,/prices-v1.js\?v=20261029-ozon-protection/);assert.ok(page.indexOf('ozon-price-protection-v1.js')<page.indexOf('initOwnerAuth();'));
+ const page=withOzonProtectionPage('<script src="./prices-v1.js?v=old"></script><script>initOwnerAuth();</script>');assert.match(page,/prices-v1.js\?v=20261029-ozon-selection/);assert.ok(page.indexOf('ozon-price-protection-v1.js')<page.indexOf('initOwnerAuth();'));
 });
 test('reused offer or changed currency is blocked before any remote price or promotion mutation',async()=>{
  let calls=[];let job=newJob([p]);const send=async(path)=>{calls.push(path);if(path.includes('info/prices'))return{items:[{offer_id:'offer',product_id:999,price:{currency_code:'RUB'}}]};if(path==='/v1/actions')return{result:[]};throw Error('Unexpected mutation '+path)};
