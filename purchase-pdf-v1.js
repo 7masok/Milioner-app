@@ -7,7 +7,7 @@ function purchasePdfInput(mode,key){
   return {title:rows[0].batch||'Закупка',date:localDateInputValue(rows[0].orderedAt||rows[0].date),draft:false,delivery:rows.reduce((n,r)=>n+(Number(r.delivery)||0),0),items:rows.map(r=>({productId:r.productId,qty:Number(r.qty),buyTotal:Number(r.buyTotal)||Number(r.unitCost)*Number(r.qty)||0}))};
  }
  const edit=mode==='edit',prefix=edit?'editPor':'por',rows=edit?editPurchaseDraftRows():purchaseDraftRows();
- if(!rows.length||rows.some(r=>!r.productId||!Number.isSafeInteger(r.qty)||r.qty<1))throw Error('Проверьте товар и количество в каждой позиции');
+ if(!rows.length||rows.some(r=>!r.productId||!Number.isSafeInteger(r.qty)||r.qty<1||r.priceValid===false))throw Error('Проверьте товар и количество в каждой позиции');
  const buy=Number(document.getElementById(prefix+'BuyTotal')?.value)||0,delivery=Number(document.getElementById(prefix+'Delivery')?.value)||0;
  if(buy<0||delivery<0)throw Error('Суммы закупки не могут быть отрицательными');
  return {title:document.getElementById(prefix+'Batch')?.value||'Закупка',date:document.getElementById(prefix+'Date')?.value||'',draft:true,delivery,items:purchaseDraftCosts(rows,buy,delivery).map(r=>({productId:r.productId,qty:r.qty,buyTotal:r.buyTotal}))};
