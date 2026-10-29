@@ -8,14 +8,9 @@ import {resolver,createDraft,cancelDraft,dispatchDraft,draftGroups,fail} from '.
 import {mirrorFboProducts} from './legacy.js';
 import {stockLedgerViolation} from '../warehouse-ledger.js';
 const knownSku=(source,sku)=>[...(source?.payload?.stockRequestedSkus||[]),...(source?.payload?.rows||[]).map(r=>r.sku),...(source?.payload?.supplies||[]).flatMap(s=>(s.items||[]).map(i=>i.sku))].map(String).includes(sku);
-export function remoteForOrder(source,orderId){
- const parts=(source?.payload?.supplies||[]).filter(s=>String(s.orderId)===orderId);if(!parts.length)fail('Заявка ещё не загружена с Ozon');
- const accepted=['ACCEPTED_AT_SUPPLY_WAREHOUSE','IN_TRANSIT','ACCEPTANCE_AT_STORAGE_WAREHOUSE','ACCEPTED_AT_STORAGE_WAREHOUSE','REPORTS_CONFIRMATION_AWAITING','REPORT_REJECTED','COMPLETED'];
- if(parts.some(s=>['CANCELLED','REJECTED_AT_SUPPLY_WAREHOUSE','OVERDUE'].includes(s.orderState)||!accepted.includes(s.state)&&s.orderState!=='COMPLETED'||!s.items?.length))fail('Ozon ещё не подтвердил передачу или состав этой заявки');
- const lines=parts.flatMap(s=>s.items.map(i=>({sku:String(i.sku),qty:Number(i.qty),clusterKey:s.clusterId?'id:'+s.clusterId:'name:'+s.cluster,warehouse:s.warehouse||s.cluster,warehouseId:s.warehouseId||'',crossdock:!!s.crossdock,supplyId:String(s.supplyId||''),bundleId:String(s.bundleId||'')})));
- if(lines.some(l=>!l.supplyId||!l.sku||!Number.isSafeInteger(l.qty)||l.qty<1)||new Set(lines.map(l=>l.supplyId+'|'+l.bundleId+'|'+l.sku)).size!==lines.length)fail('Состав заявки Ozon неполный или содержит дубли');
- return{orderId,lines};
-}
+export {remoteForOrder} from './remote.js';
+import {remoteForOrder} from './remote.js';
+import {setAutoAccounting} from './automatic.js';
 export function createFboWarehouseRouter({db=pool,transact=transaction,accounts=plannerAccounts,readSource=sourceFor,readContext=readWarehouseContext,persist=persistFboOperation,mirror=mirrorFboProducts}={}){
  const router=express.Router();router.use(requireTrustedOrigin,requireConfiguredSession,requireWritesEnabled);
  async function operate(req,res,action){
@@ -47,6 +42,7 @@ export function createFboWarehouseRouter({db=pool,transact=transaction,accounts=
   });res.json(result);
  }
  const publicDraft=({rows,signature,...d})=>d;
+ router.post('/automatic',asyncRoute(async(req,res)=>{const account=(await accounts())[0];if(!account)fail('Магазин Ozon не подключён',400);if(typeof req.body?.enabled!=='boolean')fail('Укажите режим автосписания',400);const source=await readSource(account);res.json(await setAutoAccounting(account,source,req.body.enabled,{transact}));}));
  router.post('/link',asyncRoute((req,res)=>operate(req,res,'link')));
  router.post('/drafts',asyncRoute((req,res)=>operate(req,res,'create')));
  router.post('/drafts/:id/cancel',asyncRoute((req,res)=>operate(req,res,'cancel')));

@@ -47,11 +47,30 @@ test('switching scenarios aborts an older request and its late response cannot o
 test.after(()=>pool.end());
 
 test('purchases lead into FBO supplies and cached cards open exact scoped order without stock writes',async()=>{
- const page=withFboPage(read('index.html'));assert.match(page,/id="ozonFboSuppliesBtn"[^>]*onclick="openFboSuppliesTab\(\)"/);assert.match(page,/ozon-fbo-v1.js\?v=20261029-fbo-accounting/);
+ const page=withFboPage(read('index.html'));assert.doesNotMatch(page,/id="ozonFboSuppliesBtn"/);assert.match(page,/ozon-fbo-v1.js\?v=20261029-cluster-checkup/);
  const els=new Map(),el=id=>{if(!els.has(id))els.set(id,{dataset:{},innerHTML:'',textContent:'',value:'',checked:false,addEventListener(){},querySelectorAll:()=>[],classList:{contains:()=>true}});return els.get(id)},calls=[],stored=new Map();
  const c={window:{FboDashboardModel:M,openOzonFboSupplies:id=>calls.push(['list',id]),openOzonFboSupplyOrder:(...args)=>calls.push(['order',...args])},MILLIONER_API:'',document:{getElementById:el,activeElement:null},localStorage:{getItem:()=>JSON.stringify({ui:{mode:'products',query:'old',cluster:'old'}}),setItem:(k,v)=>stored.set(k,v)},AbortController,AbortSignal,Date,console,setTimeout,clearTimeout,openView:view=>calls.push(['view',view]),fetch:async()=>({ok:true,json:async()=>({ok:true,account:{id:'shop A',label:'Мой Ozon'},plans:[],shipments:[{source:'Ozon API',id:'1',orderId:'123456789012345678',supplyId:'s',orderNumber:'Заявка',qty:2,category:'upcoming',cluster:'Уфа',status:'in_transit'}]})}),alert:msg=>assert.fail(msg)};
  vm.runInNewContext(read('fbo-dashboard-v1.js'),c);await c.window.renderFboDashboard();c.window.openFboSuppliesTab();assert.equal(el('fboSupplyActions').hidden,false);assert.match(el('fboSupplyActions').innerHTML,/Учёт и история/);assert.match(el('fboList').innerHTML,/data-fbo-order="123456789012345678"/);assert.equal(el('fboSearch').value,'');
  const ui=JSON.parse(stored.get('warehouseFboUiV1')).ui;assert.equal(ui.cluster,'');assert.equal(ui.mode,'supplies');assert.equal(ui.query,'');
  c.window.fboOpenSupplyAccounting();c.window.fboOpenSupplyOrder('123456789012345678');assert.deepEqual(calls,[['view','fbo'],['list','shop A'],['order','shop%20A','123456789012345678',true]]);
  c.window.fboMode('clusters');assert.equal(el('fboSupplyActions').hidden,true);
+});
+
+test('cluster check includes every SKU and incoming-only SKU, separates acceptance and keeps unknown quantities explicit',()=>{
+ const data={calculatedDay:'2026-10-29',plans:[{item:{sku:'1',cluster:'Казань',clusterId:'10',stock:3,daily:1},qty:8,lead:4,warehouseName:'Имя склада'}],shipments:[
+ {id:'one',source:'Ozon API',sku:'1',cluster:'Казань',clusterId:'10',status:'in_transit',qty:5,eta:'2026-11-02',timeslotDay:'2026-10-27'},
+ {id:'two',source:'Ozon API',sku:'2',name:'Только в поставке',cluster:'Казань',clusterId:'10',status:'in_transit',qty:null,eta:null},
+ {id:'accept',source:'Ozon API',sku:'1',cluster:'Казань',clusterId:'10',status:'pending',category:'acceptance',qty:7},
+ {id:'other',source:'Ozon API',sku:'1',cluster:'Москва',clusterId:'20',status:'in_transit',qty:90} ]};
+ const c=M.clusterCheck(data,'id:10');assert.equal(c.items.length,2);assert.equal(c.items[0].name,'Имя склада');assert.equal(c.items[0].need,8);assert.equal(c.items[1].need,null);assert.equal(c.transit,5);assert.equal(c.transitUnknown,1);assert.equal(c.shipments.length,3);assert.equal(c.shipments[0].remainingDays,4);assert.equal(c.shipments[0].plannedTravelDays,6);assert.equal(c.shipments[1].remainingDays,null);assert.equal(c.items[0].transit,5);
+});
+
+test('cluster expands all products inline without changing mode or paginating its contents',async()=>{
+ const els=new Map(),el=id=>{if(!els.has(id))els.set(id,{dataset:{},innerHTML:'',textContent:'',value:'',checked:false,listeners:new Map(),addEventListener(type,fn){this.listeners.set(type,fn)},querySelectorAll:()=>[],classList:{contains:()=>true}});return els.get(id)};
+ const payload={ok:true,account:{id:'shop',label:'Ozon'},calculatedDay:'2026-10-29',plans:Array.from({length:30},(_,i)=>({item:{sku:String(i+1),cluster:'Казань',clusterId:'10',stock:2,daily:1},qty:5,lead:4,warehouseName:'Складской товар '+i})),shipments:[{source:'Ozon API',id:'ship',sku:'1',cluster:'Казань',clusterId:'10',status:'in_transit',qty:5,eta:'2026-11-02'}]};
+ const c={window:{FboDashboardModel:M},MILLIONER_API:'',document:{getElementById:el,activeElement:null},localStorage:{getItem:()=>null,setItem(){}},AbortController,AbortSignal,Date,Intl,console,setTimeout,clearTimeout,fetch:async()=>({ok:true,json:async()=>payload}),alert:msg=>assert.fail(msg)};
+ vm.runInNewContext(read('fbo-dashboard-v1.js'),c);await c.window.renderFboDashboard();assert.match(el('fboList').innerHTML,/Рекомендуем отправить/);assert.doesNotMatch(el('fboList').innerHTML,/Складской товар 29/);
+ const button={dataset:{fboCluster:'id:10'},hasAttribute:k=>k==='data-fbo-cluster'};el('fboRoot').listeners.get('click')({target:{closest:()=>button}});
+ assert.match(el('fboList').innerHTML,/Складской товар 29/);assert.match(el('fboList').innerHTML,/Все поставки в этот кластер/);assert.match(el('fboList').innerHTML,/До прибытия ≈ 4/);assert.match(el('fboList').innerHTML,/aria-expanded="true"/);assert.match(el('fboModes').innerHTML,/class="active" onclick="fboMode\('clusters'\)/);
+ el('fboRoot').listeners.get('click')({target:{closest:()=>button}});assert.doesNotMatch(el('fboList').innerHTML,/Складской товар 29/);
 });
