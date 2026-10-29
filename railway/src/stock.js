@@ -1,7 +1,7 @@
 import express from 'express';
 import { pool } from './db.js';
 import { asyncRoute, requireTrustedOrigin } from './http.js';
-import { automaticOfferFromRow, linkedRecoveryStock, rewriteOfferPrice } from './kaspi-stock-feed.js';
+import { automaticOfferFromRow, linkedRecoveryStock, rewriteOfferPrice, includeDeletedKaspiStocks } from './kaspi-stock-feed.js';
 import { hydrateWarehouseReservations } from './warehouse-reservations.js';
 import { hydrateWarehouseProducts } from './warehouse-products.js';
 
@@ -122,7 +122,7 @@ async function liveTemplate() {
   return row.rows[0] || null;
 }
 async function liveKaspiXml() {
-  const [template,rows]=await Promise.all([liveTemplate(),warehouseKaspiRows()]),rowsBySku=new Map(rows.map(row=>[row.sku,row])),stocks=new Map(rows.map(row=>[row.sku,row.stock]));
+  const [template,rows,managed]=await Promise.all([liveTemplate(),warehouseKaspiRows(),pool.query('SELECT sku FROM kaspi_warehouse_skus')]),rowsBySku=new Map(rows.map(row=>[row.sku,row])),stocks=includeDeletedKaspiStocks(new Map(rows.map(row=>[row.sku,row.stock])),managed.rows.map(row=>row.sku));
   if(!template?.rawXml){const offers=rows.map(row=>`    <offer sku="${esc(row.sku)}"><stockCount>${row.stock}</stockCount></offer>`).join('\n');return `<?xml version="1.0" encoding="UTF-8"?>\n<kaspi_catalog date="${new Date().toISOString()}">\n  <offers>\n${offers}\n  </offers>\n</kaspi_catalog>`;}
   let raw=String(template.rawXml),info=templateInfo(raw),primaryStoreId=String(template.primaryStoreId||'').trim()||info.storeIds[0]||'';
   if(!primaryStoreId)throw new Error('Kaspi primary store is not configured');
