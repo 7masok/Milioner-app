@@ -7,7 +7,7 @@ Object.assign(fields,{wbVariant:'Привязка WB',nmId:'Артикул ка�
 const statuses={to_forwarder:'Доставка от продавца',to_me:'В пути ко мне',at_warehouse:'На складе',received:'В продаже',paid:'Оплачено',departed:'Выехало от продавца',delivery_warehouse:'Прибыло на склад доставки',arrived:'Поступило ко мне',pending:'Ожидает обработки',cancelled:'Отменено',canceled:'Отменено',completed:'Завершено',shipped:'Отправлено',delivered:'Доставлено',returned:'Возвращено',active:'Активен',released:'Освобождён'};
 const kinds={bundle:'Набор',simple:'Обычный товар',product:'Обычный товар',variant:'Размер товара',size:'Размер товара'};
 const dateKeys=new Set(['date','createdAt','receivedAt','sentAt','closedAt','orderedAt','warehouseReceivedAt','forwarderReceivedAt','workflowStageStartedAt','stockRestoredAt','cancelledAt']);
-const internalKeys=new Set(['id','productId','externalKey','variantGroupId','purchaseId','lotId']);
+const internalKeys=new Set(['stock','cost','totalProfit','id','productId','externalKey','variantGroupId','purchaseId','lotId']);
 function label(key){return fields[key]||'Дополнительное поле'}
 function productName(id){try{return (typeof state!=='undefined'?state.products:[])?.find(p=>String(p.id)===String(id))?.name||'Товар (название недоступно)'}catch{return 'Товар (название недоступно)'}}
 function stageName(id){try{const stage=typeof purchaseWorkflow==='function'?purchaseWorkflow().find(s=>s.id===id):null;return stage?.name||statuses[id]||'Другой этап'}catch{return statuses[id]||'Другой этап'}}
@@ -32,6 +32,7 @@ function value(v,exists,after=false,key='',depth=0){
 }
 function rowHtml(row){
  const visible=Object.entries(row.changes||{}).filter(([key])=>!internalKeys.has(key));
+ if(row.action==='updated'&&!visible.length)return '';
  const changes=visible.map(([key,c])=>`<div class="ph-change"><b>${e(label(key))}</b><div><del>${e(value(c.before,c.beforeExists,false,key))}</del><span> → </span><strong>${e(value(c.after,c.afterExists,true,key))}</strong></div></div>`).join('');
  return `<article class="ph-row"><div class="ph-time">${e(new Date(Number(row.happenedAt)).toLocaleString('ru-RU',{timeZone:'Asia/Almaty'}))}</div><b>${e(actions[row.action]||'Карточка изменена')}</b><div>${e(row.productName||'Товар без названия')}</div>${row.action==='updated'&&visible.length?`<details><summary>Что изменилось · ${visible.length}</summary>${changes}</details>`:''}</article>`;
 }

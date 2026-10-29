@@ -18,7 +18,7 @@ export function historyQuery(input={}){
  const limit=50;values.push(limit+1);
  return {text:`SELECT h.id::text,h.product_id AS "productId",h.product_name AS "productName",h.entity,h.entity_id AS "entityId",h.action,h.happened_at AS "happenedAt",h.source,h.channel,h.revision,visible.changes
  FROM product_history h LEFT JOIN warehouse_products p ON p.id=h.product_id
- CROSS JOIN LATERAL (SELECT product_history_visible_changes(h.changes) AS changes) visible
+ CROSS JOIN LATERAL (SELECT product_history_visible_changes(h.changes)-'stock'-'cost'-'totalProfit' AS changes) visible
  ${where.length?'WHERE '+where.join(' AND '):''} ORDER BY h.id DESC LIMIT $${values.length}`,values,limit};
 }
 export function createProductHistoryRouter({db=pool}={}){
