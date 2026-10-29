@@ -30,9 +30,10 @@ function businessPaintOpening(){const box=document.getElementById('businessStore
 const businessModelMeta=new Map(),businessBuildJobs=new Map();let businessCacheHydrated=false;
 let businessYearChain=Promise.resolve();
 let businessRenderSeq=0,businessSummaryCache=new Map(),businessLastModel=null;
+let businessCustomActive=false,businessCalendarRange='';
 let businessPeriod='day',businessMetric='orders',businessModels=new Map(),businessDayDate='',businessWeekDate='',businessMonthDate='',businessYearDate='',businessWeekOrderCache=new Map();
 try{
- const saved=JSON.parse(localStorage.getItem(BUSINESS_UI_KEY)||'{}');
+ const saved=JSON.parse(localStorage.getItem(BUSINESS_UI_KEY)||'{}');businessCustomActive=saved.customActive===true;
  businessPeriod=saved.period==='week'||saved.period==='month'||saved.period==='year'?saved.period:'day';
  if(saved.metric==='netProfit')businessMetric='buyoutProfit';
  else if(BUSINESS_METRICS.has(saved.metric))businessMetric=saved.metric;
@@ -43,7 +44,7 @@ try{
 }catch(_){}
 
 function businessSaveUi(){
- try{localStorage.setItem(BUSINESS_UI_KEY,JSON.stringify({period:businessPeriod,metric:businessMetric,dayDate:businessDayDate,weekDate:businessWeekDate,monthDate:businessMonthDate,yearDate:businessYearDate}))}catch(_){}
+ try{localStorage.setItem(BUSINESS_UI_KEY,JSON.stringify({customActive:businessCustomActive,period:businessPeriod,metric:businessMetric,dayDate:businessDayDate,weekDate:businessWeekDate,monthDate:businessMonthDate,yearDate:businessYearDate}))}catch(_){}
 }
 function businessRemoveLegacyStoreNote(){
  const root=document.getElementById('reports');if(!root)return;
@@ -244,7 +245,7 @@ function businessEnsureStyle(){
 function businessEnsureUi(){
  const reports=document.getElementById('reports');if(!reports)return null;let root=document.getElementById('businessDashboard');
  if(root){const tabs=document.getElementById('reportMarketTabs');if(tabs&&tabs.nextElementSibling!==root)root.before(tabs);businessInstallDaySwipe();return root}businessEnsureStyle();root=document.createElement('div');root.id='businessDashboard';root.className='business-dashboard';
- root.innerHTML=`<div class="business-top"><div><h3 id="businessPeriodTitle">Сегодня</h3><div id="businessPeriodSub" class="business-sub">Kaspi + WB1 + WB2 + Ozon · по часам</div></div><div class="business-periods"><button type="button" data-business-period="day" onclick="setBusinessDashboardPeriod('day')">Сегодня</button><button type="button" data-business-period="week" onclick="setBusinessDashboardPeriod('week')">Неделя</button><button type="button" data-business-period="month" onclick="setBusinessDashboardPeriod('month')">Месяц</button><button type="button" data-business-period="year" onclick="setBusinessDashboardPeriod('year')">Год</button><button class="business-detail-btn" type="button" onclick="renderBusinessDashboard(true)">↻</button></div></div>
+ root.innerHTML=`<div class="business-top"><div><h3 id="businessPeriodTitle">Сегодня</h3><div id="businessPeriodSub" class="business-sub">Kaspi + WB1 + WB2 + Ozon · по часам</div></div><div class="business-periods"><button type="button" data-business-period="day" onclick="setBusinessDashboardPeriod('day')">Сегодня</button><button type="button" data-business-yesterday onclick="setBusinessDashboardYesterday()">Вчера</button><button type="button" data-business-period="week" onclick="setBusinessDashboardPeriod('week')">Неделя</button><button type="button" data-business-period="month" onclick="setBusinessDashboardPeriod('month')">Месяц</button><button type="button" data-business-period="year" onclick="setBusinessDashboardPeriod('year')">Год</button><button class="business-detail-btn" type="button" onclick="renderBusinessDashboard(true)">↻</button></div></div>
  <div id="businessStoreOpening" class="business-sub" hidden></div>
  <div class="business-metrics">${[['orders','Заказы'],['buyouts','Выкупы'],['orderProfit','Прибыль заказов'],['buyoutProfit','Прибыль выкупов']].map(([k,v])=>`<button type="button" data-business-metric="${k}" onclick="setBusinessDashboardMetric('${k}')">${v}</button>`).join('')}</div>
  <div id="businessDayNav" class="business-day-nav"><button id="businessDayPrevious" type="button" aria-label="Предыдущий день" onclick="shiftBusinessDashboardSelection(-1)">‹</button><span id="businessDayDate"></span><button id="businessDayNext" type="button" aria-label="Следующий день" onclick="shiftBusinessDashboardSelection(1)">›</button></div>
@@ -263,7 +264,8 @@ function businessInstallDaySwipe(){
 function businessPaintTabs(){
  businessPaintOpening();businessPaintLoadProgress();
  document.querySelectorAll('[data-business-metric]').forEach(x=>x.classList.toggle('active',x.dataset.businessMetric===businessMetric));
- document.querySelectorAll('[data-business-period]').forEach(x=>x.classList.toggle('active',x.dataset.businessPeriod===businessPeriod));
+ document.querySelectorAll('[data-business-period]').forEach(x=>x.classList.toggle('active',x.dataset.businessPeriod===businessPeriod&&(businessPeriod!=='day'||businessSelectedDayOffset()===0)));
+ document.querySelectorAll('[data-business-yesterday]').forEach(x=>x.classList.toggle('active',businessPeriod==='day'&&businessSelectedDayOffset()===-1));
  const title=document.getElementById('businessPeriodTitle'),sub=document.getElementById('businessPeriodSub');
  const year=businessPeriod==='year',week=businessPeriod==='week',month=businessPeriod==='month',offset=businessSelectedOffset(),bounds=businessPeriodBounds(),nav=document.getElementById('businessDayNav'),dayDate=document.getElementById('businessDayDate'),previous=document.getElementById('businessDayPrevious'),next=document.getElementById('businessDayNext');
  if(nav)nav.hidden=false;if(previous){previous.disabled=false;previous.setAttribute('aria-label',year?'Предыдущий год':month?'Предыдущий месяц':week?'Предыдущая неделя':'Предыдущий день')}if(next){next.disabled=offset>=0;next.setAttribute('aria-label',year?'Следующий год':month?'Следующий месяц':week?'Следующая неделя':'Следующий день')}
@@ -592,14 +594,15 @@ async function businessBuildModel(force=false,period=businessPeriod,dayOffset=bu
  return {...today,dayOffset,yesterday,yesterdayCompare:dayOffset===0?yesterdayCompare:yesterday};
 }
 
-function businessShowSelection(){businessRenderSeq++;businessLastModel=null;businessSaveUi();businessPaintTabs();const rendered=window.renderBusinessDashboard(false);if(document.getElementById('businessLoadProgress')){businessPollLoadProgress();Promise.resolve(rendered).finally(()=>businessStartAnnualWarm())}return rendered}
+function businessShowSelection(){businessCustomActive=false;businessSyncReportPeriod(true);businessRenderLowerReport();businessRenderSeq++;businessLastModel=null;businessSaveUi();businessPaintTabs();const rendered=window.renderBusinessDashboard(false);if(document.getElementById('businessLoadProgress')){businessPollLoadProgress();Promise.resolve(rendered).finally(()=>businessStartAnnualWarm())}return rendered}
 window.shiftBusinessDashboardDay=function(direction){if(businessPeriod!=='day'||![-1,1].includes(direction))return;const current=businessSelectedDayOffset(),next=Math.min(0,current+direction);if(next===current)return;businessDayDate=next===0?'':businessIsoDate(businessDayBounds(next).start);return businessShowSelection()};
 window.shiftBusinessDashboardWeek=function(direction){if(businessPeriod!=='week'||![-1,1].includes(direction))return;const current=businessSelectedWeekOffset(),next=Math.min(0,current+direction);if(next===current)return;businessWeekDate=next===0?'':businessIsoDate(businessWeekBounds(next).start);return businessShowSelection()};
 window.shiftBusinessDashboardMonth=function(direction){if(businessPeriod!=='month'||![-1,1].includes(direction))return;const current=businessSelectedMonthOffset(),next=Math.min(0,current+direction);if(next===current)return;businessMonthDate=next===0?'':businessIsoDate(businessMonthBounds(next).start);return businessShowSelection()};
 window.shiftBusinessDashboardYear=function(direction){if(businessPeriod!=='year'||![-1,1].includes(direction))return;const current=businessSelectedYearOffset(),next=Math.min(0,current+direction);if(next===current)return;businessYearDate=next===0?'':businessIsoDate(businessYearBounds(next).start);return businessShowSelection()};
 window.shiftBusinessDashboardSelection=function(direction){return businessPeriod==='year'?window.shiftBusinessDashboardYear(direction):businessPeriod==='month'?window.shiftBusinessDashboardMonth(direction):businessPeriod==='week'?window.shiftBusinessDashboardWeek(direction):window.shiftBusinessDashboardDay(direction)};
 window.setBusinessDashboardMetric=function(metric){if(!BUSINESS_METRICS.has(metric))return;businessMetric=metric;businessSaveUi();if(businessLastModel&&businessSnapshotKey(businessLastModel)===businessModelKey()){businessPaint(businessLastModel);if(businessLastModel.pending&&!['orders','orderProfit'].includes(metric))return window.renderBusinessDashboard(false)}else return window.renderBusinessDashboard(false)};
-window.setBusinessDashboardPeriod=function(period){if(!BUSINESS_PERIODS.has(period))return;if(period===businessPeriod&&businessSelectedOffset(period)===0)return;businessPeriod=period;if(period==='day')businessDayDate='';if(period==='week')businessWeekDate='';if(period==='month')businessMonthDate='';if(period==='year')businessYearDate='';return businessShowSelection()};
+window.setBusinessDashboardYesterday=function(){businessPeriod='day';businessDayDate=businessIsoDate(businessDayBounds(-1).start);return businessShowSelection()};
+window.setBusinessDashboardPeriod=function(period){if(!BUSINESS_PERIODS.has(period))return;if(!businessCustomActive&&period===businessPeriod&&businessSelectedOffset(period)===0)return;businessPeriod=period;if(period==='day')businessDayDate='';if(period==='week')businessWeekDate='';if(period==='month')businessMonthDate='';if(period==='year')businessYearDate='';return businessShowSelection()};
 function businessComparison(current,previous){
  if(current===null||current===undefined||previous===null||previous===undefined||!Number.isFinite(Number(current))||!Number.isFinite(Number(previous)))return {html:''};
  const now=Number(current),prev=Number(previous),delta=now-prev,cls=Math.abs(delta)<.005?'flat':delta>0?'up':'down',sign=delta>0?'+':'',pct=prev!==0?delta/Math.abs(prev)*100:null,pctText=pct===null?'':(' · '+(pct>0?'+':'')+Math.round(pct)+'%');
@@ -783,12 +786,30 @@ function businessStartAnnualWarm(){
   }
  })().catch(error=>{if(!error.businessCancelled){progress.error=error.message;console.warn('Дневная основа отчёта',error.message)}}).finally(()=>{progress.active=false;progress.nextAt=progress.nextAt||Date.now()+5*60000;if(scope===businessScope)businessPaintLoadProgress();if(businessAnnualJob===task){businessAnnualJob=null;if(scope===businessScope&&document.getElementById('reports')?.classList.contains('active'))businessAnnualTimer=window.setTimeout(()=>businessStartAnnualWarm(),5*60000)}});businessAnnualJob=task;return task;
 }
+// The calendar controls own the lower financial/product report's exact date range.
+// Its existing custom-range API remains the only path for arbitrary manual dates.
+function businessSyncReportPeriod(force=false){
+ if(!force&&businessCalendarRange&&typeof reportPeriod!=='undefined'&&reportPeriod===0&&JSON.stringify([reportPeriod,reportCustomFrom,reportCustomTo])!==businessCalendarRange){businessCustomActive=true;businessSaveUi()}
+ if(businessCustomActive||typeof reportPeriod==='undefined'||typeof reportCustomFrom==='undefined')return;
+ const bounds=businessPeriodBounds(),from=businessIsoDate(bounds.start),to=businessIsoDate(Math.min(bounds.end,businessDayBounds(0).end)-86400000),offset=businessSelectedOffset(),preset=businessPeriod==='day'&&offset===0?1:businessPeriod==='day'&&offset===-1?-1:0;
+ const changed=reportPeriod!==preset||reportCustomFrom!==from||reportCustomTo!==to;
+ reportPeriod=preset;if(typeof reportPeriodPreset!=='undefined')reportPeriodPreset=preset;reportCustomFrom=from;reportCustomTo=to;businessCalendarRange=JSON.stringify([preset,from,to]);
+ if(changed&&typeof state!=='undefined'){state.settings||={};Object.assign(state.settings,{reportPeriodPreset:preset,reportPeriod:preset,reportCustomFrom:from,reportCustomTo:to,reportPeriodUpdatedAt:Date.now()});if(typeof rememberReportPeriodUiPreference==='function')rememberReportPeriodUiPreference()}
+}
+function businessPaintReportPeriod(){
+ const bar=document.getElementById('reportPeriod');if(bar)bar.innerHTML='<button type="button" class="chip '+(businessCustomActive?'active':'')+'" onclick="openBusinessCustomPeriod()">Свой период</button>';
+ const box=document.getElementById('reportCustomRange');if(box?.style)box.style.display=businessCustomActive?'grid':'none';
+}
+function businessRenderLowerReport(){const result=typeof baseRenderReports==='function'?baseRenderReports():undefined;businessPaintReportPeriod();return result}
+window.openBusinessCustomPeriod=function(){
+ businessCustomActive=true;businessSaveUi();if(typeof setReportPeriod==='function')setReportPeriod(0);else businessPaintReportPeriod();
+};
 const baseRenderReports=window.renderReports;
 window.renderReports=function(){
- const result=typeof baseRenderReports==='function'?baseRenderReports.apply(this,arguments):undefined;
+ businessSyncMarket();businessSyncReportPeriod();const result=businessRenderLowerReport();
  businessRemoveLegacyStoreNote();
  businessSyncMarket();businessPollLoadProgress();Promise.resolve(window.renderBusinessDashboard(false)).finally(()=>businessStartAnnualWarm());return result;
 };
-const init=()=>{businessEnsureUi();businessInstallLegacyNoteCleanup();businessPaintTabs();if(document.getElementById('reports')?.classList.contains('active')){businessSyncMarket();businessPollLoadProgress();Promise.resolve(window.renderBusinessDashboard(false)).finally(()=>businessStartAnnualWarm())}};
+const init=()=>{businessPaintReportPeriod();businessEnsureUi();businessInstallLegacyNoteCleanup();businessPaintTabs();if(document.getElementById('reports')?.classList.contains('active')){businessSyncMarket();businessPollLoadProgress();Promise.resolve(window.renderBusinessDashboard(false)).finally(()=>businessStartAnnualWarm())}};
 if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',init,{once:true});else init();
 })();
