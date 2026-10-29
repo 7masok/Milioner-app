@@ -77,4 +77,15 @@ test('history UI ignores stale responses, paginates the same filters and escapes
  el('phMore').onclick();assert.match(requests[2].url,/productId=new/);assert.match(requests[2].url,/before=9/);requests[2].resolve({ok:true,rows:[],nextCursor:null,installedAt:100});await new Promise(r=>setImmediate(r));assert.equal(el('phMore').hidden,true);
  el('phAction').value='deleted';el('phAction').onchange();assert.match(requests[3].url,/action=deleted/);assert.doesNotMatch(requests[3].url,/before=/);requests[3].resolve({ok:true,rows:[],nextCursor:null,installedAt:100});await new Promise(r=>setImmediate(r));assert.match(el('phRows').innerHTML,/Записей по этим условиям нет/);
 });
+test('history translates purchase receipt fields and keeps raw IDs and codes behind technical details',async()=>{
+ const nodes=new Map(),requests=[];const doc={getElementById:id=>nodes.get(id),addEventListener(){},createElement:()=>({}),head:{append(){}}};
+ const ctx={window:{},document:doc,Date,URLSearchParams,MILLIONER_API:'',showSheet:()=>{for(const id of ['phRows','phNotice','phMore','phQuery','phEntity','phAction','phRefresh'])nodes.set(id,{value:'',innerHTML:''})},apiJson:()=>new Promise(resolve=>requests.push(resolve))};
+ vm.runInNewContext(read('../../product-history-v1.js'),ctx);ctx.window.openProductHistory('p');
+ const change=(before,after)=>({before,after,beforeExists:true,afterExists:true});
+ requests[0]({ok:true,installedAt:100,rows:[{productId:'opaque-product-id',entityId:'opaque-lot-id',productName:'Череп чёрный',entity:'purchase',action:'updated',happenedAt:1793266765000,revision:25639,source:'api',changes:{status:change('at_warehouse','received'),receivedAt:change(null,1793266760000),remainingQty:change(0,20),mysteryField:change('до','после'),warehouseLots:change([], [{qty:2,productId:'deleted'}])}}]});
+ await new Promise(r=>setImmediate(r));const html=nodes.get('phRows').innerHTML,main=html.split('<details class="ph-technical">')[0];
+ assert.match(main,/На складе/);assert.match(main,/В продаже/);assert.match(main,/Дата поступления в продажу/);assert.match(main,/Остаток партии/);assert.match(main,/Количество: 2/);assert.match(main,/Дополнительное поле/);
+ assert.doesNotMatch(main,/at_warehouse|receivedAt|mysteryField|opaque-|ревизия|\{&quot;/);
+ assert.match(html,/<details class="ph-technical"><summary>Технические сведения<\/summary>/);assert.match(html,/opaque-product-id/);assert.match(html,/25639/);assert.match(html,/at_warehouse/);assert.match(html,/mysteryField/);
+});
 test.after(()=>pool.end());
