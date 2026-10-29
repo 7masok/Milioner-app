@@ -1,6 +1,6 @@
 (()=>{
 'use strict';
-let cache=null,current=null,linkContext=null,listView='active';
+let cache=null,current=null,linkContext=null,listView='active',listAccount='';
 const detailCache=new Map();
 const api=path=>apiJson(MILLIONER_API+path);
 const transfers=()=>{state.settings=state.settings||{};return state.settings.ozonFboTransfers||(state.settings.ozonFboTransfers={});};
@@ -58,7 +58,7 @@ async function loadIndex(force=false){
 }
 function renderOrders(){
  const accounts=cache?.accounts||[],rows=[];
- for(const a of accounts)for(const o of a.supplies?.rows||[])rows.push({account:a.account,label:a.label||'Ozon',...o});
+ for(const a of accounts.filter(a=>!listAccount||String(a.account)===listAccount))for(const o of a.supplies?.rows||[])rows.push({account:a.account,label:a.label||'Ozon',...o});
  rows.sort((a,b)=>Date.parse(b.created_date||b.created_at||0)-Date.parse(a.created_date||a.created_at||0));
  const classified=rows.map(o=>({order:o,section:supplyListSection(o)})),selected=classified.filter(x=>x.section===listView);
  const tabs=`<div class="row" style="gap:8px;margin:12px 0">${[['active','В пути'],['history','История']].map(([key,label])=>`<button type="button" class="btn${listView===key?' dark':''}" aria-pressed="${listView===key}" onclick="setOzonFboSupplyListView('${key}')">${label} · ${classified.filter(x=>x.section===key).length}</button>`).join('')}</div>`;
@@ -71,8 +71,8 @@ function renderOrders(){
 window.setOzonFboSupplyListView=view=>{if(!['active','history'].includes(view))return;listView=view;renderOrders();};
 window.showOzonFboSupplyList=()=>renderOrders();
 
-window.openOzonFboSupplies=async()=>{
- listView='active';detailCache.clear();
+window.openOzonFboSupplies=async(account='')=>{
+ listAccount=String(account||'');listView='active';detailCache.clear();
  showSheet('<h3>Ozon FBO · поставки</h3><div class="empty">Загружаю заявки…</div>');
  try{await loadIndex(true);renderOrders();}catch(e){showSheet('<h3>Ozon FBO · поставки</h3><div class="empty">'+text(e.message||e)+'</div>');}
 };
@@ -94,8 +94,8 @@ function renderOrder(){
  const bulk=remaining.length?`<label class="muted" for="ozonFboBulkSource">Источник для всей поставки</label><select id="ozonFboBulkSource" class="select" style="width:100%;margin-top:5px"><option value="auto">По наличию · сначала со склада</option><option value="at_warehouse">Только со склада</option><option value="sale">Только из продажи</option></select><button class="btn dark full" style="margin:10px 0" onclick="accountWholeOzonFboOrder()">${remaining.length===sum.lines.length?'Учесть отправку':'Учесть оставшееся'} · ${remainingQty} шт.</button>`:'';
  showSheet(`<button type="button" class="btn" style="margin-bottom:10px" onclick="showOzonFboSupplyList()">‹ К поставкам</button><h3>${text(order.order_number||('Заявка #'+order.order_id))}</h3>${accountingHtml(current.account,order)}<div class="muted">${supplies.length} направлений · ${sum.qty} шт. · привязано ${sum.linked}/${sum.lines.length} · учтено ${sum.recorded}/${sum.lines.length}</div>${bulk}${cards}`);
 }
-window.openOzonFboSupplyOrder=async(account,orderId)=>{
- account=decodeURIComponent(account);orderId=decodeURIComponent(orderId);showSheet('<h3>Ozon FBO</h3><div class="empty">Загружаю состав поставки…</div>');
+window.openOzonFboSupplyOrder=async(account,orderId,scope=false)=>{
+ account=decodeURIComponent(account);orderId=decodeURIComponent(orderId);if(scope){listAccount=account;listView='active';}showSheet('<h3>Ozon FBO</h3><div class="empty">Загружаю состав поставки…</div>');
  try{await loadIndex();const r=await api('/api/ozon-supply-order?account='+encodeURIComponent(account)+'&orderId='+encodeURIComponent(orderId));current={account,label:r.label,order:r.order};detailCache.set(String(account)+'|'+String(orderId),r.order);const a=(cache.accounts||[]).find(x=>String(x.account)===String(account)),index=(a?.supplies?.rows||[]).findIndex(x=>String(x.order_id)===String(orderId));if(index>=0)a.supplies.rows[index]=r.order;renderOrder();}catch(e){showSheet('<h3>Ozon FBO</h3><div class="empty">'+text(e.message||e)+'</div>');}
 };
 window.linkOzonFboItem=(supplyId,bundleId,sku)=>{

@@ -28,12 +28,12 @@ export function createFboDashboardRouter({db=pool,accounts=plannerAccounts,readS
  router.post('/read',asyncRoute(async(req,res)=>{
   const account=(await accounts())[0];if(!account){const warehouse=await readWarehouse(db,'');return res.json({ok:true,configured:false,message:'Подключите магазин Ozon в настройках склада.',...enrichWarehouseDashboard({plans:[],shipments:[]},warehouse,'')})}
   const source=await readSource(account);
-  if(!source?.payload){const warehouse=await readWarehouse(db,account.id);return res.status(202).json({ok:true,configured:true,pending:true,account:{label:account.label||'Ozon'},message:'Сервер ещё готовит остатки и поставки Ozon. Повторите обновление позже.',...enrichWarehouseDashboard({plans:[],shipments:[]},warehouse,account.id)})}
+  if(!source?.payload){const warehouse=await readWarehouse(db,account.id);return res.status(202).json({ok:true,configured:true,pending:true,account:{id:account.id,label:account.label||'Ozon'},message:'Сервер ещё готовит остатки и поставки Ozon. Повторите обновление позже.',...enrichWarehouseDashboard({plans:[],shipments:[]},warehouse,account.id)})}
   const device=(await db.query('SELECT configuration,prepared FROM ozon_planner_devices WHERE account=$1 AND client_id=$2 AND NOT revoked ORDER BY last_used_at DESC,created_at DESC,id LIMIT 1',[account.id,account.clientId])).rows[0];
   const configuration=typeof device?.configuration==='string'?JSON.parse(device.configuration):device?.configuration;
   const warehouse=await readWarehouse(db,account.id);
   const dashboard=enrichWarehouseDashboard(buildDashboard(source,device?{...device,configuration}:null,req.body||{}),warehouse,account.id);
-  res.json({ok:true,configured:true,account:{label:account.label||'Ozon'},...dashboard});
+  res.json({ok:true,configured:true,account:{id:account.id,label:account.label||'Ozon'},...dashboard});
  }));
  return router;
 }
