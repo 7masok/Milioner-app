@@ -1,3 +1,4 @@
+import {reservationViolation,transferViolation} from './fbo-warehouse/core.js';
 function rows(value) {
   return Array.isArray(value) ? value : [];
 }
@@ -14,6 +15,7 @@ function warehouseMovementIdentity(row) {
 export function stockLedgerViolation(previous, next, now = Date.now()) {
   const oldState = previous && typeof previous === 'object' ? previous : {};
   const nextState = next && typeof next === 'object' ? next : {};
+  const fboViolation=reservationViolation(oldState,nextState)||transferViolation(oldState,nextState);if(fboViolation)return fboViolation;
   const oldRows = keyedMovements(oldState.movements), nextRows = keyedMovements(nextState.movements);
   const oldMovements = new Map(oldRows.map(row => [String(row.id), row]));
   const nextMovements = new Map(nextRows.map(row => [String(row.id), row]));

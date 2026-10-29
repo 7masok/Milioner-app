@@ -261,7 +261,9 @@ function priceInlineEditor(row,index){
       '</div>';
   }
   if(row.market==='Ozon'){
+    if(row.ozonProtection?.enabled&&window.ozonProtectionEditor)return '<div class="price-inline-editor" onclick="event.stopPropagation()">'+window.ozonProtectionEditor(row,index)+'<button type="button" class="btn price-hide-action" onclick="hidePriceRow('+Number(index)+')">Скрыть</button></div>';
     return '<div class="price-inline-editor" onclick="event.stopPropagation()">'+
+      (window.ozonProtectionEditor?.(row,index)||'')+
       '<div class="price-inline-fields"><div class="field"><label>Цена, '+pEsc(row.currency||'RUB')+'</label><input id="priceEditCurrent" type="number" min="1" step="1" inputmode="decimal" value="'+pEsc(pNum(row.price)||'')+'"></div>'+
       '<div class="field"><label>До скидки</label><input id="priceEditOld" type="number" min="0" step="1" inputmode="decimal" value="'+pEsc(pNum(row.oldPrice)||'')+'"></div></div>'+
       '<div class="price-inline-actions"><button type="button" class="btn dark" onclick="submitPriceEdit('+Number(index)+')">Сохранить</button><button type="button" class="btn price-hide-action" onclick="hidePriceRow('+Number(index)+')">Скрыть</button></div>'+
@@ -315,7 +317,7 @@ function priceCard(row,index){
   return '<div class="item price-item '+(!linked?'unlinked':'')+(expanded?' expanded':'')+(selected?' selected':'')+'" data-price-row="'+index+'">'+selectBox+
     '<button type="button" class="price-card-toggle" onclick="openPriceEditor('+index+')" aria-expanded="'+(expanded?'true':'false')+'">'+
       '<div class="price-item-head"><div class="grow"><div class="name">'+pEsc(row.name||row.sku||'Товар')+'</div>'+
-      '<div class="muted">'+pEsc(account?(row.account+' · '):'')+pEsc(row.sku?('Арт. '+row.sku):row.remoteId||'')+(linked?'':' · не привязан к товару склада')+group+promo+night+protection+discountBlock+'</div>'+sync+'</div><span class="price-chevron">'+(expanded?'⌄':'›')+'</span></div>'+
+      '<div class="muted">'+pEsc(account?(row.account+' · '):'')+pEsc(row.sku?('Арт. '+row.sku):row.remoteId||'')+(linked?'':' · не привязан к товару склада')+group+promo+night+protection+discountBlock+(row.market==='Ozon'?(window.ozonProtectionBadge?.(row)||''):'')+'</div>'+sync+'</div><span class="price-chevron">'+(expanded?'⌄':'›')+'</span></div>'+
       '<div class="price-values">'+lines+'</div>'+
     '</button>'+(priceIsWbMarket(row.market)?'<div class="price-delivery-slot" data-delivery-index="'+index+'">'+priceDeliveryHtml(row)+'</div>':'')+priceInlineEditor(row,index)+'</div>';
 }
@@ -334,7 +336,7 @@ function paintPrices(){
   if(discount)discount.textContent=withDiscount.toLocaleString('ru-RU');
   if(missing)missing.textContent=noPrice.toLocaleString('ru-RU');
   const list=document.getElementById('priceList');if(!list)return;
-  updatePriceBulkTools(indexed);
+  updatePriceBulkTools(indexed);window.renderOzonProtectionTools?.(priceUi.market,indexed);
   if(!rows.length){
     const failure=priceErrors.get(priceUi.market),snapshot=activeSnapshot();
     if(failure){priceRenderError(failure.message);return;}
@@ -1161,6 +1163,11 @@ window.submitPriceEdit=async function(index){
   }
 };
 
+window.ozonProtectionRows=()=>activeRows();
+window.ozonProtectionSaved=function(items,enabled){
+ for(const row of activeRows())if(row.market==='Ozon'&&items.some(x=>x.accountId===row.accountId&&x.sku===row.sku))row.ozonProtection={enabled,price:Number(items.find(x=>x.accountId===row.accountId&&x.sku===row.sku).price),currency:row.currency,status:enabled?'pending':'off',message:'',checkedAt:0};
+ paintPrices();
+};
 window.priceTabRestore=function(){
   setPriceTabs();
   const input=document.getElementById('priceSearch');if(input)input.value=priceUi.q;

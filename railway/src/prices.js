@@ -1,3 +1,4 @@
+import {decorateOzonProtectionRows,rememberOzonCatalog,withOzonProtectionLock,protectionRows} from './ozon-protection/service.js';
 import { loadWbPriceProfit } from './wb-price-profit.js';
 import { loadWbDeliveryTariffs } from './wb-delivery-tariffs.js';
 import express from 'express';
@@ -1296,7 +1297,7 @@ function ozonPriceObject(item) {
 async function listOzonPrices(force = false) {
   const key = 'Ozon';
   const hit = cached(key, force);
-  if (hit) return hit;
+  if (hit) return {...hit,rows:await decorateOzonProtectionRows(hit.rows)};
   const generation = generationFor('Ozon');
   const configured = await ozonAccounts();
   if (!configured.length) {
@@ -1379,12 +1380,14 @@ async function listOzonPrices(force = false) {
       });
     }
   }
+  await rememberOzonCatalog(all);
+  const protectedRows=await decorateOzonProtectionRows(all);
   return remember(key, 'Ozon', generation, {
     ok: true,
     market: 'Ozon',
     source: 'Ozon Seller API',
     fetchedAt: Date.now(),
-    rows: all.sort((a, b) => (a.account + ' ' + a.name).localeCompare(b.account + ' ' + b.name, 'ru'))
+    rows: protectedRows.sort((a, b) => (a.account + ' ' + a.name).localeCompare(b.account + ' ' + b.name, 'ru'))
   });
 }
 
@@ -1393,6 +1396,13 @@ async function setWbPrice(market, input) {
 }
 
 async function setOzonPrice(input) {
+ const accountId=cleanText(input?.accountId);
+ return withOzonProtectionLock(accountId,async client=>{
+  if((await protectionRows(accountId,client)).some(p=>p.offer_id===cleanText(input?.sku)&&p.enabled))throw Object.assign(Error('Включена защита Ozon. Измените цену защиты или сначала отключите её.'),{status:409});
+  return setOzonPriceUnlocked(input);
+ });
+}
+async function setOzonPriceUnlocked(input) {
   const accountId = cleanText(input?.accountId);
   const account = (await ozonAccounts()).find(row => cleanText(row.id) === accountId);
   if (!account) {
