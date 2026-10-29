@@ -19,3 +19,11 @@ export function rewriteOfferPrice(body,price){
   next=next.replace(/<cityprice\b([^>]*)>[\s\S]*?<\/cityprice>/gi,(_whole,attrs)=>`<cityprice${attrs}>${value}</cityprice>`);
   return next;
 }
+
+// Unrelated XML-only offers keep their existing behavior. Only positively known
+// warehouse-managed seller SKUs receive a tombstone after their link disappears.
+export function includeDeletedKaspiStocks(stocks,managedSkus){
+ const result=new Map(stocks);
+ for(const raw of managedSkus){const sku=String(raw||'').trim();if(sku&&!result.has(sku))result.set(sku,0)}
+ return result;
+}
