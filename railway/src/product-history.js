@@ -3,10 +3,10 @@ import {pool} from './db.js';
 import {requireConfiguredSession} from './auth.js';
 import {asyncRoute,requireTrustedOrigin,noStore} from './http.js';
 
-export const HISTORY_ENTITIES=new Set(['product','purchase','reservation','movement','sale']);
+export const HISTORY_ENTITIES=new Set(['product']);
 export const HISTORY_ACTIONS=new Set(['created','updated','deleted','baseline']);
 export function historyQuery(input={}){
- const where=["h.action<>'baseline'","visible.changes<>'{}'::jsonb"],values=[];
+ const where=["h.entity='product'","h.action<>'baseline'","visible.changes<>'{}'::jsonb"],values=[];
  const add=(sql,value)=>{values.push(value);where.push(sql.replace('?',`$${values.length}`))};
  const productId=String(input.productId||'').trim(),q=String(input.q||'').trim();
  if(productId.length>200||q.length>200)throw Object.assign(Error('Слишком длинный запрос'),{status:400});
