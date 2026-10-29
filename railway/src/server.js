@@ -15,6 +15,8 @@ import { wbOrderHistoryRouter,startWbOrderHistoryLoop } from './wb-order-history
 import { ozonRouter, startOzonSyncLoop } from './ozon-fbo.js';
 import { ozonPerformanceRouter, resumeOzonPerformanceRetries } from './ozon-performance.js';
 import express from 'express';
+import {productHistoryRouter} from './product-history.js';
+import {withProductHistoryPage} from './product-history-page.js';
 import helmet from 'helmet';
 import path from 'node:path';
 import { readFile } from 'node:fs/promises';
@@ -50,6 +52,7 @@ assertRuntimeConfig();
 const app = express();
 const repositoryRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const frontendFiles = Object.freeze([
+  'product-history-v1.js',
   'manifest.webmanifest',
   'sw.js',
   'app-icon.svg',
@@ -119,7 +122,7 @@ app.use(express.json({ limit: '7mb', strict: true }));
 
 const frontendRevalidateHeaders = { 'Cache-Control': 'public, max-age=0, must-revalidate' };
 app.get(['/', '/index.html'], async (_req,res,next)=>{
-  try{const page=withOzonProtectionPage(withFboPage(withGrowthAnalyticsPage(await readFile(path.join(repositoryRoot,'index.html'),'utf8'))));res.set(frontendRevalidateHeaders).type('html').send(page)}catch(error){next(error)}
+  try{const page=withProductHistoryPage(withOzonProtectionPage(withFboPage(withGrowthAnalyticsPage(await readFile(path.join(repositoryRoot,'index.html'),'utf8')))));res.set(frontendRevalidateHeaders).type('html').send(page)}catch(error){next(error)}
 });
 app.get('/ozon-fbo-v1.js', async (_req,res,next)=>{
   try{
@@ -149,6 +152,7 @@ app.use('/api/ozon-planner', plannerRouter);
 app.use('/api', requireAppSession);
 app.use('/api/fbo-dashboard', fboDashboardRouter);
 app.use('/api/fbo-warehouse', fboWarehouseRouter);
+app.use('/api/product-history', productHistoryRouter);
 registerDeveloperGuideRoutes(app, repositoryRoot);
 app.get('/api/auth/webauthn/credentials', requireTrustedOrigin, listWebauthnCredentials);
 app.delete('/api/auth/webauthn/credentials/:id', requireTrustedOrigin, deleteWebauthnCredential);
