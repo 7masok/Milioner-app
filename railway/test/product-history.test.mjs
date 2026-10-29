@@ -77,16 +77,15 @@ test('history UI ignores stale responses, paginates the same filters and escapes
  el('phMore').onclick();assert.match(requests[2].url,/productId=new/);assert.match(requests[2].url,/before=9/);requests[2].resolve({ok:true,rows:[],nextCursor:null,installedAt:100});await new Promise(r=>setImmediate(r));assert.equal(el('phMore').hidden,true);
  el('phAction').value='deleted';el('phAction').onchange();assert.match(requests[3].url,/action=deleted/);assert.doesNotMatch(requests[3].url,/before=/);requests[3].resolve({ok:true,rows:[],nextCursor:null,installedAt:100});await new Promise(r=>setImmediate(r));assert.match(el('phRows').innerHTML,/Записей по этим условиям нет/);
 });
-test('history translates purchase receipt fields and keeps raw IDs and codes behind technical details',async()=>{
- const nodes=new Map(),requests=[];const doc={getElementById:id=>nodes.get(id),addEventListener(){},createElement:()=>({}),head:{append(){}}};
- const ctx={window:{},document:doc,Date,URLSearchParams,MILLIONER_API:'',showSheet:()=>{for(const id of ['phRows','phNotice','phMore','phQuery','phEntity','phAction','phRefresh'])nodes.set(id,{value:'',innerHTML:''})},apiJson:()=>new Promise(resolve=>requests.push(resolve))};
+test('card history shows only readable card events with no technical dump or operation filters',async()=>{
+ const nodes=new Map(),requests=[];let sheet='';const doc={getElementById:id=>nodes.get(id),addEventListener(){},createElement:()=>({}),head:{append(){}}};
+ const ctx={window:{},document:doc,Date,URLSearchParams,MILLIONER_API:'',showSheet:html=>{sheet=html;for(const id of ['phRows','phNotice','phMore','phQuery','phAction','phRefresh'])nodes.set(id,{value:'',innerHTML:''})},apiJson:()=>new Promise(resolve=>requests.push(resolve))};
  vm.runInNewContext(read('../../product-history-v1.js'),ctx);ctx.window.openProductHistory('p');
- const change=(before,after)=>({before,after,beforeExists:true,afterExists:true});
- requests[0]({ok:true,installedAt:100,rows:[{productId:'opaque-product-id',entityId:'opaque-lot-id',productName:'Череп чёрный',entity:'purchase',action:'updated',happenedAt:1793266765000,revision:25639,source:'api',changes:{status:change('at_warehouse','received'),receivedAt:change(null,1793266760000),remainingQty:change(0,20),mysteryField:change('до','после'),warehouseLots:change([], [{qty:2,productId:'deleted'}])}}]});
- await new Promise(r=>setImmediate(r));const html=nodes.get('phRows').innerHTML,main=html.split('<details class="ph-technical">')[0];
- assert.match(main,/На складе/);assert.match(main,/В продаже/);assert.match(main,/Дата поступления в продажу/);assert.match(main,/Остаток партии/);assert.match(main,/Количество: 2/);assert.match(main,/Дополнительное поле/);
- assert.doesNotMatch(main,/at_warehouse|receivedAt|mysteryField|opaque-|ревизия|\{&quot;/);
- assert.match(html,/<details class="ph-technical"><summary>Технические сведения<\/summary>/);assert.match(html,/opaque-product-id/);assert.match(html,/25639/);assert.match(html,/at_warehouse/);assert.match(html,/mysteryField/);
+ const change=(before,after)=>({before,after,beforeExists:true,afterExists:true}),event={productId:'opaque-product-id',entityId:'opaque-lot-id',productName:'Венчик голд',entity:'product',action:'updated',happenedAt:1793266765000,revision:25639,source:'api-patch',changes:{stock:change(50,0)}};
+ requests[0]({ok:true,installedAt:100,rows:[event,...['reservation','movement','purchase','sale'].map(entity=>({...event,entity,productName:'UNWANTED '+entity})),{...event,action:'baseline',productName:'UNWANTED baseline'}]});
+ await new Promise(r=>setImmediate(r));const html=nodes.get('phRows').innerHTML;
+ assert.match(html,/Карточка изменена/);assert.match(html,/Венчик голд/);assert.match(html,/Учётный остаток/);assert.match(html,/<del>50<\/del>/);assert.match(html,/<strong>0<\/strong>/);
+ assert.doesNotMatch(html,/Технические|opaque-|ревизия|api-patch|beforeExists|afterExists|UNWANTED|<pre>/);assert.doesNotMatch(sheet,/phEntity|Все записи|Резерв|Движение|Партия/);
 });
 test('polling metadata creates no events; historic noise and baselines are filtered before pagination',async()=>{
  const db=await fixture(true);try{
@@ -103,6 +102,16 @@ test('polling metadata creates no events; historic noise and baselines are filte
   query=historyQuery({productId:'one'});rows=(await db.query(query.text,query.values)).rows;assert.equal(rows.length,2);assert.ok(rows.every(r=>r.action!=='baseline'));assert.equal((await db.query(historyQuery({productId:'one',before:rows[1].id}).text,historyQuery({productId:'one',before:rows[1].id}).values)).rows.length,0);
   await db.exec("BEGIN;UPDATE warehouse_products SET stock=8 WHERE id='one';INSERT INTO warehouse_audit VALUES(33,100,'hash','fbo-automatic');COMMIT;");
   rows=(await db.query(query.text,query.values)).rows;assert.equal(rows[0].source,'fbo-automatic');assert.equal(rows[0].changes.stock.after,8);
+ }finally{await db.close()}
+});
+test('server excludes all non-card entities before page limits, including legacy filters',async()=>{
+ const db=await fixture();try{
+  await db.exec("INSERT INTO warehouse_products(id,name,stock,payload) VALUES('p','Карточка',3,'{}')");
+  for(const entity of ['reservation','movement','purchase','sale'])for(let i=0;i<15;i++)await db.query("INSERT INTO product_history(product_id,product_name,entity,entity_id,action,changes) VALUES('p','Лишнее',$1,'operation','created',$2::jsonb)",[entity,JSON.stringify({qty:{after:5,afterExists:true,beforeExists:false}})]);
+  await db.exec("UPDATE warehouse_products SET name='Новое название' WHERE id='p';DELETE FROM warehouse_products WHERE id='p'");
+  const q=historyQuery({productId:'p'}),rows=(await db.query(q.text,q.values)).rows;
+  assert.deepEqual(rows.map(r=>r.action),['deleted','updated','created']);assert.ok(rows.every(r=>r.entity==='product'));
+  for(const entity of ['reservation','movement','purchase','sale'])assert.throws(()=>historyQuery({entity}),/Неизвестный тип/);
  }finally{await db.close()}
 });
 test.after(()=>pool.end());
