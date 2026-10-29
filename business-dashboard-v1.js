@@ -254,12 +254,16 @@ function businessEnsureUi(){
  const title=reports.querySelector('h2');if(title)title.insertAdjacentElement('afterend',root);else reports.prepend(root);const tabs=document.getElementById('reportMarketTabs');if(tabs)root.before(tabs);businessInstallDaySwipe();return root;
 }
 function businessInstallDaySwipe(){
- const chart=document.getElementById('businessChart');if(!chart||chart.dataset.daySwipe==='1')return;chart.dataset.daySwipe='1';
- let gesture=null;
- chart.addEventListener('touchstart',event=>{gesture=null;if(!BUSINESS_PERIODS.has(businessPeriod)||event.touches.length!==1)return;const t=event.touches[0];gesture={id:t.identifier,x:t.clientX,y:t.clientY,vertical:false,key:businessModelKey()};},{passive:true});
+ const totals=document.getElementById('reports')?.querySelector?.('.kpi');
+ for(const chart of [document.getElementById('businessChart'),totals]){
+ if(!chart||chart.dataset.daySwipe==='1')continue;chart.dataset.daySwipe='1';
+ let gesture=null,suppressClickUntil=0;
+ chart.addEventListener('touchstart',event=>{gesture=null;suppressClickUntil=0;if(!BUSINESS_PERIODS.has(businessPeriod)||event.touches.length!==1)return;const t=event.touches[0];gesture={id:t.identifier,x:t.clientX,y:t.clientY,vertical:false,key:businessModelKey()};},{passive:true});
  chart.addEventListener('touchmove',event=>{if(!gesture)return;if(event.touches.length!==1){gesture=null;return}const t=event.touches[0],dx=t.clientX-gesture.x,dy=t.clientY-gesture.y;if(Math.abs(dy)>12&&Math.abs(dy)>Math.abs(dx))gesture.vertical=true;if(!gesture.vertical&&Math.abs(dx)>12&&Math.abs(dx)>Math.abs(dy)*1.5&&event.cancelable)event.preventDefault();},{passive:false});
- chart.addEventListener('touchend',event=>{const start=gesture;gesture=null;if(!start||start.vertical||!BUSINESS_PERIODS.has(businessPeriod)||start.key!==businessModelKey()||event.touches.length)return;const t=Array.from(event.changedTouches).find(x=>x.identifier===start.id);if(!t)return;const dx=t.clientX-start.x,dy=t.clientY-start.y;if(Math.abs(dx)>=50&&Math.abs(dx)>Math.abs(dy)*1.5)window.shiftBusinessDashboardSelection(dx>0?-1:1);},{passive:true});
+ chart.addEventListener('touchend',event=>{const start=gesture;gesture=null;if(!start||start.vertical||!BUSINESS_PERIODS.has(businessPeriod)||start.key!==businessModelKey()||event.touches.length)return;const t=Array.from(event.changedTouches).find(x=>x.identifier===start.id);if(!t)return;const dx=t.clientX-start.x,dy=t.clientY-start.y;if(Math.abs(dx)>=50&&Math.abs(dx)>Math.abs(dy)*1.5){suppressClickUntil=Date.now()+500;window.shiftBusinessDashboardSelection(dx>0?-1:1);}},{passive:true});
  chart.addEventListener('touchcancel',()=>{gesture=null;},{passive:true});
+ chart.addEventListener('click',event=>{if(Date.now()<suppressClickUntil){event.preventDefault();event.stopImmediatePropagation();}},{capture:true});
+ }
 }
 function businessPaintTabs(){
  businessPaintOpening();businessPaintLoadProgress();
@@ -269,7 +273,7 @@ function businessPaintTabs(){
  const title=document.getElementById('businessPeriodTitle'),sub=document.getElementById('businessPeriodSub');
  const year=businessPeriod==='year',week=businessPeriod==='week',month=businessPeriod==='month',offset=businessSelectedOffset(),bounds=businessPeriodBounds(),nav=document.getElementById('businessDayNav'),dayDate=document.getElementById('businessDayDate'),previous=document.getElementById('businessDayPrevious'),next=document.getElementById('businessDayNext');
  if(nav)nav.hidden=false;if(previous){previous.disabled=false;previous.setAttribute('aria-label',year?'Предыдущий год':month?'Предыдущий месяц':week?'Предыдущая неделя':'Предыдущий день')}if(next){next.disabled=offset>=0;next.setAttribute('aria-label',year?'Следующий год':month?'Следующий месяц':week?'Следующая неделя':'Следующий день')}
- if(dayDate)dayDate.innerHTML=(year?new Date(bounds.start+18000000).getUTCFullYear()+' год':month?new Date(bounds.start).toLocaleDateString('ru-RU',{timeZone:'Asia/Almaty',month:'long',year:'numeric'}):week?businessShortDate(bounds.start)+' – '+businessShortDate(bounds.end-86400000)+' · '+(offset===0?'эта неделя':'вся неделя'):businessShortDate(bounds.start)+' · '+(offset===0?'сегодня':offset===-1?'вчера':'весь день'))+'<small>Свайп по графику ← →</small>';
+ if(dayDate)dayDate.innerHTML=(year?new Date(bounds.start+18000000).getUTCFullYear()+' год':month?new Date(bounds.start).toLocaleDateString('ru-RU',{timeZone:'Asia/Almaty',month:'long',year:'numeric'}):week?businessShortDate(bounds.start)+' – '+businessShortDate(bounds.end-86400000)+' · '+(offset===0?'эта неделя':'вся неделя'):businessShortDate(bounds.start)+' · '+(offset===0?'сегодня':offset===-1?'вчера':'весь день'))+'<small>Свайп по графику или суммам ← →</small>';
  if(title)title.textContent=year?'Год':month?'Месяц':week?'Неделя':offset===0?'Сегодня':bounds.label;
  if(sub)sub.textContent=businessMarketLabel()+' · '+(year?'по месяцам':businessPeriod==='day'?'по часам':'по дням');
 }

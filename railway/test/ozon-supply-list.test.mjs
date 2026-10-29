@@ -9,7 +9,7 @@ function fixture(rows=[],settings={}){
  const state={products:[],settings},responses={accounts:[{account:'a',label:'Ozon',supplies:{rows}}]},sheets=[];
  const window={},ctx={window,state,Date,console,Map,Set,esc:s=>String(s).replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;').replaceAll('"','&quot;').replaceAll("'",'&#39;'),MILLIONER_API:'https://fixture.invalid',apiJson:async url=>url.includes('/ozon-supply-order')?{label:'Ozon',order:rows.find(x=>x.order_id===new URL(url).searchParams.get('orderId'))}:responses,showSheet:html=>sheets.push(html),setInterval(){},MutationObserver:class{observe(){}},document:{readyState:'loading',getElementById:()=>null,addEventListener(){}},confirm:()=>assert.fail('view must not confirm a stock write'),save:()=>assert.fail('view must not save'),render:()=>assert.fail('view must not render warehouse'),log:()=>assert.fail('view must not log stock'),fifoConsume:()=>assert.fail('view must not consume FIFO')};
  vm.createContext(ctx);vm.runInContext(source.replace(/\}\)\(\);\s*$/,'window.testApi={supplyListSection,accountingSummary,accountingHtml,transferKey};})();'),ctx);
- return{window,state,sheets,api:window.testApi,html:()=>sheets.at(-1)};
+ return{window,state,sheets,responses,api:window.testApi,html:()=>sheets.at(-1)};
 }
 function marker(f,o,s,qty=50,account='a'){
  const key=f.api.transferKey(account,o.order_id,s.supply_id,s.bundle_id,s.items[0].sku);
@@ -69,4 +69,13 @@ test('supply entry is a permanent purchases action, outside report rendering and
  assert.doesNotMatch(source,/function ensureButton|setInterval\(ensureButton|ozonFboSuppliesBtn/);
  const button=purchases.match(/<button id="ozonFboSuppliesBtn"[^>]*>/)[0];assert.doesNotMatch(button,/hidden|display:\s*none|disabled/);
  let opened=0;vm.runInNewContext(button.match(/onclick="([^"]+)"/)[1],{openOzonFboSupplies:()=>{opened++}});assert.equal(opened,1);
+});
+
+test('FBO entry scopes account through history and direct order return; legacy entry resets scope',async()=>{
+ const a=order('first'),b=order('other'),f=fixture([a,order('old','COMPLETED')]);
+ f.responses.accounts.push({account:'b',label:'Другой магазин',supplies:{rows:[b,order('otherOld','COMPLETED')]}});
+ await f.window.openOzonFboSupplies('a');assert.match(f.html(),/Заявка first/);assert.doesNotMatch(f.html(),/Заявка other/);
+ f.window.setOzonFboSupplyListView('history');assert.match(f.html(),/Заявка old/);assert.doesNotMatch(f.html(),/otherOld/);
+ await f.window.openOzonFboSupplyOrder('a','first',true);f.window.showOzonFboSupplyList();assert.match(f.html(),/Заявка first/);assert.doesNotMatch(f.html(),/Заявка other/);
+ await f.window.openOzonFboSupplies();assert.match(f.html(),/Заявка other/);
 });
