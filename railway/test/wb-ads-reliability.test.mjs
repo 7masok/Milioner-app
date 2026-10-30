@@ -2,6 +2,8 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import test from 'node:test';
 import vm from 'node:vm';
+import {createWbAdGroups} from '../src/wb-ad-groups.js';
+import {createWbQueryHistory} from '../src/wb-query-history.js';
 import {stockBlock} from '../src/wb-ad-inventory.js';
 
 const source = readFileSync(new URL('../src/wb-ads.js', import.meta.url), 'utf8');
@@ -10,9 +12,9 @@ function harness(configured = []) {
   const context = vm.createContext({
     console: { info() {}, warn() {}, error() {} },
     Date, Intl, URL, AbortController, setTimeout, clearTimeout, setInterval,
-    express: { Router: () => ({ get() {}, put() {}, post() {} }) },
+    express: { Router: () => ({ get() {}, put() {}, post() {}, use() {} }) },
     pool: { query: async (sql, args) => { queries.push({ sql, args }); return { rows: configured }; } },
-    stockBlock, config: {}, credentialFor: async () => 'test-token', asyncRoute: fn => fn,
+    stockBlock, createWbQueryHistory, createWbAdGroups, config: {}, credentialFor: async () => 'test-token', asyncRoute: fn => fn,
   });
   vm.runInContext(source.replace(/^import .*;\r?\n/gm, '').replace(/export /g, '') + '\nglobalThis.api = { enforce, fetchCampaigns, setStoredCampaignStatus, localDate, requestInterval, campaignName, campaignApiName, campaignPeriodMetrics };', context);
   context.mockRequest = async url => { calls.push(url); return {}; };

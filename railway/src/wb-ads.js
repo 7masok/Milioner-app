@@ -1,4 +1,6 @@
 import express from 'express';
+import {createWbAdGroups} from './wb-ad-groups.js';
+import {createWbQueryHistory} from './wb-query-history.js';
 import { pool } from './db.js';
 import { config } from './config.js';
 import { credentialFor } from './connections.js';
@@ -594,6 +596,7 @@ async function publicSnapshot(marketName) {
   return {
     ...value,
     cached: true,
+    groups: await wbCampaignGroups.list(marketName),
     waitingForFirstSync: !value.updatedAt,
     campaigns: value.campaigns
       .filter(row => MANAGEABLE_CAMPAIGN_STATUSES.has(Number(row.status)))
@@ -835,7 +838,14 @@ async function enforce(marketName, snapshot, { allowSchedule = true, allowStarts
   }
 }
 
+const wbCampaignGroups=createWbAdGroups({db:pool,snapshot:storedSnapshot});
+wbAdsRouter.use('/promotion/groups',wbCampaignGroups.router);
+
+const wbQueryHistory=createWbQueryHistory({db:pool,tokenFor,request,snapshot:storedSnapshot});
+wbAdsRouter.use('/promotion/queries',wbQueryHistory.router);
+
 export function startWbAdsLimitLoop() {
+  wbQueryHistory.start();
   const running = new Set();
   const scheduleRetry = (marketName, retryAt) => {
     const at = Number(retryAt || 0);
