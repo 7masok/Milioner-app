@@ -12,11 +12,11 @@ function extract(name,next){
   return html.slice(start,end);
 }
 
-test('new purchase total is computed from explicit line prices and never auto-filled from recommendations',()=>{
+test('new purchase accepts a manual grand total explicitly and never auto-fills from recommendations',()=>{
   const fn=extract('purchaseForm','lightweightPurchaseOptions');
   assert.doesNotMatch(fn,/suggestedTotal/);
-  assert.match(fn,/id="porBuyTotal"[^>]*readonly/);
-  assert.match(fn,/Сумма введённых цен всех товаров/);
+  assert.match(fn,/id="porBuyTotal"[^>]*oninput="markPurchaseTotalDraft/);assert.doesNotMatch(fn,/id="porBuyTotal"[^>]*readonly/);
+  assert.match(fn,/Распределить по количеству/);assert.match(fn,/Отменить общую сумму/);
   assert.doesNotMatch(fn,/распределится автоматически по количеству/);
   assert.doesNotMatch(fn,/value="\$\{hint\.estimatedCost/);
 });
