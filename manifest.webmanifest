@@ -10,16 +10,10 @@
   "theme_color": "#111111",
   "icons": [
     {
-      "src": "/app-icon.svg",
-      "sizes": "192x192",
+      "src": "/app-icon.svg?v=20261030-dollar-logo",
+      "sizes": "192x192 512x512",
       "type": "image/svg+xml",
       "purpose": "any"
-    },
-    {
-      "src": "/app-icon.svg",
-      "sizes": "512x512",
-      "type": "image/svg+xml",
-      "purpose": "any maskable"
     }
   ]
 }
