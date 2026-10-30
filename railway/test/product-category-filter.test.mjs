@@ -81,3 +81,32 @@ test('category menu sits below the existing search/ranking row and uses an indep
  assert.match(html,/\.product-category-options\{[^}]*left:0;right:0;max-height:260px;overflow-y:auto/);
  assert.doesNotMatch(extract('setProductCategory'),/\bsave\(|ensureProductRankStats|invalidateProductRenderStats|fetch\(/);
 });
+
+test('store filters use explicit links and aliases, keep WB cabinets separate and ignore sale counts',()=>{
+ const products=[{id:'a',name:'А',kaspi:'K1',wb:'W1'},{id:'b',name:'Б',wb2Aliases:['  B2  ']},{id:'c',name:'В',ozon:'O1'},{id:'d',name:'Г',wbAliases:['  ']},{id:'g',name:'Д',kind:'variant-group'},{id:'child',name:'Размер',variantGroupId:'g',wb2:'SIZE'}];
+ const f=fixture({},products);f.stats.products=products.filter(p=>!p.variantGroupId);
+ f.ctx.setProductStore('wb');assert.equal(f.list(),'a|');
+ f.ctx.setProductStore('wb2');assert.equal(f.list(),'b|g|');
+ f.ctx.setProductStore('ozon');assert.equal(f.list(),'c|');
+ f.ctx.setProductStore('kaspi');assert.equal(f.list(),'a|');
+ f.ctx.setProductStore('all');assert.match(f.element('productPager').innerHTML,/5 товаров/);
+ assert.match(f.element('productStoreTabs').innerHTML,/aria-pressed="true"[^>]*>Все/);
+});
+
+test('store choice persists and intersects with category search FBO and ranking without writing inventory',()=>{
+ const products=[{id:'red',name:'Красный',category:'Брелки',kaspi:'K1'},{id:'blue',name:'Синий',category:'Брелки',kaspiAliases:['K2']},{id:'knife',name:'Нож',category:'Ножи',wb2:'W'}];
+ const f=fixture({rankSort:'sales',rankDays:60,rankDirection:'asc',page:3},products);
+ f.ctx.setProductStore('kaspi');assert.equal(f.ctx.productPage,1);assert.equal(f.saved().storeFilter,'kaspi');assert.equal(f.saved().rankDays,60);
+ f.ctx.setProductCategory('category:Брелки');vm.runInContext('productFboOnly=true',f.ctx);f.render();assert.equal(f.list(),'blue|');
+ f.element('q').value='Красный';f.render();assert.match(f.list(),/Нет товаров с привязкой к Kaspi/);
+ const reload=fixture(f.saved(),products);reload.render();assert.equal(reload.list(),'red|blue|');
+ const invalid=fixture({storeFilter:'unknown'},products);invalid.render();assert.match(invalid.element('productPager').innerHTML,/3 товаров/);
+});
+
+test('store link badges escape identifiers, display selected store codes and handle unlinked products',()=>{
+ const f=fixture();f.ctx.setProductStore('ozon');
+ const text=f.ctx.productStoreLinksHtml({kaspi:'K',ozonAliases:['<img onerror="bad()">']});
+ assert.match(text,/Kaspi/);assert.match(text,/class="selected">Ozon · &lt;img/);assert.doesNotMatch(text,/<img/);
+ assert.match(f.ctx.productStoreLinksHtml({}),/Без привязок/);
+ assert.doesNotMatch(extract('setProductStore'),/\bsave\(|fetch\(|invalidateProductRenderStats|ensureProductRankStats/);
+});

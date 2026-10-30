@@ -4,6 +4,8 @@ import vm from 'node:vm';
 import {readFileSync} from 'node:fs';
 import {preserveWbValidation,linkFingerprint} from '../src/wb-link-validation.js';
 const ui=readFileSync(new URL('../../wb-variants-v1.js',import.meta.url),'utf8');
+const html=readFileSync(new URL('../../index.html',import.meta.url),'utf8');
+const storeHelpers=['productStoreCodes','productStoreLinksHtml'].map(name=>{const start=html.indexOf('function '+name+'(');return html.slice(start,html.indexOf('\nfunction ',start+10));}).join('\n');
 const backend=readFileSync(new URL('../src/wb-stock-sync.js',import.meta.url),'utf8');
 function product(id,stock,amount,at=Date.now()){
  return {id,name:id,stock,variantGroupId:'g',reserved:0,wb:id,wbVariant:{market:'WB',nmId:'1',chrtId:Number(id),barcode:id,wbAmount:0,checkedAt:Date.now()-4*86400000,stockObservation:amount===undefined?undefined:{amount,at,warehouseId:'wh',pending:false}}};
@@ -11,7 +13,7 @@ function product(id,stock,amount,at=Date.now()){
 function harness(rows){
  const group={id:'g',kind:'variant-group',name:'Кольца'};let readonly=false,sheet='';
  const context={window:{},state:{products:[group,...rows]},warehouseRemoteReady:false,document:{documentElement:{hasAttribute:()=>readonly},createElement:()=>({}),head:{appendChild(){}}},stockProducts(){},reserved:p=>p.reserved||0,productDisplayStock:p=>p.stock,productAvailableStock:p=>Math.max(0,p.stock-(p.reserved||0)),productCard:()=>'',openProduct(){},buildProductRenderStats:()=>({products:[]}),prod:id=>context.state.products.find(p=>p.id===id),esc:x=>String(x),isBundleProduct:()=>false,packagingProductBlock:()=>'',setTimeout(){},showSheet:s=>sheet=s};
- vm.createContext(context);vm.runInContext(ui,context);
+ vm.createContext(context);vm.runInContext("let productStoreFilter='all';\n"+storeHelpers,context);vm.runInContext(ui,context);
  return {context,group,card:()=>context.productCard(group),open:()=>{context.openProduct('g');return sheet},readonly:v=>readonly=v};
 }
 test('reload displays cached quantities immediately with update marker, then replaces them with server data',()=>{
