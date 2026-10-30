@@ -110,3 +110,26 @@ test('store link badges escape identifiers, display selected store codes and han
  assert.match(f.ctx.productStoreLinksHtml({}),/Без привязок/);
  assert.doesNotMatch(extract('setProductStore'),/\bsave\(|fetch\(|invalidateProductRenderStats|ensureProductRankStats/);
 });
+
+test('unlinked button includes only products with no store codes, including aliases and size children',()=>{
+ const products=[{id:'a',name:'А',kaspi:'K'},{id:'b',name:'Б',wb2Aliases:['B']},{id:'c',name:'В',wb:'  ',ozonAliases:['']},{id:'g',name:'Г',kind:'variant-group'},{id:'child',name:'Размер',variantGroupId:'g',ozon:'O'}];
+ const f=fixture({},products);f.stats.products=products.filter(p=>!p.variantGroupId);
+ f.ctx.setProductStore('unlinked');assert.equal(f.list(),'c|');assert.equal(f.saved().storeFilter,'unlinked');
+ assert.equal(f.element('productStoreLinkMode').hidden,true);assert.match(f.element('productStoreTabs').innerHTML,/aria-pressed="true"[^>]*>Без привязки/);
+ const reload=fixture(f.saved(),products);reload.stats.products=f.stats.products;reload.render();assert.equal(reload.list(),'c|');
+ f.ctx.setProductStoreUnlinked(true);assert.equal(f.list(),'c|');
+ f.element('q').value='Размер';f.render();assert.match(f.list(),/Товаров без привязок к магазинам по выбранным фильтрам нет/);
+});
+
+test('missing links for selected store invert only its links and preserve independent filters on reload',()=>{
+ const products=[{id:'a',name:'А',category:'Брелки',kaspi:'K'},{id:'blue',name:'Б',category:'Брелки',wb2Aliases:['B']},{id:'c',name:'В',category:'Ножи'}];
+ const f=fixture({rankSort:'sales',rankDays:60,rankDirection:'asc'},products);
+ f.ctx.setProductStore('kaspi');f.ctx.setProductStoreUnlinked(true);assert.equal(f.list(),'blue|c|');
+ assert.equal(f.element('productStoreLinkMode').hidden,false);assert.equal(f.ctx.productPage,1);assert.equal(f.saved().storeUnlinked,true);assert.equal(f.saved().rankDays,60);
+ f.ctx.setProductCategory('category:Брелки');vm.runInContext('productFboOnly=true',f.ctx);f.render();assert.equal(f.list(),'blue|');
+ const reload=fixture(f.saved(),products);reload.render();assert.equal(reload.list(),'blue|');
+ f.ctx.setProductStore('wb2');assert.match(f.list(),/Товаров без привязки к WB 2/);
+ f.ctx.setProductStoreUnlinked(false);assert.equal(f.list(),'blue|');
+ f.ctx.setProductStore('all');assert.equal(f.element('productStoreLinkMode').hidden,true);
+ assert.doesNotMatch(extract('setProductStoreUnlinked'),/\bsave\(|fetch\(|invalidateProductRenderStats/);
+});
