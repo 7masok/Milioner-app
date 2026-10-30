@@ -8,6 +8,7 @@ function purchasePdfInput(mode,key){
  }
  const edit=mode==='edit',prefix=edit?'editPor':'por',rows=edit?editPurchaseDraftRows():purchaseDraftRows();
  if(!rows.length||rows.some(r=>!r.productId||!Number.isSafeInteger(r.qty)||r.qty<1||r.priceValid===false))throw Error('Проверьте товар и количество в каждой позиции');
+ if(document.getElementById(prefix+'BuyTotal')?.dataset?.pendingTotal==='1')throw Error('Сначала распределите общую сумму по количеству или отмените её ввод');
  const buy=Number(document.getElementById(prefix+'BuyTotal')?.value)||0,delivery=Number(document.getElementById(prefix+'Delivery')?.value)||0;
  if(buy<0||delivery<0)throw Error('Суммы закупки не могут быть отрицательными');
  return {title:document.getElementById(prefix+'Batch')?.value||'Закупка',date:document.getElementById(prefix+'Date')?.value||'',draft:true,delivery,items:purchaseDraftCosts(rows,buy,delivery).map(r=>({productId:r.productId,qty:r.qty,buyTotal:r.buyTotal}))};
