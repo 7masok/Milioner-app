@@ -21,7 +21,7 @@ export const QUERY_TOTALS_SQL=`SELECT s.nm_id::text AS "nmId",s.query,
  MIN(s.date_from)::text AS "dateFrom",MAX(w.synced_at)::float8 AS "updatedAt"
  FROM wb_query_stats s JOIN wb_query_windows w USING(market,campaign_id,nm_id,date_from)
  WHERE s.market=$1 AND s.campaign_id=$2 GROUP BY s.nm_id,s.query`;
-export function createWbQueryHistory({db,tokenFor,request,snapshot,clock=Date.now}){
+export function createWbQueryHistory({db,tokenFor,request,snapshot,clock=Date.now,schedule=fn=>{const timer=setTimeout(fn,0);timer.unref();}}){
  const router=express.Router();router.use(noStore,requireConfiguredSession,requireTrustedOrigin);let busy=false,timer;
  async function transaction(fn){const c=await db.connect();try{await c.query('BEGIN');const r=await fn(c);await c.query('COMMIT');return r;}catch(e){await c.query('ROLLBACK');throw e;}finally{c.release();}}
  async function wbCall(market,path,body){
@@ -45,6 +45,7 @@ export function createWbQueryHistory({db,tokenFor,request,snapshot,clock=Date.no
   return {ok:true,market,campaignId:id,rule,rows:filtered.slice(0,200),total:filtered.length,history:windows||{},tracked:(await db.query('SELECT 1 FROM wb_query_sources WHERE market=$1 AND campaign_id=$2 LIMIT 1',[market,id])).rows.length>0};
  }
  router.get('/:market/:id',asyncRoute(async(req,res)=>res.json(await list(marketId(req.params.market),identifier(req.params.id),String(req.query.q||'').slice(0,200)))));
+ router.post('/:market/:id/collect',asyncRoute(async(req,res)=>{const m=marketId(req.params.market),id=identifier(req.params.id);await track(m,id);const data=await list(m,id);schedule(()=>collectNow(m));res.json(data);}));
  router.put('/:market/:id',requireTrustedOrigin,asyncRoute(async(req,res)=>{const m=marketId(req.params.market),id=identifier(req.params.id),rule=queryRule(req.body);await track(m,id);await db.query(`INSERT INTO wb_query_rules(market,campaign_id,rule,updated_at) VALUES($1,$2,$3::jsonb,$4) ON CONFLICT(market,campaign_id) DO UPDATE SET rule=EXCLUDED.rule,updated_at=EXCLUDED.updated_at`,[m,id,JSON.stringify(rule),clock()]);if(!rule.autoExclude)await db.query("UPDATE wb_query_exclusions SET state='cancelled',updated_at=$3 WHERE market=$1 AND campaign_id=$2 AND source='auto' AND state='pending'",[m,id,clock()]);res.json(await list(m,id));}));
  router.post('/:market/:id/exclude',requireTrustedOrigin,asyncRoute(async(req,res)=>{const m=marketId(req.params.market),id=identifier(req.params.id),nm=identifier(req.body.nmId),query=String(req.body.query||'');await campaign(m,id);const exists=await db.query('SELECT 1 FROM wb_query_stats WHERE market=$1 AND campaign_id=$2 AND nm_id=$3 AND query=$4 LIMIT 1',[m,id,nm,query]);if(!exists.rows.length)throw Object.assign(Error('Запрос не найден в сохранённой статистике'),{status:400});await queueExclusion(m,id,nm,query);res.json({ok:true,state:'pending'});}));
  async function queueExclusion(m,id,nm,query,source='manual'){
@@ -60,7 +61,7 @@ export function createWbQueryHistory({db,tokenFor,request,snapshot,clock=Date.no
    await db.query(`INSERT INTO wb_query_windows(market,campaign_id,nm_id,date_from,date_to) VALUES($1,$2,$3,$4,$5) ON CONFLICT(market,campaign_id,nm_id,date_from) DO UPDATE SET date_to=EXCLUDED.date_to`,[market,source.campaign_id,source.nm_id,w.from,w.to]);
   }}
   // Expired segments stay frozen; never replace a full segment with a partial WB horizon.
-  const job=(await db.query(`SELECT *,date_from::text AS date_from,date_to::text AS date_to FROM wb_query_windows WHERE market=$1 AND date_from >= $2 AND (attempted_at=0 OR attempted_at<$3) ORDER BY synced_at ASC,attempted_at ASC LIMIT 1`,[market,earliest,clock()-60*60*1000])).rows[0];
+  const job=(await db.query(`SELECT *,date_from::text AS date_from,date_to::text AS date_to FROM wb_query_windows WHERE market=$1 AND date_from >= $2 AND (attempted_at=0 OR attempted_at<$3) ORDER BY synced_at ASC,attempted_at ASC,wb_query_windows.date_from DESC,campaign_id,nm_id LIMIT 1`,[market,earliest,clock()-60*60*1000])).rows[0];
   if(!job)return;
   try{
    const jobs=(await db.query(`SELECT *,date_from::text AS date_from,date_to::text AS date_to FROM wb_query_windows WHERE market=$1 AND date_from=$2 AND date_to=$3 AND (attempted_at=0 OR attempted_at<$4) ORDER BY campaign_id,nm_id LIMIT 100`,[market,job.date_from,job.date_to,clock()-60*60*1000])).rows;
@@ -93,6 +94,7 @@ export function createWbQueryHistory({db,tokenFor,request,snapshot,clock=Date.no
    for(const row of await totals(market,id))if(queryVerdict(row,rule).state==='poor'&&row.orders!==null&&Number(row.orders)===0)await queueExclusion(market,id,Number(row.nmId),row.query,'auto');
   }
  }
+ async function collectNow(market){if(busy)return;busy=true;try{await syncOne(market);}catch(e){console.warn('WB query collection',market,e.message);}finally{busy=false;}}
  async function tick(){if(busy)return;busy=true;try{for(const m of ['WB','WB2']){try{await syncOne(m);await autoQueue(m);await exclusionsOne(m);}catch(e){console.warn('WB query history',m,e.message);}}}finally{busy=false;}}
  return {router,tick,start(){if(timer)return;timer=setInterval(()=>void tick(),60*1000);timer.unref();const start=setTimeout(()=>void tick(),120000);start.unref();}};
 }
