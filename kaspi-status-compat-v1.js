@@ -26,6 +26,7 @@ try{
   if(typeof log==='function'){
     log=function(type,pid,qty,extra=''){
       const movement={id:id(),date:Date.now(),type,productId:pid,qty,extra};
+      const p=prod(pid);if(p&&!isBundleProduct(p))captureMovementBalance(movement,p.stock);
       if(!Array.isArray(state.movements))state.movements=[];
       state.movements.unshift(movement);
       return movement;
@@ -82,7 +83,7 @@ try{
       const totalPages=Math.max(1,Math.ceil(a.length/MOVEMENT_PAGE_SIZE));
       movementPage=Math.min(Math.max(1,movementPage),totalPages);
       const rows=a.slice((movementPage-1)*MOVEMENT_PAGE_SIZE,movementPage*MOVEMENT_PAGE_SIZE);
-      list.innerHTML='<table><tr><th>Дата</th><th>Операция</th><th>Товар</th><th>Кол.</th><th></th></tr>'+rows.map(m=>`<tr><td>${new Date(m.date).toLocaleDateString('ru-RU')}</td><td>${esc(movementIsStockAdjustment(m)?movementAdjustmentLabel(m):m.type)}${movementReturnDetails(m)}</td><td>${esc(productNameById(m.productId,'—'))}</td><td>${Number(m.qty)||0}</td><td>${movementIsStockAdjustment(m)?`<button type="button" class="btn" aria-label="Редактировать операцию" onclick="openMovementEdit('${encodeURIComponent(String(m.id))}')">✎</button>`:''}</td></tr>`).join('')+'</table>';
+      list.innerHTML='<table><tr><th>Дата</th><th>Операция</th><th>Товар</th><th>Кол.</th><th></th></tr>'+rows.map(m=>`<tr><td>${new Date(m.date).toLocaleDateString('ru-RU')}</td><td>${esc(movementIsStockAdjustment(m)?movementAdjustmentLabel(m):m.type)}${movementReturnDetails(m)}</td><td>${esc(productNameById(m.productId,'—'))}</td><td>${Number(m.qty)>0?'+':''}${Number(m.qty)||0}${movementBalanceHtml(m)}</td><td>${movementIsStockAdjustment(m)?`<button type="button" class="btn" aria-label="Редактировать операцию" onclick="openMovementEdit('${encodeURIComponent(String(m.id))}')">✎</button>`:''}</td></tr>`).join('')+'</table>';
       if(pager)pager.innerHTML=totalPages>1?`<div class="item" style="padding:10px;margin-top:8px"><div class="row" style="justify-content:space-between"><button class="btn" ${movementPage<=1?'disabled':''} onclick="setMovementPage(${movementPage-1})">← Назад</button><div class="muted" style="text-align:center">Страница ${movementPage} из ${totalPages}<br>${a.length} операций</div><button class="btn" ${movementPage>=totalPages?'disabled':''} onclick="setMovementPage(${movementPage+1})">Вперёд →</button></div></div>`:'';
     };
   }

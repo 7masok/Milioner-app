@@ -1,3 +1,4 @@
+import {captureMovementBalance} from './movement-stock-balance.js';
 import {effectiveKaspiRow} from './kaspi-order-content.js';
 import crypto from 'node:crypto';
 import { transaction } from './db.js';
@@ -60,7 +61,7 @@ function consumeProduct(state, products, product, qty, label, now, orderKey) {
     target.product.stock = Math.max(0, before - target.qty);
     totalCost += target.qty * Math.max(0, Number(target.product.cost) || 0);
     shortage += Math.max(0, target.qty - before);
-    state.movements.unshift({
+    state.movements.unshift(captureMovementBalance({
       id: uid('market-sale-movement', `${label}:${target.product.id}`, now),
       date: now,
       type: 'продажа',
@@ -68,7 +69,7 @@ function consumeProduct(state, products, product, qty, label, now, orderKey) {
       productId: String(target.product.id),
       qty: -taken,
       extra: `${label} · собрано на маркетплейсе${target.bundle ? ` · набор «${target.bundle}»` : ''}${target.qty > before ? ` · нехватка ${target.qty - before} шт.` : ''}`
-    });
+    },target.product.stock));
   }
   return { unitCost: qty ? totalCost / qty : 0, shortage };
 }
@@ -100,12 +101,12 @@ function restorePrematureWbSale(state, products, row, market) {
     const restoredQty = product && !recounted && !manualReceipt ? taken : 0;
     if (restoredQty) product.stock = Math.max(0, Number(product.stock) || 0) + restoredQty;
     movement.stockRestoredAt = now;
-    state.movements.unshift({
+    state.movements.unshift(captureMovementBalance({
       id: uid('market-sale-restore', `${key}:${movement.id}`, now),
       date: now, type: 'возврат', productId, qty: restoredQty,
       externalKey: key, reversesMovementId: movement.id,
       extra: `${label} · отмена преждевременного списания · возвращено ${restoredQty} шт.${manualReceipt ? ' · возврат уже обработан вручную, повторный приход заблокирован' : recounted ? ' · остаток уже уточнён инвентаризацией' : ''}`
-    });
+    },product?.stock));
   }
   if (!debits.length) state.movements.unshift({
     id: uid('market-sale-restore-review', key, now), date: now,

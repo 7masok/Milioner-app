@@ -1,3 +1,4 @@
+import {captureMovementBalance} from '../movement-stock-balance.js';
 import crypto from 'node:crypto';
 export const FBO_SOURCE='FBO';
 const list=x=>Array.isArray(x)?x:[];
@@ -68,8 +69,8 @@ export function dispatchDraft(state,id,remote,now=Date.now()){
   let need=num(r.qty);for(const lot of list(state.purchases).filter(l=>String(l.productId)===r.productId&&!['to_forwarder','to_me','at_warehouse'].includes(l.status)&&num(l.remainingQty)>0).sort((a,b)=>num(a.receivedAt||a.date)-num(b.receivedAt||b.date))){const take=Math.min(need,num(lot.remainingQty)),cost=unitCost(lot);lot.remainingQty-=take;need-=take;total+=take*cost;used.push({purchaseId:String(lot.id),qty:take,unitCost:cost});if(!need)break}if(need){total+=need*num(p.cost);used.push({purchaseId:null,qty:need,unitCost:num(p.cost),fallback:true})}
   p.stock=num(p.stock)-num(r.qty);const remaining=list(state.purchases).filter(l=>String(l.productId)===r.productId&&!['to_forwarder','to_me','at_warehouse'].includes(l.status)&&num(l.remainingQty)>0),q=remaining.reduce((n,l)=>n+num(l.remainingQty),0);if(q)p.cost=remaining.reduce((n,l)=>n+num(l.remainingQty)*unitCost(l),0)/q;
   const extra='Ozon FBO · '+d.title+' · заявка '+remote.orderId;
-  if(r.warehouseQty)state.movements.unshift({id:'fbo-in-'+uid(id,r.id),date:now,type:'приход',productId:r.productId,qty:r.warehouseQty,extra:'со склада для отправки · '+extra});
-  state.movements.unshift({id:'fbo-out-'+uid(id,r.id),date:now,type:'FBO Ozon',productId:r.productId,qty:-(num(r.qty)+num(r.warehouseQty)),extra,fifoLots:used});
+  if(r.warehouseQty)state.movements.unshift(captureMovementBalance({id:'fbo-in-'+uid(id,r.id),date:now,type:'приход',productId:r.productId,qty:r.warehouseQty,extra:'со склада для отправки · '+extra},num(p.stock)+num(r.qty)+num(r.warehouseQty)));
+  state.movements.unshift(captureMovementBalance({id:'fbo-out-'+uid(id,r.id),date:now,type:'FBO Ozon',productId:r.productId,qty:-(num(r.qty)+num(r.warehouseQty)),extra,fifoLots:used},p.stock));
   costs.set(r.lineId,(costs.get(r.lineId)||0)+total);r.active=false;r.stage='sent';r.orderId=String(remote.orderId);r.sentAt=now;r.updatedAt=now;
  }
  for(const line of remoteLines){const own=d.lines.find(x=>x.sku===line.sku&&x.clusterKey===line.clusterKey),key=[d.account,remote.orderId,line.supplyId,line.bundleId,line.sku].map(x=>String(x||'')).join('|');state.settings.ozonFboTransfers[key]={key,productId:own.productId,sku:line.sku,qty:line.qty,account:d.account,orderId:String(remote.orderId),supplyId:line.supplyId,bundleId:line.bundleId,warehouseName:line.warehouse||own.cluster,warehouseId:line.warehouseId||'',crossdock:!!line.crossdock,sentAt:now,unitCost:(costs.get(own.id)||0)/own.qty,stockSource:d.rows.some(r=>r.lineId===own.id&&r.warehouseQty>0)?(d.rows.some(r=>r.lineId===own.id&&r.qty>0)?'mixed':'at_warehouse'):'sale',status:'in_transit',serverDraftId:id}}
