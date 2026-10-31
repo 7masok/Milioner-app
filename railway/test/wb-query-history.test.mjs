@@ -1,3 +1,4 @@
+import vm from 'node:vm';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
@@ -102,4 +103,36 @@ test('automatic exclusion requires full fresh stats, minimum samples and zero kn
   }});
   await controller.tick();assert.deepEqual(sent,['уже исключён','без корзин']);const rows=(await db.query('SELECT query,state,source FROM wb_query_exclusions')).rows;assert.equal(rows.length,1);assert.equal(rows[0].query,'без корзин');assert.equal(rows[0].source,'auto');assert.equal(rows[0].state,'checking');
  }finally{await db.close();}
+});
+
+test('opening collection tracks idempotently without saving rules or applying exclusions; newest segment loads first',async()=>{
+ const db=await fixture(),now=Date.parse('2026-11-01T12:00:00Z'),tasks=[],calls=[];
+ const pg={query:(...a)=>db.query(...a),connect:async()=>({query:(...a)=>db.query(...a),release(){}})};
+ const controller=createWbQueryHistory({db:pg,clock:()=>now,schedule:fn=>tasks.push(fn),tokenFor:async()=> 'read-only-test-token',snapshot:async()=>({campaigns:[{id:1,nmIds:[2]}]}),request:async(url,token,opts)=>{calls.push({url,body:opts.body});assert.ok(url.endsWith('/normquery/stats'));return {stats:[{advert_id:1,nm_id:2,stats:[{norm_query:'кольцо нож',views:12,clicks:1,atbs:0,orders:0}]}]};}});
+ const app=express();app.use(express.json());app.use('/q',controller.router);app.use((e,req,res,next)=>res.status(e.status||500).json({error:e.message}));const server=app.listen(0,'127.0.0.1');await new Promise(r=>server.on('listening',r));const url='http://127.0.0.1:'+server.address().port,headers={Origin:url,Authorization:'Bearer '+createSessionToken().token,'Content-Type':'application/json'};
+ try{
+  const call=(path,patch={})=>fetch(url+'/q/'+path,{method:'POST',headers:{...headers,...patch},body:'{}'});
+  assert.equal((await fetch(url+'/q/WB/1/collect',{method:'POST'})).status,401);
+  assert.equal((await call('WB/1/collect',{Origin:'https://evil.invalid'})).status,403);
+  const r=await call('WB/1/collect');assert.equal(r.status,200);assert.equal((await r.json()).tracked,true);assert.equal(calls.length,0);
+  assert.equal((await db.query('SELECT * FROM wb_query_rules')).rows.length,0);assert.equal((await db.query('SELECT * FROM wb_query_sources')).rows.length,1);
+  await db.query("INSERT INTO wb_query_exclusions(market,campaign_id,nm_id,query,updated_at) VALUES('WB',1,2,'уже в очереди',$1)",[now]);
+  await tasks.shift()();assert.equal(calls.length,1);assert.equal(calls[0].body.to,'2026-11-01');assert.ok(calls[0].body.from>'2026-10-20');
+  let data=await (await fetch(url+'/q/WB/1',{headers})).json();assert.equal(data.rows[0].query,'кольцо нож');assert.equal(data.rows[0].state,'collecting');assert.equal(data.rule.autoExclude,false);
+  assert.equal((await db.query('SELECT state FROM wb_query_exclusions')).rows[0].state,'pending');
+  assert.equal((await call('WB/1/collect')).status,200);assert.equal((await db.query('SELECT * FROM wb_query_sources')).rows.length,1);await tasks.shift()();assert.equal(calls.length,1);
+  const custom=queryRule({basis:'clicks',minSamples:222,minCartPercent:3,autoExclude:true});await db.query("INSERT INTO wb_query_rules(market,campaign_id,rule,updated_at) VALUES('WB',1,$1::jsonb,$2)",[JSON.stringify(custom),now]);
+  assert.equal((await call('WB/1/collect')).status,200);data=await (await fetch(url+'/q/WB/1',{headers})).json();assert.deepEqual(data.rule,custom);
+ }finally{await new Promise(r=>server.close(r));await db.close();}
+});
+
+test('opening the panel starts collection automatically but does not overwrite edits or enable automation',async()=>{
+ const html=readFileSync(new URL('../../index.html',import.meta.url),'utf8'),start=html.indexOf('async function openWbQueryHistory('),end=html.indexOf('\nfunction scheduleWbQueryPoll(',start),source=html.slice(start,end);
+ for(const tracked of [false,true]){
+  const calls=[],box={},saved={tracked,rule:{autoExclude:false,minSamples:100},rows:[]};let paints=0,polls=0;
+  const ctx={wbQueryPollTimer:0,wbQueryRequest:0,wbQueryView:null,adsMarket:'WB2',clearTimeout(){},showSheet(){},document:{getElementById:id=>id==='wbQueryPanel'?box:null},paintWbQueryHistory:()=>paints++,scheduleWbQueryPoll:()=>polls++,adsApi:async(path,options)=>{calls.push({path,options});if(options){box.oninput({target:{id:'wbQueryMinimum'}});return {...saved,tracked:true};}return saved;}};
+  vm.createContext(ctx);vm.runInContext(source,ctx);await ctx.openWbQueryHistory(777);
+  assert.equal(calls.length,tracked?1:2);assert.equal(paints,1);assert.equal(polls,1);assert.equal(ctx.wbQueryView.data.rule.autoExclude,false);
+  if(!tracked){assert.equal(calls[1].path,'/api/promotion/queries/WB2/777/collect');assert.equal(calls[1].options.method,'POST');assert.equal(ctx.wbQueryView.dirty,true);}
+ }
 });
