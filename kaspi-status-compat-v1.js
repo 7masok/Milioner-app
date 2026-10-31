@@ -75,7 +75,7 @@ try{
       let a=(Array.isArray(state.movements)?state.movements:[]).filter(m=>
         (!cutoff||Number(m?.date||0)>=cutoff)&&
         (t==='all'||m.type===t)&&
-        ([prod(m.productId)?.name||'',m.type==='возврат'?m.extra||'':''].join(' ').toLowerCase().includes(q))
+        ([prod(m.productId)?.name||'',['возврат','излишек'].includes(m.type)?m.extra||'':''].join(' ').toLowerCase().includes(q))
       );
       const list=document.getElementById('movementList'),pager=document.getElementById('movementPager');
       if(!list)return;
