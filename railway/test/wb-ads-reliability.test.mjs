@@ -16,7 +16,7 @@ function harness(configured = []) {
     pool: { query: async (sql, args) => { queries.push({ sql, args }); return { rows: configured }; } },
     stockBlock, createWbQueryHistory, createWbAdGroups, config: {}, credentialFor: async () => 'test-token', asyncRoute: fn => fn,
   });
-  vm.runInContext(source.replace(/^import .*;\r?\n/gm, '').replace(/export /g, '') + '\nglobalThis.api = { enforce, fetchCampaigns, setStoredCampaignStatus, localDate, requestInterval, campaignName, campaignApiName, campaignPeriodMetrics };', context);
+  vm.runInContext(source.replace(/^import .*;\r?\n/gm, '').replace(/export /g, '') + '\nglobalThis.api = { enforce, fetchCampaigns, setStoredCampaignStatus, localDate, requestInterval, campaignName, campaignApiName, campaignPeriodMetrics, experimentStartBlock };', context);
   context.mockRequest = async url => { calls.push(url); return {}; };
   vm.runInContext('request = (...args) => mockRequest(...args); setStoredCampaignStatus = async () => {}; inventoryFor = async (m, rows) => new Map(rows.map(r => [Number(r.id), {known:true, allEmpty:false, allRisky:false}]));', context);
   return { context, api: context.api, calls, queries };
@@ -162,4 +162,16 @@ test('campaign statistics keep daily rows for the last 30 days while today stays
   );
   const statsUrl = h.calls.find(url => url.includes('/fullstats'));
   assert.ok(statsUrl.includes('beginDate=' + result.historyFrom + '&endDate=' + result.historyTo));
+});
+
+test('experiment starts require known stock, current data, one unchanged article and bounded daily rules',async()=>{
+ const h=harness([limit(1)]);h.context.testSnap={updatedAt:Date.now(),day:h.api.localDate(),campaigns:[{...campaign(1,11,0),nmIds:[777],statsStale:false}]};
+ vm.runInContext('storedSnapshot=async()=>testSnap;',h.context);
+ assert.equal(await h.api.experimentStartBlock('WB',1,'777'),'');
+ assert.match(await h.api.experimentStartBlock('WB',1,'999'),/Состав кампании/);
+ h.context.testSnap.updatedAt=Date.now()-21*60000;assert.match(await h.api.experimentStartBlock('WB',1,'777'),/свежие/);
+ h.context.testSnap.updatedAt=Date.now();h.context.testSnap.campaigns[0].statsStale=true;assert.match(await h.api.experimentStartBlock('WB',1,'777'),/свежие/);
+ h.context.testSnap.campaigns[0].status=4;assert.equal(await h.api.experimentStartBlock('WB',1,'777'),'');
+ const manual=harness([limit(1,{manualPaused:true})]);manual.context.testSnap=h.context.testSnap;vm.runInContext('storedSnapshot=async()=>testSnap;',manual.context);assert.match(await manual.api.experimentStartBlock('WB',1,'777'),/Ручная пауза/);
+ const scheduled=harness([limit(1,{scheduleEnabled:true})]);scheduled.context.testSnap=h.context.testSnap;vm.runInContext('storedSnapshot=async()=>testSnap;',scheduled.context);assert.match(await scheduled.api.experimentStartBlock('WB',1,'777'),/ежедневный запуск/);
 });

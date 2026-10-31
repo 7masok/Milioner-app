@@ -658,6 +658,7 @@ wbAdsRouter.post('/promotion/actions/:market/:campaignId', asyncRoute(async (req
     throw error;
   }
 
+  await wbCampaignGroups.experiments.manualAction(marketName,id,action);
   if (action === 'start') {
     const [inventory, configured] = await Promise.all([inventoryFor(marketName, [campaign]), rules(marketName)]);
     const reason = stockBlock(inventory.get(id), configured.get(id));
@@ -711,6 +712,7 @@ async function enforce(marketName, snapshot, { allowSchedule = true, allowStarts
   // Zero-stock protection also applies to campaigns without saved budget rules.
   for (const campaign of snapshot?.campaigns || []) if (!configured.has(Number(campaign.id)))
     configured.set(Number(campaign.id), { campaignId: Number(campaign.id), lowStockMode: 'warn' });
+  const testManaged = await wbCampaignGroups.experiments.managedIds(marketName);
   const enabled = [...configured.values()];
   if (!enabled.length) return;
   const byId = new Map((snapshot?.campaigns || []).map(row => [Number(row.id), row]));
@@ -761,6 +763,15 @@ async function enforce(marketName, snapshot, { allowSchedule = true, allowStarts
     }
     if (rule.manualPaused) continue;
     if (mustPause || rule.stockPaused) continue;
+
+    // Rotation owns automatic starts; stock/manual/budget stops retain priority.
+    if (testManaged.has(Number(row.id))) {
+      if (overLimit(rule)) {
+        try {await request(ADVERT_API+'/adv/v0/pause?id='+encodeURIComponent(row.id),token);await setStoredCampaignStatus(marketName,row.id,11);await pool.query("UPDATE wb_ad_limits SET auto_paused=TRUE,auto_paused_day=$3,last_action_type='auto_pause',last_action_at=$4 WHERE market=$1 AND campaign_id=$2",[marketName,row.id,day,Date.now()]);}
+        catch(error){await pool.query('UPDATE wb_ad_limits SET last_action_error=$3 WHERE market=$1 AND campaign_id=$2',[marketName,row.id,actionErrorText(error)]);}
+      }
+      continue;
+    }
 
     // Resume only campaigns paused by this limiter. A campaign paused manually
     // in WB or in the app must remain paused.
@@ -838,7 +849,28 @@ async function enforce(marketName, snapshot, { allowSchedule = true, allowStarts
   }
 }
 
-const wbCampaignGroups=createWbAdGroups({db:pool,snapshot:storedSnapshot});
+async function experimentStartBlock(m,id,expectedNmId){
+ const snap=await storedSnapshot(m),row=snap?.campaigns?.find(r=>Number(r.id)===id),rule=(await rules(m)).get(id)||{};
+ if(expectedNmId&&(!Array.isArray(row?.nmIds)||row.nmIds.length!==1||String(row.nmIds[0])!==String(expectedNmId)))return 'Состав кампании изменился. Остановите тест и проверьте артикул.';
+ if(rule.manualPaused)return 'Ручная пауза: возобновите кампанию вручную и снова поставьте на паузу в WB перед тестом.';
+ if(rule.stockPaused)return 'Автозапуск заблокирован защитой остатков.';
+ if(!snap?.updatedAt||Date.now()-Number(snap.updatedAt)>20*60*1000||snap.lastError||snap.day!==localDate()||(row?.statsStale&&Number(row?.status)!==4))return 'Для запуска нужны свежие полные данные рекламы за сегодня.';
+ const stock=(await inventoryFor(m,row?[row]:[])).get(id),reason=stockBlock(stock,rule);if(reason)return reason;
+ if(!rule.enabled||Number(rule.dailyLimit)<=0)return 'Задайте каждой кампании дневной лимит и включите остановку по лимиту.';
+ if(rule.scheduleEnabled)return 'Отключите отдельный ежедневный запуск кампании: расписанием управляет тест.';
+ if(rule.autoPausedDay===localDate()&&rule.autoPaused)return 'Дневной лимит уже достигнут.';
+ if(Math.max(Number(row?.todaySpend)||0,Number(row?.maxTodaySpend)||0)>=Number(rule.dailyLimit))return 'Дневной лимит уже достигнут.';
+ return '';
+}
+const wbCampaignGroups=createWbAdGroups({db:pool,snapshot:storedSnapshot,experimentIO:{
+ validate:async(m,ids)=>{const snap=await storedSnapshot(m),rows=ids.map(id=>snap?.campaigns?.find(r=>Number(r.id)===id)),nms=rows.map(r=>r?.nmIds);if(nms.some(n=>!Array.isArray(n)||n.length!==1)||new Set(nms.map(n=>String(n[0]))).size!==1){const e=new Error('Для теста выберите кампании одного и того же артикула WB, по одному товару в каждой.');e.status=409;throw e;}for(const id of ids){const reason=await experimentStartBlock(m,id);if(reason){const e=new Error(reason);e.status=409;throw e;}}return {nmId:nms[0][0]};},
+ finish:async(m,ids)=>{for(const id of ids)await pool.query("UPDATE wb_ad_limits SET manual_paused=TRUE,auto_paused=FALSE,auto_paused_day='',updated_at=$3 WHERE market=$1 AND campaign_id=$2",[m,id,Date.now()]);},
+ forMarket:(m,plan)=>({
+  read:async ids=>campaignRows(await request(ADVERT_API+'/api/advert/v2/adverts?ids='+ids.join(','),await tokenFor(m))).map(r=>({id:campaignId(r),status:Number(r.status??r.statusId)})),
+  gate:id=>experimentStartBlock(m,id,plan.nmId),
+  action:async(id,action)=>{await request(ADVERT_API+'/adv/v0/'+action+'?id='+encodeURIComponent(id),await tokenFor(m));await setStoredCampaignStatus(m,id,action==='start'?9:11);}
+ })
+}});
 wbAdsRouter.use('/promotion/groups',wbCampaignGroups.router);
 
 const wbQueryHistory=createWbQueryHistory({db:pool,tokenFor,request,snapshot:storedSnapshot});
@@ -872,6 +904,7 @@ export function startWbAdsLimitLoop() {
       await enforce(marketName, previous, { allowSchedule: true, allowStarts: true });
       const snapshot = await refreshMarket(marketName);
       await enforce(marketName, snapshot, { allowStarts: !snapshot?.lastError });
+      await wbCampaignGroups.experiments.run(marketName);
       const pendingRules=await rules(marketName);
       const retries=[Number(snapshot?.nextAttemptAt||0),...[...pendingRules.values()].map(r=>Number(actionErrorInfo(r.lastActionError)?.retryAt)||0)].filter(at=>at>Date.now());
       if(retries.length){scheduleRetry(marketName,Math.min(...retries));return;}
