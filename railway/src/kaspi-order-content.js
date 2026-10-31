@@ -1,3 +1,4 @@
+import {captureMovementBalance} from './movement-stock-balance.js';
 import crypto from 'node:crypto';
 import {kaspiOrderIsActive,kaspiOrderIsCollected} from './kaspi-status.js';
 export const contentKey=(orderId,entryId)=>JSON.stringify([String(orderId),String(entryId)]);
@@ -52,7 +53,7 @@ export function correctKaspiContents(state,rows,input,now=Date.now()){
   for(const debit of debits){
    const p=pmap.get(String(debit.productId)),count=Math.max(0,-Number(debit.qty)||0);p.stock=Math.max(0,Number(p.stock)||0)+count;
    next.movements.find(m=>m.id===debit.id).stockRestoredAt=now;
-   next.movements.unshift({id:crypto.randomUUID(),date:now,type:'возврат',productId:p.id,qty:count,externalKey:key,reversesMovementId:debit.id,extra:label+' · исправление отправленного состава'});
+   next.movements.unshift(captureMovementBalance({id:crypto.randomUUID(),date:now,type:'возврат',productId:p.id,qty:count,externalKey:key,reversesMovementId:debit.id,extra:label+' · исправление отправленного состава'},p.stock));
   }
   for(const r of next.reservations)if(r.source==='Kaspi'&&[key,key.slice(6)].includes(String(r.externalKey))){r.active=false;r.stage='content-corrected';r.updatedAt=now;r.closedAt=now;}
   next.settings.kaspiOrderContents[contentKey(orderId,row.entry_id)]={productId:product.id,qty,version,updatedAt:now,history:[...(old?.history||[]),{at:now,from:{productId:current.product_id||null,name:products.get(String(current.product_id))?.name||row.product_name,qty:Number(current.qty)},to:{productId:product.id,name:product.name,qty},reason:String(input.reason||'').trim().slice(0,300)}]};
@@ -63,7 +64,7 @@ export function correctKaspiContents(state,rows,input,now=Date.now()){
   if(Math.max(0,Number(p.stock)||0)-reserved<qty)fail('Недостаточно свободного остатка: '+p.name);
   if(collected){
    p.stock=Number(p.stock)-qty;const cost=Math.max(0,Number(p.cost)||0),revenue=Math.max(0,Number(row.total_price)||Number(row.unit_price)*Number(row.qty)||0),fees=Math.max(0,Number(row.seller_delivery_cost)||0)+Math.max(0,Number(row.marketplace_fee)||0);
-   next.movements.unshift({id:crypto.randomUUID(),date:now,type:'продажа',productId:p.id,qty:-qty,externalKey:key,extra:`Kaspi ${row.code||orderId} · фактически отправленный состав`});
+   next.movements.unshift(captureMovementBalance({id:crypto.randomUUID(),date:now,type:'продажа',productId:p.id,qty:-qty,externalKey:key,extra:`Kaspi ${row.code||orderId} · фактически отправленный состав`},p.stock));
    const updated={...(sale||{}),id:sale?.id||crypto.randomUUID(),productId:p.id,qty,price:revenue/qty,cost,fee:fees/qty,channel:'Kaspi',date:Number(row.creation_date)||now,externalKey:key,serverReconciled:true,stockShortage:0,contentCorrectedAt:now};
    next.sales=next.sales.filter(s=>![key,key.slice(6)].includes(String(s.externalKey)));next.sales.push(updated);
   }else next.reservations.push({id:crypto.randomUUID(),productId:p.id,qty,active:true,source:'Kaspi',externalKey:key,stage:'new',date:Number(row.creation_date)||now,updatedAt:now});

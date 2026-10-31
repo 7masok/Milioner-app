@@ -19,7 +19,7 @@ function fixture(){
   log(type,productId,qty,extra){const m={id:'move-'+next++,type,productId,qty,extra};state.movements.unshift(m);return m;},
   purchaseShipmentRows:()=>state.purchases.filter(x=>x.id==='lot'),productNameById:()=> 'Сладкий набор розовый',
  };
- vm.createContext(ctx);vm.runInContext(['purchaseStatus','purchaseWarehouseQty','purchaseAtWarehouseQty','writeoffSourceOptions','syncWriteoffSource','writeoffForm','createWarehouseWriteoff','createWriteoff','releaseWarehousePurchaseUnits','releaseProductWarehouseQty','releaseSelectedPurchaseRows'].map(line).join('\n')+'\n'+block('purchaseDisplayUnitCost'),ctx);
+ vm.createContext(ctx);vm.runInContext(['captureMovementBalance','purchaseStatus','purchaseWarehouseQty','purchaseAtWarehouseQty','writeoffSourceOptions','syncWriteoffSource','writeoffForm','createWarehouseWriteoff','createWriteoff','releaseWarehousePurchaseUnits','releaseProductWarehouseQty','releaseSelectedPurchaseRows'].map(line).join('\n')+'\n'+block('purchaseDisplayUnitCost'),ctx);
  return {ctx,state,fields,alerts,get saves(){return saves;}};
 }
 test('five physical units before sale can be written off without changing sale stock, reservations or paid purchase',()=>{

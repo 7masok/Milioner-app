@@ -14,6 +14,7 @@ function fixture(collected=true){
 test('collected Kaspi replacement restores only the exact debit, consumes actual item and preserves commercial amount and other orders',()=>{
  const {state,row,input}=fixture(),before=structuredClone(state);state.sales.push({id:'other',externalKey:'Kaspi:other:e',productId:'a',qty:1});
  const result=correctKaspiContents(state,[row],input,at);assert.equal(result.changed,true);assert.equal(state.products[0].stock,10);assert.equal(state.products[1].stock,7);
+ assert.equal(state.movements.find(m=>m.type==='возврат').stockBalance.after,10);assert.equal(state.movements.find(m=>m.type==='продажа'&&m.productId==='b').stockBalance.after,7);
  const sale=state.sales.find(s=>s.externalKey===key);assert.equal(sale.id,'sale-a');assert.equal(sale.productId,'b');assert.equal(sale.qty,3);assert.equal(sale.price*sale.qty,1000);assert.equal(sale.fee*sale.qty,250);assert.equal(sale.cost,200);assert.ok(state.sales.some(s=>s.id==='other'));
  assert.equal(stockLedgerViolation(before,state),null);assert.deepEqual(state.purchases,before.purchases);assert.equal(row.product_id,'a');assert.equal(state.products[0].kaspi,'sku-a');assert.equal(kaspiContentOverride(state,'order','entry').history[0].reason,'Другой цвет');
 });
