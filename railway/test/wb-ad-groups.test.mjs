@@ -10,7 +10,7 @@ const express=(await import('express')).default;
 const html=readFileSync(new URL('../../index.html',import.meta.url),'utf8');
 const migration=readFileSync(new URL('../migrations/154_wb_ad_groups.sql',import.meta.url),'utf8');
 async function fixture(){
- const db=new PGlite();await db.exec(migration);
+ const db=new PGlite();await db.exec(migration);await db.exec(readFileSync(new URL('../migrations/155_wb_ad_experiments.sql',import.meta.url),'utf8'));
  const pg={query:(...a)=>db.query(...a),connect:async()=>({query:(...a)=>db.query(...a),release(){}})};
  const controller=createWbAdGroups({db:pg,snapshot:async m=>({campaigns:(m==='WB'?[1,2,3,4]:[1,5]).map(id=>({id}))})});
  const app=express();app.use(express.json());app.use('/groups',controller.router);app.use((e,req,res,next)=>res.status(e.status||500).json({error:e.message}));
@@ -57,4 +57,16 @@ test('group renderer keeps individual campaign cards, escapes names, filters mem
  assert.match(out,/&lt;Лимон&gt;/);assert.doesNotMatch(out,/<Лимон>/);assert.match(out,/2 из 3 кампаний/);assert.match(out,/Расход 300 ₸/);for(const text of ['CARD1','CARD2','CARD4','Без группы','Цена корзины'])assert.ok(out.includes(text));
  ctx.wbAdOpenGroups.clear();out=ctx.wbAdGroupedCards(rows,cards,[{id:'g',name:'Лимон',campaignIds:[1,2]}]);assert.match(out,/wb-ad-group-body" hidden/);
  rows[0].row.metric.complete=false;out=ctx.wbAdGroupedCards(rows,cards,[{id:'g',name:'Лимон',campaignIds:[1,2]}]);assert.match(out,/Статистика группы неполная/);
+});
+test('test plan endpoint is opt-in/versioned and active tests block editing/deleting the group',async()=>{
+ const f=await fixture();try{
+ const g=(await f.request('WB','POST',{name:'Нож777',campaignIds:[1,2,3]})).data.groups[0],path='WB/'+g.id+'/test',plan={version:0,campaignIds:[1,2,3],startDate:'2030-01-01',switchTime:'00:00',days:21,operation:'save'};
+ assert.equal((await fetch(f.base+'/groups/'+path,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(plan)})).status,401);
+ assert.equal((await f.request(path,'PUT',plan,{Origin:'https://evil.invalid'})).status,403);
+ const saved=await f.request(path,'PUT',plan);assert.equal(saved.status,200);assert.equal(saved.data.groups[0].test.enabled,false);assert.equal((await f.request(path,'PUT',plan)).status,409);
+ await f.db.query("UPDATE wb_ad_experiments SET enabled=TRUE WHERE market='WB' AND group_id=$1",[g.id]);
+ assert.equal((await f.request('WB/'+g.id,'PUT',{name:'Изменить',campaignIds:[1,2],version:g.version})).status,409);
+ assert.equal((await f.request('WB/'+g.id,'DELETE',{version:g.version})).status,409);
+ assert.equal((await f.request('WB2')).data.groups.length,0);
+ }finally{await f.close();}
 });

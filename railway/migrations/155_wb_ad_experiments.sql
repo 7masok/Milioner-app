@@ -1,0 +1,6 @@
+CREATE TABLE IF NOT EXISTS wb_ad_experiments (
+ market TEXT NOT NULL,group_id TEXT NOT NULL,version INTEGER NOT NULL DEFAULT 1,
+ plan JSONB NOT NULL,runtime JSONB NOT NULL DEFAULT '{}',enabled BOOLEAN NOT NULL DEFAULT FALSE,
+ stopping BOOLEAN NOT NULL DEFAULT FALSE,updated_at BIGINT NOT NULL,
+ PRIMARY KEY(market,group_id),FOREIGN KEY(market,group_id) REFERENCES wb_ad_groups(market,id) ON DELETE CASCADE
+);
