@@ -18,29 +18,38 @@ export function experimentSlot(plan,now=Date.now()){
 export async function advanceExperiment(plan,previous,io,now,stopping=false){
  const slot=experimentSlot(plan,now),out={...previous,...slot,checkedAt:now,error:'',retryAt:0};
  if(!stopping&&slot.state==='waiting'&&!plan.autoPrepare)return out;
- if(Number(previous.retryAt)>now)return previous;
+ const protocol=io.protocol||'',newReader=protocol&&previous.statusProtocol!==protocol&&!previous.startedCampaignId;
+ if(Number(previous.retryAt)>now&&!newReader)return previous;
+ if(protocol)out.statusProtocol=protocol;
+ out.pendingPauses={...(previous.pendingPauses||{})};
+ let statusAt=now,nextReadAt=now+60000;
+ const pending=(state,error='')=>({...out,state,error,retryAt:Math.max(now+1000,nextReadAt)});
  const ids=plan.campaignIds;
- const read=async()=>{const rows=await io.read(ids);const map=new Map(rows.map(r=>[Number(r.id),Number(r.status)]));if(ids.some(id=>!Number.isFinite(map.get(id))))throw fail('Не удалось подтвердить статусы всех кампаний. Переключение остановлено.');return map;};
+ const read=async()=>{const result=await io.read(ids),rows=Array.isArray(result)?result:result.rows;statusAt=Number(result.observedAt)||now;nextReadAt=Number(result.nextAt)||now+60000;const map=new Map(rows.map(r=>[Number(r.id),Number(r.status)]));if(ids.some(id=>!Number.isFinite(map.get(id))))throw fail('Не удалось подтвердить статусы всех кампаний. Переключение остановлено.');return map;};
  try{
   let live=await read();
   // Manual pause, stock, budget and stale statistics gate every automatic start.
   const reason=slot.campaignId&&!stopping?await io.gate(slot.campaignId):'';
   const wanted=!reason&&!stopping?slot.campaignId:null;
-  for(const id of ids)if(id!==wanted&&live.get(id)===9)await io.action(id,'pause');
+  for(const id of ids)if(id!==wanted&&live.get(id)===9){if(protocol&&out.pendingPauses[id]&&statusAt<=out.pendingPauses[id])return pending('pausing',reason);await io.action(id,'pause');if(protocol)out.pendingPauses[id]=Math.max(now,statusAt)+1;}
+  if(protocol&&Object.values(out.pendingPauses).some(at=>statusAt<=at))return pending('pausing',reason);
+  out.pendingPauses={};
   live=await read();
   if(ids.some(id=>id!==wanted&&live.get(id)===9))throw fail('WB ещё не подтвердил паузу предыдущей кампании. Новая не запускается.');
   if(!stopping&&slot.state==='waiting')return {...out,campaignId:null};
   if(stopping||slot.state==='finished')return {...out,state:stopping?'stopped':'finished',campaignId:null};
   if(reason)return {...out,state:'blocked',error:reason};
+  if(protocol&&previous.pendingStartAt&&statusAt<=previous.pendingStartAt)return pending('starting');
+  if(protocol&&live.get(wanted)!==9&&statusAt<plan.startAt+(slot.day-1)*DAY)return pending('checking');
   // An unexpected pause in WB is an opt-out, never an instruction to restart it.
-  if(previous.startedCampaignId===wanted&&previous.startedDay===slot.day&&live.get(wanted)!==9)return {...out,state:'blocked',error:'Кампания поставлена на паузу вне теста. Повторного запуска сегодня не будет.'};
+  if(previous.startedCampaignId===wanted&&previous.startedDay===slot.day&&live.get(wanted)!==9)return {...out,state:'blocked',error:previous.pendingStartAt?'WB не подтвердил запуск кампании. Проверьте бюджет или ручную паузу в WB.':'Кампания поставлена на паузу вне теста. Повторного запуска сегодня не будет.'};
   if(![4,9,11].includes(live.get(wanted)))return {...out,state:'blocked',error:'Кампания завершена или недоступна для запуска.'};
-  if(live.get(wanted)!==9){const gate=await io.gate(wanted);if(gate)return {...out,state:'blocked',error:gate};await io.action(wanted,'start');}
+  if(live.get(wanted)!==9){const gate=await io.gate(wanted);if(gate)return {...out,state:'blocked',error:gate};await io.action(wanted,'start');if(protocol){out.startedCampaignId=wanted;out.startedDay=slot.day;out.pendingStartAt=Math.max(now,statusAt)+1;return pending('starting');}}
   // Persist ownership before read-back so an ambiguous response cannot cause repeated starts.
   out.startedCampaignId=wanted;out.startedDay=slot.day;
   live=await read();
   if(live.get(wanted)!==9)throw fail('WB ещё не подтвердил запуск кампании. Проверьте статус и бюджет.');
-  return {...out,state:'running',confirmedAt:now};
+  return {...out,state:'running',pendingStartAt:0,confirmedAt:now};
  }catch(e){return {...out,state:'error',error:String(e.message||e).slice(0,500),retryAt:Math.max(now+60000,Number(e.retryAt)||0)};}
 }
 export function createAdExperiments({db,snapshot,clock=Date.now,io}){

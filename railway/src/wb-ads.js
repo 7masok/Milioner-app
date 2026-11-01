@@ -1,3 +1,4 @@
+import {reserveAdApiRequest,saveAdApiRetry,readAdStatusCache,saveAdStatusCache,STATUS_ENDPOINT,adTokenHash} from './wb-ad-api-windows.js';
 import express from 'express';
 import {createWbAdGroups} from './wb-ad-groups.js';
 import {createWbQueryHistory} from './wb-query-history.js';
@@ -103,6 +104,7 @@ async function request(url, token, { method = 'GET', body } = {}) {
       throw error;
     }
 
+    await reserveAdApiRequest(pool,url,token);
     const waitUntil = Number(window.nextAt[limiter.key] || 0);
     if (waitUntil > now) await delay(waitUntil - now);
     window.nextAt[limiter.key] = Date.now() + limiter.interval;
@@ -135,6 +137,7 @@ async function request(url, token, { method = 'GET', body } = {}) {
             window.cooldowns[limiter.key] = Date.now() + waitMs;
             requestWindows.set(queueKey, window);
             error.retryAt = window.cooldowns[limiter.key];
+            await saveAdApiRetry(pool,url,token,window.cooldowns[limiter.key]);
             error.endpoint = new URL(url).pathname;
             error.retryAfterMs = waitMs;
             if (false) { // Retry through the scheduler; never block the command queue.
@@ -854,7 +857,9 @@ async function experimentStartBlock(m,id,expectedNmId,autoPrepare=false){
  if(expectedNmId&&(!Array.isArray(row?.nmIds)||row.nmIds.length!==1||String(row.nmIds[0])!==String(expectedNmId)))return 'Состав кампании изменился. Остановите тест и проверьте артикул.';
  if(rule.manualPaused)return 'Ручная пауза: возобновите кампанию вручную и снова поставьте на паузу в WB перед тестом.';
  if(rule.stockPaused)return 'Автозапуск заблокирован защитой остатков.';
- if(!snap?.updatedAt||Date.now()-Number(snap.updatedAt)>20*60*1000||snap.lastError||snap.day!==localDate()||(row?.statsStale&&Number(row?.status)!==4))return 'Для запуска нужны свежие полные данные рекламы за сегодня.';
+ const capped=rule.enabled&&Number(rule.dailyLimit)>0;
+ if(autoPrepare&&!capped){if(!snap?.updatedAt||Date.now()-Number(snap.updatedAt)>70*60*1000)return 'Ожидаем актуального состава кампании WB.';}
+ else if(!snap?.updatedAt||Date.now()-Number(snap.updatedAt)>20*60*1000||snap.lastError||snap.day!==localDate()||(row?.statsStale&&Number(row?.status)!==4))return 'Для запуска нужны свежие полные данные рекламы за сегодня.';
  const stock=(await inventoryFor(m,row?[row]:[])).get(id),reason=stockBlock(stock,rule);if(reason)return reason;
  if(!autoPrepare&&(!rule.enabled||Number(rule.dailyLimit)<=0))return 'Задайте каждой кампании дневной лимит и включите остановку по лимиту.';
  if(rule.scheduleEnabled)return 'Отключите отдельный ежедневный запуск кампании: расписанием управляет тест.';
@@ -862,14 +867,31 @@ async function experimentStartBlock(m,id,expectedNmId,autoPrepare=false){
  if(rule.enabled&&Number(rule.dailyLimit)>0&&Math.max(Number(row?.todaySpend)||0,Number(row?.maxTodaySpend)||0)>=Number(rule.dailyLimit))return 'Дневной лимит уже достигнут.';
  return '';
 }
+const statusReads=new Map();
+async function experimentStatuses(m,ids){
+ const token=await tokenFor(m),key=adTokenHash(token);
+ if(!statusReads.has(key))statusReads.set(key,(async()=>{
+  let cached=await readAdStatusCache(pool,token);
+  if(!cached?.payload||Number(cached.next_allowed_at)<=Date.now()){
+   const data=await request(ADVERT_API+STATUS_ENDPOINT,token),rows=campaignRows(data).map(r=>({id:campaignId(r),status:Number(r.status??r.statusId)}));
+   if(!rows.length)throw Error('WB вернул пустой список статусов кампаний.');
+   await saveAdStatusCache(pool,token,rows);cached=await readAdStatusCache(pool,token);
+  }
+  return cached;
+ })().finally(()=>statusReads.delete(key)));
+ const cache=await statusReads.get(key),rows=(cache.payload||[]).filter(r=>ids.includes(Number(r.id)));
+ for(const row of rows)await setStoredCampaignStatus(m,Number(row.id),Number(row.status));
+ return {rows,observedAt:Number(cache.observed_at),nextAt:Number(cache.next_allowed_at)};
+}
 const wbCampaignGroups=createWbAdGroups({db:pool,snapshot:storedSnapshot,experimentIO:{
  validate:async(m,ids,plan)=>{const snap=await storedSnapshot(m),rows=ids.map(id=>snap?.campaigns?.find(r=>Number(r.id)===id)),nms=rows.map(r=>r?.nmIds);if(nms.some(n=>!Array.isArray(n)||n.length!==1)||new Set(nms.map(n=>String(n[0]))).size!==1){const e=new Error('Для теста выберите кампании одного и того же артикула WB, по одному товару в каждой.');e.status=409;throw e;}for(const id of plan?.autoPrepare?[]:ids){const reason=await experimentStartBlock(m,id);if(reason){const e=new Error(reason);e.status=409;throw e;}}return {nmId:nms[0][0]};},
  prepare:async(c,m,ids)=>{for(const id of ids)await c.query(`INSERT INTO wb_ad_limits(market,campaign_id,updated_at) VALUES($1,$2,$3) ON CONFLICT(market,campaign_id) DO UPDATE SET manual_paused=FALSE,schedule_enabled=FALSE,updated_at=$3`,[m,id,Date.now()]);},
  finish:async(m,ids)=>{for(const id of ids)await pool.query("UPDATE wb_ad_limits SET manual_paused=TRUE,auto_paused=FALSE,auto_paused_day='',updated_at=$3 WHERE market=$1 AND campaign_id=$2",[m,id,Date.now()]);},
  forMarket:(m,plan)=>({
-  read:async ids=>campaignRows(await request(ADVERT_API+'/api/advert/v2/adverts?ids='+ids.join(','),await tokenFor(m))).map(r=>({id:campaignId(r),status:Number(r.status??r.statusId)})),
+  protocol:'count-v1',
+  read:ids=>experimentStatuses(m,ids),
   gate:id=>experimentStartBlock(m,id,plan.nmId,plan.autoPrepare===true),
-  action:async(id,action)=>{await request(ADVERT_API+'/adv/v0/'+action+'?id='+encodeURIComponent(id),await tokenFor(m));await setStoredCampaignStatus(m,id,action==='start'?9:11);}
+  action:async(id,action)=>{await request(ADVERT_API+'/adv/v0/'+action+'?id='+encodeURIComponent(id),await tokenFor(m));}
  })
 }});
 wbAdsRouter.use('/promotion/groups',wbCampaignGroups.router);
