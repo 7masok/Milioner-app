@@ -849,25 +849,26 @@ async function enforce(marketName, snapshot, { allowSchedule = true, allowStarts
   }
 }
 
-async function experimentStartBlock(m,id,expectedNmId){
+async function experimentStartBlock(m,id,expectedNmId,autoPrepare=false){
  const snap=await storedSnapshot(m),row=snap?.campaigns?.find(r=>Number(r.id)===id),rule=(await rules(m)).get(id)||{};
  if(expectedNmId&&(!Array.isArray(row?.nmIds)||row.nmIds.length!==1||String(row.nmIds[0])!==String(expectedNmId)))return 'Состав кампании изменился. Остановите тест и проверьте артикул.';
  if(rule.manualPaused)return 'Ручная пауза: возобновите кампанию вручную и снова поставьте на паузу в WB перед тестом.';
  if(rule.stockPaused)return 'Автозапуск заблокирован защитой остатков.';
  if(!snap?.updatedAt||Date.now()-Number(snap.updatedAt)>20*60*1000||snap.lastError||snap.day!==localDate()||(row?.statsStale&&Number(row?.status)!==4))return 'Для запуска нужны свежие полные данные рекламы за сегодня.';
  const stock=(await inventoryFor(m,row?[row]:[])).get(id),reason=stockBlock(stock,rule);if(reason)return reason;
- if(!rule.enabled||Number(rule.dailyLimit)<=0)return 'Задайте каждой кампании дневной лимит и включите остановку по лимиту.';
+ if(!autoPrepare&&(!rule.enabled||Number(rule.dailyLimit)<=0))return 'Задайте каждой кампании дневной лимит и включите остановку по лимиту.';
  if(rule.scheduleEnabled)return 'Отключите отдельный ежедневный запуск кампании: расписанием управляет тест.';
  if(rule.autoPausedDay===localDate()&&rule.autoPaused)return 'Дневной лимит уже достигнут.';
- if(Math.max(Number(row?.todaySpend)||0,Number(row?.maxTodaySpend)||0)>=Number(rule.dailyLimit))return 'Дневной лимит уже достигнут.';
+ if(rule.enabled&&Number(rule.dailyLimit)>0&&Math.max(Number(row?.todaySpend)||0,Number(row?.maxTodaySpend)||0)>=Number(rule.dailyLimit))return 'Дневной лимит уже достигнут.';
  return '';
 }
 const wbCampaignGroups=createWbAdGroups({db:pool,snapshot:storedSnapshot,experimentIO:{
- validate:async(m,ids)=>{const snap=await storedSnapshot(m),rows=ids.map(id=>snap?.campaigns?.find(r=>Number(r.id)===id)),nms=rows.map(r=>r?.nmIds);if(nms.some(n=>!Array.isArray(n)||n.length!==1)||new Set(nms.map(n=>String(n[0]))).size!==1){const e=new Error('Для теста выберите кампании одного и того же артикула WB, по одному товару в каждой.');e.status=409;throw e;}for(const id of ids){const reason=await experimentStartBlock(m,id);if(reason){const e=new Error(reason);e.status=409;throw e;}}return {nmId:nms[0][0]};},
+ validate:async(m,ids,plan)=>{const snap=await storedSnapshot(m),rows=ids.map(id=>snap?.campaigns?.find(r=>Number(r.id)===id)),nms=rows.map(r=>r?.nmIds);if(nms.some(n=>!Array.isArray(n)||n.length!==1)||new Set(nms.map(n=>String(n[0]))).size!==1){const e=new Error('Для теста выберите кампании одного и того же артикула WB, по одному товару в каждой.');e.status=409;throw e;}for(const id of plan?.autoPrepare?[]:ids){const reason=await experimentStartBlock(m,id);if(reason){const e=new Error(reason);e.status=409;throw e;}}return {nmId:nms[0][0]};},
+ prepare:async(c,m,ids)=>{for(const id of ids)await c.query(`INSERT INTO wb_ad_limits(market,campaign_id,updated_at) VALUES($1,$2,$3) ON CONFLICT(market,campaign_id) DO UPDATE SET manual_paused=FALSE,schedule_enabled=FALSE,updated_at=$3`,[m,id,Date.now()]);},
  finish:async(m,ids)=>{for(const id of ids)await pool.query("UPDATE wb_ad_limits SET manual_paused=TRUE,auto_paused=FALSE,auto_paused_day='',updated_at=$3 WHERE market=$1 AND campaign_id=$2",[m,id,Date.now()]);},
  forMarket:(m,plan)=>({
   read:async ids=>campaignRows(await request(ADVERT_API+'/api/advert/v2/adverts?ids='+ids.join(','),await tokenFor(m))).map(r=>({id:campaignId(r),status:Number(r.status??r.statusId)})),
-  gate:id=>experimentStartBlock(m,id,plan.nmId),
+  gate:id=>experimentStartBlock(m,id,plan.nmId,plan.autoPrepare===true),
   action:async(id,action)=>{await request(ADVERT_API+'/adv/v0/'+action+'?id='+encodeURIComponent(id),await tokenFor(m));await setStoredCampaignStatus(m,id,action==='start'?9:11);}
  })
 }});
@@ -932,6 +933,10 @@ export function startWbAdsLimitLoop() {
   };
   const startupTimer = setTimeout(() => void run(), STARTUP_DELAY_MS);
   startupTimer.unref();
+  // Rotation is independent of a throttled statistics refresh. Persisted retryAt
+  // and row locks prevent duplicate actions and survive process restarts.
+  const experimentTimer=setInterval(()=>{void (async()=>{for(const m of ['WB','WB2'])await wbCampaignGroups.experiments.run(m);})().catch(e=>console.error('WB ad test worker',e));},60000);
+  experimentTimer.unref();
   const timer = setInterval(() => void run(), CHECK_MS);
   timer.unref();
   return timer;

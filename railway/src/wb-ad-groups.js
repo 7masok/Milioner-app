@@ -36,7 +36,7 @@ export function createWbAdGroups({db,snapshot,clock=Date.now,experimentIO}){
    for(const campaign of input.campaignIds)await c.query('INSERT INTO wb_ad_group_members(market,group_id,campaign_id) VALUES($1,$2,$3)',[m,id,campaign]);
   });return list(m);
  }
- router.put('/:market/:id/test',asyncRoute(async(req,res)=>{const m=market(req.params.market),id=groupId(req.params.id);await experiments.change(m,id,req.body);res.json({ok:true,groups:await list(m)});}));
+ router.put('/:market/:id/test',asyncRoute(async(req,res)=>{const m=market(req.params.market),id=groupId(req.params.id);await experiments.change(m,id,req.body);if(req.body.operation!=='save')void experiments.run(m).catch(e=>console.error('WB ad test start',e));res.json({ok:true,groups:await list(m)});}));
  router.get('/:market',asyncRoute(async(req,res)=>res.json({ok:true,groups:await list(market(req.params.market))})));
  router.post('/:market',asyncRoute(async(req,res)=>res.json({ok:true,groups:await save(market(req.params.market),randomUUID(),req.body,true)})));
  router.put('/:market/:id',asyncRoute(async(req,res)=>res.json({ok:true,groups:await save(market(req.params.market),groupId(req.params.id),req.body,false)})));
