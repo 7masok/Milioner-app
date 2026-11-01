@@ -38,3 +38,6 @@ test('old inventory can show its explicitly recorded count; other historical bal
 test('both movement renderers show balance after signed quantities and final compatibility log captures it without trimming history',()=>{
  assert.match(fn('renderMovement'),/movementBalanceHtml\(m\)/);assert.match(compat,/movementBalanceHtml\(m\)/);assert.match(compat,/captureMovementBalance\(movement,p.stock\)/);assert.doesNotMatch(fn('log'),/slice\(0,1000\)/);assert.match(html,/＋ Добавить остаток<\/button>/);assert.match(html,/value="излишек"/);
 });
+test('found stock records the selected category and separate comment without changing its quantity or FIFO rules',()=>{
+ const f=fixture();f.fields.foundStockCategory={value:'Нашёл в коробке'};f.fields.foundStockReason={value:'Верхняя полка'};f.ctx.addFoundStock();const m=f.state.movements[0];assert.equal(m.reasonCategory,'Нашёл в коробке');assert.equal(m.reasonComment,'Верхняя полка');assert.match(m.extra,/причина: Нашёл в коробке/);assert.match(m.extra,/комментарий: Верхняя полка/);assert.equal(f.p.stock,13);assert.equal(f.old.remainingQty,10);
+});
