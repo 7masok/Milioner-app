@@ -17,7 +17,7 @@ export function experimentSlot(plan,now=Date.now()){
 // IO is injected: unit/integration tests never call WB or modify production campaigns.
 export async function advanceExperiment(plan,previous,io,now,stopping=false){
  const slot=experimentSlot(plan,now),out={...previous,...slot,checkedAt:now,error:'',retryAt:0};
- if(!stopping&&slot.state==='waiting')return out;
+ if(!stopping&&slot.state==='waiting'&&!plan.autoPrepare)return out;
  if(Number(previous.retryAt)>now)return previous;
  const ids=plan.campaignIds;
  const read=async()=>{const rows=await io.read(ids);const map=new Map(rows.map(r=>[Number(r.id),Number(r.status)]));if(ids.some(id=>!Number.isFinite(map.get(id))))throw fail('Не удалось подтвердить статусы всех кампаний. Переключение остановлено.');return map;};
@@ -29,6 +29,7 @@ export async function advanceExperiment(plan,previous,io,now,stopping=false){
   for(const id of ids)if(id!==wanted&&live.get(id)===9)await io.action(id,'pause');
   live=await read();
   if(ids.some(id=>id!==wanted&&live.get(id)===9))throw fail('WB ещё не подтвердил паузу предыдущей кампании. Новая не запускается.');
+  if(!stopping&&slot.state==='waiting')return {...out,campaignId:null};
   if(stopping||slot.state==='finished')return {...out,state:stopping?'stopped':'finished',campaignId:null};
   if(reason)return {...out,state:'blocked',error:reason};
   // An unexpected pause in WB is an opt-out, never an instruction to restart it.
@@ -57,13 +58,17 @@ export function createAdExperiments({db,snapshot,clock=Date.now,io}){
   }
   if(old?.enabled||old?.stopping)throw fail('Сначала остановите тест и дождитесь подтверждения пауз.',409);
   const members=(await c.query('SELECT campaign_id FROM wb_ad_group_members WHERE market=$1 AND group_id=$2',[m,id])).rows.map(x=>Number(x.campaign_id));
-  const plan=experimentPlan(body,members),enabled=body.operation==='start';
+  const now=clock(),immediate=body.autoPrepare===true&&body.startMode==='now';
+  const local=new Date(now+5*3600000).toISOString();
+  const plan=experimentPlan(immediate?{...body,startDate:local.slice(0,10),switchTime:local.slice(11,16)}:body,members),enabled=body.operation==='start';
+  if(body.autoPrepare===true){plan.autoPrepare=true;if(immediate)plan.startAt=now;}
   if(enabled){
-   if(plan.startAt<clock())throw fail('Для нового запуска выберите будущее время начала.');
+   if(!immediate&&plan.startAt<clock())throw fail('Для нового запуска выберите будущее время начала.');
    if(!io)throw fail('Исполнитель теста недоступен.',503);
    const snap=await snapshot(m),byId=new Map((snap?.campaigns||[]).map(x=>[Number(x.id),x]));
-   for(const cid of plan.campaignIds){const row=byId.get(cid);if(!row||![4,11].includes(Number(row.status)))throw fail('Перед запуском поставьте все кампании теста на паузу.');}
-   const verified=await io.validate(m,plan.campaignIds);if(verified?.nmId)plan.nmId=String(verified.nmId);
+   for(const cid of plan.campaignIds){const row=byId.get(cid);if(!row||!(plan.autoPrepare?[4,9,11]:[4,11]).includes(Number(row.status)))throw fail(plan.autoPrepare?'Кампания недоступна для теста. Дождитесь обновления статусов WB.':'Перед запуском поставьте все кампании теста на паузу.');}
+   const verified=await io.validate(m,plan.campaignIds,plan);if(verified?.nmId)plan.nmId=String(verified.nmId);
+   if(plan.autoPrepare){if(!io.prepare)throw fail('Подготовка теста недоступна.',503);await io.prepare(c,m,plan.campaignIds);}
   }
   await c.query(`INSERT INTO wb_ad_experiments(market,group_id,plan,enabled,runtime,updated_at) VALUES($1,$2,$3,$4,'{}',$5)
    ON CONFLICT(market,group_id) DO UPDATE SET plan=$3,enabled=$4,stopping=FALSE,runtime='{}',version=wb_ad_experiments.version+1,updated_at=$5`,[m,id,JSON.stringify(plan),enabled,clock()]);

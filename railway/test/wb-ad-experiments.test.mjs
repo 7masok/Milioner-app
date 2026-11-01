@@ -64,6 +64,46 @@ test('a restarted SQL worker continues the saved rotation and persists confirmat
 test('test form and preview render three named slots, escape names and show the first seven days',()=>{
  const extract=n=>{const i=html.indexOf('function '+n+'('),end=html.slice(i+10).search(/\n(?:async )?function |\n(?:let|const) /);return html.slice(i,end<0?undefined:i+10+end);};
  let sheet='';const fields={wbTestCampaign0:{value:'1'},wbTestCampaign1:{value:'2'},wbTestCampaign2:{value:'3'},wbTestDate:{value:'2026-11-02'},wbTestTime:{value:'00:00'},wbTestDays:{value:'21'},wbTestPreview:{}};
- const ctx={Date,Number,String,Set,Math,wbAdTestEditor:null,adsMarket:'WB2',adsDashboardData:{campaigns:[1,2,3].map(id=>({id,name:'<Нож> '+id})),groups:[{id:'g',name:'<Нож777>',campaignIds:[1,2,3]}]},esc:x=>String(x).replaceAll('<','&lt;').replaceAll('>','&gt;'),showSheet:s=>sheet=s,document:{getElementById:n=>fields[n]}};
- vm.createContext(ctx);vm.runInContext(['wbAdTestStatus','openWbAdTest','rHistory','wbAdTestInput','previewWbAdTest'].map(extract).join('\n'),ctx);ctx.openWbAdTest('g');assert.match(sheet,/&lt;Нож777&gt;/);assert.doesNotMatch(sheet,/<Нож777>/);for(let i=0;i<3;i++)assert.ok(sheet.includes('id="wbTestCampaign'+i+'"'));assert.match(sheet,/Включить тест/);assert.equal(ctx.previewWbAdTest(),true);assert.match(fields.wbTestPreview.innerHTML,/Первые 7 дней/);fields.wbTestCampaign2.value='2';assert.equal(ctx.previewWbAdTest(),false);
+ const ctx={Date,Number,String,Set,Math,clearTimeout:()=>{},wbAdTestPollTimer:0,wbAdTestEditor:null,adsMarket:'WB2',adsDashboardData:{campaigns:[1,2,3].map(id=>({id,name:'<Нож> '+id})),groups:[{id:'g',name:'<Нож777>',campaignIds:[1,2,3]}]},esc:x=>String(x).replaceAll('<','&lt;').replaceAll('>','&gt;'),showSheet:s=>sheet=s,document:{getElementById:n=>fields[n]}};
+ vm.createContext(ctx);vm.runInContext(['wbAdTestStatus','openWbAdTest','rHistory','wbAdTestInput','previewWbAdTest'].map(extract).join('\n'),ctx);ctx.openWbAdTest('g');assert.match(sheet,/&lt;Нож777&gt;/);assert.doesNotMatch(sheet,/<Нож777>/);for(let i=0;i<3;i++)assert.ok(sheet.includes('id="wbTestCampaign'+i+'"'));assert.match(sheet,/Запустить тест/);assert.doesNotMatch(sheet,/Сохранить план|Показать план|Перед включением/);assert.equal(ctx.previewWbAdTest(),true);assert.match(fields.wbTestPreview.innerHTML,/Первые 7 дней/);fields.wbTestCampaign2.value='2';assert.equal(ctx.previewWbAdTest(),false);
+});
+
+test('automatic preparation pauses all three active campaigns while waiting for tomorrow, then starts only the first',async()=>{
+ const p={...plan,autoPrepare:true},f=ioFixture({1:9,2:9,3:9});
+ let runtime=await advanceExperiment(p,{},f.io,p.startAt-60000);
+ assert.equal(runtime.state,'waiting');assert.deepEqual(f.calls,[[1,'pause'],[2,'pause'],[3,'pause']]);
+ runtime=await advanceExperiment(p,runtime,f.io,p.startAt);assert.equal(runtime.state,'running');assert.deepEqual(f.calls.at(-1),[1,'start']);assert.deepEqual([...f.status.values()],[9,11,11]);
+});
+test('one-click start persists ownership and prepares rules atomically without external actions in the transaction',async()=>{
+ const f=await sqlFixture();try{
+ let prepared=0,now=plan.startAt+12345;
+ const api=createAdExperiments({db:f.db,snapshot:async()=>({campaigns:[1,2,3].map(id=>({id,status:9}))}),clock:()=>now,io:{validate:async()=>({nmId:777}),prepare:async(c,m,ids)=>{prepared++;assert.equal(m,'WB2');assert.deepEqual(ids,[1,2,3]);assert.equal((await c.query('SELECT COUNT(*)::int AS n FROM wb_ad_experiments')).rows[0].n,0);},forMarket:()=>f.f.io}});
+ await api.change('WB2',f.id,{...input,version:0,operation:'start',autoPrepare:true,startMode:'now'});
+ const row=(await api.list('WB2'))[0];assert.equal(prepared,1);assert.equal(row.enabled,true);assert.equal(row.plan.startAt,now);assert.equal(row.plan.nmId,'777');assert.equal(f.f.calls.length,0);
+ await api.run('WB2');assert.equal((await api.list('WB2'))[0].runtime.state,'running');assert.deepEqual(f.f.calls,[[1,'start']]);
+ await assert.rejects(()=>api.change('WB2',f.id,{...input,version:0,operation:'start',autoPrepare:true,startMode:'now'}),/уже изменён/);assert.equal(prepared,1);
+ }finally{await f.pg.close();}
+});
+test('failed preparation rolls back activation and a saved draft never prepares campaigns',async()=>{
+ const f=await sqlFixture();try{
+ let prepares=0;const api=createAdExperiments({db:f.db,snapshot:async()=>({campaigns:[1,2,3].map(id=>({id,status:9}))}),clock:()=>plan.startAt-60000,io:{validate:async()=>({nmId:777}),prepare:async()=>{prepares++;throw Error('prepare failed');},forMarket:()=>f.f.io}});
+ await assert.rejects(()=>api.change('WB2',f.id,{...input,version:0,operation:'start',autoPrepare:true}),/prepare failed/);assert.equal((await api.list('WB2')).length,0);
+ await api.change('WB2',f.id,{...input,version:0,operation:'save',autoPrepare:true});assert.equal(prepares,1);assert.equal((await api.list('WB2'))[0].enabled,false);assert.equal(f.f.calls.length,0);
+ }finally{await f.pg.close();}
+});
+test('automatic preparation still pauses safely on stock or budget blocks and never starts before confirming pauses',async()=>{
+ const p={...plan,autoPrepare:true},f=ioFixture({1:9,2:9,3:9});f.setGate('Дневной лимит уже достигнут.');
+ const blocked=await advanceExperiment(p,{},f.io,p.startAt);assert.equal(blocked.state,'blocked');assert.equal(f.calls.filter(x=>x[1]==='start').length,0);assert.ok([...f.status.values()].every(x=>x===11));
+ const g=ioFixture({1:9,2:9,3:9});g.io.action=async(id,a)=>g.calls.push([id,a]);const result=await advanceExperiment(p,{},g.io,p.startAt);assert.equal(result.state,'error');assert.equal(g.calls.filter(x=>x[1]==='start').length,0);
+});
+test('automatic mode retains stock, freshness and enabled spending caps while allowing campaigns without local limits',async()=>{
+ const source=fs.readFileSync(new URL('../src/wb-ads.js',import.meta.url),'utf8'),start=source.indexOf('async function experimentStartBlock('),end=source.indexOf('\nconst wbCampaignGroups=',start);
+ let rule={},stockReason='',snap={updatedAt:Date.now(),day:'today',campaigns:[{id:1,status:11,nmIds:[777],todaySpend:5}]};
+ const ctx={Date,Number,String,Array,storedSnapshot:async()=>snap,rules:async()=>new Map([[1,rule]]),inventoryFor:async()=>new Map([[1,{}]]),stockBlock:()=>stockReason,localDate:()=> 'today'};vm.createContext(ctx);vm.runInContext(source.slice(start,end),ctx);
+ assert.equal(await ctx.experimentStartBlock('WB2',1,'777',true),'');
+ rule={enabled:true,dailyLimit:4};assert.match(await ctx.experimentStartBlock('WB2',1,'777',true),/лимит уже достигнут/);
+ rule={};stockReason='Нет остатка';assert.equal(await ctx.experimentStartBlock('WB2',1,'777',true),'Нет остатка');stockReason='';
+ rule={stockPaused:true};assert.match(await ctx.experimentStartBlock('WB2',1,'777',true),/остатков/);rule={manualPaused:true};assert.match(await ctx.experimentStartBlock('WB2',1,'777',true),/Ручная пауза/);rule={};
+ snap={...snap,updatedAt:Date.now()-21*60000};assert.match(await ctx.experimentStartBlock('WB2',1,'777',true),/свежие/);
+ assert.match(source,/experimentTimer=setInterval/);assert.match(source,/schedule_enabled=FALSE/);
 });
