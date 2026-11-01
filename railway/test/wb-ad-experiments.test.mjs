@@ -104,6 +104,24 @@ test('automatic mode retains stock, freshness and enabled spending caps while al
  rule={enabled:true,dailyLimit:4};assert.match(await ctx.experimentStartBlock('WB2',1,'777',true),/лимит уже достигнут/);
  rule={};stockReason='Нет остатка';assert.equal(await ctx.experimentStartBlock('WB2',1,'777',true),'Нет остатка');stockReason='';
  rule={stockPaused:true};assert.match(await ctx.experimentStartBlock('WB2',1,'777',true),/остатков/);rule={manualPaused:true};assert.match(await ctx.experimentStartBlock('WB2',1,'777',true),/Ручная пауза/);rule={};
- snap={...snap,updatedAt:Date.now()-21*60000};assert.match(await ctx.experimentStartBlock('WB2',1,'777',true),/свежие/);
+ snap={...snap,updatedAt:Date.now()-21*60000};rule={enabled:true,dailyLimit:100};assert.match(await ctx.experimentStartBlock('WB2',1,'777',true),/свежие/);rule={};assert.equal(await ctx.experimentStartBlock('WB2',1,'777',true),'');snap={...snap,updatedAt:Date.now()-71*60000};assert.match(await ctx.experimentStartBlock('WB2',1,'777',true),/состава/);
  assert.match(source,/experimentTimer=setInterval/);assert.match(source,/schedule_enabled=FALSE/);
+});
+
+function deferredFixture(initial={1:11,2:11,3:11}){const f=ioFixture(initial);let observedAt=plan.startAt,rows=[...f.status].map(([id,status])=>({id,status})),reads=0;f.io.protocol='count-v1';f.io.read=async()=>{reads++;return {rows,observedAt,nextAt:observedAt+901000}};return {...f,refresh:at=>{observedAt=at;rows=[...f.status].map(([id,status])=>({id,status}));},reads:()=>reads};}
+test('base-token status cache starts once and confirms in a later allowed slot without rereading details or mistaking pending start for manual pause',async()=>{
+ const f=deferredFixture();let r=await advanceExperiment(plan,{},f.io,plan.startAt);assert.equal(r.state,'starting');assert.deepEqual(f.calls,[[1,'start']]);assert.ok(r.pendingStartAt>plan.startAt);
+ const count=f.reads();r=await advanceExperiment(plan,r,f.io,plan.startAt+60000);assert.equal(r.state,'starting');assert.equal(f.reads(),count);assert.equal(f.calls.length,1);
+ f.refresh(plan.startAt+901000);r=await advanceExperiment(plan,r,f.io,plan.startAt+901000);assert.equal(r.state,'running');assert.equal(r.pendingStartAt,0);assert.equal(f.calls.length,1);
+ f.status.set(1,11);f.refresh(plan.startAt+1802000);r=await advanceExperiment(plan,r,f.io,plan.startAt+1802000);assert.equal(r.state,'blocked');assert.equal(f.calls.length,1);
+});
+test('delayed WB observations require confirmed pauses in later slots before another campaign starts',async()=>{
+ const f=deferredFixture({1:9,2:11,3:9});let r=await advanceExperiment(plan,{},f.io,plan.startAt+DAY);assert.equal(r.state,'pausing');assert.deepEqual(f.calls,[[1,'pause'],[3,'pause']]);assert.ok(!f.calls.some(x=>x[1]==='start'));
+ f.refresh(plan.startAt+DAY+901000);r=await advanceExperiment(plan,r,f.io,plan.startAt+DAY+901000);assert.equal(r.state,'starting');assert.deepEqual(f.calls.at(-1),[2,'start']);
+});
+test('old details-reader backoff does not block a new independent status method, while current-protocol retry remains persisted',async()=>{
+ const f=deferredFixture(),old={state:'error',error:'rate limit exceeded',retryAt:plan.startAt+3600000};const r=await advanceExperiment(plan,old,f.io,plan.startAt);assert.equal(r.state,'starting');assert.equal(r.statusProtocol,'count-v1');const reads=f.reads();await advanceExperiment(plan,r,f.io,plan.startAt+60000);assert.equal(f.reads(),reads);
+});
+test('an observation predating the daily switch never starts the new slot',async()=>{
+ const f=deferredFixture();f.refresh(plan.startAt-1000);const r=await advanceExperiment(plan,{},f.io,plan.startAt);assert.equal(r.state,'checking');assert.equal(f.calls.length,0);
 });
