@@ -1,3 +1,4 @@
+import {runSupplyReservations} from '../fbo-warehouse/supply-reservations.js';
 import {readWarehouseContext,enrichPreparedWithWarehouse} from '../fbo-warehouse/store.js';
 import {runAutoAccounting} from '../fbo-warehouse/automatic.js';
 import crypto from 'node:crypto';
@@ -34,7 +35,9 @@ async function run(){
   const lock=await pool.connect();let locked=false;
   try{
    locked=!!(await lock.query('SELECT pg_try_advisory_lock(hashtext($1)) AS locked',['ozon-planner:'+account.id])).rows[0]?.locked;if(!locked)continue;
-   const source=await sourceFor(account);if(!sourceDue(source))continue;
+   const source=await sourceFor(account);
+   try{await runSupplyReservations(account,source)}catch{console.warn('FBO supply reservation unavailable',account.id)}
+   if(!sourceDue(source))continue;
    await pool.query(`INSERT INTO ozon_planner_sources(account,client_id,attempt_at,next_allowed_at) VALUES($1,$2,$3,$4) ON CONFLICT(account) DO UPDATE SET client_id=EXCLUDED.client_id,payload=CASE WHEN ozon_planner_sources.client_id=EXCLUDED.client_id THEN ozon_planner_sources.payload ELSE NULL END,updated_at=CASE WHEN ozon_planner_sources.client_id=EXCLUDED.client_id THEN ozon_planner_sources.updated_at ELSE 0 END,attempt_at=EXCLUDED.attempt_at,next_allowed_at=EXCLUDED.next_allowed_at,last_error=''`,[account.id,account.clientId,Date.now(),Date.now()+15*60000]);
    console.info('Ozon planner refresh started',account.id);
    const entries=(await pool.query('SELECT supply_id,payload FROM ozon_planner_bundles WHERE account=$1 AND client_id=$2',[account.id,account.clientId])).rows,cache=new Map(entries.map(r=>[r.supply_id,r.payload]));
@@ -43,6 +46,7 @@ async function run(){
    const payload=await collectSnapshot(createOzonReader(account.credentials),{previous:source?.payload,cache,extraSkus,today:today(),saveBundle:async(supplyId,entry)=>pool.query(`INSERT INTO ozon_planner_bundles(account,client_id,supply_id,payload) VALUES($1,$2,$3,$4::jsonb) ON CONFLICT(account,client_id,supply_id) DO UPDATE SET payload=EXCLUDED.payload`,[account.id,account.clientId,supplyId,JSON.stringify(entry)])});
    const stamp=Date.parse(payload.updatedAt);
    await pool.query('UPDATE ozon_planner_sources SET payload=$2::jsonb,updated_at=$3,next_allowed_at=$4,last_error=$5 WHERE account=$1 AND client_id=$6',[account.id,JSON.stringify(payload),stamp,stamp+15*60000,'',account.clientId]);
+   try{await runSupplyReservations(account,{payload,updated_at:stamp,client_id:account.clientId})}catch{console.warn('FBO supply reservation unavailable',account.id)}
    try{await runAutoAccounting(account,{payload,updated_at:stamp})}catch{console.warn('FBO automatic accounting unavailable',account.id)}
    const devices=(await pool.query('SELECT * FROM ozon_planner_devices WHERE account=$1 AND client_id=$2 AND NOT revoked',[account.id,account.clientId])).rows;
    for(const device of devices)await prepareDevice(device,{payload,updated_at:stamp});

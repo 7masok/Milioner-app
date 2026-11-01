@@ -42,7 +42,7 @@ export function accountAutomaticOrder(context,payload,account,orderId,now=Date.n
  const state=structuredClone(before),resolve=resolver(state,context.stockRows),groups=new Map();
  for(const l of remote.lines){const key=l.sku+'|'+l.clusterKey;const own=groups.get(key)||{sku:l.sku,clusterKey:l.clusterKey,cluster:l.warehouse,qty:0};own.qty+=l.qty;groups.set(key,own)}
  const id='auto-fbo-'+crypto.createHash('sha256').update(account+'|'+orderId).digest('hex').slice(0,40);
- const lines=[...groups.values()],matches=draftGroups(state).filter(d=>d.account===account&&d.status==='reserved'&&d.lines.length===lines.length&&d.lines.every(l=>lines.some(x=>x.sku===l.sku&&x.clusterKey===l.clusterKey&&x.qty===l.qty)));
+ const lines=[...groups.values()],matches=draftGroups(state).filter(d=>d.account===account&&(!d.orderId||d.orderId===orderId)&&d.status==='reserved'&&d.lines.length===lines.length&&d.lines.every(l=>lines.some(x=>x.sku===l.sku&&x.clusterKey===l.clusterKey&&x.qty===l.qty)));
  if(matches.length>1)fail('Несколько планов совпадают с заявкой. Выберите план вручную.');
  const draftId=matches[0]?.id||id;if(!matches.length)createDraft(state,{id,title:'Авто · заявка '+orderId,lines},resolve,account,now);
  const result=dispatchDraft(state,draftId,remote,now),violation=stockLedgerViolation(before,state);if(violation)fail('Списание не согласовано с журналом склада.');

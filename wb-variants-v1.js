@@ -32,7 +32,7 @@ productCard=function(...args){
   const product=args[0];
   if(!isGroup(product))return originalProductCard(...args);
   const totals=groupTotals(product),ready=stockReady(),mismatch=ready&&totals.hasWb&&!totals.pending&&!totals.stale&&totals.wb!==totals.available;
-  return `<div class="item variant-group-card" onclick="openProduct('${product.id}')"><div class="row"><div class="grow"><div class="name">${esc(product.name)}</div>${productStoreLinksHtml(product)}${typeof productSalesTrendHtml==='function'?productSalesTrendHtml(product,productRankSpec()):''}<div class="muted">${product.variantMarket==='WB2'?'WB2':'WB1'} · ${totals.rows.length} размеров · <span class="badge">Размеры ›</span></div><div class="product-stock-inline">${`<span style="color:#16752d">В продаже: ${totals.available} шт.</span>${totals.reserve?`<span style="color:#8a5300">Резерв: ${totals.reserve} шт.</span>`:''}<span${mismatch?' style="color:#a40000"':''}>${wbStockLabel(totals)}</span>`}${!ready?'<span class="muted">Обновляется…</span>':''}</div></div></div></div>`;
+  return `<div class="item variant-group-card" onclick="openProduct('${product.id}')"><div class="row"><div class="grow"><div class="name">${esc(product.name)}</div>${productStoreLinksHtml(product)}${typeof productSalesTrendHtml==='function'?productSalesTrendHtml(product,productRankSpec()):''}<div class="muted">${product.variantMarket==='WB2'?'WB2':'WB1'} · ${totals.rows.length} размеров · <span class="badge">Размеры ›</span></div><div class="product-stock-inline">${`<span style="color:#16752d">В продаже: ${totals.available} шт.</span>${totals.reserve?`<span style="color:#8a5300">Резерв: ${totals.reserve} шт.</span>`:''}<span${mismatch?' style="color:#a40000"':''}>${wbStockLabel(totals)}</span>`}${Number(args[5]?.warehouseReserved)>0?`<span style="color:#8a5300">Резерв FBO на складе: ${Number(args[5].warehouseReserved)} шт.</span>`:''}${!ready?'<span class="muted">Обновляется…</span>':''}</div></div></div></div>`;
 };
 
 buildProductRenderStats=function(){
@@ -46,6 +46,7 @@ buildProductRenderStats=function(){
     if(stats.reservedMap)stats.reservedMap.set(key,sumMap(stats.reservedMap,rows));
     if(stats.stockMap)stats.stockMap.set(key,sumMap(stats.stockMap,rows));
     if(stats.atWarehouseMap)stats.atWarehouseMap.set(key,sumMap(stats.atWarehouseMap,rows));
+    if(stats.warehouseReservedMap)stats.warehouseReservedMap.set(key,sumMap(stats.warehouseReservedMap,rows));
     if(stats.transitMap)stats.transitMap.set(key,sumMap(stats.transitMap,rows));
     if(stats.fboMap)stats.fboMap.set(key,sumMap(stats.fboMap,rows));
     if(stats.searchMap){
