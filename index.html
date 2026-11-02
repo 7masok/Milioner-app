@@ -8,6 +8,37 @@
 <link rel="icon" type="image/svg+xml" href="/app-icon.svg?v=20261030-dollar-logo">
 <meta name="application-name" content="Склад">
 <title>Склад — MVP</title>
+<script id="warehouse-boot-guard">
+(function(){
+'use strict';
+let settled=false,blocked=false,problem='',box=null;
+const started=Date.now();
+function show(reason,code="BOOT_TIMEOUT"){
+ if(settled)return;
+ problem=reason||problem||'Загрузка страницы не завершилась за 15 секунд.';
+ try{const key='sklad_connection_attempts_v1',list=JSON.parse(localStorage.getItem(key)||'[]');list.push({path:'/',code,at:Date.now(),ms:Date.now()-started});localStorage.setItem(key,JSON.stringify(list.slice(-12)))}catch{}
+ if(!box){
+  box=document.createElement('section');box.id='warehouseBootStatus';box.setAttribute('role','alert');
+  box.style.cssText='position:fixed;inset:0;z-index:10000;background:#f5f6f8;color:#18232b;font:14px/1.6 system-ui;display:grid;place-items:center;padding:22px;overflow:auto';
+  box.innerHTML='<div style="width:min(440px,100%);background:#fff;border:1px solid #e5e8eb;border-radius:24px;padding:26px"><b style="font-size:22px">Склад</b><h1 style="font-size:24px;line-height:1.25">Загрузка не завершилась</h1><p id="warehouseBootReason"></p><p id="warehouseBootResource" style="color:#67717a;overflow-wrap:anywhere"></p><p>Данные браузера сохранены. Страница не запускала складские изменения.</p><button type="button" id="warehouseBootRetry" style="font:600 15px system-ui;background:#172d3a;color:white;border:0;border-radius:12px;padding:14px;width:100%">Открыть заново</button><p style="color:#67717a;font-size:12px" id="warehouseBootTime"></p></div>';
+  document.documentElement.appendChild(box);
+  document.getElementById('warehouseBootRetry').onclick=()=>location.reload();
+ }
+ document.getElementById('warehouseBootReason').textContent=problem;
+ const scripts=Array.from(document.scripts||[]),last=scripts.filter(s=>s.src&&!s.dataset.bootLoaded).map(s=>new URL(s.src,location.href).pathname)[0];
+ document.getElementById('warehouseBootResource').textContent=last?'Ещё не завершён модуль '+last:'Этап: проверка доступа или запуск интерфейса.';
+ document.getElementById('warehouseBootTime').textContent='Попытка '+new Date(started).toLocaleString('ru-RU',{timeZone:'Asia/Almaty'})+' · Алматы';
+}
+const timer=setTimeout(()=>show(),15000);
+window.addEventListener('load',event=>{if(event.target?.tagName==='SCRIPT')event.target.dataset.bootLoaded='1'},true);
+window.addEventListener('error',event=>{
+ if(settled)return;
+ if(event.target?.tagName==='SCRIPT'){blocked=true;show('Не удалось загрузить модуль '+new URL(event.target.src,location.href).pathname+'.','BOOT_SCRIPT')}
+ else if(event.message){blocked=true;show('Ошибка запуска интерфейса: '+String(event.message).slice(0,180),'BOOT_ERROR')}
+},true);
+window.warehouseBoot={canStart(){return !blocked},complete(){settled=true;clearTimeout(timer);box?.remove()}};
+})();
+</script>
 <style>
 :root{--bg:#f5f6f8;--card:#fff;--text:#17181a;--muted:#74777c;--line:#e6e7e9;--accent:#111;--ok:#25a244;--warn:#b76b00;--bad:#c62828}
 *{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font-family:system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
@@ -232,14 +263,14 @@ function publicKeyFromOptions(options){const listed=key=>Array.isArray(options[k
 function setOwnerLoginError(text){const box=document.getElementById('ownerLoginError');if(box)box.textContent=text||''}
 function toggleOwnerRecovery(){document.getElementById('ownerRecoveryBox')?.classList.toggle('open');setTimeout(()=>document.getElementById('ownerPassword')?.focus(),50)}
 function renderOwnerLogin(info){ownerAuthInfo=info||ownerAuthInfo;const hint=document.getElementById('ownerLoginHint');if(hint)hint.textContent='Введите код доступа.'}
-function setOwnerAuthMode(mode,error=''){document.body.classList.remove('auth-pending','auth-locked','auth-ready');document.body.classList.add('auth-'+mode);setOwnerLoginError(error);const logout=document.getElementById('ownerLogoutBtn');if(logout)logout.style.display=ownerAuthEnabled?'block':'none';if(mode==='locked')setTimeout(()=>document.getElementById('ownerPassword')?.focus(),50)}
+function setOwnerAuthMode(mode,error=''){if(mode==='ready'||mode==='locked')globalThis.warehouseBoot?.complete();document.body.classList.remove('auth-pending','auth-locked','auth-ready');document.body.classList.add('auth-'+mode);setOwnerLoginError(error);const logout=document.getElementById('ownerLogoutBtn');if(logout)logout.style.display=ownerAuthEnabled?'block':'none';if(mode==='locked')setTimeout(()=>document.getElementById('ownerPassword')?.focus(),50)}
 function startOwnerRuntimeAfterAuth(){ownerAuthEnabled=true;cloudStatus('онлайн','ok');setOwnerAuthMode('ready');try{startAppRuntime()}catch(e){console.error('app startup after valid auth failed',e)}}
 async function ownerAuthRequest(path,options={}){
  const controller=new AbortController();let timer;
  const timeout=new Promise((_,reject)=>{timer=setTimeout(()=>{reject(new Error('Сервер не ответил за 20 секунд. Попробуйте ещё раз.'));controller.abort()},20000)});
  try{return await Promise.race([(async()=>{const response=await nativeFetch(MILLIONER_API+path,{...options,signal:controller.signal});const data=await response.json().catch(()=>({}));return {response,data}})(),timeout])}finally{clearTimeout(timer)}
 }
-async function initOwnerAuth(){try{if(ownerSessionToken){const {response:check}=await ownerAuthRequest('/api/auth/session',{cache:'no-store',headers:{Authorization:'Bearer '+ownerSessionToken}});if(check.ok){startOwnerRuntimeAfterAuth();return}if(check.status!==401&&check.status!==403)throw new Error('Сервер временно недоступен. Обновите страницу.');ownerSessionToken='';sessionStorage.removeItem(APP_SESSION_KEY);localStorage.removeItem(APP_SESSION_KEY)}const {response:configResponse,data:info}=await ownerAuthRequest('/api/auth/config',{cache:'no-store'});if(!configResponse.ok||typeof info?.enabled!=='boolean')throw new Error('Сервер временно недоступен. Обновите страницу.');ownerAuthEnabled=info.enabled;ownerAuthInfo={credentialCount:Number(info?.credentialCount||0),passwordLogin:true};renderOwnerLogin(ownerAuthInfo);if(!ownerAuthEnabled){startOwnerRuntimeAfterAuth();return}setOwnerAuthMode('locked')}catch(e){setOwnerAuthMode('locked',String(e?.message||'Сервер временно недоступен. Обновите страницу.'))}}
+async function initOwnerAuth(){if(globalThis.warehouseBoot&&!globalThis.warehouseBoot.canStart())return;try{if(ownerSessionToken){const {response:check}=await ownerAuthRequest('/api/auth/session',{cache:'no-store',headers:{Authorization:'Bearer '+ownerSessionToken}});if(check.ok){startOwnerRuntimeAfterAuth();return}if(check.status!==401&&check.status!==403)throw new Error('Сервер временно недоступен. Обновите страницу.');ownerSessionToken='';sessionStorage.removeItem(APP_SESSION_KEY);localStorage.removeItem(APP_SESSION_KEY)}const {response:configResponse,data:info}=await ownerAuthRequest('/api/auth/config',{cache:'no-store'});if(!configResponse.ok||typeof info?.enabled!=='boolean')throw new Error('Сервер временно недоступен. Обновите страницу.');ownerAuthEnabled=info.enabled;ownerAuthInfo={credentialCount:Number(info?.credentialCount||0),passwordLogin:true};renderOwnerLogin(ownerAuthInfo);if(!ownerAuthEnabled){startOwnerRuntimeAfterAuth();return}setOwnerAuthMode('locked')}catch(e){setOwnerAuthMode('locked',String(e?.message||'Сервер временно недоступен. Обновите страницу.'))}}
 function rememberOwnerSession(data){ownerSessionToken=String(data?.token||'');sessionStorage.setItem(APP_SESSION_KEY,ownerSessionToken);localStorage.setItem(APP_SESSION_KEY,ownerSessionToken);sessionStorage.setItem(APP_FRESH_LOGIN_KEY,'1');startOwnerRuntimeAfterAuth()}
 async function ownerAuthSubmit(event){event?.preventDefault();const password=String(document.getElementById('ownerPassword')?.value||'');if(!password){setOwnerLoginError('Введите код доступа');document.getElementById('ownerPassword')?.focus();return}const button=document.getElementById('ownerLoginButton');if(button){button.disabled=true;button.textContent='Вход…'}setOwnerLoginError('');try{const {response,data}=await ownerAuthRequest('/api/auth/login',{method:'POST',cache:'no-store',headers:{'Content-Type':'application/json'},body:JSON.stringify({password})});if(!response.ok)throw new Error(data?.error==='wrong-password'?'Неверный код доступа':data?.error||('HTTP '+response.status));const input=document.getElementById('ownerPassword');if(input)input.value='';rememberOwnerSession(data)}catch(e){setOwnerLoginError(String(e?.message||e))}finally{if(button){button.disabled=false;button.textContent='Войти'}}}
 async function ownerWebAuthnLogin(opts={}){if(!ownerAuthSupported()){if(!opts.silent)setOwnerLoginError('Этот браузер не поддерживает ключи доступа.');return}const button=document.getElementById('ownerBiometricButton');if(button){button.disabled=true;button.textContent='Сканер…'}setOwnerLoginError('');try{const optionsResponse=await nativeFetch(MILLIONER_API+'/api/auth/webauthn/login-options',{method:'POST',cache:'no-store',headers:{'Content-Type':'application/json'},body:'{}'}),optionsData=await optionsResponse.json().catch(()=>({}));if(!optionsResponse.ok)throw new Error(optionsData?.error==='no-webauthn-credentials'?'Сначала привяжите ключ доступа':optionsData?.error||('HTTP '+optionsResponse.status));const cred=await navigator.credentials.get({publicKey:publicKeyFromOptions(optionsData.options)});if(!cred)throw new Error('Ключ доступа не получен');const verify=await nativeFetch(MILLIONER_API+'/api/auth/webauthn/login-verify',{method:'POST',cache:'no-store',headers:{'Content-Type':'application/json'},body:JSON.stringify({credential:serializeAssertion(cred)})}),data=await verify.json().catch(()=>({}));if(!verify.ok)throw new Error(data?.error==='webauthn-login-failed'?'Ключ доступа не принят':data?.error||('HTTP '+verify.status));rememberOwnerSession(data)}catch(e){if(opts.silent&&/NotAllowedError|AbortError/i.test(String(e?.name||e)))return;setOwnerLoginError(humanWebauthnError(e))}finally{if(button){button.disabled=false;button.textContent='Войти по ключу доступа'}}}
@@ -2077,3 +2108,4 @@ function enhanceArrivalProductSearch(){}
 <script>initOwnerAuth();</script>
 </body>
 </html>
+

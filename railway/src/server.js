@@ -170,6 +170,20 @@ app.get('/health', noStore, async (_req, res, next) => {
   } catch (error) { next(error); }
 });
 
+// Only bounded connection observations, never business data or browser credentials.
+app.post('/api/system/client-diagnostics', requireTrustedOrigin, (req,res)=>{
+  const input=Array.isArray(req.body?.attempts)?req.body.attempts:[];
+  const attempts=input.slice(-12).map(item=>{
+    const code=String(item?.code||'').slice(0,40);
+    let path='';try{path=new URL(String(item?.path||'/'),'https://warehouse.local').pathname}catch{}
+    if(!/^((HTTP [1-5][0-9]{2})|OK|NETWORK|OFFLINE|TIMEOUT( 8 с)?|INVALID_RESPONSE|BOOT_TIMEOUT|BOOT_SCRIPT|BOOT_ERROR)$/.test(code))return null;
+    if(!['/','/health','/api/warehouse-state'].includes(path))return null;
+    return {path,code,at:Math.max(0,Math.min(Date.now()+60000,Number(item?.at)||0)),ms:Math.max(0,Math.min(300000,Number(item?.ms)||0))};
+  }).filter(Boolean);
+  if(attempts.length)console.warn('warehouse client connection diagnostics',JSON.stringify({receivedAt:Date.now(),attempts}));
+  res.set('Cache-Control','no-store').json({ok:true});
+});
+
 app.get('/api/system/storage-status', requireTrustedOrigin, async (_req, res, next) => {
   try {
     const capacityGb = Math.max(0.5, Number(process.env.POSTGRES_VOLUME_GB || 5) || 5);
@@ -411,3 +425,4 @@ async function shutdown(signal) {
 
 process.on('SIGTERM', () => shutdown('SIGTERM'));
 process.on('SIGINT', () => shutdown('SIGINT'));
+
