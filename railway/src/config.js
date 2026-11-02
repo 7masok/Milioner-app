@@ -5,6 +5,9 @@ function bool(name, fallback = false) {
 }
 
 export const config = Object.freeze({
+  infernoApiUrl: String(process.env.INFERNO_API_URL || '').trim(),
+  infernoAdminToken: String(process.env.INFERNO_ADMIN_TOKEN || ''),
+  storeProfile:String(process.env.STORE_PROFILE||''),
   port: Math.max(1, Number(process.env.PORT || 3000)),
   databaseUrl: String(process.env.DATABASE_URL || ''),
   corsOrigin: String(process.env.CORS_ORIGIN || 'https://7masok.github.io').replace(/\/$/, ''),

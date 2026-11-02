@@ -43,7 +43,7 @@ async function retry(){
 const previousFetch=window.fetch.bind(window);
 window.fetch=async function(input,options){
  let target=false;
- try{const url=new URL(typeof input==='string'?input:input.url,location.href);target=url.origin===new URL(MILLIONER_API).origin&&url.pathname==='/api/warehouse-state'}catch{}
+ try{const url=new URL(typeof input==='string'?input:input.url,location.href);target=url.origin===new URL(MILLIONER_API).origin&&url.pathname===new URL(MILLIONER_API+'/api/warehouse-state').pathname}catch{}
  if(!target)return previousFetch(input,options);
  const started=Date.now(),method=String(options?.method||input?.method||'GET').toUpperCase();
  const controller=new AbortController(),signal=options?.signal||input?.signal;

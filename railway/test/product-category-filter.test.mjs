@@ -133,3 +133,8 @@ test('missing links for selected store invert only its links and preserve indepe
  f.ctx.setProductStore('all');assert.equal(f.element('productStoreLinkMode').hidden,true);
  assert.doesNotMatch(extract('setProductStoreUnlinked'),/\bsave\(|fetch\(|invalidateProductRenderStats/);
 });
+
+test('Inferno product filters expose only its own WB links and unlinked products',()=>{
+ const f=fixture();f.ctx.WB3_ONLY=true;f.render();
+ const tabs=f.element('productStoreTabs').innerHTML;assert.match(tabs,/Инферно/);assert.doesNotMatch(tabs,/Kaspi|WB 1|WB 2|Ozon/);
+});

@@ -133,7 +133,7 @@ test('static assets can revalidate while API responses stay no-store',()=>{
   assert.match(server,/frontendRevalidateHeaders = \{ 'Cache-Control': 'public, max-age=0, must-revalidate' \}/);
   assert.match(server,/app\.use\('\/api', noStore\)/);
   assert.doesNotMatch(server,/app\.use\(noStore\)/);
-  const staticAt=server.indexOf("app.get(['/', '/index.html']");
+  const staticAt=server.indexOf("app.get(['/','/index.html',");
   const apiNoStoreAt=server.indexOf("app.use('/api', noStore)");
   assert.ok(staticAt>0&&apiNoStoreAt>staticAt);
 });
