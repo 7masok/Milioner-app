@@ -1,3 +1,6 @@
+import { withWarehouseScopePage, createInfernoProxy, infernoSession } from './warehouse-scope.js';
+import { startWb3OrderHistoryLoop, syncWb3OrderHistory } from './wb3-orders.js';
+import { startWb3InventoryLoop, syncWb3Inventory, readWb3Inventory } from './wb3-inventory.js';
 import {withOzonProtectionPage} from './ozon-protection/page.js';
 import {ozonProtectionRouter} from './ozon-protection/router.js';
 import {startOzonProtectionLoop} from './ozon-protection/service.js';
@@ -34,7 +37,7 @@ import { hydrateWarehouseProducts } from './warehouse-products.js';
 import { startKaspiSyncLoop, syncKaspiOrders } from './kaspi-sync.js';
 import { startWbSyncLoop, syncWbOrders } from './wb-sync.js';
 import { syncWbStockMarket, validateWbStockLinks } from './wb-stock-sync.js';
-import { authConfig, login, requireAppSession, webauthnLoginOptions, webauthnLoginVerify, webauthnRegisterOptions, webauthnRegisterVerify, listWebauthnCredentials, deleteWebauthnCredential } from './auth.js';
+import { authConfig, login, requireConfiguredSession, requireAppSession, webauthnLoginOptions, webauthnLoginVerify, webauthnRegisterOptions, webauthnRegisterVerify, listWebauthnCredentials, deleteWebauthnCredential } from './auth.js';
 import { configuredWbConnectionIds, connectionsRouter } from './connections.js';
 import { wbVariantsRouter } from './wb-variants.js';
 import { wbReturnsRouter } from './wb-returns.js';
@@ -52,6 +55,10 @@ assertRuntimeConfig();
 const app = express();
 const repositoryRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const frontendFiles = Object.freeze([
+  'warehouse-scope-bootstrap.js',
+  'warehouse-scope-v1.js',
+  'wb3-profile.js',
+  'wb3-orders-v1.js',
   'product-history-v1.js',
   'manifest.webmanifest',
   'sw.js',
@@ -120,13 +127,21 @@ app.use(helmet({
   }
 }));
 app.use(exactCors);
+// Stream the request to the isolated service before JSON body consumption.
+if (config.infernoApiUrl && config.storeProfile !== 'WB3') {
+  const proxy = createInfernoProxy(config.infernoApiUrl);
+  app.use('/inferno', (req, res, next) => {
+    if (req.path === '/health' || req.path === '/api' || req.path.startsWith('/api/')) return requireTrustedOrigin(req, res, () => proxy(req, res, next));
+    next();
+  });
+}
 app.use(express.json({ limit: '7mb', strict: true }));
 
 const frontendRevalidateHeaders = { 'Cache-Control': 'public, max-age=0, must-revalidate' };
-app.get(['/', '/index.html'], async (_req,res,next)=>{
-  try{const page=withProductHistoryPage(withOzonProtectionPage(withFboPage(withGrowthAnalyticsPage(await readFile(path.join(repositoryRoot,'index.html'),'utf8')))));res.set(frontendRevalidateHeaders).type('html').send(page)}catch(error){next(error)}
+app.get(['/','/index.html', ...(config.infernoApiUrl && config.storeProfile !== 'WB3' ? ['/inferno/', '/inferno/index.html'] : [])], async (req,res,next)=>{
+  try{const page=withProductHistoryPage(withOzonProtectionPage(withFboPage(withGrowthAnalyticsPage(await readFile(path.join(repositoryRoot,'index.html'),'utf8')))));res.set(frontendRevalidateHeaders).type('html').send(withWarehouseScopePage(page,{inferno:config.storeProfile==='WB3'||req.path.startsWith('/inferno/'),enabled:Boolean(config.infernoApiUrl)||config.storeProfile==='WB3'}))}catch(error){next(error)}
 });
-app.get('/ozon-fbo-v1.js', async (_req,res,next)=>{
+app.get(['/ozon-fbo-v1.js', '/inferno/ozon-fbo-v1.js'], async (_req,res,next)=>{
   try{
     const [rawBase,supplies]=await Promise.all([
       readFile(path.join(repositoryRoot,'ozon-fbo-v1.js'),'utf8'),
@@ -139,8 +154,10 @@ app.get('/ozon-fbo-v1.js', async (_req,res,next)=>{
 });
 for (const file of frontendFiles) {
   app.get(`/${file}`, (_req, res) => res.sendFile(path.join(repositoryRoot, file), { headers: frontendRevalidateHeaders }));
+  app.get(`/inferno/${file}`, (_req, res) => res.sendFile(path.join(repositoryRoot, file), { headers: frontendRevalidateHeaders }));
 }
 
+app.get('/inferno', (_req,res)=>res.redirect(308,'/inferno/'));
 app.use('/api', noStore);
 app.get('/api/auth/config', requireTrustedOrigin, authConfig);
 app.post('/api/auth/login', requireTrustedOrigin, login);
@@ -152,6 +169,23 @@ app.post('/api/auth/webauthn/login-verify', requireTrustedOrigin, webauthnLoginV
 // Device tokens are scoped to the planner; warehouse routes keep their session gate.
 app.use('/api/ozon-planner', plannerRouter);
 app.use('/api', requireAppSession);
+app.post('/api/inferno/session', requireTrustedOrigin, requireConfiguredSession, (req,res) => {
+  if (!config.infernoApiUrl || !config.infernoAdminToken || config.storeProfile === 'WB3') return res.status(503).json({ok:false,error:'inferno-not-configured'});
+  const token = String(req.headers.authorization || '').replace(/^Bearer\s+/i, '');
+  res.json({ok:true,...infernoSession(token, config.infernoAdminToken)});
+});
+app.post('/api/wb3/sync', requireTrustedOrigin, async (_req,res,next) => {
+  if(config.storeProfile!=='WB3') return res.sendStatus(404);
+  try {
+    const results=await Promise.allSettled([syncWbOrders('WB'),syncWb3OrderHistory(),syncWb3Inventory()]);
+    const value=r=>r.status==='fulfilled'?r.value:{ok:false,error:String(r.reason?.message||r.reason)};
+    res.json({ok:true,fbs:value(results[0]),history:value(results[1]),inventory:value(results[2])});
+  } catch(error) { next(error); }
+});
+app.get('/api/wb3/inventory', requireTrustedOrigin, async (_req,res,next) => {
+  if(config.storeProfile!=='WB3') return res.sendStatus(404);
+  try { res.json(await readWb3Inventory()); } catch(error) { next(error); }
+});
 app.use('/api/fbo-dashboard', fboDashboardRouter);
 app.use('/api/fbo-warehouse', fboWarehouseRouter);
 app.use('/api/product-history', productHistoryRouter);
@@ -386,26 +420,30 @@ async function verifyBackupRestoreReadiness() {
   }
 }
 
-const server = app.listen(config.port, '0.0.0.0', () => {
+const server = app.listen(config.port, '::', () => {
   console.log(`millioner Railway API listening on ${config.port}`);
   setTimeout(()=>verifyBackupRestoreReadiness(),4000).unref();
   setTimeout(()=>logWbHourlyOrders(30),7000).unref();
+  if(config.storeProfile!=='WB3') {
   startOzonSyncLoop();
   resumeOzonPerformanceRetries().catch(()=>console.warn('Ozon Performance: не удалось восстановить очередь повторов'));
   startPlannerLoop();
   startKaspiSyncLoop();
-  startWbSyncLoop();
-  startWbPriceSyncLoop();
   startOzonProtectionLoop();
-  startWbDeliveryTariffLoop();
-  startWbOrderHistoryLoop();
   startKaspiHistoryLoop();
+  }
+  startWbSyncLoop();
+  startWb3OrderHistoryLoop();
+  startWb3InventoryLoop();
+  startWbPriceSyncLoop();
+  startWbDeliveryTariffLoop();
+  if(config.storeProfile!=='WB3')startWbOrderHistoryLoop();
   startWbPromotionLoop();
   startWbAdsLimitLoop();
   let checkingLinks=false;
   const checkLinks=async()=>{
     if(checkingLinks)return;checkingLinks=true;
-    try{for(const market of ['WB','WB2']){
+    try{for(const market of await configuredWbConnectionIds()){
       try{const result=await validateWbStockLinks(market);if(Number(result?.detached||0)>0)console.info('WB link validation',JSON.stringify(result));}
       catch(error){console.warn('WB link validation failed',market,String(error.message||error));}
     }}finally{checkingLinks=false;}

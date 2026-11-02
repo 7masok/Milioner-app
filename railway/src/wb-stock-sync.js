@@ -145,6 +145,7 @@ async function writeStocks(token,warehouse,items){
 }
 export function wbStockPublishReady(product,market){return product?.wbSizeStockPending?.[market]!==true}
 export async function syncWbStockMarket(market,{write=true}={}){
+  if(config.storeProfile==='WB3'&&write&&process.env.WB3_STOCK_PUBLISH_ENABLED!=='true')return {ok:true,market:'WB',skipped:true,reason:'initial-inventory-required'};
   const id=String(market||'').toUpperCase()==='WB1'?'WB':String(market||'').toUpperCase();
   if(!/^WB(?:[2-9]\d*|1\d+)?$/.test(id))throw new Error('Unsupported WB market');
   const token=await credentialFor(id,id==='WB2'?config.wbToken2:config.wbToken);
