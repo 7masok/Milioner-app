@@ -85,6 +85,7 @@ pushWarehouseToServer=async function(){
     warehouseRemoteUpdatedAt=Number(data.updatedAt||Date.now());
     warehouseLastCloudSnapshot=sentSnap;
     warehouseLastSyncedText=sentText;
+    window.saveWarehouseConfirmedCache?.(sentSnap,warehouseRemoteRevision,warehouseRemoteUpdatedAt);
     const currentText=JSON.stringify(normalizeWarehouseSnapshot(warehouseSnapshot()));
     if(currentText===sentText){
       clearWarehouseDirty();

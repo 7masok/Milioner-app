@@ -37,9 +37,10 @@ function writeFastCache(source,revision,updatedAt){
   try{
     const snap=serverSnapshot(source);
     if(!snap.products.length)return;
-    localStorage.setItem(FAST_CACHE_KEY,JSON.stringify({state:snap,revision:Number(revision||0),updatedAt:Number(updatedAt||Date.now())}));
+    localStorage.setItem(FAST_CACHE_KEY,JSON.stringify({state:snap,revision:Number(revision||0),updatedAt:Number(updatedAt||Date.now()),verifiedAt:Date.now()}));
   }catch{}
 }
+window.saveWarehouseConfirmedCache=writeFastCache;
 function setReadOnlyCache(on){
   showingReadOnlyCache=Boolean(on);
   document.documentElement?.toggleAttribute('data-warehouse-readonly-cache',showingReadOnlyCache);
@@ -374,7 +375,7 @@ function health(name){
   if(failed)return {cls:'bad',label:'ошибка',last,latest};if(age<=10*60*1000)return {cls:'',label:'есть связь',last,latest};if(age<=30*60*1000)return {cls:'warn',label:'задержка',last,latest};if(last)return {cls:'bad',label:'нет свежей связи',last,latest};return {cls:'off',label:'нет данных',last,latest};
 }
 function paint(name,dotId,timeId){const h=health(name),dot=document.getElementById(dotId),time=document.getElementById(timeId);if(dot){dot.className='dot'+(h.cls?' '+h.cls:'');dot.title=(name==='WB'?'WB1':name)+': '+h.label}if(time)time.textContent=fmt(h.last);return h}
-function compactCloudText(){const el=document.getElementById('cloudStatus');if(!el)return;const raw=String(el.textContent||'').trim().toLowerCase();let short='';if(/сохраня|отправля/.test(raw))short='сохранение…';else if(/сохранено|синхронизировано/.test(raw))short='сохранено ✓';else if(/подключ|обновлено|сервер подключён/.test(raw))short='онлайн';else if(/последние данные/.test(raw))short='кэш';else if(/только просмотр/.test(raw))short='только просмотр';else if(/загружа|проверя/.test(raw))short='…';else if(/ошиб|нет связи|недоступ/.test(raw))short='ошибка';if(short&&el.textContent!==short)el.textContent=short}
+function compactCloudText(){if(window.warehouseConnection?.paintHeader())return;const el=document.getElementById('cloudStatus');if(!el)return;const raw=String(el.textContent||'').trim().toLowerCase();let short='';if(/сохраня|отправля/.test(raw))short='сохранение…';else if(/сохранено|синхронизировано/.test(raw))short='сохранено ✓';else if(/подключ|обновлено|сервер подключён/.test(raw))short='онлайн';else if(/последние данные/.test(raw))short='кэш';else if(/только просмотр/.test(raw))short='только просмотр';else if(/загружа|проверя/.test(raw))short='…';else if(/ошиб|нет связи|недоступ/.test(raw))short='ошибка';if(short&&el.textContent!==short)el.textContent=short}
 function refresh(){if(!buildCompactStatus())return;paint('Kaspi','dotKaspi','lastSync');paint('WB','dotWB1','wb1Sync');paint('WB2','dotWB2','wb2Sync');if(typeof window.ozonFboPaintStatus==='function')window.ozonFboPaintStatus();else if(typeof window.ozonFboRefreshStatus!=='function')paint('Ozon','dotOzonTop','ozonTopStatus');compactCloudText()}
 window.refreshCompactMarketStatus=refresh;
 async function details(name){
