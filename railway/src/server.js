@@ -55,6 +55,8 @@ const frontendFiles = Object.freeze([
   'product-history-v1.js',
   'manifest.webmanifest',
   'sw.js',
+  'offline.html',
+  'connection-status-v1.js',
   'app-icon.svg',
   'ozon-fbo-v1.js',
   'business-dashboard-v1.js',

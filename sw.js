@@ -1,9 +1,20 @@
-self.addEventListener('install',event=>event.waitUntil(self.skipWaiting()));
+const OFFLINE_CACHE='sklad-connection-screen-v1';
+self.addEventListener('install',event=>event.waitUntil((async()=>{const cache=await caches.open(OFFLINE_CACHE);await cache.add(new Request('/offline.html',{cache:'reload'}));await self.skipWaiting()})()));
 self.addEventListener('activate',event=>event.waitUntil(self.clients.claim()));
-// Retire the bank-statement share target for previously installed warehouse PWAs.
+// Business data, authenticated responses and access tokens are never cached here.
 self.addEventListener('fetch',event=>{
  const url=new URL(event.request.url);
+ if(url.origin!==self.location.origin)return;
  if(event.request.method==='POST'&&url.pathname==='/share/finance-statement'){
-  event.respondWith(Promise.resolve(Response.redirect(new URL('/',self.location.origin).href,303)));
+  event.respondWith(Promise.resolve(Response.redirect(new URL('/',self.location.origin).href,303)));return;
  }
+ if(event.request.method!=='GET'||event.request.mode!=='navigate'||!['/','/index.html'].includes(url.pathname))return;
+ event.respondWith((async()=>{
+  const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),10000);let code='NETWORK';
+  try{const response=await fetch(event.request,{cache:'no-store',signal:controller.signal});if(response.ok||response.status<500)return response;code='HTTP '+response.status}
+  catch(error){if(error.name==='AbortError')code='TIMEOUT'}finally{clearTimeout(timer)}
+  const cached=await (await caches.open(OFFLINE_CACHE)).match('/offline.html');
+  const html=cached?await cached.text():'<!doctype html><meta name="viewport" content="width=device-width"><title>Склад · нет связи</title><h1>Склад временно недоступен</h1><p>Обновите страницу, чтобы проверить связь.</p>';
+  return new Response(html.replace('__CONNECTION_CODE__',code),{status:503,headers:{'Content-Type':'text/html; charset=utf-8','Cache-Control':'no-store'}});
+ })());
 });
