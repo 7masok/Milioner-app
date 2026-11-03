@@ -129,3 +129,19 @@ test('All preserves unknown profit, weighted coverage and oldest input time thro
  const {composeBusinessDays}=await import('../src/business-dashboard-cache.js'),begin=today-10*DAY,rows=markets.map((m,i)=>storeRow(m,begin,(i+1)*10));rows[0].payload.summary.profit=null;rows[1].payload.orders.coveredAmount=0;rows[1].payload.orders.coverage=0;rows[2].generated_at=begin+DAY-1;rows[2].source_revision='old';
  const result=composeBusinessDays(rows,begin,begin+DAY,{},revision())[0];assert.equal(result.day.summary.profit,null);assert.equal(result.day.netProfit,null);assert.equal(result.day.orders.coverage,.4);assert.equal(result.generatedAt,begin+DAY-1);assert.equal(result.fresh,false);assert.equal(result.reusable,false);assert.equal(result.day.hourly.ozonHourlyComplete,false);
 });
+
+test('Kaspi coverage uses verified archive boundaries instead of the oldest isolated live cancellation',async()=>{
+ const {ordersRouter}=await import('../src/orders.js'),handler=ordersRouter.stack.find(x=>x.route?.path==='/orders'&&x.route.methods.get).route.stack[0].handle,old=pool.query;let out;
+ pool.query=async sql=>({rows:sql.startsWith('SELECT payload FROM kaspi_order_history_state')?[{payload:{coveredFrom:start+DAY,anchor:start+2*DAY,goal:start-DAY,complete:false}}]:sql.includes('MIN(creation_date)')?[{market:'Kaspi',from:start-DAY}]:[]});
+ try{await handler({query:{after:String(start),before:String(start+DAY),history:'1',limit:'15000'}},{json(x){out=x}},e=>{throw e})}finally{pool.query=old}
+ assert.equal(out.historyCoverage.find(x=>x.market==='Kaspi').from,start+DAY);
+});
+test('a repaired Kaspi day rejects older cached snapshots and preserves unaffected WB caches',async()=>{
+ const route=reportsRouter.stack.find(x=>x.route?.path==='/business-dashboard-cache'&&x.route.methods.get).route.stack.at(-1).handle,old=pool.query,at=Date.now();let out;
+ const history={coveredFrom:1,anchor:at,goal:1,complete:true,repairRevisions:[{from:start,to:start+DAY,at}]};
+ pool.query=async sql=>({rows:sql.startsWith('SELECT payload FROM kaspi_order_history_state')?[{payload:history}]:sql.startsWith('SELECT version')?[{version:BUSINESS_CACHE_VERSION,source_revision:revision(),payload:model(),generated_at:at-1}]:sql.includes(' AS warehouse,')?[marker]:[]});
+ try{
+  await route({query:{period:'day',start,market:'Kaspi'}},{json(x){out=x}},e=>{throw e});assert.equal(out.snapshot,null);assert.equal(out.stale,true);
+  await route({query:{period:'day',start,market:'WB'}},{json(x){out=x}},e=>{throw e});assert.ok(out.snapshot);
+ }finally{pool.query=old}
+});

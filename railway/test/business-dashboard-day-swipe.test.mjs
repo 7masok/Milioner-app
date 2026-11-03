@@ -25,7 +25,7 @@ function fixture(saved={},loader=null){
  }};
  const ctx={window,Date:Clock,Intl,Map,Set,console,state,financialSales:()=>sales,groupMarketplaceOrders:rows=>rows,marketplaceLifecycleStage:()=>'',MILLIONER_API:'https://fixture.invalid',apiJson:async url=>{requests.push({orderHistoryUrl:url});return {ok:true,orders:state.kaspiOrderFeed.map((row,i)=>({...row,entryId:String(i),orderId:String(i)}))}},fmt:n=>String(n)+' ₸',localStorage:{getItem:k=>storage.get(k),setItem:(k,v)=>storage.set(k,v)},document:{readyState:'loading',getElementById:id=>elements.get(id)||null,querySelectorAll:()=>[],addEventListener(){}},setTimeout() {}};
  vm.createContext(ctx);
- vm.runInContext(source.replace(/\}\)\(\);\s*$/, "window.testApi={businessDayBounds,businessSelectedDayOffset,businessWeekBounds,businessSelectedWeekOffset,businessMonthBounds,businessSelectedMonthOffset,businessBuildModel,businessInstallDaySwipe,businessModels,businessPaintTabs,businessRememberModel,businessModelMeta,businessModelFromDays,businessDays,businessAwait,businessSyncMarket,businessLoadWeekOrderHistory,businessEnsureUi};})();"),ctx);
+ vm.runInContext(source.replace(/\}\)\(\);\s*$/, "window.testApi={businessDayBounds,businessSelectedDayOffset,businessWeekBounds,businessSelectedWeekOffset,businessMonthBounds,businessSelectedMonthOffset,businessBuildModel,businessInstallDaySwipe,businessModels,businessPaintTabs,businessRememberModel,businessModelMeta,businessModelFromDays,businessDays,businessAwait,businessSyncMarket,businessLoadWeekOrderHistory,businessEnsureUi,businessOrderRepairAt,businessKaspiGap,setKaspiHistory:value=>{businessKaspiHistory=value}};})();"),ctx);
  const chart=element('businessChart');window.testApi.businessInstallDaySwipe();
  const touch=(x,y,id=1)=>({clientX:x,clientY:y,identifier:id});
  function event(type,touches,changedTouches=[]){let prevented=false;chart.listeners.get(type)({touches,changedTouches,cancelable:true,preventDefault(){prevented=true}});return prevented}
@@ -399,3 +399,12 @@ test('missing Kaspi history leaves known WB orders visible in All without claimi
 });
 
 test('the existing report store selector moves immediately before the graph',()=>{const f=fixture(),root=f.element('businessDashboard'),tabs=f.element('reportMarketTabs');let moved=null;root.before=element=>{moved=element;tabs.nextElementSibling=root};f.api.businessEnsureUi();assert.equal(moved,tabs);moved=null;f.api.businessEnsureUi();assert.equal(moved,null)});
+
+test('Kaspi recheck invalidates only affected closed days and suppresses a false monthly percentage',async()=>{
+ const f=sharedFixture();await f.window.setBusinessDashboardPeriod('month');await f.window.shiftBusinessDashboardMonth(-1);
+ const model=f.api.businessModelFromDays('month',-1),bounds=model.bounds;
+ f.api.setKaspiHistory({gaps:[{from:bounds.start,to:bounds.end}],repairRevisions:[{from:bounds.start,to:bounds.end,at:today+1}]});
+ assert.equal(f.api.businessKaspiGap(bounds),true);assert.equal(f.api.businessOrderRepairAt(bounds),today+1);assert.equal(f.api.businessOrderRepairAt({start:bounds.end,end:bounds.end+86400000}),0);
+ await f.window.renderBusinessDashboard();assert.match(f.element('businessValueMeta').textContent,/история Kaspi перепроверяется/);assert.doesNotMatch(f.element('businessYesterdayCompare').innerHTML,/%/);
+ f.api.setKaspiHistory({gaps:[],repairRevisions:[{from:bounds.start,to:bounds.end,at:today+1}]});assert.equal(f.api.businessKaspiGap(bounds),false);
+});

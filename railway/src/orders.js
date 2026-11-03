@@ -151,7 +151,7 @@ ordersRouter.get('/orders', asyncRoute(async (req, res) => {
   if(history&&historyCoverage){
     for(const state of [...history.states,kaspiHistory.state]){
       const live=historyCoverage.find(r=>r.market===state.market),from=Number(state.from)||0;
-      const merged={...state,from:from?Math.min(Number(live?.from)||from,from):Number(live?.from)||0};
+      const merged={...state,from:state.market==='Kaspi'?from:from?Math.min(Number(live?.from)||from,from):Number(live?.from)||0};
       if(live)Object.assign(live,merged);else historyCoverage.push(merged);
     }
     // Absent worker state is unknown, never a silent zero for a missing account.
