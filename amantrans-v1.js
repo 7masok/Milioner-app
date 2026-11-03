@@ -11,10 +11,16 @@
   const response=await fetch(MILLIONER_API+'/api/amantrans'+path,{method,cache:'no-store',headers:{'Content-Type':'application/json'},...(body?{body:JSON.stringify(body)}:{})});
   const data=await response.json();if(!response.ok||data.ok===false)throw Error(data.error||'Не удалось получить Aman Trans');return data;
  }
- function accept(data){snapshot=data;loaded=true;checkedAt=Date.now();const changed=amanApplyPurchaseStages();paint();if(changed)renderPurchases({listOnly:true});}
+ function accept(data){snapshot=data;loaded=true;checkedAt=Date.now();const linked=applyPurchaseLinks(),changed=amanApplyPurchaseStages();paint();if(linked||changed)renderPurchases({listOnly:true});}
  async function load(force=false){if(loading)return loading;if(!force&&loaded&&Date.now()-checkedAt<60000)return snapshot;loading=request('/state').then(data=>{accept(data);return data;}).catch(error=>{snapshot.lastError=error.message;paint();return snapshot;}).finally(()=>loading=null);return loading;}
  function rows(){return shipment?purchaseShipmentRows(enc(shipment)):[];}
  function order(id){return snapshot.orders.find(x=>x.id===String(id));}
+ function applyPurchaseLinks(){
+  if(!snapshot.connected||typeof warehouseEditReady!=='function'||!warehouseEditReady())return false;let changed=false;
+  for(const row of state.purchases||[]){const key=String(row.shipmentId||row.id||''),link=snapshot.purchaseLinks?.[key];if(!link||!row.amantransAutoRequestedAt||row.amantransAccountId&&String(row.amantransAccountId)!==snapshot.accountId||row.amantransOrderId&&String(row.amantransOrderId)!==String(link.id))continue;
+   if(String(row.amantransOrderId||'')!==String(link.id)||row.amantransAccountId!==snapshot.accountId||row.amantransSyncedTrack!==link.track){row.amantransOrderId=String(link.id);row.amantransAccountId=snapshot.accountId;row.amantransSyncedTrack=link.track;changed=true;}}
+  if(changed)save();return changed;
+ }
  const carrierStages=[['NEW','Новый'],['CHINA','На складе в Китае'],['ON_ROAD_CHINA','В пути из Китая'],['ON_BORDER','На границе'],['SORTING','Сортировка'],['ON_ROAD','В пути'],['SUB_FILIAL','В филиале']];
  function carrierStageOptions(){const options=new Map(carrierStages);for(const row of snapshot.orders||[])if(/^[A-Z_]{1,40}$/.test(row.status)&&row.statusLabel)options.set(row.status,row.statusLabel);return options;}
  window.amanStageBindingField=function(stage,index){
@@ -50,40 +56,45 @@
   }
   if(changed)save();return changed;
  };
- function purchaseTrack(items){const first=items[0]||{},batch=String(first.batch||'').trim();return first.amantransTrack||(/^[a-zA-Z0-9_-]{6,100}$/.test(batch)?batch:'');}
- function purchaseStamp(items){return JSON.stringify(items.map(x=>[x.id,x.productId,x.qty,x.buyTotal,x.unitCost,x.amantransTrack,x.batch]));}
- window.amanPurchaseTrackField=items=>'<div class="field"><label>Трек Aman Trans</label><input id="amanPurchaseTrack" value="'+esc(purchaseTrack(items))+'" autocomplete="off" placeholder="Трек-код продавца"></div>';
- window.amanPreparePurchase=function(items,previousStage,track){
-  if(track!==undefined)for(const row of items)row.amantransTrack=String(track).trim();
+ function purchaseTrack(items){const first=items[0]||{};return String(first.batch||first.amantransTrack||'').trim();}
+ window.amanPurchaseTrackField=()=>'';
+ window.amanPreparePurchase=function(items,previousStage,track,previousTrack){
+  if(track!==undefined)for(const row of items){row.amantransTrack=String(track).trim();row.batch=String(track).trim();}
   if(!items.length)return;const current=purchaseWorkflowStage(items[0]),stage=typeof purchaseWorkflow==='function'?purchaseWorkflow().find(x=>x.id===current):null,paid=current==='paid'||stage?.amantransStatus==='NEW';
-  if(paid&&previousStage!==current&&!items.some(x=>x.amantransOrderId))for(const row of items)row.amantransAutoRequestedAt=Date.now();
+  const payment=paid&&previousStage!==current&&!items.some(x=>x.amantransOrderId);
+  if(payment){const temporary='TMP-'+String(items[0].shipmentId||items[0].id).replace(/[^a-zA-Z0-9_-]/g,'-').slice(-90);for(const row of items){row.amantransAutoRequestedAt=Date.now();if(!String(row.batch||row.amantransTrack||'').trim()||/^Китай \d/.test(row.batch||''))row.batch=temporary;}}
+  const desired=purchaseTrack(items),edited=track!==undefined||previousTrack!==undefined&&desired!==String(previousTrack).trim();if((payment||edited)&&items.some(x=>x.amantransAutoRequestedAt||x.amantransOrderId)&&items.some(x=>x.amantransPendingTrack!==desired)){const operationId=crypto.randomUUID();for(const row of items){row.amantransPendingTrack=desired;row.amantransTrackOperationId=operationId;}}
  };
  window.amanSubmitPurchase=async function(key){
   key=decodeURIComponent(String(key));const items=purchaseShipmentRows(enc(key));
-  if(!items.length||!items.some(x=>x.amantransAutoRequestedAt)||items.some(x=>x.amantransOrderId)||sending.has(key))return;
+  if(!items.length||!items.some(x=>x.amantransAutoRequestedAt||x.amantransOrderId)||sending.has(key))return;
+  const firstRow=items[0],linked=items.some(x=>x.amantransOrderId),track=purchaseTrack(items);
+  if(linked&&!items.some(x=>x.amantransPendingTrack))return;
+  if(linked&&items.every(x=>x.amantransSyncedTrack===track))return;
   if(!requireWarehouseEditReady()){sendErrors.set(key,'Дождись загрузки склада и проверь отправку');paint();return;}
-  const track=purchaseTrack(items);if(!track){sendErrors.set(key,'Укажи трек-код для отправки в Aman Trans');paint();return;}
-  const stamp=purchaseStamp(items);sending.add(key);sendErrors.delete(key);paint();
+  if(!track){sendErrors.set(key,'Укажи временный трек в названии закупки');paint();return;}
+  const operationId=firstRow.amantransTrackOperationId||crypto.randomUUID();if(!firstRow.amantransTrackOperationId){for(const row of items){row.amantransTrackOperationId=operationId;row.amantransPendingTrack=track;}save();}
+  sending.add(key);sendErrors.delete(key);paint();let successful=false;
   try{
    const first=items.slice().sort((a,b)=>productNameById(a.productId,'').localeCompare(productNameById(b.productId,''),'ru',{numeric:true,sensitivity:'base'}))[0];
-   const result=await request('/purchases/register','POST',{purchaseKey:key,fields:{name:productNameById(first.productId,''),track,amount:items.reduce((n,x)=>n+Number(x.qty||0),0),priceUsd:Math.round(items.reduce((n,x)=>n+(Number(x.buyTotal)||Number(x.unitCost||0)*Number(x.qty||0)),0)*100)/100,shippingMethod:'Avto'}});
+   const result=await request('/purchases/register','POST',{purchaseKey:key,...(linked?{orderId:firstRow.amantransOrderId,accountId:firstRow.amantransAccountId,previousTrack:firstRow.amantransSyncedTrack||order(firstRow.amantransOrderId)?.track||''}:{}),editOperationId:operationId,fields:{name:productNameById(first.productId,''),track,amount:items.reduce((n,x)=>n+Number(x.qty||0),0),priceUsd:Math.round(items.reduce((n,x)=>n+(Number(x.buyTotal)||Number(x.unitCost||0)*Number(x.qty||0)),0)*100)/100,shippingMethod:'Avto'}});
    accept(result);
-   if(!result.createdOrderId)throw Error('Отправлено в Aman Trans. Обнови доставку и свяжи запись с закупкой; повторная отправка не создаст дубль.');
+   if(!result.createdOrderId)throw Error('Проверяем создание в Aman Trans. Связь восстановится автоматически, повторной записи не будет.');
    const current=purchaseShipmentRows(enc(key));
-   if(purchaseStamp(current)!==stamp)throw Error('Отправлено в Aman Trans, но закупка изменилась. Проверь доставку перед привязкой.');
    if(!requireWarehouseEditReady())throw Error('Отправлено в Aman Trans. Дождись связи со складом и нажми «Проверить отправку».');
-   for(const row of current){row.amantransOrderId=result.createdOrderId;row.amantransAccountId=result.accountId;}save();
-  }catch(error){sendErrors.set(key,error.message);}finally{sending.delete(key);paint();}
+   for(const row of current){if(row.amantransAccountId&&row.amantransAccountId!==result.accountId)throw Error('Аккаунт закупки изменился');row.amantransOrderId=result.createdOrderId;row.amantransAccountId=result.accountId;row.amantransSyncedTrack=result.syncedTrack||track;}save();successful=true;
+   if(result.refreshNeeded&&!linked){try{accept(await request('/sync','POST'));}catch{}}
+  }catch(error){sendErrors.set(key,error.message);}finally{sending.delete(key);paint();if(successful&&purchaseTrack(purchaseShipmentRows(enc(key)))!==track)void amanSubmitPurchase(enc(key));}
  };
  window.amanRetryPurchase=key=>amanSubmitPurchase(key);
  function connectedCard(){return '<b>Aman Trans</b><div class="muted">'+(loaded?snapshot.connected?'Подключён '+esc(snapshot.phoneHint||''):'Не подключён':'Доставки из Китая')+'</div><button type="button" class="btn full" onclick="openAmanTrans()">'+(snapshot.connected?'Отправления и доставка':'Подключить Aman Trans')+'</button><button type="button" class="btn full" onclick="openPurchaseWorkflowEditor()">Привязать этапы</button>';}
- function install(){for(const [id,target]of [['amanSettings','settings'],['amanPurchases','purchases']]){if(document.getElementById(id))continue;const root=document.getElementById(target);if(!root)continue;const box=document.createElement('div');box.id=id;box.className='item';root.append(box);}paint();}
- function paint(){for(const el of document.querySelectorAll('[data-aman-shipment]')){const key=decodeURIComponent(el.dataset.amanShipment),items=typeof state!=='undefined'?(state.purchases||[]).filter(x=>String(x.shipmentId||x.id||'')===key):[];el.outerHTML=amanShipmentHtml(key,items);}for(const id of ['amanSettings','amanPurchases']){const box=document.getElementById(id);if(box)box.innerHTML=connectedCard();}}
+ function install(){document.getElementById('amanPurchases')?.remove?.();if(!document.getElementById('amanSettings')){const root=document.getElementById('settings');if(root){const box=document.createElement('div');box.id='amanSettings';box.className='item';root.append(box);}}paint();}
+ function paint(){for(const el of document.querySelectorAll('[data-aman-shipment]')){const key=decodeURIComponent(el.dataset.amanShipment),items=typeof state!=='undefined'?(state.purchases||[]).filter(x=>String(x.shipmentId||x.id||'')===key):[];el.outerHTML=amanShipmentHtml(key,items);}const box=document.getElementById('amanSettings');if(box)box.innerHTML=connectedCard();}
  window.amanShipmentHtml=function(key,items){
   const ids=[...new Set(items.map(x=>x.amantransOrderId).filter(Boolean).map(String))],accounts=[...new Set(items.map(x=>x.amantransAccountId).filter(Boolean).map(String))];
   const row=ids.length===1&&accounts.length===1&&accounts[0]===snapshot.accountId?order(ids[0]):null;
-  const requested=items.some(x=>x.amantransAutoRequestedAt),error=sendErrors.get(key),label=row?row.statusLabel+(row.weight==null?'':' · '+number(row.weight)+' кг')+(row.totalKzt==null?'':' · '+money(row.totalKzt))+(snapshot.lastError?' · нет обновления':''):ids.length?'Связь требует проверки':sending.has(key)?'Отправляю закупку…':requested?(error||'Отправка требует проверки'):'Привязать отправление';
-  return '<div class="aman-shipment" data-aman-shipment="'+enc(key)+'"><div class="muted">Aman Trans · '+esc(label)+'</div>'+(requested&&!ids.length&&!sending.has(key)?'<button type="button" class="btn full" onclick="event.stopPropagation();amanRetryPurchase(\''+enc(key)+'\')">Проверить отправку</button>':'')+'<button type="button" class="btn full" onclick="event.stopPropagation();openAmanTrans(\''+enc(key)+'\')">'+(ids.length?'Открыть доставку':'Aman Trans')+'</button></div>';
+  const requested=items.some(x=>x.amantransAutoRequestedAt),error=sendErrors.get(key),label=sending.has(key)?'Синхронизирую трек…':error?error:row?row.statusLabel+(row.weight==null?'':' · '+number(row.weight)+' кг')+(row.totalKzt==null?'':' · '+money(row.totalKzt))+(snapshot.lastError?' · нет обновления':''):ids.length?'Связь требует проверки':requested?'Ожидает отправки':'';
+  return '<div class="aman-shipment" data-aman-shipment="'+enc(key)+'">'+(label?'<div class="muted">Aman Trans · '+esc(label)+'</div>':'')+'</div>';
  };
  window.openAmanTrans=async function(key=''){shipment=decodeURIComponent(String(key));search='';page=1;showHidden=false;showSheet('<h3>Aman Trans</h3><div class="muted">Читаю сохранённые отправления…</div>');await load();if(!snapshot.connected)return openAmanConnect();renderManager();};
  function renderManager(){
@@ -101,7 +112,7 @@
  window.amanHideOrder=async(id,hidden,button)=>{button.disabled=true;try{accept(await request('/orders/'+id+'/visibility','POST',{hidden}));renderManager();}catch(error){alert(error.message);}finally{button.disabled=false;}};
  window.amanBack=()=>renderManager();
  window.amanLink=function(id){if(!requireWarehouseEditReady())return;const target=order(id),items=rows();if(!target||!items.length)return alert('Закупка или отправление изменились. Откройте их заново.');for(const row of items){row.amantransOrderId=id;row.amantransAccountId=snapshot.accountId;}save();renderPurchases({listOnly:true});renderManager();};
- window.amanUnlink=function(){if(!requireWarehouseEditReady())return;for(const row of rows()){delete row.amantransOrderId;delete row.amantransAccountId;}save();renderPurchases({listOnly:true});renderManager();};
+ window.amanUnlink=function(){if(!requireWarehouseEditReady())return;for(const row of rows()){delete row.amantransOrderId;delete row.amantransAccountId;delete row.amantransAutoRequestedAt;}save();renderPurchases({listOnly:true});renderManager();};
  window.amanEditOrder=function(id=''){
   const original=id?order(id):null;if(id&&!original)return alert('Обновите список Aman Trans');
   const items=rows(),name=items.map(x=>productNameById(x.productId,'')).filter(Boolean).join(', ').slice(0,200),fields=original?{name:original.name,track:original.track,priceUsd:original.priceUsd,amount:original.amount}:{name,track:'',priceUsd:'',amount:items.reduce((sum,x)=>sum+Number(x.qty||0),0)||1,shippingMethod:'Avto'};
@@ -116,5 +127,6 @@
  window.amanHistory=async id=>{showSheet('<h3>История Aman Trans</h3><div id="amanHistory">Загружаю…</div><button class="btn full" onclick="amanBack()">Назад</button>');try{const data=await request('/orders/'+id+'/history'),box=document.getElementById('amanHistory');if(box){const seen=new Set();box.innerHTML=data.history.filter(x=>{const key=x.at+'|'+x.status;if(seen.has(key))return false;seen.add(key);return true;}).map(x=>'<div class="item"><b>'+esc(x.status)+'</b><div class="muted">'+when(x.at)+'</div></div>').join('')||'История пока отсутствует';}}catch(error){const box=document.getElementById('amanHistory');if(box)box.textContent=error.message;}};
  const render=renderPurchases;renderPurchases=function(...args){amanApplyPurchaseStages();const result=render(...args);void load();return result;};
  const settings=renderStoreSettings;renderStoreSettings=function(...args){const result=settings(...args);paint();void load();return result;};
- const start=startAppRuntime;startAppRuntime=function(...args){const result=start(...args);install();const timer=setInterval(()=>{if(document.querySelector('#purchases.view.active,#settings.view.active'))void load(true);},60000);return result;};
+ function resumePending(){if(typeof warehouseEditReady==='function'&&!warehouseEditReady())return;const keys=new Set((state.purchases||[]).filter(x=>!x.amantransOrderId&&x.amantransAutoRequestedAt||x.amantransOrderId&&x.amantransPendingTrack).map(x=>String(x.shipmentId||x.id||'')));for(const key of keys)if(purchaseShipmentRows(enc(key)).some(x=>x.amantransSyncedTrack!==purchaseTrack(purchaseShipmentRows(enc(key)))))void amanSubmitPurchase(enc(key));}
+ const start=startAppRuntime;startAppRuntime=function(...args){const result=start(...args);install();const timer=setInterval(()=>{if(document.querySelector('#purchases.view.active,#settings.view.active'))void load(true).then(resumePending);},60000);return result;};
 })();
