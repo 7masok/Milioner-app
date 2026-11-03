@@ -4,7 +4,7 @@ import {amanIdentity,amanOrder,amanEdit,createAmanService,amanRouter} from '../s
 const token=(id=7,role='RoleClient')=>'header.'+Buffer.from(JSON.stringify({id,role,exp:4000000000})).toString('base64url')+'.fixture';
 const raw=(id,name='Кошелёк')=>({id,name,track_code:'SAME-TRACK',amount:1,price:3,weight:0.13,tariff_price:3.2,box_price:0.026,delivery_price:0.416,usd:455.1,created_at:'2026-10-17T08:00:00Z',status:{name:'SUB_FILIAL',name_ru:'В филиале'},customer:{id:7,phone:'not-returned'}});
 function fixture(){
- let stored=null,at=1000000,source=[raw(11),raw(12,'Ошибочная запись')],mode='',calls=[];
+ let stored=null,at=1000000,source=[raw(11),raw(12,'Ошибочная запись')],mode='',calls=[],nextId=15;
  const service=createAmanService({now:()=>at,read:async()=>structuredClone(stored),write:async data=>{stored=structuredClone(data)},fetchImpl:async(url,options)=>{
   const u=new URL(url),body=options.body?JSON.parse(options.body):null;calls.push({url:u,options,body});
   assert.equal(u.origin,'https://api.amantrans.com.kz');assert.equal(options.redirect,'error');assert.ok(options.signal);
@@ -14,12 +14,12 @@ function fixture(){
    if(mode==='offline')throw Error('offline');
    if(mode==='foreign')return Response.json({content:[{...raw(99),customer:{id:8}}],totalPages:1});
    if(mode==='partial'&&u.searchParams.get('page')==='1')throw Error('offline');
-   return Response.json({content:source,totalPages:mode==='partial'?2:1});
+   const search=u.searchParams.get('forSearch')||'';return Response.json({content:source.filter(x=>!search||x.track_code.includes(search)||x.name.includes(search)),totalPages:mode==='partial'?2:1});
   }
   if(u.pathname==='/amantrans/orders/create'){
-   if(mode==='write-timeout')throw Error('lost response');source.push({...raw(15),...body});return Response.json({id:15});
+   if(mode==='write-timeout')throw Error('lost response');const id=nextId++;source.push({...raw(id),...body});if(mode==='create-applied-timeout')throw Error('response lost after create');return Response.json(mode==='no-id'?{ok:true}:{id});
   }
-  if(u.pathname==='/amantrans/orders/update'){const row=source.find(x=>x.id===body.id);assert.ok(row);Object.assign(row,body);return Response.json(row);}
+  if(u.pathname==='/amantrans/orders/update'){const row=source.find(x=>x.id===body.id);assert.ok(row);if(mode==='edit-timeout')throw Error('response lost');Object.assign(row,body);if(mode==='edit-applied-timeout')throw Error('response lost after update');return Response.json(row);}
   if(u.pathname==='/amantrans/order_turkey/get-status-info')return Response.json([{update_date:'2026-10-28T19:01:00Z',status_to:{name_ru:'В филиале'},moderator_phone:'not-returned'}]);
   assert.fail(u.pathname);
  }});
@@ -99,13 +99,40 @@ test('paying registers a purchase with the same numeric total and a durable ship
  await f.service.registerPurchase(body);assert.equal(f.calls.filter(x=>x.url.pathname==='/amantrans/orders/create').length,1);
  const saved=structuredClone(f.stored),restarted=createAmanService({read:async()=>structuredClone(saved),write:async()=>{},fetchImpl:async()=>assert.fail('a linked receipt must survive restart')});
  assert.equal((await restarted.registerPurchase(body)).createdOrderId,'15');
- await assert.rejects(f.service.registerPurchase({...body,fields:{...body.fields,amount:141}}),/другими данными/);
+ await f.service.registerPurchase({...body,fields:{...body.fields,amount:141}});assert.equal(f.source.find(x=>x.id===15).amount,140,'later track sync never overwrites provider quantity');
  assert.equal(f.calls.filter(x=>x.url.pathname==='/amantrans/orders/create').length,1);
  assert.doesNotMatch(JSON.stringify(await f.service.get()),/purchaseKey|NEW-TRACK.*beforeIds|fixture-only/);
 });
-test('a paid purchase never chooses a duplicate track or repeats an uncertain carrier write',async()=>{
+test('a purchase owns a new exact record even with duplicate temporary tracks and never repeats an uncertain create',async()=>{
  const f=fixture();await f.connect();const body={purchaseKey:'inferno:po-paid-fixture',fields:{name:'Первый товар',track:'SAME-TRACK',priceUsd:10000,amount:2,shippingMethod:'Avto'}};
- await assert.rejects(f.service.registerPurchase(body),/Такой трек уже есть/);assert.equal(f.calls.filter(x=>x.url.pathname==='/amantrans/orders/create').length,0);
+ const result=await f.service.registerPurchase(body);assert.equal(result.createdOrderId,'15');assert.equal(f.source.find(x=>x.id===11).amount,1);assert.equal(f.source.find(x=>x.id===12).name,'Ошибочная запись');assert.equal(f.calls.filter(x=>x.url.pathname==='/amantrans/orders/create').length,1);body.purchaseKey='another-purchase';
  body.fields.track='NEW-TRACK';f.mode='write-timeout';await assert.rejects(f.service.registerPurchase(body));
- await assert.rejects(f.service.registerPurchase(body),/предыдущей отправки/);assert.equal(f.calls.filter(x=>x.url.pathname==='/amantrans/orders/create').length,1);
+ await assert.rejects(f.service.registerPurchase(body),/повторно не отправляется/);assert.equal(f.calls.filter(x=>x.url.pathname==='/amantrans/orders/create').length,2);
+});
+
+test('temporary to real tracking updates the same carrier ID and preserves live quantity, value and name',async()=>{
+ const f=fixture();await f.connect();const body={purchaseKey:'warehouse-purchase',fields:{name:'Первый товар',track:'TMP-WAREHOUSE',priceUsd:7480,amount:140,shippingMethod:'Avto'}};
+ const created=await f.service.registerPurchase(body);assert.equal(created.createdOrderId,'15');assert.equal(created.purchaseLinks['warehouse-purchase'].id,'15');
+ const provider=f.source.find(x=>x.id===15);provider.name='Подтверждённое название';provider.amount=139;provider.price=7000;
+ const edit={...body,orderId:'15',accountId:'7',previousTrack:'TMP-WAREHOUSE',editOperationId:'track-change-fixture-0001',fields:{...body.fields,track:'YT-REAL-TRACK'}};
+ const result=await f.service.registerPurchase(edit);assert.equal(result.createdOrderId,'15');assert.equal(result.syncedTrack,'YT-REAL-TRACK');assert.equal(result.purchaseLinks['warehouse-purchase'].track,'YT-REAL-TRACK');
+ const writes=f.calls.filter(x=>x.url.pathname==='/amantrans/orders/update');assert.equal(writes.length,1);assert.equal(writes[0].body.id,15);assert.equal(writes[0].body.track_code,'YT-REAL-TRACK');assert.equal(writes[0].body.name,'Подтверждённое название');assert.equal(writes[0].body.price,7000);assert.equal(writes[0].body.amount,139);assert.equal(writes[0].body.weight,undefined);
+ await f.service.registerPurchase(edit);assert.equal(f.calls.filter(x=>x.url.pathname==='/amantrans/orders/update').length,1);assert.equal(f.calls.filter(x=>x.url.pathname==='/amantrans/orders/create').length,1);
+ await assert.rejects(f.service.registerPurchase({...edit,accountId:'8'}),/другому аккаунту/);await assert.rejects(f.service.registerPurchase({...edit,orderId:'12'}),/ID отправления/);
+});
+test('a lost creation response recovers its own record and then changes its temporary track without a second create',async()=>{
+ const f=fixture();await f.connect();const body={purchaseKey:'lost-create-fixture',fields:{name:'Первый товар',track:'TMP-WAREHOUSE',priceUsd:7480,amount:140,shippingMethod:'Avto'}};
+ f.mode='create-applied-timeout';await assert.rejects(f.service.registerPurchase(body));f.mode='';
+ const result=await f.service.registerPurchase({...body,editOperationId:'lost-create-change-0001',fields:{...body.fields,track:'REAL-AFTER-LOST'}});assert.equal(result.createdOrderId,'15');assert.equal(result.syncedTrack,'REAL-AFTER-LOST');assert.equal(f.calls.filter(x=>x.url.pathname==='/amantrans/orders/create').length,1);assert.equal(f.calls.filter(x=>x.url.pathname==='/amantrans/orders/update').length,1);
+});
+test('a lost successful track update is verified by exact ID under the new track and never sent twice',async()=>{
+ const f=fixture();await f.connect();const body={purchaseKey:'lost-update-fixture',fields:{name:'Первый товар',track:'TMP-WAREHOUSE',priceUsd:7480,amount:140,shippingMethod:'Avto'}};
+ await f.service.registerPurchase(body);const edit={...body,editOperationId:'lost-update-change-0001',fields:{...body.fields,track:'REAL-AFTER-LOST'}};
+ f.mode='edit-applied-timeout';await assert.rejects(f.service.registerPurchase(edit));f.mode='';const result=await f.service.registerPurchase(edit);assert.equal(result.createdOrderId,'15');assert.equal(result.syncedTrack,'REAL-AFTER-LOST');assert.equal(f.calls.filter(x=>x.url.pathname==='/amantrans/orders/update').length,1);
+});
+test('a changed external track is not overwritten, and an uncertain unsuccessful update is not retried',async()=>{
+ const f=fixture();await f.connect();const body={purchaseKey:'conflict-fixture',fields:{name:'Первый товар',track:'TMP-WAREHOUSE',priceUsd:7480,amount:140,shippingMethod:'Avto'}};await f.service.registerPurchase(body);
+ const edit={...body,previousTrack:'TMP-WAREHOUSE',editOperationId:'conflict-change-0001',fields:{...body.fields,track:'MY-REAL-TRACK'}};
+ f.source.find(x=>x.id===15).track_code='EXTERNAL-TRACK';await f.service.sync();await assert.rejects(f.service.registerPurchase(edit),/временно не найдено/);assert.equal(f.calls.filter(x=>x.url.pathname==='/amantrans/orders/update').length,0);
+ f.source.find(x=>x.id===15).track_code='TMP-WAREHOUSE';f.mode='edit-timeout';await assert.rejects(f.service.registerPurchase(edit));f.mode='';await assert.rejects(f.service.registerPurchase(edit),/повторно не отправляется/);assert.equal(f.calls.filter(x=>x.url.pathname==='/amantrans/orders/update').length,1);
 });

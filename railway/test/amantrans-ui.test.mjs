@@ -55,11 +55,10 @@ test('only an explicit paid transition registers the first visible name, total q
  await f.ctx.amanSubmitPurchase('main');assert.equal(f.requests.filter(x=>x.options.method==='POST').length,1);
  assert.match(f.ctx.amanShipmentHtml('main',[row,other]),/В филиале/);
 });
-test('opening old paid purchases does not send anything and a missing track stays visible until supplied',async()=>{
+test('old purchases are not sent by opening; a new payment without a track gets its own temporary warehouse code',async()=>{
  const f=fixture(),row=f.ctx.state.purchases[0];f.ctx.purchaseWorkflowStage=x=>x.workflowStageId;row.workflowStageId='paid';
  f.ctx.amanPreparePurchase([row],'paid');await f.ctx.amanSubmitPurchase('main');assert.equal(f.requests.length,0);assert.equal(row.amantransAutoRequestedAt,undefined);
- f.ctx.amanPreparePurchase([row],'cart');await f.ctx.amanSubmitPurchase('main');assert.equal(f.requests.length,0);assert.match(f.ctx.amanShipmentHtml('main',[row]),/Укажи трек/);
- f.ctx.amanPreparePurchase([row],'paid','NEW-TRACK');f.view.createdOrderId='11';await f.ctx.amanSubmitPurchase('main');assert.equal(f.requests.length,1);
+ f.ctx.amanPreparePurchase([row],'cart');assert.equal(row.batch,'TMP-main');f.view.createdOrderId='11';await f.ctx.amanSubmitPurchase('main');assert.equal(f.requests.length,1);assert.equal(JSON.parse(f.requests[0].options.body).fields.track,row.batch);
 });
 test('an Inferno payment uses its own stable purchase key and never merges quantities with the main warehouse',async()=>{
  const f=fixture(),row=f.ctx.state.purchases[1];f.ctx.purchaseWorkflowStage=x=>x.workflowStageId;row.workflowStageId='paid';f.ctx.amanPreparePurchase([row],'cart','WB3-TRACK');f.view.createdOrderId='11';await f.ctx.amanSubmitPurchase('inferno%3Achild');
@@ -117,4 +116,24 @@ test('bindings are configurable in the actual stage editor and survive sanitize,
 });
 test('a custom payment stage bound to New keeps the automatic carrier registration trigger',()=>{
  const f=stagedFixture(),row=f.ctx.state.purchases[1];f.workflow[1].id='my_payment';row.workflowStageId='my_payment';f.ctx.amanPreparePurchase([row],'cart','WB3-NEW');assert.ok(row.amantransAutoRequestedAt);assert.equal(f.requests.length,0);
+});
+
+test('editing the existing purchase track field automatically updates its linked record, with no second track input or manual link button',async()=>{
+ const f=fixture(),row=f.ctx.state.purchases[0],html=readFileSync(new URL('../../index.html',import.meta.url),'utf8');let n=0;f.ctx.crypto.randomUUID=()=> 'track-operation-fixture-'+(++n);row.batch='TEMP-ORDER';row.workflowStageId='paid';f.ctx.purchaseWorkflowStage=x=>x.workflowStageId;
+ f.ctx.amanPreparePurchase([row],'cart');f.view.createdOrderId='11';await f.ctx.amanSubmitPurchase('main');assert.equal(row.amantransSyncedTrack,'TEMP-ORDER');
+ f.ctx.purchaseEditStagePlan=()=>null;f.ctx.applyPurchaseEditStage=()=>{};f.ctx.closeModal=()=>{};f.field('quickPurchaseBatch').value='REAL-TRACK';
+ vm.runInContext(html.split('\n').find(line=>line.startsWith('function saveQuickPurchaseBatch(')),f.ctx);f.ctx.saveQuickPurchaseBatch('main');await new Promise(setImmediate);
+ assert.equal(f.requests.filter(x=>x.url.endsWith('/purchases/register')).length,2);const body=JSON.parse(f.requests.at(-1).options.body);assert.equal(body.orderId,'11');assert.equal(body.accountId,'7');assert.equal(body.previousTrack,'TEMP-ORDER');assert.equal(body.fields.track,'REAL-TRACK');assert.equal(row.amantransOrderId,'11');assert.equal(row.amantransSyncedTrack,'REAL-TRACK');assert.equal(row.buyTotal,10000);assert.equal(row.qty,2);
+ assert.equal(f.ctx.amanPurchaseTrackField([row]),'');assert.doesNotMatch(f.ctx.amanShipmentHtml('main',[row]),/<button|Привязать отправление/);
+ f.ctx.saveQuickPurchaseBatch('main');await new Promise(setImmediate);assert.equal(f.requests.filter(x=>x.url.endsWith('/purchases/register')).length,2);
+});
+test('server purchase identity restores a lost local link without track guessing or manual actions',async()=>{
+ const f=fixture(),row=f.ctx.state.purchases[0];row.batch='TEMP-ORDER';row.amantransAutoRequestedAt=100;f.ctx.warehouseEditReady=()=>true;f.view.purchaseLinks={main:{id:'12',track:'TEMP-ORDER'},'inferno:child':{id:'11',track:'OTHER'}};
+ await f.ctx.openAmanTrans('main');assert.equal(row.amantransOrderId,'12');assert.equal(row.amantransSyncedTrack,'TEMP-ORDER');assert.equal(row.amantransAccountId,'7');assert.equal(f.ctx.state.purchases[1].amantransOrderId,undefined);assert.equal(f.requests.length,1);assert.equal(f.requests[0].options.method,'GET');
+});
+test('a track edited while creation is in flight is sent to the newly created ID after the first response',async()=>{
+ const f=fixture(),row=f.ctx.state.purchases[0];row.batch='TEMP-ORDER';row.workflowStageId='paid';f.ctx.purchaseWorkflowStage=x=>x.workflowStageId;f.ctx.amanPreparePurchase([row],'cart');f.view.createdOrderId='11';
+ let release;const gate=new Promise(resolve=>release=resolve),original=f.ctx.fetch;let first=true;f.ctx.fetch=async(...args)=>{if(first){first=false;await gate;}return original(...args);};
+ const creation=f.ctx.amanSubmitPurchase('main');row.batch='REAL-EARLY';f.ctx.amanPreparePurchase([row],'paid');await f.ctx.amanSubmitPurchase('main');release();await creation;await new Promise(setImmediate);
+ assert.equal(f.requests.length,2);const bodies=f.requests.map(x=>JSON.parse(x.options.body));assert.equal(bodies[0].fields.track,'TEMP-ORDER');assert.equal(bodies[1].orderId,'11');assert.equal(bodies[1].fields.track,'REAL-EARLY');assert.equal(row.amantransSyncedTrack,'REAL-EARLY');
 });
