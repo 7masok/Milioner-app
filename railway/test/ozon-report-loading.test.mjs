@@ -38,3 +38,11 @@ test('the selected Ozon advertising dates stay in Almaty even in a browser in an
   assert.match(requests[0],/from=2026-10-11&to=2026-10-11$/);
  }finally{if(old===undefined)delete process.env.TZ;else process.env.TZ=old}
 });
+
+
+test('an Ozon refund cancels its original quantity and cost, using the finance unit number when posting_number is empty',()=>{
+ const f=fixture(),rows=f.payload.accounts[0].finance.rows;rows.splice(1);rows[0].unit_number='1234-12-1';rows[0].posting={posting_number:''};
+ f.payload.accounts[0].postings={rows:[{posting_number:'1234-12-1',products:[{sku:'100',quantity:2,price:5000}]}]};
+ rows.push({...rows[0],amount:-10000,accruals_for_sale:-10000});
+ const summary=f.ctx.window.summaryFrom(f.payload,0,null,range);assert.equal(summary.qty,0);assert.equal(summary.cost,0);assert.equal(summary.sales,0);assert.equal(summary.products[0].qty,0);
+});

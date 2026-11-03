@@ -1,3 +1,4 @@
+import {recoverOzonPostings,missingOzonPostings} from './ozon-posting-recovery.js';
 import express from 'express';
 import {REPORT_HISTORY_FROM,reportStoreStartDate} from './report-history-range.js';
 import { pool } from './db.js';
@@ -34,9 +35,13 @@ export async function fetchPostingHistory(credentials,from,to,previous={},fetchR
  const historyFrom=new Date(coveredFrom).toISOString();
  // Keep all previously collected orders. Coverage is advanced only by complete
  // requests; the age of an individual saved row is not proof of coverage.
- const retained=older.filter(row=>{const created=Date.parse(row.created_at||row.in_process_at||'');return created>=Date.parse(historyFrom)&&created<Date.parse(from)});
+ // A list response may omit an already known posting. Retain its confirmed
+ // record (including recovered details) until an actual newer record replaces it.
  const outsideCoverage=older.filter(row=>Date.parse(row.created_at||row.in_process_at||'')<Date.parse(historyFrom));
- return {rows:[...new Map([...outsideCoverage,...retained,...fresh].map(row=>[row.posting_number,row])).values()],from:historyFrom,to,targetFrom:new Date(target).toISOString()};
+ const retained=older.filter(row=>{const t=Date.parse(row.created_at||row.in_process_at||'');return t>=Date.parse(historyFrom)&&t<Date.parse(from)});
+ const freshNumbers=new Set(fresh.map(p=>p.posting_number));
+ const omittedRecent=older.filter(row=>Date.parse(row.created_at||row.in_process_at||'')>=Date.parse(from)&&!freshNumbers.has(row.posting_number));
+ return {rows:[...new Map([...outsideCoverage,...retained,...omittedRecent,...fresh].map(row=>[row.posting_number,row])).values()],from:historyFrom,to,targetFrom:new Date(target).toISOString(),...(previous.reconciliation?{reconciliation:previous.reconciliation}:{})};
 }
 export async function fetchStocks(credentials){
  const rows=[];let cursor='';
@@ -172,20 +177,25 @@ async function run(historyOnly=false){
   const previous=(await pool.query('SELECT payload FROM ozon_fbo_cache WHERE account=$1',[account.id])).rows[0]?.payload||{};
   const targetFrom=new Date(Math.max(storeStart?storeStart-18000000:0,Math.min(REPORT_HISTORY_FROM,Date.now()-366*86400000,Date.parse(previous.historyTargetFrom||'')||Infinity))).toISOString();
   const financeGoal=Math.max(storeStart||0,Date.parse(new Date(Date.now()+18000000).toISOString().slice(0,10)+'T00:00:00Z')-364*86400000)-18000000,financePending=!(Date.parse(previous.finance?.from||'')<=financeGoal)||Date.parse(previous.finance?.to||'')<Date.now()-86400000;
-  if(historyOnly&&Date.parse(previous.postings?.from||'')<=Date.parse(targetFrom)&&!financePending)continue;
+  const gapsPending=missingOzonPostings(previous).length>0;
+  if(historyOnly&&Date.parse(previous.postings?.from||'')<=Date.parse(targetFrom)&&!financePending&&!gapsPending)continue;
   const allowedAt=Math.max(Number(previous.historyRetryAt)||0,historyOnly?(Number(previous.postings?.updatedAt)||0)+60000:0);
   if(Date.now()<allowedAt){scheduleHistory(allowedAt-Date.now());if(historyOnly)continue}
   let credentials;
   try{credentials=JSON.parse(await credentialFor(account.id));if(!credentials.clientId||!credentials.apiKey)throw new Error('missing');}catch{results.push({account:account.id,error:'Проверьте Client ID и API-ключ'});continue;}
   const to=new Date().toISOString(),from=new Date(Math.max(storeStart?storeStart-18000000:0,Date.now()-30*86400000)).toISOString();
   const payload={...previous,account:account.id,label:account.label,scheme:'FBO',attemptAt:Date.now(),historyTargetFrom:targetFrom,errors:historyOnly?{...previous.errors}:{}};
-  for(const [key,fn] of [...(historyOnly&&Date.parse(previous.postings?.from||'')<=Date.parse(targetFrom)?[]:[['postings',()=>fetchPostingHistory(credentials,from,to,{...previous.postings,targetFrom,openingFrom:storeStart?storeStart-18000000:0})]]),['finance',()=>fetchFinanceHistory(credentials,to,previous.finance||{},fetchFinance,{archiveOnly:historyOnly&&Date.parse(previous.finance?.to||'')>=Date.now()-86400000,start:storeStart})],...(!historyOnly?[['stocks',()=>fetchStocks(credentials)],['supplies',()=>fetchSupplyOrders(credentials,previous.supplies?.rows||[])]]:[])]){
+  for(const [key,fn] of [...(historyOnly&&Date.parse(previous.postings?.from||'')<=Date.parse(targetFrom)?[]:[['postings',()=>fetchPostingHistory(credentials,from,to,{...previous.postings,targetFrom,openingFrom:storeStart?storeStart-18000000:0})]]),...(!historyOnly||financePending?[['finance',()=>fetchFinanceHistory(credentials,to,previous.finance||{},fetchFinance,{archiveOnly:historyOnly&&Date.parse(previous.finance?.to||'')>=Date.now()-86400000,start:storeStart})]]:[]),...(!historyOnly?[['stocks',()=>fetchStocks(credentials)],['supplies',()=>fetchSupplyOrders(credentials,previous.supplies?.rows||[])]]:[])]){
    if(key==='finance'&&Number(previous.financeRetryAt)>Date.now()){payload.errors.finance=previous.errors?.finance||'Финансовая история Ozon ожидает повторной попытки';continue}
    if(key==='postings'&&Number(previous.historyRetryAt)>Date.now()){payload.errors.postings=previous.errors?.postings||'История Ozon ожидает повторной попытки';continue}
    delete payload.errors[key];
    try{const result=await fn();payload[key]={...(['postings','finance'].includes(key)?result:{rows:result,from,to}),updatedAt:Date.now()};}
    catch(e){payload.errors[key]=String(e.message||e);if(key==='finance')payload.financeRetryAt=Math.max(Number(e.retryAt)||0,Date.now()+15*60*1000);}
   }
+  // Five exact read requests per minute, persisted cooldowns and the existing
+  // single-account sync mutex; no stock, receipt or order mutation.
+  payload.postings=await recoverOzonPostings(payload,number=>request(credentials,'/v2/posting/fbo/get',{posting_number:number,translit:false,with:{analytics_data:true,financial_data:true}}));
+  if(payload.postings.reconciliation.pending){pending=true;}
   if(!payload.errors.finance)payload.financeRetryAt=0;
   payload.historyRetryAt=payload.errors.postings?(Number(previous.historyRetryAt)>Date.now()?Number(previous.historyRetryAt):Date.now()+15*60*1000):0;
   // Preserve an earlier target requested while this sync was in flight.

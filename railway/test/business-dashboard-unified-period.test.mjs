@@ -17,7 +17,7 @@ function fixture(){
   financialSales:()=>[],groupMarketplaceOrders:rows=>rows,marketplaceLifecycleStage:()=>'',
   setTimeout:(fn,ms)=>ms?setTimeout(fn,ms).unref():fn(),clearTimeout};
  ctx.window=ctx;vm.createContext(ctx);
- vm.runInContext(source.replace(/\}\)\(\);\s*$/,'window.api={businessSyncMarket,businessStamp,businessScopeMatches,businessPaint,businessDayBounds,businessYearBounds,businessMakeDay,businessMissingComparison,businessModelFromDays,businessDays,businessRememberModel,businessModelKey,businessSaveDays,businessBuckets};})();'),ctx);
+ vm.runInContext(source.replace(/\}\)\(\);\s*$/,'window.api={businessSyncMarket,businessStamp,businessScopeMatches,businessPaint,businessDayBounds,businessYearBounds,businessMakeDay,businessMissingComparison,businessModelFromDays,businessDays,businessRememberModel,businessModelKey,businessSaveDays,businessBuckets,businessOrdersClosedReady,businessClosedReady,businessCalendarFromDays};})();'),ctx);
  ctx.api.businessSyncMarket();return{ctx,api:ctx.api,el,selection,storage,packs:()=>packs};
 }
 function seed(f){
@@ -68,4 +68,28 @@ test('saving unchanged daily history does not repack every hour on each render',
  f.api.businessSaveDays();assert.equal(f.packs(),count);
  const start=f.api.businessDayBounds(0).start,row=f.api.businessDays.get(start);row.unsaved='HTTP 409';f.api.businessSaveDays();assert.equal(f.packs(),count+1);
  const stored=[...f.storage.values()].find(text=>text.includes('packedHours'));assert.match(stored,/HTTP 409/);
+});
+
+
+test('a recovered Ozon order invalidates the closed day and monthly projection of its actual creation date',()=>{
+ const f=fixture(),start=Date.parse('2026-10-01T00:00:00+05:00'),old=start+4*DAY,repair=NOW-100;
+ const day=f.api.businessMakeDay(start,[],{revenue:100,qty:1,profit:10});f.api.businessDays.set(start,{data:day,at:old});
+ assert.equal(f.api.businessClosedReady(day,old),true);assert.equal(f.api.businessOrdersClosedReady(day,old),true);
+ for(let i=1;i<31;i++){const t=start+i*DAY;f.api.businessDays.set(t,{data:f.api.businessMakeDay(t,[],{revenue:1,qty:1,profit:1}),at:NOW});}
+ assert.ok(f.api.businessCalendarFromDays('month',-1));
+ f.ctx.ozonFboOrderRepairAt=b=>b.start<=start&&b.end>start?repair:0;
+ assert.equal(f.api.businessCalendarFromDays('month',-1),null,'monthly totals must not freeze the old incomplete day');
+ assert.equal(f.api.businessClosedReady(day,old),false);assert.equal(f.api.businessOrdersClosedReady(day,old),false);
+ assert.equal(f.api.businessClosedReady(day,NOW),true);assert.equal(f.api.businessOrdersClosedReady(day,NOW),true);
+ f.selection.splice(f.selection.indexOf('Ozon'),1);f.api.businessSyncMarket();assert.equal(f.api.businessClosedReady(day,old),true,'an Ozon repair does not invalidate a WB-only source');
+});
+
+
+test('report reconciliation requests WB1, WB2 and Ozon separately and displays price bases without rewriting the chart',async()=>{
+ const f=fixture(),requests=[];f.ctx.AbortSignal=AbortSignal;f.ctx.showSheet=()=>f.el('businessPriceReconciliation');
+ f.ctx.esc=String;f.ctx.fetch=async url=>{requests.push(url);const m=new URL(url).searchParams.get('market');return Response.json(m==='Ozon'?{ok:true,market:m,matched:10,samePrice:10,differentPrice:0,missing:2,missingAmount:300,sales:12,returns:1,ambiguous:0}:{ok:true,market:m,buyer:100,seller:120,unknownSeller:0,discountDifference:20,matched:1,unmatched:0,ambiguous:0,matchedOrderBuyer:100,matchedBuyoutBuyer:100,matchedBuyoutSeller:120})};
+ f.ctx.MILLIONER_API='https://fixture.invalid';f.el('businessChart').innerHTML='known chart';
+ await f.ctx.openBusinessReconciliation();
+ assert.equal(requests.length,3);assert.deepEqual(requests.map(url=>new URL(url).searchParams.get('market')),['WB','WB2','Ozon']);
+ assert.match(f.el('businessPriceReconciliation').innerHTML,/Оплатили покупатели/);assert.match(f.el('businessPriceReconciliation').innerHTML,/Не найден заказ/);assert.match(f.el('businessPriceReconciliation').innerHTML,/периода|месяца/);assert.equal(f.el('businessChart').innerHTML,'known chart');
 });
