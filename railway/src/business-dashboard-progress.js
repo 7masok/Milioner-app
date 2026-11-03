@@ -1,3 +1,4 @@
+import {kaspiHistoryStatus,kaspiHistoryHasGap} from './kaspi-order-history.js';
 import {reportStoreStartDate} from './report-history-range.js';
 const DAY=86400000,OFFSET=18000000;
 const time=value=>value===null||value===undefined||value===''||value===0||value==='0'?0:Number.isFinite(Number(value))&&Number(value)>0?Number(value):Date.parse(value)||0;
@@ -33,11 +34,11 @@ export async function readBusinessProgress(client,market,now=Date.now(),range=nu
    if(!ozon.rows.length){sources.push({market:m,kind:'orders',...historyProgress({goal,requiredTo},now)},{market:m,kind:'finance',...historyProgress({goal,requiredTo},now)});continue}
    for(const row of ozon.rows)for(const kind of ['orders','finance'])sources.push({market:m,kind,...historyProgress({goal,requiredTo,from:row[kind+'_from'],to:row[kind+'_to'],updatedAt:row[kind+'_at'],nextAt:row[kind+'_retry'],error:row[kind+'_error'],complete:true},now)});
   }else{
-   const row=m==='Kaspi'?kaspi.rows[0]:orders.rows.find(r=>r.market===m),state=object(row?.payload),base={goal,requiredTo,from:state.coveredFrom,to:state.anchor,updatedAt:row?.updated_at,nextAt:state.nextAllowedAt,error:state.lastError,complete:state.complete};
+   const row=m==='Kaspi'?kaspi.rows[0]:orders.rows.find(r=>r.market===m),state=object(row?.payload),base={goal,requiredTo,from:state.coveredFrom,to:state.anchor,updatedAt:row?.updated_at,nextAt:state.nextAllowedAt,error:state.lastError,complete:state.complete&&!(m==='Kaspi'&&kaspiHistoryHasGap(state,goal,range?.to||now))};
    sources.push({market:m,kind:'orders',...historyProgress(base,now)});
    if(m==='Kaspi')sources.push({market:m,kind:'finance',...historyProgress(base,now)});
    else{const f=object(finance.rows.find(r=>r.market===m)?.state),archive=f.archive||{};sources.push({market:m,kind:'finance',...historyProgress({goal,requiredTo,from:archive.complete?Date.parse(archive.dateFrom+'T00:00:00+03:00'):0,to:archive.dateTo?Date.parse(archive.dateTo+'T00:00:00+03:00')+DAY:0,complete:archive.complete,updatedAt:f.updatedAt,nextAt:f.nextAllowedAt,error:f.lastError},now)})}
   }
  }
- return {ok:true,market,checkedAt:now,sources};
+ return {ok:true,market,checkedAt:now,sources,...(markets.includes('Kaspi')?{historyRepairs:kaspiHistoryStatus(object(kaspi.rows[0]?.payload))}:{})};
 }

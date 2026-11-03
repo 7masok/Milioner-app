@@ -1,12 +1,12 @@
 import {reconcileWbPrices,reconcileOzonPrices,wbFinanceIdentity} from './report-price-reconciliation.js';
-import {kaspiHistoryStatus} from './kaspi-order-history.js';
+import {kaspiHistoryStatus,kaspiHistoryHasGap,requestKaspiHistoryRepair} from './kaspi-order-history.js';
 import { financeHistoryStatus } from './wb-finance-history.js';
 import { configuredWbConnectionIds } from './connections.js';
 import { registerBusinessDashboardCache } from './business-dashboard-cache.js';
 import { registerProductOrderSeries } from './product-sales-series.js';
 import express from 'express';
 import { pool } from './db.js';
-import { asyncRoute } from './http.js';
+import { asyncRoute,requireTrustedOrigin } from './http.js';
 import { buildWbOperationAudit } from './wb-operation-audit.js';
 import { wbFinancePeriodSql } from './wb-finance-period.js';
 import { wbOrderDay } from './wb-order-advertising.js';
@@ -199,6 +199,15 @@ reportsRouter.get('/wb-sync-status', asyncRoute(async (_req, res) => {
   res.json({ ok: true, latest, newestOrders });
 }));
 
+reportsRouter.get('/kaspi-order-history',asyncRoute(async(_req,res)=>{
+ const row=(await pool.query('SELECT payload FROM kaspi_order_history_state WHERE id=1')).rows[0];res.json({ok:true,...kaspiHistoryStatus(row?.payload)});
+}));
+reportsRouter.post('/kaspi-order-history/recheck',requireTrustedOrigin,asyncRoute(async(req,res)=>{
+ const from=Number(req.body?.from),to=Number(req.body?.to),now=Date.now();
+ if(!Number.isSafeInteger(from)||!Number.isSafeInteger(to)||from<Date.parse('2025-01-01T00:00:00+05:00')||to<=from||to>now||to-from>64*86400000)return res.status(400).json({ok:false,error:'Некорректный диапазон сверки'});
+ const state=await requestKaspiHistoryRepair(pool,from,to,now);res.status(state?202:409).json(state?{ok:true,...state}:{ok:false,error:'Сверка занята, повторите запрос'});
+}));
+
 reportsRouter.get('/kaspi-report-orders', asyncRoute(async (req, res) => {
   const bounds = kaspiBounds(Number(req.query.days || 1), req.query.from, req.query.to);
   const [liveResult, cachedResult, returnsResult, latestSyncResult, coverageResult, archiveResult, archiveStateResult, missingDatesResult] = await Promise.all([
@@ -238,8 +247,8 @@ reportsRouter.get('/kaspi-report-orders', asyncRoute(async (req, res) => {
   const cache = latestSyncResult.rows[0] || {};
   const coverage = coverageResult.rows[0] || {};
   const archiveStatus=kaspiHistoryStatus(archiveStateResult.rows[0]?.payload);
-  const coverageFrom=Math.min(Number(coverage.coverageFrom)||Infinity,archiveStatus.from||Infinity);
-  const historyIncomplete=coverageFrom>bounds.start||Number(missingDatesResult.rows[0]?.rows)>0;
+  const coverageFrom=archiveStatus.from||Infinity;
+  const historyIncomplete=kaspiHistoryHasGap(archiveStateResult.rows[0]?.payload,bounds.start,bounds.end)||coverageFrom>bounds.start||Number(missingDatesResult.rows[0]?.rows)>0;
   res.json({ ok: true, days: Number(req.query.days || 1), from: req.query.from ? Number(req.query.from) : null,
     to: req.query.to ? Number(req.query.to) : null, fetchedAt: Date.now(), source: 'PostgreSQL completed Kaspi orders by completion date',
     historyComplete: !historyIncomplete, historyIncomplete, coverageFrom: Number.isFinite(coverageFrom)?coverageFrom:null,

@@ -1,14 +1,14 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {initialKaspiHistory,stepKaspiHistory,kaspiHistoryOrder,syncKaspiHistory,readKaspiHistory,KASPI_HISTORY_STATES} from '../src/kaspi-order-history.js';
+import {initialKaspiHistory,stepKaspiHistory,kaspiHistoryOrder,syncKaspiHistory,readKaspiHistory,KASPI_HISTORY_STATES,queueKaspiHistoryRepair,finishKaspiHistoryRepair,kaspiHistoryHasGap,kaspiHistoryRepairAt,kaspiHistoryStatus,requestKaspiHistoryRepair} from '../src/kaspi-order-history.js';
 import {mergeReportingOrders} from '../src/wb-order-history.js';
 const NOW=Date.parse('2026-10-19T01:40:00+05:00'),DAY=86400000;
 const raw=(extra={})=>({id:'order-1',attributes:{code:'1001',state:'ARCHIVE',status:'COMPLETED',creationDate:Date.parse('2026-06-12T10:00:00Z'),completionDate:Date.parse('2026-06-15T10:00:00Z'),totalPrice:110,...extra}});
 const lines=[{id:'entry1',merchantCode:'toy',quantity:2,totalPrice:50},{id:'entry2',merchantCode:'cat',quantity:1,totalPrice:60}];
 const page=data=>({data,meta:{pageCount:data.length?1:0}});
-test('initial scan fills the oldest live gap first, with 14-day intervals and the full 2025 Almaty year',()=>{
+test('an isolated older live order never acknowledges later days: scan from now with 14-day windows',()=>{
  const live=Date.parse('2026-07-01T00:00:00+05:00'),s=initialKaspiHistory(NOW,live);
- assert.equal(s.to,live+DAY);assert.equal(s.to-s.from,14*DAY-1);assert.equal(s.coveredFrom,live);
+ assert.equal(s.to,Math.floor(NOW/1000)*1000);assert.equal(s.to-s.from,14*DAY-1);assert.equal(s.coveredFrom,s.anchor);assert.equal(s.version,2);
  assert.equal(s.goal,Date.parse('2025-01-01T00:00:00+05:00'));
  assert.equal(initialKaspiHistory(NOW).to,Math.floor(NOW/1000)*1000);
 });
@@ -93,4 +93,38 @@ test('archive reads respect exact date bounds and store filters, with checked co
  const queries=[],client={async query(sql,args){queries.push({sql,args});return{rows:sql.includes('history_state')?[{payload:initialKaspiHistory(NOW)}]:[]}}};
  const r=await readKaspiHistory(client,100,200,null,15000);assert.equal(r.state.market,'Kaspi');assert.deepEqual(queries[0].args,[100,200,15000]);
  queries.length=0;await readKaspiHistory(client,100,200,'WB',15000);assert.equal(queries.length,1);assert.match(queries[0].sql,/history_state/);
+});
+
+test('a targeted July repair pauses the main cursor, persists entries and removes only verified gaps',async()=>{
+ const from=Date.parse('2026-07-01T00:00:00+05:00'),to=Date.parse('2026-08-01T00:00:00+05:00');
+ const original=initialKaspiHistory(NOW);original.complete=true;original.coveredFrom=original.goal;original.gaps=[{from:from-DAY,to:to+DAY}];
+ let s=queueKaspiHistoryRepair(original,from,to,NOW);
+ assert.equal(s.complete,true);assert.equal(s.coveredFrom,original.goal);assert.equal(kaspiHistoryHasGap(s,from,to),true);assert.equal(kaspiHistoryRepairAt(s,{start:from,end:to}),NOW);
+ assert.equal(queueKaspiHistoryRepair(s,from,to,NOW+1).repairs.length,1);
+ let cursor=s.repairs[0].cursor,visited=[];
+ for(let i=0;i<50&&!cursor.complete;i++){const r=await stepKaspiHistory(cursor,{now:NOW+i*3000,fetchPage:async q=>{visited.push(q);return page([])}});cursor=r.state;s=finishKaspiHistoryRepair(s,cursor,NOW+i*3000)}
+ assert.equal(cursor.complete,true);assert.equal(visited.length,18);assert.equal(Math.min(...visited.map(q=>q.from)),from);assert.equal(Math.max(...visited.map(q=>q.to)),to-1);
+ assert.equal(s.repairs.length,0);assert.equal(s.coveredFrom,original.goal);assert.deepEqual(s.gaps,[{from:from-DAY,to:from},{from:to,to:to+DAY}]);assert.equal(kaspiHistoryHasGap(s,from,to),false);
+ assert.ok(kaspiHistoryRepairAt(s,{start:from,end:to})>NOW);assert.equal(kaspiHistoryRepairAt(s,{start:from-2*DAY,end:from-DAY}),0);
+ assert.equal(original.repairs,undefined);
+});
+test('legacy false coverage queues the unverified live interval, keeps a requested month first and respects cooldown',async()=>{
+ const from=Date.parse('2026-07-01T00:00:00+05:00'),to=from+31*DAY,old=initialKaspiHistory(NOW);old.version=1;old.complete=true;old.coveredFrom=old.goal;old.nextAllowedAt=NOW+7200000;old.lastError='Kaspi: история HTTP 429';
+ const f=fixture(queueKaspiHistoryRepair(old,from,to,NOW));let calls=0;
+ await syncKaspiHistory({client:f.client,token:'fixture',now:NOW,fetcher:async()=>{calls++;throw Error('cooldown')}});
+ assert.equal(calls,0);assert.equal(f.state.version,2);assert.equal(f.state.repairs.length,2);assert.equal(f.state.repairs[0].from,from);assert.equal(f.state.repairs[0].to,to);assert.equal(f.state.nextAllowedAt,old.nextAllowedAt);assert.equal(f.state.coveredFrom,old.goal);
+ assert.equal(kaspiHistoryStatus(f.state).status,'retry');assert.equal(kaspiHistoryHasGap(f.state,from,to),true);
+});
+test('repair worker uses the selected July cursor, with report-only inserts and upstream pacing',async()=>{
+ const from=Date.parse('2026-07-01T00:00:00+05:00'),to=from+31*DAY,f=fixture(queueKaspiHistoryRepair(initialKaspiHistory(NOW),from,to,NOW));
+ await syncKaspiHistory({client:f.client,token:'fixture',now:NOW,fetcher:async url=>{const u=new URL(url);assert.equal(Number(u.searchParams.get('filter[orders][creationDate][$le]')),to-1);return{ok:true,json:async()=>page([])}}});
+ assert.equal(f.state.repairs[0].cursor.stateIndex,1);assert.equal(f.state.stateIndex,0);assert.ok(f.queries.every(sql=>!/(INSERT INTO|UPDATE|DELETE FROM) (marketplace_order_lines|warehouse|reservations)/.test(sql)));
+});
+
+test('a verified July stops being partial while a wider migration scan continues elsewhere',()=>{
+ const from=Date.parse('2026-07-01T00:00:00+05:00'),to=from+31*DAY;
+ let s=queueKaspiHistoryRepair(initialKaspiHistory(NOW),from-DAY,to+DAY,NOW);s.repairs[0].gapRepair=true;s.gaps=[{from:from-DAY,to:to+DAY}];
+ s=queueKaspiHistoryRepair(s,from,to,NOW+1);s=finishKaspiHistoryRepair(s,{complete:true},NOW+3000);
+ assert.equal(s.repairs.length,1);assert.equal(kaspiHistoryHasGap(s,from,to),false);assert.equal(kaspiHistoryHasGap(kaspiHistoryStatus(s),from,to),false);
+ assert.equal(kaspiHistoryHasGap(s,from-DAY,from),true);
 });

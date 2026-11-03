@@ -1,3 +1,4 @@
+import {kaspiHistoryRepairAt,kaspiHistoryHasGap,kaspiHistoryStatus} from './kaspi-order-history.js';
 import crypto from 'node:crypto';
 import {reportStoreStartDate} from './report-history-range.js';
 import {readBusinessProgress} from './business-dashboard-progress.js';
@@ -93,6 +94,8 @@ export function composeBusinessDays(rows,from,to,warehouse,revision,now=Date.now
  }
  return out;
 }
+async function readKaspiRepairs(){const r=await pool.query('SELECT payload FROM kaspi_order_history_state WHERE id=1');return kaspiHistoryStatus(r.rows[0]?.payload)}
+function checkedKaspiSnapshot(model,at,market,history){return market!=='Kaspi'&&market!=='all'||model&&[model,model.yesterday,model.yesterdayCompare].filter(Boolean).every(m=>at>=kaspiHistoryRepairAt(history,m.bounds)&&!kaspiHistoryHasGap(history,m.bounds.start,m.bounds.end))}
 export function registerBusinessDashboardCache(router){
  router.get('/business-dashboard-progress',asyncRoute(async(req,res)=>{
   const market=cacheMarket(req.query.market);if(!market)return res.status(400).json({ok:false,error:'Некорректный магазин'});
@@ -105,23 +108,23 @@ export function registerBusinessDashboardCache(router){
   const from=Number(req.query.from),to=Number(req.query.to);
   if(!businessCacheKey('year',from)||!Number.isFinite(to)||to<=from||to-from>732*DAY||new Date(to+OFFSET).getUTCMonth()!==0||new Date(to+OFFSET).getUTCDate()!==1||to!==midnight(to))return res.status(400).json({ok:false,error:'Некорректный диапазон месяцев'});
   const keys=[];for(let t=from;t<to;){keys.push(scopedKey('month:'+t,market));const d=new Date(t+OFFSET);t=Date.UTC(d.getUTCFullYear(),d.getUTCMonth()+1,1)-OFFSET}
-  await ensureCache();const [revision,result]=await Promise.all([sourceRevision(),pool.query('SELECT cache_key,version,source_revision,payload,generated_at FROM business_dashboard_cache WHERE cache_key=ANY($1::text[])',[keys])]);
+  const historyRepairs=await readKaspiRepairs();await ensureCache();const [revision,result]=await Promise.all([sourceRevision(),pool.query('SELECT cache_key,version,source_revision,payload,generated_at FROM business_dashboard_cache WHERE cache_key=ANY($1::text[])',[keys])]);
   const months=new Map();
   for(const row of result.rows){const at=Number(row.generated_at),model=row.payload;if(row.version!==BUSINESS_CACHE_VERSION||!validBusinessSnapshot(model,'month',Number(row.cache_key.split(':')[1]))||!validScope(model,market))continue;
-   for(const candidate of [model,model.yesterday]){if(candidate?.period!=='month'||candidate.pending&&!candidate.ordersReady||candidate.unavailable||candidate.bounds.start<from||candidate.bounds.start>=to)continue;const prior=months.get(candidate.bounds.start);if(prior&&prior.generatedAt>=at)continue;
+   for(const candidate of [model,model.yesterday]){if(candidate?.period!=='month'||candidate.pending&&!candidate.ordersReady||candidate.unavailable||candidate.bounds.start<from||candidate.bounds.start>=to||!checkedKaspiSnapshot(candidate,at,market,historyRepairs))continue;const prior=months.get(candidate.bounds.start);if(prior&&prior.generatedAt>=at)continue;
     const {period,bounds,buckets,orders,summary,netProfit,hourly,pending,ordersReady,ordersPartialMarkets,market:store,storeStarts,beforeOpening}=candidate;
     months.set(bounds.start,{month:{...(store?{market:store}:{}),...(storeStarts?{storeStarts}:{}),beforeOpening:Boolean(beforeOpening),ordersPartialMarkets:ordersPartialMarkets||[],period,bounds,buckets,orders,summary,netProfit,hourly,pending:Boolean(pending),ordersReady:ordersReady===true||!pending},generatedAt:at,fresh:!partialSnapshot(candidate)&&row.source_revision===revision&&Date.now()-at<(bounds.end>Date.now()?60000:15*60000)&&!(at<bounds.end&&bounds.end<=Date.now())});
    }
   }
-  res.json({ok:true,version:BUSINESS_CACHE_VERSION,sourceRevision:revision,months:[...months.values()]});
+  res.json({ok:true,version:BUSINESS_CACHE_VERSION,sourceRevision:revision,historyRepairs,months:[...months.values()]});
  }));
  router.get('/business-dashboard-days',asyncRoute(async(req,res)=>{
   const market=cacheMarket(req.query.market);if(!market)return res.status(400).json({ok:false,error:'Некорректный магазин'});
   const from=Number(req.query.from),to=Number(req.query.to);if(!dailyBounds(from,to))return res.status(400).json({ok:false,error:'Некорректный дневной диапазон'});
-  await ensureCache();const keys=[];for(let t=from;t<to;t+=DAY){keys.push(scopedKey('base:'+t,market));if(market==='all')for(const m of MARKETS)keys.push(scopedKey('base:'+t,m))}
+  const historyRepairs=await readKaspiRepairs();await ensureCache();const keys=[];for(let t=from;t<to;t+=DAY){keys.push(scopedKey('base:'+t,market));if(market==='all')for(const m of MARKETS)keys.push(scopedKey('base:'+t,m))}
   const [revision,result,warehouse]=await Promise.all([sourceRevision(),pool.query('SELECT cache_key,version,source_revision,payload,generated_at FROM business_dashboard_cache WHERE cache_key=ANY($1::text[])',[keys]),market==='all'?pool.query('SELECT payload FROM warehouse_state WHERE id=1'):Promise.resolve({rows:[]})]);
   const days=market==='all'?composeBusinessDays(result.rows,from,to,warehouse.rows[0]?.payload,revision):result.rows.filter(r=>r.version===BUSINESS_CACHE_VERSION&&validBusinessDay(r.payload)&&validScope(r.payload,market)).map(r=>({day:r.payload,generatedAt:Number(r.generated_at),reusable:reusableBusinessSnapshot(r.payload,Number(r.generated_at)),fresh:!partialSnapshot(r.payload)&&!r.payload.pending&&r.source_revision===revision&&Date.now()-Number(r.generated_at)<(r.payload.bounds.end>Date.now()?60000:15*60000)&&!(Number(r.generated_at)<r.payload.bounds.end&&r.payload.bounds.end<=Date.now())}));
-  res.json({ok:true,version:BUSINESS_CACHE_VERSION,sourceRevision:revision,days});
+  res.json({ok:true,version:BUSINESS_CACHE_VERSION,sourceRevision:revision,historyRepairs,days:days.filter(r=>checkedKaspiSnapshot(r.day,r.generatedAt,market,historyRepairs))});
  }));
  router.put('/business-dashboard-days',requireTrustedOrigin,asyncRoute(async(req,res)=>{
   const market=cacheMarket(req.body?.market);if(!market)return res.status(400).json({ok:false,error:'Некорректный магазин'});
@@ -138,11 +141,11 @@ export function registerBusinessDashboardCache(router){
 
  router.get('/business-dashboard-cache',asyncRoute(async(req,res)=>{
   const market=cacheMarket(req.query.market),base=businessCacheKey(req.query.period,req.query.start),key=market&&base?scopedKey(base,market):null;if(!key)return res.status(400).json({ok:false,error:'Некорректный период'});
-  await ensureCache();const [revision,result]=await Promise.all([sourceRevision(),pool.query('SELECT version,source_revision,payload,generated_at FROM business_dashboard_cache WHERE cache_key=$1',[key])]);
-  const row=result.rows[0],payload=row?.version===BUSINESS_CACHE_VERSION&&validBusinessSnapshot(row.payload,req.query.period,req.query.start)&&validScope(row.payload,market)?row.payload:null;
+  const historyRepairs=await readKaspiRepairs();await ensureCache();const [revision,result]=await Promise.all([sourceRevision(),pool.query('SELECT version,source_revision,payload,generated_at FROM business_dashboard_cache WHERE cache_key=$1',[key])]);
+  const row=result.rows[0],payload=row?.version===BUSINESS_CACHE_VERSION&&validBusinessSnapshot(row.payload,req.query.period,req.query.start)&&validScope(row.payload,market)&&checkedKaspiSnapshot(row.payload,Number(row.generated_at),market,historyRepairs)?row.payload:null;
   const at=Number(row?.generated_at)||0,current=Number(payload?.bounds?.end)>Date.now(),ttl=current?60000:15*60000;
   const stale=!payload||partialSnapshot(payload)||payload.pending===true||row.source_revision!==revision||Date.now()-at>ttl||current&&midnight(at)!==midnight(Date.now())||payload&&at<payload.bounds.end&&payload.bounds.end<=Date.now();
-  res.json({ok:true,version:BUSINESS_CACHE_VERSION,sourceRevision:revision,snapshot:payload,generatedAt:at||null,reusable:reusableBusinessSnapshot(payload,at),stale});
+  res.json({ok:true,version:BUSINESS_CACHE_VERSION,sourceRevision:revision,historyRepairs,snapshot:payload,generatedAt:at||null,reusable:reusableBusinessSnapshot(payload,at),stale});
  }));
  router.put('/business-dashboard-cache',requireTrustedOrigin,asyncRoute(async(req,res)=>{
   const {period,start,snapshot,sourceRevision:revision,version}=req.body||{},market=cacheMarket(req.body?.market),base=businessCacheKey(period,start),key=market&&base?scopedKey(base,market):null;

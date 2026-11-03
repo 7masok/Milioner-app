@@ -11,8 +11,9 @@ const cancelled=new Set(['CANCELLED','CANCELLING','RETURNED','KASPI_DELIVERY_RET
 const statuses=new Set(['APPROVED_BY_BANK','ACCEPTED_BY_MERCHANT','COMPLETED','CANCELLED','CANCELLING','KASPI_DELIVERY_RETURN_REQUESTED','RETURNED']);
 export function initialKaspiHistory(now,liveFrom=0){
  const anchor=Math.floor(now/1000)*1000,goal=reportHistoryGoal(now);
- const to=liveFrom>goal&&liveFrom<anchor?Math.min(anchor,liveFrom+DAY):anchor;
- return {version:1,anchor,goal,to,from:Math.max(goal,to-14*DAY+1),coveredFrom:liveFrom>0?Math.min(anchor,liveFrom):anchor,stateIndex:0,page:0,pending:[],pageCount:0,rows:0,complete:false,nextAllowedAt:0,lastError:''};
+ // A single old live order proves no continuous coverage of later days.
+ const to=anchor;
+ return {version:2,anchor,goal,to,from:Math.max(goal,to-14*DAY+1),coveredFrom:anchor,stateIndex:0,page:0,pending:[],pageCount:0,rows:0,complete:false,nextAllowedAt:0,lastError:''};
 }
 function resumeKaspiBackfill(state){
  state.complete=false;state.to=state.coveredFrom-1;state.from=Math.max(state.goal,state.to-14*DAY+1);state.stateIndex=0;state.page=0;state.pending=[];state.pageCount=0;
@@ -21,6 +22,35 @@ export function extendKaspiHistory(input,now){
  const state=structuredClone(input);state.goal=Math.min(Number(state.goal)||Infinity,reportHistoryGoal(now));
  if(state.complete&&!state.mode&&state.coveredFrom>state.goal){resumeKaspiBackfill(state);state.nextAllowedAt=historyBackfillWake(input,now,3000)}
  return state;
+}
+// Reporting-only rechecks keep the main backfill cursor and all saved orders.
+export function queueKaspiHistoryRepair(input,from,to,now){
+ if(!Number.isSafeInteger(from)||!Number.isSafeInteger(to)||from<reportHistoryGoal(now)||to<=from||to>now||to-from>732*DAY)throw Error('Kaspi: некорректный диапазон сверки');
+ const state=structuredClone(input),queue=state.repairs||=[];
+ if(queue.some(r=>r.from===from&&r.to===to))return state;
+ const cursor={...initialKaspiHistory(now),anchor:to-1,goal:from,to:to-1,from:Math.max(from,to-14*DAY),coveredFrom:to,rows:0};
+ queue.unshift({from,to,at:now,cursor});state.repairRevisions=[...(state.repairRevisions||[]),{from,to,at:now}].slice(-64);
+ state.nextAllowedAt=state.lastError?state.nextAllowedAt:Math.min(Number(state.nextAllowedAt)||now,now);
+ return state;
+}
+export function finishKaspiHistoryRepair(input,cursor,now){
+ const state=structuredClone(input),range=state.repairs[0];
+ if(!cursor.complete){range.cursor=cursor;state.nextAllowedAt=cursor.nextAllowedAt;return state}
+ state.repairs.shift();
+ state.gaps=(state.gaps||[]).flatMap(g=>g.to<=range.from||g.from>=range.to?[g]:[
+  ...(g.from<range.from?[{from:g.from,to:range.from}]:[]),...(g.to>range.to?[{from:range.to,to:g.to}]:[])]);
+ state.repairRevisions=[...(state.repairRevisions||[]),{from:range.from,to:range.to,at:now}].slice(-64);
+ state.nextAllowedAt=now+3000;return state;
+}
+export function kaspiHistoryRepairAt(state,bounds){return Math.max(0,...(state?.repairRevisions||[]).filter(r=>r.from<bounds.end&&r.to>bounds.start).map(r=>Number(r.at)||0))}
+export function kaspiHistoryHasGap(state,from,to){return (state?.gaps||[]).some(g=>g.from<to&&g.to>from)||(state?.repairs||[]).some(g=>!g.gapRepair&&g.from<to&&g.to>from)}
+export async function requestKaspiHistoryRepair(client,from,to,now=Date.now()){
+ const db=await client.connect();let locked=false;
+ try{locked=Boolean((await db.query('SELECT pg_try_advisory_lock(730147,1) AS locked')).rows[0]?.locked);if(!locked)return null;
+  const saved=(await db.query('SELECT payload FROM kaspi_order_history_state WHERE id=1')).rows[0];
+  const state=queueKaspiHistoryRepair(saved?object(saved.payload):initialKaspiHistory(now),from,to,now);
+  await db.query('INSERT INTO kaspi_order_history_state(id,payload,updated_at) VALUES(1,$1::jsonb,$2) ON CONFLICT(id) DO UPDATE SET payload=EXCLUDED.payload,updated_at=EXCLUDED.updated_at',[JSON.stringify(state),now]);return kaspiHistoryStatus(state);
+ }finally{if(locked)await db.query('SELECT pg_advisory_unlock(730147,1)');db.release()}
 }
 function compact(raw){
  const a=raw?.attributes||{},at=Number(a.creationDate);
@@ -76,7 +106,7 @@ export async function stepKaspiHistory(input,{now,fetchPage,fetchEntries}){
  }
  state.lastError='';return{state,orders};
 }
-export function kaspiHistoryStatus(s){return {market:'Kaspi',from:Number(s?.coveredFrom)||0,to:Number(s?.anchor)||0,targetFrom:Number(s?.goal)||0,rows:Number(s?.rows)||0,status:!s?'pending':s.lastError?'retry':s.complete?'complete':'loading',error:s?.lastError||'',nextAllowedAt:Number(s?.nextAllowedAt)||0};}
+export function kaspiHistoryStatus(s){return {market:'Kaspi',from:Number(s?.coveredFrom)||0,to:Number(s?.anchor)||0,targetFrom:Number(s?.goal)||0,rows:Number(s?.rows)||0,gaps:s?.gaps||[],repairs:(s?.repairs||[]).map(({from,to,cursor,gapRepair})=>({from,to,gapRepair:Boolean(gapRepair),coveredFrom:cursor.coveredFrom,state:KASPI_HISTORY_STATES[cursor.stateIndex],page:cursor.page,pending:cursor.pending.length})),repairRevisions:s?.repairRevisions||[],status:!s?'pending':s.lastError?'retry':s.repairs?.length?'repairing':s.complete?'complete':'loading',error:s?.lastError||'',nextAllowedAt:Number(s?.nextAllowedAt)||0};}
 const productCache=new Map();let lastRequest=0;
 export async function syncKaspiHistory({client=pool,token,fetcher=fetch,now=Date.now()}={}){
  token=token??await credentialFor('Kaspi',config.kaspiToken);if(!token)return;
@@ -87,6 +117,13 @@ export async function syncKaspiHistory({client=pool,token,fetcher=fetch,now=Date
   const found=(await db.query('SELECT payload FROM kaspi_order_history_state WHERE id=1')).rows[0];
   if(found)state=object(found.payload);
   else{const live=(await db.query("SELECT MIN(creation_date) AS first FROM marketplace_order_lines WHERE market='Kaspi' AND creation_date>0")).rows[0];state=initialKaspiHistory(now,Number(live?.first)||0);}
+  if(state.version<2){
+   const live=(await db.query("SELECT MIN(creation_date) AS first FROM marketplace_order_lines WHERE market='Kaspi' AND creation_date>0")).rows[0];
+   const from=Math.max(state.goal,Number(live?.first)||state.anchor),to=state.anchor;
+   state.version=2;state.gaps=from<to?[{from,to}]:[];
+   if(from<to){const priority=state.repairs||[];state.repairs=[];state=queueKaspiHistoryRepair(state,from,to,now);state.repairs[0].gapRepair=true;state.repairs=[...priority,...state.repairs];}
+   await persist();
+  }
   state=extendKaspiHistory(state,now);
   if(state.nextAllowedAt>now)return;
   state.nextAllowedAt=now+60000;await persist();recovery=structuredClone(state);
@@ -98,11 +135,12 @@ export async function syncKaspiHistory({client=pool,token,fetcher=fetch,now=Date
    if(!response.ok){const error=Error('Kaspi: история HTTP '+response.status),v=response.headers?.get('retry-after');error.retryAt=Math.max(now+5*60000,Number(v)>0?Date.now()+Number(v)*1000:Date.parse(v)||0);throw error;}
    return response.json();
   };
-  const live=new Map();if(state.pending.length){
-   const ids=state.pending.slice(0,10).map(o=>o.id),data=await db.query("SELECT order_id,entry_id,sku,product_name,qty,total_price FROM marketplace_order_lines WHERE market='Kaspi' AND order_id=ANY($1::text[])",[ids]);
+  const cursor=state.repairs?.[0]?.cursor||state;
+  const live=new Map();if(cursor.pending.length){
+   const ids=cursor.pending.slice(0,10).map(o=>o.id),data=await db.query("SELECT order_id,entry_id,sku,product_name,qty,total_price FROM marketplace_order_lines WHERE market='Kaspi' AND order_id=ANY($1::text[])",[ids]);
    for(const r of data.rows){const list=live.get(r.order_id)||[];list.push(r);live.set(r.order_id,list);}
   }
-  const result=await stepKaspiHistory(state,{now,
+  const result=await stepKaspiHistory(cursor,{now,
    fetchPage:({from,to,state,page})=>request('/orders?'+new URLSearchParams({'page[number]':String(page),'page[size]':'100','filter[orders][state]':state,'filter[orders][creationDate][$ge]':String(from),'filter[orders][creationDate][$le]':String(to)})),
    fetchEntries:async order=>{
     const saved=live.get(order.id);
@@ -119,7 +157,8 @@ export async function syncKaspiHistory({client=pool,token,fetcher=fetch,now=Date
    }});
   await db.query('BEGIN');let inserted=0;
   for(const item of result.orders){const r=await db.query('INSERT INTO kaspi_order_history(order_id,creation_date,completion_date,payload,updated_at) VALUES($1,$2,$3,$4::jsonb,$5) ON CONFLICT(order_id) DO UPDATE SET completion_date=EXCLUDED.completion_date,payload=EXCLUDED.payload,updated_at=EXCLUDED.updated_at RETURNING (xmax=0) AS inserted',[item.order.id,item.order.creationDate,item.order.completionDate,JSON.stringify(item),now]);if(r.rows[0]?.inserted)inserted++;}
-  state=result.state;state.rows+=inserted;await persist();await db.query('COMMIT');
+  if(state.repairs?.length)state=finishKaspiHistoryRepair(state,result.state,now);else state=result.state;
+  state.rows+=inserted;state.lastError='';await persist();await db.query('COMMIT');
   console.info('Kaspi order history progress',JSON.stringify({...kaspiHistoryStatus(state),phase:state.pending.length?'entries':'page',state:KASPI_HISTORY_STATES[state.stateIndex],page:state.page,inserted}));
  }catch(error){await db.query('ROLLBACK').catch(()=>{});state=recovery||state;if(state){state.lastError=/^Kaspi:/.test(error.message)?error.message:'Kaspi: не удалось сохранить историю';state.nextAllowedAt=Math.max(now+5*60000,Number(error.retryAt)||0);await persist();}console.warn('Kaspi order history retry',JSON.stringify(kaspiHistoryStatus(state)));}
  finally{if(locked)await db.query('SELECT pg_advisory_unlock(730147,1)').catch(()=>{});db.release();}
