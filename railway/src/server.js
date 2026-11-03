@@ -1,3 +1,4 @@
+import {createUnifiedWarehouseRouter} from './unified-warehouse.js';
 import { withWarehouseScopePage, createInfernoProxy, infernoSession } from './warehouse-scope.js';
 import { startWb3OrderHistoryLoop, syncWb3OrderHistory } from './wb3-orders.js';
 import { startWb3InventoryLoop, syncWb3Inventory, readWb3Inventory } from './wb3-inventory.js';
@@ -57,6 +58,7 @@ const repositoryRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url))
 const frontendFiles = Object.freeze([
   'warehouse-scope-bootstrap.js',
   'warehouse-scope-v1.js',
+  'store-selection-v1.js',
   'wb3-profile.js',
   'wb3-orders-v1.js',
   'product-history-v1.js',
@@ -135,6 +137,7 @@ if (config.infernoApiUrl && config.storeProfile !== 'WB3') {
     next();
   });
 }
+if(config.infernoApiUrl&&config.storeProfile!=='WB3')app.use('/api/unified/warehouse-state',express.json({limit:'13mb',strict:true}));
 app.use(express.json({ limit: '7mb', strict: true }));
 
 const frontendRevalidateHeaders = { 'Cache-Control': 'public, max-age=0, must-revalidate' };
@@ -169,6 +172,7 @@ app.post('/api/auth/webauthn/login-verify', requireTrustedOrigin, webauthnLoginV
 // Device tokens are scoped to the planner; warehouse routes keep their session gate.
 app.use('/api/ozon-planner', plannerRouter);
 app.use('/api', requireAppSession);
+if(config.infernoApiUrl&&config.infernoAdminToken&&config.storeProfile!=='WB3')app.use('/api/unified', requireTrustedOrigin, createUnifiedWarehouseRouter({mainOrigin:'http://127.0.0.1:'+config.port,infernoOrigin:config.infernoApiUrl,infernoSecret:config.infernoAdminToken}));
 app.post('/api/inferno/session', requireTrustedOrigin, requireConfiguredSession, (req,res) => {
   if (!config.infernoApiUrl || !config.infernoAdminToken || config.storeProfile === 'WB3') return res.status(503).json({ok:false,error:'inferno-not-configured'});
   const token = String(req.headers.authorization || '').replace(/^Bearer\s+/i, '');

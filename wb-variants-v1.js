@@ -101,18 +101,18 @@ function variantGroupForCard(card,market){
 function manualVariantGroup(card,market){
   let group=variantGroupForCard(card,market);if(group)return group;
   const title=String(card.title||card.vendorCode||'Товар WB').trim();
-  group={id:id(),name:title,category:'',photo:'',kaspi:'',wb:'',wb2:'',ozon:'',min:0,stock:0,cost:0,totalProfit:0,createdAt:Date.now(),kind:'variant-group',variantMarket:market,variantNmId:String(card.nmId||''),variantVendorCode:String(card.vendorCode||'')};
-  group[market==='WB2'?'wb2':'wb']=String(card.vendorCode||'');
+  group={id:(market==='WB3'?'inferno:':'')+id(),name:title,category:'',photo:'',kaspi:'',wb:'',wb2:'',ozon:'',min:0,stock:0,cost:0,totalProfit:0,createdAt:Date.now(),kind:'variant-group',variantMarket:market,variantNmId:String(card.nmId||''),variantVendorCode:String(card.vendorCode||'')};
+  group[market==='WB3'?'wb3':market==='WB2'?'wb2':'wb']=String(card.vendorCode||'');
   state.products.push(group);return group;
 }
 function manualVariantProduct(card,size,market){
-  const group=manualVariantGroup(card,market),field=market==='WB2'?'wb2':'wb';
+  const group=manualVariantGroup(card,market),field=market==='WB3'?'wb3':market==='WB2'?'wb2':'wb';
   let product=(state.products||[]).find(row=>String(row?.variantGroupId||'')===String(group.id)&&(
     Number(row?.wbVariant?.chrtId||0)===Number(size.chrtId||0)||String(row?.wbVariant?.size||'')===String(size.size||'')
   ));
   if(!product){
     const label=String(size.size||'Без размера');
-    product={id:id(),name:`${group.name} · размер ${label}`,category:group.category||'',photo:group.photo||'',kaspi:'',wb:'',wb2:'',ozon:'',min:0,stock:0,cost:0,totalProfit:0,createdAt:Date.now(),variantGroupId:group.id,variantLabel:`Размер ${label}`};
+    product={id:(market==='WB3'?'inferno:':'')+id(),name:`${group.name} · размер ${label}`,category:group.category||'',photo:group.photo||'',kaspi:'',wb:'',wb2:'',ozon:'',min:0,stock:0,cost:0,totalProfit:0,createdAt:Date.now(),variantGroupId:group.id,variantLabel:`Размер ${label}`};
     state.products.push(product);
   }
   product.variantGroupId=group.id;product.variantLabel=`Размер ${String(size.size||'Без размера')}`;
@@ -126,12 +126,12 @@ function manualVariantProduct(card,size,market){
 window.choosePendingWbVariant=function(cardIndex,sizeIndex){
   const link=window.pendingMarketplaceLink,card=window.pendingWbVariantCards?.[Number(cardIndex)],size=card?.sizes?.[Number(sizeIndex)];
   if(!link||!card||!size)return alert('Размер WB не найден. Обновите список.');
-  const market=String(link.market)==='WB2'?'WB2':'WB',product=manualVariantProduct(card,size,market);
+  const market=['WB2','WB3'].includes(String(link.market))?String(link.market):'WB',product=manualVariantProduct(card,size,market);
   if(attachMarketplaceSku(product,market,link.sku||size.barcode,link.feedKey)!==false){closeModal();render()}
 };
 
 window.loadPendingWbVariants=async function(){
-  const link=window.pendingMarketplaceLink,panel=document.getElementById('wbVariantLinkPanel');if(!link||!panel||!['WB','WB2'].includes(String(link.market)))return;
+  const link=window.pendingMarketplaceLink,panel=document.getElementById('wbVariantLinkPanel');if(!link||!panel||!['WB','WB2','WB3'].includes(String(link.market)))return;
   panel.innerHTML='<div class="muted">Загружаю размеры и баркоды WB…</div>';
   try{
     const response=await fetch(MILLIONER_API+'/api/wb-variants?market='+encodeURIComponent(link.market)+'&query='+encodeURIComponent(link.sku||''),{cache:'no-store'}),data=await response.json().catch(()=>({}));
@@ -146,7 +146,7 @@ window.loadPendingWbVariants=async function(){
 const originalOpenMarketplaceLink=window.openMarketplaceLink;
 if(typeof originalOpenMarketplaceLink==='function')window.openMarketplaceLink=function(market,sku,context='',feedKey='',productName=''){
   originalOpenMarketplaceLink.apply(this,arguments);
-  if(!['WB','WB2'].includes(String(market)))return;
+  if(!['WB','WB2','WB3'].includes(String(market)))return;
   const suggestions=document.getElementById('linkSuggestions');if(!suggestions)return;
   const panel=document.createElement('div');panel.id='wbVariantLinkPanel';panel.className='item';panel.style.marginBottom='10px';suggestions.before(panel);
   loadPendingWbVariants();

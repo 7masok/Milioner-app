@@ -126,7 +126,7 @@ test('Marketplace price APIs reject malformed success payloads',()=>{
 
 test('WB edits are queued locally while Ozon keeps its immediate write invalidation',()=>{
   const submitStart=ui.indexOf("window.submitPriceEdit");
-  const wbSubmit=ui.slice(ui.indexOf("if(row.market==='WB'||row.market==='WB2'){",submitStart),ui.indexOf("if(row.market==='Ozon'){",submitStart));
+  const wbSubmit=ui.slice(ui.indexOf("if((row.market==='WB'||row.market==='WB2'||row.market==='WB3')){",submitStart),ui.indexOf("if(row.market==='Ozon'){",submitStart));
   assert.match(wbSubmit,/row\.syncState='pending'/);
   assert.doesNotMatch(wbSubmit,/bumpPriceEpoch\(/);
   assert.match(api,/return queueWbPrice\(market, input\)/);
@@ -242,8 +242,8 @@ test('Inline price editor stays compact and avoids explanatory blocks',()=>{
 
 test('WB inline promotion actions change the discount through the workbench',()=>{
   const inline=ui.slice(ui.indexOf('function priceInlineEditor'),ui.indexOf('function priceCard'));
-  const wb=inline.slice(inline.indexOf("if(row.market==='WB'||row.market==='WB2')"),inline.indexOf("if(row.market==='Ozon')"));
-  const kaspi=inline.slice(inline.indexOf("if(row.market==='Kaspi')"),inline.indexOf("if(row.market==='WB'"));
+  const wb=inline.slice(inline.indexOf("if((row.market==='WB'||row.market==='WB2'||row.market==='WB3'))"),inline.indexOf("if(row.market==='Ozon')"));
+  const kaspi=inline.slice(inline.indexOf("if(row.market==='Kaspi')"),inline.indexOf("if((row.market==='WB'"));
   assert.match(wb,/price-promo-toggle/);
   assert.match(wb,/openPriceWorkbench\(\\'enter/);
   assert.match(wb,/openPriceWorkbench\(\\'exit/);
@@ -346,7 +346,7 @@ test('WB bulk promotion controls can select all visible rows and enable or disab
   assert.match(html,/\.price-bulk-actions\{display:grid;grid-template-columns:repeat\(4,minmax\(0,1fr\)\);gap:10px\}/);
   assert.match(html,/\.price-bulk-actions \.btn\{[^}]*min-height:42px/);
   assert.match(html,/@media\(max-width:420px\)\{\.price-bulk-tools\{[^}]*gap:9px[^}]*\}\.price-bulk-actions\{gap:9px\}\.price-bulk-actions \.btn\{[^}]*min-height:44px/);
-  assert.match(ui,/const priceSelected=\{Kaspi:new Set\(\),WB:new Set\(\),WB2:new Set\(\)\}/);
+  assert.match(ui,/const priceSelected=\{Kaspi:new Set\(\),WB:new Set\(\),WB2:new Set\(\),WB3:new Set\(\)\}/);
   assert.match(ui,/window\.priceSelectAllVisible=function\(checked\)/);
   assert.match(ui,/window\.priceSelectRow=function\(index,checked\)/);
   assert.match(ui,/window\.priceBulkPromo=async function\(enabled\)/);

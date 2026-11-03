@@ -27,7 +27,7 @@ test('snapshots crossing a day/week/month boundary require rebuilding, even insi
  cached={version:BUSINESS_CACHE_VERSION,source_revision:revision(),payload:model(),generated_at:start+DAY-1000};const get=await invoke('get');assert.equal(get.out.stale,true);
 });
 test('wrong dates, versions, shapes, HTML and oversized snapshots are rejected before cache writes',async()=>{
- assert.equal(businessCacheKey('month',start),null);assert.equal(businessCacheKey('day',today+DAY),null);assert.equal(businessCacheKey('year',start),null);
+ assert.equal(businessCacheKey('month',Date.UTC(2020,0,15)-18000000),null);assert.equal(businessCacheKey('day',today+DAY),null);assert.equal(businessCacheKey('year',Date.UTC(2020,0,15)-18000000),null);
  for(const patch of [{version:'old'},{start:start+1},{snapshot:{...model(),period:'week'}},{snapshot:{...model(),summary:{revenue:'fake',qty:1,profit:null}}},{snapshot:{...model(),label:'<img src=x onerror=alert(1)>'}},{snapshot:{...model(),big:'a'.repeat(600000)}}]){
   const r=await invoke('put',{period:'day',start,version:BUSINESS_CACHE_VERSION,sourceRevision:revision(),snapshot:model(),...patch});assert.equal(r.status,400);assert.equal(r.calls.length,0);
  }

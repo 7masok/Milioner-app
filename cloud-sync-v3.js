@@ -233,6 +233,7 @@ document.addEventListener('click',event=>{
   if(wbBtn){const wbAccount=String(wbBtn.dataset.wbAccount||'');if(['all','WB','WB2'].includes(wbAccount))rememberOrderMarketUi({market:'WB',wbAccount})}
 },true);
 function restoreOrderMarketUi(){
+  if(window.unifiedWarehouseEnabled)return;
   const saved=readOrderMarketUi();
   if(!['all','Kaspi','WB','Ozon'].includes(saved.market))return;
   const marketBtn=document.querySelector(`[data-market="${saved.market}"]`);
