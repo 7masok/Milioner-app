@@ -24,14 +24,14 @@ function purchaseDeletionBlockReason(rows){
 
   const ids=new Set(received.map(x=>String(x.id||'')).filter(Boolean));
   const referencedBySale=(state.sales||[]).some(s=>(s?.fifoLots||[]).some(l=>ids.has(String(l?.purchaseId||''))&&Number(l?.qty||0)>0));
-  if(referencedBySale)return 'Из этой закупки уже есть продажи. Удаление заблокировано, чтобы не испортить FIFO и себестоимость продаж.';
+  if(referencedBySale)return 'В этой закупке есть проданные товары. Сначала отмените связанные продажи.';
 
   for(const x of received){
     const qty=Math.max(0,Number(x.qty)||0);
     const remainingRaw=Number(x.remainingQty);
-    if(!Number.isFinite(remainingRaw))return 'У этой старой партии нет надёжных FIFO-данных. Автоматическое удаление заблокировано.';
+    if(!Number.isFinite(remainingRaw))return 'Не удалось подтвердить остаток этой партии. Удаление недоступно.';
     const remaining=Math.max(0,remainingRaw);
-    if(Math.abs(remaining-qty)>1e-9)return 'Из этой закупки уже было продано или списано часть товара. Удаление заблокировано, чтобы не сломать FIFO.';
+    if(Math.abs(remaining-qty)>1e-9)return 'Часть товара из этой закупки уже продана или списана. Сначала отмените связанные движения.';
   }
 
   const rollbackByProduct=new Map();
@@ -63,7 +63,7 @@ window.deletePurchaseShipment=function(encodedKey){
   const label=String(first.batch||'Поставка');
   const warning=receivedQty
     ? `\n\nИз них ${receivedQty} шт. уже введены в продажу, но ещё не использованы. Их приход будет откатан и остаток уменьшится на ${receivedQty} шт.`
-    : '\n\nОстатки и FIFO не изменятся.';
+    : '\n\nОстатки не изменятся.';
 
   if(!confirm(`Удалить закупку «${label}»?\n\n${rows.length} поз. · ${totalQty} шт.${warning}\n\nДействие сохранится в облаке.`))return;
 

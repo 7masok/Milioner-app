@@ -778,10 +778,10 @@ function businessProgressInfo(){
 }
 function businessProgressTime(t){return new Date(t).toLocaleString('ru-RU',{timeZone:'Asia/Almaty',day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit'})}
 function businessPaintLoadProgress(){
- const box=document.getElementById('businessLoadProgress');if(!box)return;const info=businessProgressInfo();box.hidden=false;box.dataset.state=info.state;
+ const box=document.getElementById('businessLoadProgress');if(!box)return;const info=businessProgressInfo();box.hidden=info.state==='ready';box.dataset.state=info.state;if(box.hidden)return info;
  if(!box.dataset.built){box.innerHTML='<div class="business-load-title"><span class="business-load-dot" aria-hidden="true"></span><b data-load-title></b></div><div data-load-count></div><progress data-load-bar aria-label="Подготовка дневной истории"></progress><div class="business-sub" data-load-detail></div>';box.dataset.built='1'}
  const title=box.querySelector?.('[data-load-title]'),count=box.querySelector?.('[data-load-count]'),detail=box.querySelector?.('[data-load-detail]'),bar=box.querySelector?.('[data-load-bar]');
- if(title)title.textContent=info.title;if(count)count.textContent=info.label;if(detail)detail.textContent=info.range+(info.detail?' · '+info.detail:'');if(bar){bar.hidden=info.total===0;bar.max=info.total||1;bar.value=info.ready;bar.title=info.range;bar.setAttribute('aria-valuetext',info.label)}
+ if(title)title.textContent=info.title;if(count)count.textContent=info.label;if(detail)detail.textContent=info.state==='loading'?'':info.detail.replace('Работает и при закрытом складе','').trim();if(bar){bar.hidden=info.total===0;bar.max=info.total||1;bar.value=info.ready;bar.title=info.range;bar.setAttribute('aria-valuetext',info.label)}
  return info;
 }
 function businessPollLoadProgress(){

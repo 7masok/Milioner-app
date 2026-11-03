@@ -16,7 +16,6 @@ window.ozonProtectionEditor=(row,index)=>{
  '<div class="field"><label>Цена защиты, '+esc(row.currency)+'</label><input id="ozonGuardPrice-'+index+'" type="number" min="0.01" step="0.01" value="'+esc(enabled?p.price:row.price)+'"></div>'+
  (enabled?'<p class="muted">'+esc(labels[p.status]||'Проверяется')+(p.checkedAt?' · '+new Date(p.checkedAt).toLocaleString('ru-RU',{timeZone:'Asia/Almaty'}):'')+'</p>':'')+
  (p.message?'<p class="price-error">'+esc(p.message)+'</p>':'')+
- '<div class="muted">Работает при закрытом приложении. Без автоматического повышения цены.</div>'+
  '<div class="price-inline-actions"><button type="button" class="btn dark" onclick="saveOzonPriceProtection('+index+',true)" '+(busy?'disabled':'')+'>'+(enabled?'Сохранить защиту':'Включить и выйти из акций')+'</button>'+
  (enabled?'<button type="button" class="btn" onclick="saveOzonPriceProtection('+index+',false)" '+(busy?'disabled':'')+'>Отключить</button>':'')+'</div></div>';
 };
