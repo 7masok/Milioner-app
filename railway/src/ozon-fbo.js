@@ -1,4 +1,4 @@
-import {recoverOzonPostings,missingOzonPostings} from './ozon-posting-recovery.js';
+import {recoverOzonPostings,missingOzonPostings,createOzonPostingReader} from './ozon-posting-recovery.js';
 import express from 'express';
 import {REPORT_HISTORY_FROM,reportStoreStartDate} from './report-history-range.js';
 import { pool } from './db.js';
@@ -194,7 +194,7 @@ async function run(historyOnly=false){
   }
   // Five exact read requests per minute, persisted cooldowns and the existing
   // single-account sync mutex; no stock, receipt or order mutation.
-  payload.postings=await recoverOzonPostings(payload,number=>request(credentials,'/v2/posting/fbo/get',{posting_number:number,translit:false,with:{analytics_data:true,financial_data:true}}));
+  payload.postings=await recoverOzonPostings(payload,createOzonPostingReader((path,body)=>request(credentials,path,body)));
   if(payload.postings.reconciliation.pending){pending=true;}
   if(!payload.errors.finance)payload.financeRetryAt=0;
   payload.historyRetryAt=payload.errors.postings?(Number(previous.historyRetryAt)>Date.now()?Number(previous.historyRetryAt):Date.now()+15*60*1000):0;
@@ -227,7 +227,7 @@ export function compactOzonAccount(account){
  const pick=(value,keys)=>Object.fromEntries(keys.filter(key=>value?.[key]!==undefined).map(key=>[key,value[key]]));
  if(!account.postings)return account;
  return{...account,postings:{...account.postings,rows:(account.postings.rows||[]).map(posting=>({
-  ...pick(posting,['posting_number','created_at','in_process_at','delivered_date','status']),
+  ...pick(posting,['posting_number','created_at','in_process_at','delivered_date','status','fulfillment']),
   products:(posting.products||[]).map(product=>pick(product,['sku','offer_id','name','quantity','price','currency_code','currency']))
  }))}};
 }
