@@ -35,6 +35,15 @@ function decryptToken(value) {
   return Buffer.concat([decipher.update(encrypted), decipher.final()]).toString('utf8');
 }
 
+// Delivery access and its bounded snapshot use the existing encrypted vault.
+// They are not marketplace accounts and never participate in stock workers.
+export async function saveAmanAccess(value) {
+  const now=Date.now();
+  await pool.query("INSERT INTO marketplace_credentials(id,provider,label,encrypted_token,enabled,created_at,updated_at,last_test_ok,last_error) VALUES('DELIVERY_AMANTRANS','AMANTRANS','Aman Trans',$1,1,$2,$2,1,'') ON CONFLICT(id) DO UPDATE SET encrypted_token=EXCLUDED.encrypted_token,updated_at=EXCLUDED.updated_at",[encryptToken(JSON.stringify(value)),now]);
+  cache.delete('DELIVERY_AMANTRANS');
+}
+export async function readAmanAccess(){const text=await credentialFor('DELIVERY_AMANTRANS');return text?JSON.parse(text):null;}
+
 export async function credentialFor(id, fallback = '') {
   if(config.storeProfile==='WB3'&&id!=='WB')return '';
   const slot = BUILTIN_CONNECTIONS[id];
@@ -130,7 +139,7 @@ connectionsRouter.get('/connections', asyncRoute(async (_req, res) => {
     };
   });
   for (const row of result.rows) {
-    if (BUILTIN_CONNECTIONS[row.id]||config.storeProfile==='WB3') continue;
+    if (BUILTIN_CONNECTIONS[row.id]||row.provider==='AMANTRANS'||config.storeProfile==='WB3') continue;
     connections.push({
       id:String(row.id), provider:String(row.provider), label:String(row.label), builtin:false,
       enabled:Boolean(Number(row.enabled)), configured:Boolean(row.encrypted_token), managedInSite:Boolean(row.encrypted_token),
