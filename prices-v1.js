@@ -2,13 +2,13 @@
 'use strict';
 
 const PRICE_UI_KEY=(typeof KEY==='string'?KEY:'sklad_mvp_v2')+'_prices_ui_v1';
-const PRICE_MARKETS=window.WB3_ONLY?['WB']:['Kaspi','WB','WB2','Ozon'];
+const PRICE_MARKETS=window.WB3_ONLY?['WB']:['Kaspi','WB','WB2','WB3','Ozon'];
 const PRICE_CLIENT_TTL_MS=2*60*1000;
 let priceUi={market:'Kaspi',q:'',sort:'asc',hidden:{},groupFilter:'all',groupId:''};
 Object.assign(priceUi,{deliveryRank:'',deliverySettings:{},sortMetric:'price'});
 if(window.WB3_ONLY)priceUi.market='WB';
 let priceExpanded=null;
-const priceSelected={Kaspi:new Set(),WB:new Set(),WB2:new Set()};
+const priceSelected={Kaspi:new Set(),WB:new Set(),WB2:new Set(),WB3:new Set()};
 try{
   const saved=JSON.parse(localStorage.getItem(PRICE_UI_KEY)||'{}')||{};
   if(PRICE_MARKETS.includes(saved.market))priceUi.market=saved.market;
@@ -49,7 +49,7 @@ function pRange(min,max,currency){
   return b>a?pMoney(a,currency)+' – '+pMoney(b,currency):pMoney(a,currency);
 }
 function marketLabel(market){
-  return market==='WB'?'WB 1':market==='WB2'?'WB 2':market;
+  return market==='WB'?'WB 1':market==='WB2'?'WB2':market==='WB3'?'WB3':market;
 }
 function activeSnapshot(){
   return priceCache.get(priceUi.market)||null;
@@ -63,7 +63,7 @@ function priceHiddenKeys(market=priceUi.market){
 function priceRowKey(row){
   if(!row)return'';
   const market=String(row.market||priceUi.market||'');
-  if(market==='WB'||market==='WB2')return market+'|nm:'+String(row.remoteId||row.nmID||row.sku||row.name||'');
+  if((market==='WB'||market==='WB2'||market==='WB3'))return market+'|nm:'+String(row.remoteId||row.nmID||row.sku||row.name||'');
   if(market==='Ozon')return market+'|'+String(row.accountId||row.account||'')+'|'+String(row.sku||row.remoteId||row.productId||row.name||'');
   return market+'|'+String(row.productId||row.sku||row.remoteId||row.name||'');
 }
@@ -77,7 +77,7 @@ function priceSelection(market=priceUi.market){
   return priceSelected[market]||new Set();
 }
 function priceIsWbMarket(market=priceUi.market){
-  return market==='WB'||market==='WB2';
+  return (market==='WB'||market==='WB2'||market==='WB3');
 }
 function priceCanSelect(market=priceUi.market){return market==='Kaspi'||priceIsWbMarket(market)}
 function priceSelectionId(row){return priceIsWbMarket(row?.market)?String(row.remoteId||''):priceRowKey(row)}
@@ -212,10 +212,10 @@ function wbServerStatus(data){
 }
 function priceErrorText(error){
   const text=String(error?.message||error||'Не удалось загрузить цены');
-  if((priceUi.market==='WB'||priceUi.market==='WB2')&&Number(error?.status)===429){
+  if(((priceUi.market==='WB'||priceUi.market==='WB2'||priceUi.market==='WB3'))&&Number(error?.status)===429){
     return 'WB временно ограничил обновление цен. Следующая попытка '+priceRetryLabel(error?.retryAt)+'.';
   }
-  if((priceUi.market==='WB'||priceUi.market==='WB2')&&/403|доступ|forbidden/i.test(text)){
+  if(((priceUi.market==='WB'||priceUi.market==='WB2'||priceUi.market==='WB3'))&&/403|доступ|forbidden/i.test(text)){
     return 'Токен '+marketLabel(priceUi.market)+' не имеет доступа к категории «Цены и скидки» WB. Добавьте это право у API-ключа и обновите.';
   }
   return text;
@@ -238,7 +238,7 @@ function priceInlineEditor(row,index){
       '<div class="price-inline-actions"><button type="button" class="btn dark" onclick="submitPriceEdit('+Number(index)+')">Сохранить</button><button type="button" class="btn price-hide-action" onclick="hidePriceRow('+Number(index)+')">Скрыть</button></div>'+
       '</div>';
   }
-  if(row.market==='WB'||row.market==='WB2'){
+  if((row.market==='WB'||row.market==='WB2'||row.market==='WB3')){
     const priceDisabled=row.canEditPrice===false;
     const ordinary=pNum(row.nightBasePrice)||pNum(row.confirmedPrice)||pNum(row.price);
     return '<div class="price-inline-editor" onclick="event.stopPropagation()">'+
@@ -279,7 +279,7 @@ function priceCard(row,index){
   const discount=priceDiscountValue(row),linked=row.linked!==false;
   const account=row.account&&row.account!==marketLabel(row.market)?'<span>'+pEsc(row.account)+'</span>':'';
   let lines='';
-  if(row.market==='WB'||row.market==='WB2'){
+  if((row.market==='WB'||row.market==='WB2'||row.market==='WB3')){
     lines='<span>Цена сейчас: <b>'+pRange(row.confirmedPrice??row.price,row.confirmedPriceMax??row.priceMax,row.currency)+'</b></span>'+
       '<span>Скидка: <b>'+pNum(row.confirmedDiscount??row.discount)+'%'+'</b></span>'+
       '<span>После скидки: <b>'+pRange(pNum(row.confirmedPrice??row.price)*(1-pNum(row.confirmedDiscount??row.discount)/100),pNum(row.confirmedPriceMax??row.priceMax)*(1-pNum(row.confirmedDiscount??row.discount)/100),row.currency)+'</b></span>'+
@@ -300,13 +300,13 @@ function priceCard(row,index){
     :row.syncState==='sent'
       ?'<div class="price-sync-state sent">Отправлено в WB · ждём проверки</div>'
       :'';
-  const promo=row.market==='WB'||row.market==='WB2'
+  const promo=(row.market==='WB'||row.market==='WB2'||row.market==='WB3')
     ?'<span class="price-promo-badge '+(row.promoEnabled&&row.promoStatus==='participating'?'active':row.promoEnabled?'waiting':'off')+'"> · '+(
       row.promoEnabled&&row.promoStatus==='participating'?'В акции':
       row.promoEnabled&&row.promoStatus==='auto_only'?'Автоакции вручную':
       row.promoEnabled?'Подбирает условия акции':'Участие проверяйте в WB')+'</span>'
     :'';
-  const night=(row.market==='WB'||row.market==='WB2')&&(row.nightPriceEnabled||row.nightPricePhase==='restoring')
+  const night=((row.market==='WB'||row.market==='WB2'||row.market==='WB3'))&&(row.nightPriceEnabled||row.nightPricePhase==='restoring')
     ?'<span class="price-night-badge"> · 🌙 '+pEsc(priceNightDaysLabel(row.nightPriceWeekdays))+' · '+pEsc(row.nightPriceStart||'04:00')+'–'+pEsc(row.nightPriceEnd||'06:00')+' · '+pMoney(row.nightPriceTarget,row.currency)+' · '+pEsc(({idle:'Запланировано',raising:'Устанавливается',active:'Установлена',restoring:'Возвращается',manual:'Ручная цена',locked:'Защита',off:'Выключено',error:'Ошибка'})[row.nightPricePhase]||'Запланировано')+(row.nightProtectionOverride?' · Поверх защиты':'')+(row.nightPriceError?' · '+pEsc(row.nightPriceError):'')+'</span>'
     :'';
   const discountBlock=row.promoBlocked?'<span class="price-lock-badge"> · Скидки заблокированы · 0%</span>':'';
@@ -399,7 +399,7 @@ window.renderPrices=async function(force=false){
     else setPriceStatus('Обновлено '+new Date(existing.fetchedAt||Date.now()).toLocaleTimeString('ru-RU',{hour:'2-digit',minute:'2-digit'}),'ok');
     return;
   }
-  const managedWb=market==='WB'||market==='WB2';
+  const managedWb=(market==='WB'||market==='WB2'||market==='WB3');
   const cooldown=managedWb?0:Number(priceCooldowns.get(market)||0);
   if(cooldown>Date.now()){
     const message='WB временно ограничил обновление цен. Следующая попытка '+priceRetryLabel(cooldown)+'.';
@@ -1116,7 +1116,7 @@ window.submitPriceEdit=async function(index){
       setPriceStatus(pushed?'Цена Kaspi сохранена · XML обновлён':'Цена Kaspi сохранена локально · сервер ещё синхронизируется',pushed?'ok':'warn');
       return;
     }
-    if(row.market==='WB'||row.market==='WB2'){
+    if((row.market==='WB'||row.market==='WB2'||row.market==='WB3')){
       const enteredPrice=row.canEditPrice===false?null:inputNumber('priceEditCurrent');
       const enteredDiscount=inputNumber('priceEditDiscount');
       if(row.canEditPrice!==false&&!(enteredPrice>0))throw new Error('Введите цену больше 0');

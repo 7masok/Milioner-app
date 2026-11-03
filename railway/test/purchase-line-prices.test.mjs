@@ -70,3 +70,8 @@ test('PDF refuses an unapplied total and invalid allocation leaves entered row p
  const f=fixture(),a=f.line('a',3,100),b=f.line('b',2,900,'total'),total=f.field('porBuyTotal');total.value='2000';f.ctx.markPurchaseTotalDraft(total);const script=readFileSync(new URL('../../purchase-pdf-v1.js',import.meta.url),'utf8').replace('window.exportPurchasePdf=','window.purchasePdfInput=purchasePdfInput;window.exportPurchasePdf=');vm.runInContext(script,f.ctx);assert.throws(()=>f.ctx.window.purchasePdfInput('new'),/распределите общую сумму/);
  total.value='-1';f.ctx.applyPurchaseGrandTotal('new');assert.equal(a.input.value,'100');assert.equal(b.input.value,'900');assert.equal(total.dataset.pendingTotal,'1');assert.equal(f.saves,0);
 });
+
+test('one draft separates WB3 into its own shipment with only its own purchase and delivery totals',()=>{
+ const f=fixture();f.state.products[1].id='inferno:b';f.line('a',3,100);f.line('inferno:b',2,450);f.ctx.createPurchaseOrder();assert.equal(f.saves,1);
+ const main=f.state.purchases.find(p=>p.productId==='a'),child=f.state.purchases.find(p=>p.productId==='inferno:b');assert.notEqual(main.shipmentId,child.shipmentId);assert.ok(child.shipmentId.startsWith('inferno:'));assert.ok(child.id.startsWith('inferno:'));assert.equal(main.shipmentPurchaseTotal,300);assert.equal(child.shipmentPurchaseTotal,900);assert.equal(main.shipmentDeliveryTotal,60);assert.equal(child.shipmentDeliveryTotal,40);
+});

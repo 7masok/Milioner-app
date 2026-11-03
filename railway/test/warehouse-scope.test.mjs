@@ -69,9 +69,9 @@ test('delegated sessions retain the parent expiry and are signed only by the Inf
   assert.throws(()=>infernoSession(now+'.expired.signature','inferno-secret',now));
   assert.throws(()=>infernoSession(parent,'',now));
 });
-test('every section has a shared scope switch, and the main page does not install the Inferno runtime', () => {
+test('main warehouse uses flat store buttons and keeps the legacy Inferno address compatible', () => {
   const main=withWarehouseScopePage(html,{enabled:true}), child=withWarehouseScopePage(html,{inferno:true,enabled:true});
-  assert.match(main,/id="warehouseScopeSwitch"/); assert.match(main,/Все магазины/); assert.match(main,/data-scope="inferno"/);
+  assert.doesNotMatch(main,/id="warehouseScopeSwitch"/);assert.match(main,/id="orderStoreSelection"/);for(const market of ['Kaspi','WB','WB2','WB3','Ozon'])assert.ok(main.includes('data-store-select="'+market+'"'));assert.match(main,/store-selection-v1\.js/);
   assert.doesNotMatch(main,/<script src="\.\/wb3-profile/);
   assert.ok(child.indexOf('warehouse-scope-bootstrap.js')<child.indexOf("const KEY="));
   assert.ok(child.indexOf('wb3-orders-v1.js')<child.indexOf('<script>initOwnerAuth();'));

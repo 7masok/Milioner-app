@@ -3,6 +3,7 @@
 if(typeof window==='undefined')return;
 
 const BUSINESS_SUPPORTED_MARKETS=new Set(['Kaspi','WB','WB2','Ozon']);
+if(window.WAREHOUSE_SCOPE_CONFIG?.enabled&&!window.WB3_ONLY)BUSINESS_SUPPORTED_MARKETS.add('WB3');
 if(window.WB3_ONLY){BUSINESS_SUPPORTED_MARKETS.clear();BUSINESS_SUPPORTED_MARKETS.add('WB');}
 const BUSINESS_PERIODS=new Set(['day','week','month','year']);
 const BUSINESS_WEEKDAYS=['Пн','Вт','Ср','Чт','Пт','Сб','Вс'];
@@ -10,18 +11,18 @@ const BUSINESS_METRICS=new Set(['orders','buyouts','orderProfit','buyoutProfit']
 const BUSINESS_UI_KEY='milioner_business_dashboard_v1';
 const BUSINESS_MONTH_NAMES=['янв','фев','мар','апр','май','июн','июл','авг','сен','окт','ноя','дек'];
 const BUSINESS_CACHE_VERSION='calendar-v2';let BUSINESS_CACHE_KEY='milioner_business_snapshots_calendar_v2';
-let businessMarket='all',businessScope=0,businessOpeningSignature='{}';
+let businessSelection='',businessMarket='all',businessScope=0,businessOpeningSignature='{}';
 function businessSelectedMarket(){const m=typeof window.getReportMarket==='function'?window.getReportMarket():state?.settings?.reportMarket;return BUSINESS_SUPPORTED_MARKETS.has(m)?m:'all'}
-function businessIncludesMarket(m){return businessMarket==='all'||businessMarket===m}
+function businessIncludesMarket(m){return window.unifiedWarehouseEnabled?selectedStoreIds('reports').includes(m):businessMarket==='all'||businessMarket===m}
 function businessMarketLabel(m=businessMarket){return m==='all'?'Kaspi + WB1 + WB2 + Ozon':m==='WB'?'WB 1':m==='WB2'?'WB 2':m}
 function businessMarketQuery(){return businessMarket==='all'?'':'&market='+encodeURIComponent(businessMarket)}
 function businessSnapshotKey(model){return model.period+':'+model.bounds.start+(businessMarket==='all'?'':':'+businessMarket)}
 function businessOpeningKey(value,market=businessMarket){try{const starts=typeof value==='string'?JSON.parse(value):value||{},markets=market==='all'?[...BUSINESS_SUPPORTED_MARKETS]:[market];return JSON.stringify(Object.fromEntries(markets.filter(m=>starts[m]).map(m=>[m,starts[m]])))}catch(_){return null}}
-function businessSyncMarket(){const market=businessSelectedMarket(),signature=businessOpeningKey(state?.settings?.reportStoreStarts,market);if(market===businessMarket&&signature===businessOpeningSignature)return;businessOpeningSignature=signature;businessMarket=market;businessScope++;businessDayChain=Promise.resolve();businessYearChain=Promise.resolve();businessRenderSeq++;businessLastModel=null;for(const cache of [businessModels,businessModelMeta,businessSummaryCache,businessBuildJobs,businessDays,businessDayJobs,businessMonthBases,businessWeekOrderCache,businessComparisonAttempts])cache.clear();businessCacheHydrated=false;businessDaysHydrated=false;businessMonthsHydrated=false;const suffix=market==='all'?'':':'+market;BUSINESS_CACHE_KEY='milioner_business_snapshots_calendar_v2'+suffix;BUSINESS_DAYS_KEY='milioner_business_days_v2'+suffix;BUSINESS_MONTHS_KEY='milioner_business_month_bases_v1'+suffix;}
+function businessSyncMarket(){const market=businessSelectedMarket(),signature=businessOpeningKey(state?.settings?.reportStoreStarts,market);const selection=window.unifiedWarehouseEnabled?selectedStoreIds('reports').join(','):'';if(market===businessMarket&&signature===businessOpeningSignature&&selection===businessSelection)return;businessSelection=selection;businessOpeningSignature=signature;businessMarket=market;businessScope++;businessDayChain=Promise.resolve();businessYearChain=Promise.resolve();businessRenderSeq++;businessLastModel=null;for(const cache of [businessModels,businessModelMeta,businessSummaryCache,businessBuildJobs,businessDays,businessDayJobs,businessMonthBases,businessWeekOrderCache,businessComparisonAttempts])cache.clear();businessCacheHydrated=false;businessDaysHydrated=false;businessMonthsHydrated=false;const suffix=(market==='all'?'':':'+market)+(businessSelection?':'+businessSelection:'');BUSINESS_CACHE_KEY='milioner_business_snapshots_calendar_v2'+suffix;BUSINESS_DAYS_KEY='milioner_business_days_v2'+suffix;BUSINESS_MONTHS_KEY='milioner_business_month_bases_v1'+suffix;}
 function businessStoreStart(m=businessMarket){const date=state?.settings?.reportStoreStarts?.[m];if(!/^\d{4}-\d{2}-\d{2}$/.test(date||''))return 0;const t=Date.parse(date+'T00:00:00+05:00');return Number.isFinite(t)&&businessIsoDate(t)===date?t:0}
 function businessBeforeOpening(bounds){const markets=businessMarket==='all'?[...BUSINESS_SUPPORTED_MARKETS]:[businessMarket];return markets.every(m=>businessStoreStart(m)>0&&bounds.end<=businessStoreStart(m))}
-function businessScopeMatches(model){if(!model)return false;if(model.market&&model.market!==businessMarket)return false;if(model.storeStarts&&businessOpeningKey(model.storeStarts)!==businessOpeningSignature)return false;return businessMarket==='all'||[...(model.ordersPartialMarkets||[]),...(model.summary?.missingMarkets||[]),...Object.keys(model.summary?.sources||{})].every(m=>m===businessMarket)}
-function businessStamp(model){return {...model,market:businessMarket,storeStarts:businessOpeningSignature}}
+function businessScopeMatches(model){if(!model)return false;if(window.unifiedWarehouseEnabled&&model.storeSelection!==selectedStoreIds('reports').join(','))return false;if(model.market&&model.market!==businessMarket)return false;if(model.storeStarts&&businessOpeningKey(model.storeStarts)!==businessOpeningSignature)return false;return businessMarket==='all'||[...(model.ordersPartialMarkets||[]),...(model.summary?.missingMarkets||[]),...Object.keys(model.summary?.sources||{})].every(m=>m===businessMarket)}
+function businessStamp(model){return {...model,...(window.unifiedWarehouseEnabled?{storeSelection:selectedStoreIds('reports').join(',')}:{}),market:businessMarket,storeStarts:businessOpeningSignature}}
 function businessOrdersClosedReady(data,at,now=Date.now()){return Boolean(data&&data.ordersReady===true&&!data.ordersPartialMarkets?.length&&data.bounds.end+2*86400000<=now&&at>=data.bounds.end+2*86400000)}
 function businessClosedReady(data,at,now=Date.now()){return Boolean(data&&data.bounds.end+2*86400000<=now&&at>=data.bounds.end+2*86400000&&!data.pending&&!data.ordersPartialMarkets?.length&&!data.summary?.missingMarkets?.length&&!data.summary?.partialOzonHistory)}
 function businessAnnualFloor(){return businessDayBounds(0).start-364*86400000}

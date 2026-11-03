@@ -27,9 +27,9 @@ function warehouseChangedWire(sentSnap){
   if((base.kaspiBaselineAt||null)!==(sentSnap.kaspiBaselineAt||null))patch.kaspiBaselineAt=sentSnap.kaspiBaselineAt||null;
   if(!Object.keys(patch.deleted).length)delete patch.deleted;
   const described=Object.keys(patch).length>0;
-  if(!described)return {patch:false,state:sentSnap};
+  if(!described)return {patch:Boolean(window.unifiedWarehouseEnabled),state:window.unifiedWarehouseEnabled?{}:sentSnap};
   const totalRows=fields.reduce((sum,field)=>sum+((sentSnap[field]||[]).length),0);
-  if(totalRows>0&&changedRows>Math.max(80,Math.floor(totalRows*0.6)))return {patch:false,state:sentSnap};
+  if(!window.unifiedWarehouseEnabled&&totalRows>0&&changedRows>Math.max(80,Math.floor(totalRows*0.6)))return {patch:false,state:sentSnap};
   return {patch:true,state:patch};
 }
 
@@ -44,7 +44,7 @@ pushWarehouseToServer=async function(){
     const response=await fetch(MILLIONER_API+'/api/warehouse-state',{
       method:'PUT',
       headers:{'Content-Type':'application/json',Accept:'application/json'},
-      body:JSON.stringify({baseRevision:warehouseRemoteRevision,patch:wire.patch,state:wire.state})
+      body:JSON.stringify({baseRevision:warehouseRemoteRevision,patch:wire.patch,state:wire.state,...(window.unifiedWarehouseEnabled?{unifiedWarehouseVersion:1}:{})})
     });
     let data={};
     try{data=await response.json()}catch{}
