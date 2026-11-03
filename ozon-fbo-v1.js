@@ -38,6 +38,8 @@ window.ozonFboRequestOrderHistory=async bounds=>{
  return result.pending===true;
 };
 window.ozonFboFinanceHistoryCovers=bounds=>Boolean(data?.accounts)&&data.accounts.every(account=>Array.isArray(account.finance?.rows)&&Date.parse(account.finance.from)<=bounds.start&&Date.parse(account.finance.to)>=Math.min(bounds.end,Date.now()));
+window.ozonFboOrderRepairAt=bounds=>Math.max(0,...(data?.accounts||[]).flatMap(a=>Object.entries({...a.postings?.reconciliation?.repairedDays,...a.postings?.reconciliation?.recalculatedDays}).filter(([day])=>{const t=Date.parse(day+'T00:00:00+05:00');return t>=bounds.start&&t<bounds.end}).map(([,at])=>Number(at)||0)));
+window.ozonFboOrderGapCount=()=>data?.accounts?.reduce((n,a)=>n+(Number(a.postings?.reconciliation?.pending)||0),0)||0;
 function updateFboMetric(){const el=document.getElementById('productFboQty');if(el)el.textContent=data?fboTotal.toLocaleString('ru-RU')+' шт.':'—';}
 function populateOzonOrderFeed(){
  if(!data?.accounts)return;
@@ -162,7 +164,7 @@ function load(force=false){
  loading=true;
  updateOzonHeaderIndicator();
  try{
-  const priorCoverage=JSON.stringify((data?.accounts||[]).map(a=>[a.account,a.postings?.from,a.postings?.to]));
+  const priorCoverage=JSON.stringify((data?.accounts||[]).map(a=>[a.account,a.postings?.from,a.postings?.to,a.postings?.rows?.length,a.postings?.reconciliation?.recovered]));
   const response=await fetch(MILLIONER_API+'/api/ozon-fbo?compact=1',{cache:'no-store',signal:AbortSignal.timeout(20000)});
   const payload=await response.json();if(!response.ok||payload?.ok===false)throw Error(payload?.error||'HTTP '+response.status);
   data=payload;
@@ -172,7 +174,7 @@ function load(force=false){
   populateOzonOrderFeed();
   resolveOzonProductIds();
   updateFboMetric();
-  if(priorCoverage!==JSON.stringify((data?.accounts||[]).map(a=>[a.account,a.postings?.from,a.postings?.to]))&&document.getElementById('reports')?.classList.contains('active'))setTimeout(()=>window.renderBusinessDashboard?.(false),0);
+  if(priorCoverage!==JSON.stringify((data?.accounts||[]).map(a=>[a.account,a.postings?.from,a.postings?.to,a.postings?.rows?.length,a.postings?.reconciliation?.recovered]))&&document.getElementById('reports')?.classList.contains('active'))setTimeout(()=>window.renderBusinessDashboard?.(false),0);
   if(document.getElementById('products')?.classList.contains('active')){if(typeof invalidateProductRenderStats==='function')invalidateProductRenderStats();baseRenderProducts(false);}
  }
  catch(e){

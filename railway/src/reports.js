@@ -1,3 +1,4 @@
+import {reconcileWbPrices,reconcileOzonPrices,wbFinanceIdentity} from './report-price-reconciliation.js';
 import {kaspiHistoryStatus} from './kaspi-order-history.js';
 import { financeHistoryStatus } from './wb-finance-history.js';
 import { configuredWbConnectionIds } from './connections.js';
@@ -371,6 +372,23 @@ async function resolveWbAdvertising(selected, adRows = []) {
 }
 
 // A separate, read-only report: existing warehouse/product analytics remain on their current model.
+// One financial entry supplies both price bases. Matching never joins by month,
+// article, amount or a cart ID; only individual RID/SRID or posting + SKU.
+reportsRouter.get('/report-price-reconciliation',asyncRoute(async(req,res)=>{
+ const since=Number(req.query.from),until=Number(req.query.to),selected=market(req.query.market);
+ if(!['WB','WB2','OZON'].includes(selected)||!Number.isSafeInteger(since)||!Number.isSafeInteger(until)||since<1||until<=since||until-since>366*86400000)return res.status(400).json({ok:false,error:'Проверьте магазин и период не более года'});
+ if(selected==='OZON'){
+  const accounts=(await pool.query("SELECT c.payload FROM ozon_fbo_cache c JOIN marketplace_credentials m ON m.id=c.account WHERE m.provider='OZON' AND m.enabled=1")).rows.map(x=>x.payload);
+  return res.json({ok:true,...reconcileOzonPrices(accounts,since,until)});
+ }
+ const finance=(await pool.query(`SELECT market,rrd_id,operation,doc_type,qty,retail_amount,vendor_code,raw_json FROM wb_finance_rows WHERE market=$1 AND (${wbFinancePeriodSql()}) >= $2 AND (${wbFinancePeriodSql()}) < $3 AND lower(COALESCE(NULLIF(btrim(operation),''),btrim(doc_type))) IN ('продажа','возврат') ORDER BY rrd_id LIMIT 30001`,[selected,since,until])).rows;
+ if(finance.length>30000)return res.status(422).json({ok:false,error:'Слишком много продаж. Выберите более короткий период'});
+ const ids=[...new Set(finance.map(wbFinanceIdentity).filter(Boolean))];
+ const orders=ids.length?(await pool.query(`SELECT market,order_id,qty,total_price,raw_json FROM marketplace_order_lines WHERE market=$1 AND COALESCE(NULLIF(raw_json::jsonb->'order'->>'rid',''),NULLIF(raw_json::jsonb->'order'->>'srid',''),NULLIF(raw_json::jsonb->>'srid',''))=ANY($2::text[]) LIMIT 30001`,[selected,ids])).rows:[];
+ if(orders.length>30000)return res.status(422).json({ok:false,error:'Слишком много связанных заказов'});
+ res.json({ok:true,...reconcileWbPrices(selected,finance,orders)});
+}));
+
 reportsRouter.get('/wb-operation-audit', asyncRoute(async (req, res) => {
   const selected = market(req.query.market);
   if (!['WB', 'WB2'].includes(selected)) return res.status(400).json({ ok: false, error: 'market must be WB or WB2' });

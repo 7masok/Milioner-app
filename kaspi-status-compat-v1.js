@@ -228,9 +228,9 @@ try{
       if(!product){if(category==='ads')unallocatedAds+=amount;else if(category!=='sales')unallocated+=amount;continue;}
       const pr=productRow(product);pr[category]+=categoryAmount;pr.net+=amount;
       if(category==='sales'){
-        const posting=String(row?.posting?.posting_number||'');
+        const posting=String(row?.posting?.posting_number||row?.unit_number||'');
         const q=maps.postingQty.get(String(account?.account||'')+'|'+posting+'|'+sku)||1;
-        pr.qty+=q;if(categoryAmount>0&&!/возврат|отмен/i.test(String(row.operation_type_name||''))){const day=new Date(t+18000000).toISOString().slice(0,10);pr.dailySales[day]=(pr.dailySales[day]||0)+q;}
+        pr.qty+=(categoryAmount<0?-q:q);if(categoryAmount>0&&!/возврат|отмен/i.test(String(row.operation_type_name||''))){const day=new Date(t+18000000).toISOString().slice(0,10);pr.dailySales[day]=(pr.dailySales[day]||0)+q;}
       }
     }
     for(const pr of products.values()){
