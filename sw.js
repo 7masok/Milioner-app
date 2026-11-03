@@ -1,6 +1,6 @@
 const SCOPE_BASE=new URL('.',self.location.href||self.location.origin+'/sw.js').pathname;
 const OFFLINE_PATH=SCOPE_BASE+'offline.html';
-const OFFLINE_CACHE='sklad-connection-screen-v3-'+SCOPE_BASE;
+const OFFLINE_CACHE='sklad-connection-screen-v4-'+SCOPE_BASE;
 self.addEventListener('install',event=>event.waitUntil((async()=>{const cache=await caches.open(OFFLINE_CACHE);await cache.add(new Request(OFFLINE_PATH,{cache:'reload'}));await self.skipWaiting()})()));
 self.addEventListener('activate',event=>event.waitUntil(self.clients.claim()));
 // Business data, authenticated responses and access tokens are never cached here.
