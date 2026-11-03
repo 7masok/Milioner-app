@@ -20,5 +20,5 @@ test('request budget, server cooldown and individual failed posting retries surv
 test('wrong identity or missing creation date never fabricates an order; 404 is retried after a day',async()=>{
  const input={postings:{rows:[]},finance:{rows:[sale('1111-11-1'),sale('2222-22-2'),sale('not-a-posting')]}};
  const r=await recoverOzonPostings(input,async n=>n==='1111-11-1'?posting('WRONG'):Promise.reject(Error('HTTP 404')),NOW);
- assert.equal(r.rows.length,0);assert.equal(r.reconciliation.pending,2);assert.equal(r.reconciliation.retry['2222-22-2'].nextAt,NOW+86400000);
+ assert.equal(r.rows.length,0);assert.equal(r.reconciliation.pending,2);assert.equal(r.reconciliation.retry['2222-22-2'].nextAt,NOW+86400000);assert.equal(r.reconciliation.retry['2222-22-2'].error,'HTTP 404');
 });

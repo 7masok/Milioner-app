@@ -33,7 +33,7 @@ export async function recoverOzonPostings(account, readPosting, now = Date.now()
       repairedDays[day] = now; delete retry[number]; recovered++;
     } catch (error) {
       const wait = /HTTP 404/.test(error.message) ? 86400000 : 15 * 60000;
-      retry[number] = {nextAt: Math.max(now + wait, Number(error.retryAt) || 0)};
+      retry[number] = {nextAt: Math.max(now + wait, Number(error.retryAt) || 0),error:String(error.message||'Ozon: не удалось прочитать отправление').slice(0,240)};
       if (Number(error.retryAt) > now || /HTTP 429/.test(error.message)) {nextAt = retry[number].nextAt; break;}
     }
   }
