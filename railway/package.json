@@ -11,12 +11,13 @@
   },
   "dependencies": {
     "@simplewebauthn/server": "^13.3.3",
+    "acorn": "^8.19.0",
+    "dejavu-fonts-ttf": "2.37.3",
     "express": "^5.1.0",
     "helmet": "^8.1.0",
     "pdf-parse": "^1.1.1",
-    "pg": "^8.16.3",
     "pdfkit": "0.20.2",
-    "sharp": "0.35.5",
-    "dejavu-fonts-ttf": "2.37.3"
+    "pg": "^8.16.3",
+    "sharp": "0.35.5"
   }
 }

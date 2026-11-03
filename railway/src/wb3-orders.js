@@ -79,10 +79,10 @@ export function startWb3OrderHistoryLoop() {
   const run=()=>syncWb3OrderHistory().catch(error=>console.error('WB3 orders',String(error.message||error)));
   void run();const timer=setInterval(run,60_000);timer.unref();return timer;
 }
-export async function readWb3Orders({after=0,limit=500,cursor=''}={}) {
+export async function readWb3Orders({after=0,before=0,limit=500,cursor=''}={}) {
   const [native,history,warehouse,status]=await Promise.all([
-    pool.query(`SELECT o.order_id AS "orderId",o.code,o.entry_id AS "entryId",o.status,o.state,o.creation_date AS "creationDate",o.sku,o.product_name AS "productName",o.qty,o.unit_price AS "unitPrice",o.total_price AS "totalPrice",o.updated_at AS "updatedAt",o.raw_json AS "rawJson",'WB' AS market FROM marketplace_order_lines o WHERE o.market='WB' AND o.creation_date >= $1`,[after]),
-    pool.query('SELECT payload FROM wb3_order_history WHERE creation_date >= $1',[after]),
+    pool.query(`SELECT o.order_id AS "orderId",o.code,o.entry_id AS "entryId",o.status,o.state,o.creation_date AS "creationDate",o.sku,o.product_name AS "productName",o.qty,o.unit_price AS "unitPrice",o.total_price AS "totalPrice",o.updated_at AS "updatedAt",o.raw_json AS "rawJson",'WB' AS market FROM marketplace_order_lines o WHERE o.market='WB' AND o.creation_date >= $1 AND ($2::bigint=0 OR o.creation_date<$2)`,[after,before]),
+    pool.query('SELECT payload FROM wb3_order_history WHERE creation_date >= $1 AND ($2::bigint=0 OR creation_date<$2)',[after,before]),
     pool.query('SELECT payload FROM warehouse_state WHERE id=1'),
     pool.query('SELECT source,last_success_at AS "lastSuccessAt",next_allowed_at AS "nextAt",last_error AS error,cursor FROM wb3_order_history_sync ORDER BY source')
   ]);

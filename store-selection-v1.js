@@ -42,9 +42,10 @@
   let body;try{body=typeof options.body==='string'?JSON.parse(options.body):null}catch{}
   const child=[...url.searchParams.values()].some(v=>v==='WB3'||v.startsWith('inferno:'))||decodeURIComponent(url.pathname).includes('inferno:')||/\/WB3(?:\/|$)/.test(url.pathname)||body&&(body.market==='WB3'||body.account==='WB3'||String(body.productId||'').startsWith('inferno:')||body.markets?.includes('WB3'));
   const reports=selectedStoreIds('reports'),customReports=reports.length>1&&!(reports.length===4&&defaults.every(m=>reports.includes(m)));
-  if(customReports&&/^\/api\/business-dashboard-(cache|days|months)$/.test(url.pathname)){
-   if(String(options.method||'GET').toUpperCase()!=='GET')return Promise.resolve(Response.json({ok:true,generatedAt:Date.now(),localOnly:true}));
-   return previousFetch(input,options).then(async response=>{if(!response.ok)return response;const data=await response.json();return Response.json({...data,snapshot:null,days:[],months:[],reusable:false},{status:response.status});});
+  if(customReports&&/^\/api\/business-dashboard-(cache|days|months|progress)$/.test(url.pathname)){
+   if(String(options.method||'GET').toUpperCase()!=='GET')return Promise.resolve(Response.json({ok:true,generatedAt:Date.now(),serverManaged:true}));
+   if(/-(days|progress)$/.test(url.pathname)){url.pathname='/api/unified'+url.pathname.slice(4);url.searchParams.set('markets',reports.join(','));return previousFetch(url.href,options)}
+   return previousFetch(input,options).then(async response=>{if(!response.ok)return response;const data=await response.json();return Response.json({...data,serverManaged:true,snapshot:null,days:[],months:[],reusable:false},{status:response.status});});
   }
   const combined=['/api/warehouse-state','/api/market-status','/api/orders','/api/connections'].includes(url.pathname);
   if(body&&url.pathname!=='/api/warehouse-state'){

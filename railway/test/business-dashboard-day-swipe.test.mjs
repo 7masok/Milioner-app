@@ -25,7 +25,7 @@ function fixture(saved={},loader=null){
  }};
  const ctx={window,Date:Clock,Intl,Map,Set,console,state,financialSales:()=>sales,groupMarketplaceOrders:rows=>rows,marketplaceLifecycleStage:()=>'',MILLIONER_API:'https://fixture.invalid',apiJson:async url=>{requests.push({orderHistoryUrl:url});return {ok:true,orders:state.kaspiOrderFeed.map((row,i)=>({...row,entryId:String(i),orderId:String(i)}))}},fmt:n=>String(n)+' ₸',localStorage:{getItem:k=>storage.get(k),setItem:(k,v)=>storage.set(k,v)},document:{readyState:'loading',getElementById:id=>elements.get(id)||null,querySelectorAll:()=>[],addEventListener(){}},setTimeout() {}};
  vm.createContext(ctx);
- vm.runInContext(source.replace(/\}\)\(\);\s*$/, "window.testApi={businessDayBounds,businessSelectedDayOffset,businessWeekBounds,businessSelectedWeekOffset,businessMonthBounds,businessSelectedMonthOffset,businessBuildModel,businessInstallDaySwipe,businessModels,businessPaintTabs,businessRememberModel,businessModelMeta,businessModelFromDays,businessDays,businessAwait,businessSyncMarket,businessLoadWeekOrderHistory,businessEnsureUi,businessOrderRepairAt,businessKaspiGap,setKaspiHistory:value=>{businessKaspiHistory=value}};})();"),ctx);
+ vm.runInContext(source.replace(/\}\)\(\);\s*$/, "window.testApi={businessDayBounds,businessSelectedDayOffset,businessWeekBounds,businessSelectedWeekOffset,businessMonthBounds,businessSelectedMonthOffset,businessBuildModel,businessInstallDaySwipe,businessModels,businessPaintTabs,businessRememberModel,businessModelMeta,businessModelFromDays,businessDays,businessAwait,businessSyncMarket,businessLoadWeekOrderHistory,businessEnsureUi,businessMakeDay,businessLoadDayBase,businessStartAnnualWarm,businessOrderRepairAt,businessKaspiGap,setKaspiHistory:value=>{businessKaspiHistory=value}};})();"),ctx);
  const chart=element('businessChart');window.testApi.businessInstallDaySwipe();
  const touch=(x,y,id=1)=>({clientX:x,clientY:y,identifier:id});
  function event(type,touches,changedTouches=[]){let prevented=false;chart.listeners.get(type)({touches,changedTouches,cancelable:true,preventDefault(){prevented=true}});return prevented}
@@ -407,4 +407,18 @@ test('Kaspi recheck invalidates only affected closed days and suppresses a false
  assert.equal(f.api.businessKaspiGap(bounds),true);assert.equal(f.api.businessOrderRepairAt(bounds),today+1);assert.equal(f.api.businessOrderRepairAt({start:bounds.end,end:bounds.end+86400000}),0);
  await f.window.renderBusinessDashboard();assert.match(f.element('businessValueMeta').textContent,/история Kaspi перепроверяется/);assert.doesNotMatch(f.element('businessYesterdayCompare').innerHTML,/%/);
  f.api.setKaspiHistory({gaps:[],repairRevisions:[{from:bounds.start,to:bounds.end,at:today+1}]});assert.equal(f.api.businessKaspiGap(bounds),false);
+});
+
+test('server-managed reports read prepared days without order history, finance calculations or browser PUTs',async()=>{
+ const seed=sharedFixture();await seed.window.renderBusinessDashboard();const records=[...seed.api.businessDays.values()].map(r=>({day:r.data,generatedAt:r.at,reusable:true,fresh:true}));
+ const f=sharedFixture(),requests=[];f.ctx.apiJson=async()=>assert.fail('browser must not load source orders');
+ f.window.loadBusinessMarketplaceDaily=async()=>assert.fail('browser must not calculate finance');
+ f.ctx.fetch=async(url,options={})=>{requests.push({url,method:options.method||'GET'});assert.equal(options.method,undefined);return{ok:true,json:async()=>({ok:true,serverManaged:true,version:'calendar-v2',sourceRevision:'a'.repeat(64),snapshot:null,days:url.includes('/business-dashboard-days?')?records:[]})}};
+ await f.window.renderBusinessDashboard();assert.equal(f.loads,0);assert.notEqual(f.element('businessValue').textContent,'—');assert.ok(requests.some(r=>r.url.includes('/business-dashboard-days?')));assert.ok(requests.every(r=>r.method==='GET'));
+ const count=requests.length;assert.equal(f.api.businessStartAnnualWarm(),undefined);assert.equal(requests.length,count,'a closed browser is no longer the background calculator');
+});
+test('an unavailable server preparation endpoint never falls back to browser computation',async()=>{
+ const f=sharedFixture();let reads=0;f.ctx.apiJson=async()=>assert.fail('no source history in server mode');f.window.loadBusinessMarketplaceDaily=async()=>assert.fail('no browser finance fallback');
+ f.ctx.fetch=async url=>{reads++;if(url.includes('/business-dashboard-days?'))throw Error('offline');return{ok:true,json:async()=>({ok:true,serverManaged:true,version:'calendar-v2',sourceRevision:'a'.repeat(64),snapshot:null})}};
+ await f.window.renderBusinessDashboard();assert.equal(f.loads,0);assert.ok(reads>0);
 });

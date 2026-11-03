@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import express from 'express';
 import {createUnifiedWarehouseRouter} from '../src/unified-warehouse.js';
-import {mergeWarehouses,splitWarehouses,LISTS,combinedRevision,applyUnifiedPatch,warehouseDelta} from '../src/unified-warehouse-model.js';
+import {mergeWarehouses,splitWarehouses,LISTS,combinedRevision,applyUnifiedPatch,warehouseDelta,scopeApiValue} from '../src/unified-warehouse-model.js';
 
 function state(name){return {...Object.fromEntries(LISTS.map(k=>[k,[]])),products:[{id:'same',name,stock:10,wb:'SKU',wbVariant:{market:'WB',nmId:'123',chrtId:456}}],settings:{name}};}
 test('colliding IDs, FIFO references, packaging and ignored purchase plans round-trip to their original warehouse',()=>{
@@ -67,4 +67,9 @@ test('a small edit uses bounded patches in both warehouse protocols',async t=>{
 test('patches retain untouched entities and scope deletion keys correctly',()=>{
  const main=state('main'),child=state('child');child.purchases=[{id:'p',productId:'same',qty:2}];const base=mergeWarehouses(main,child);
  const patched=applyUnifiedPatch(base,{deleted:{purchases:['inferno:p']}}),parts=splitWarehouses(patched,child,main);assert.equal(parts.inferno.products.length,1);assert.equal(parts.inferno.purchases.length,0);assert.deepEqual(warehouseDelta(child,parts.inferno).deleted.purchases,['p']);
+});
+
+test('WB3 report metadata retains its own market when prepared snapshots are federated',()=>{
+ const result=scopeApiValue({market:'WB',ordersPartialMarkets:['WB'],summary:{missingMarkets:['WB']},storeStarts:JSON.stringify({WB:'2026-05-01'})});
+ assert.equal(result.market,'WB3');assert.deepEqual(result.ordersPartialMarkets,['WB3']);assert.deepEqual(result.summary.missingMarkets,['WB3']);assert.equal(JSON.parse(result.storeStarts).WB3,'2026-05-01');
 });

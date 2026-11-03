@@ -2,7 +2,7 @@
 export const INFERNO_ID = 'inferno:';
 export const LISTS = ['products','purchases','movements','sales','reservations','kaspiAdExpenses'];
 const IDS = new Set(['id','productId','variantGroupId','parentId','orderId','purchaseId','purchaseOrderId','shipmentId','batchId','reservationId','movementId','externalKey','componentId','packagingId','saleId','adjustmentMovementId','returnReceiptId','productIds','purchaseIds','reservationIds','movementIds','ids']);
-const MARKETS = new Set(['market','channel','source','account','markets','variantMarket']);
+const MARKETS = new Set(['market','channel','source','account','markets','variantMarket','ordersPartialMarkets','missingMarkets']);
 export function scopeValue(value, toUnified = true, key = '', idKeys = IDS) {
   if (Array.isArray(value)) return value.map(v => scopeValue(v,toUnified,key,idKeys));
   if (value && typeof value === 'object') {
@@ -16,6 +16,7 @@ export function scopeValue(value, toUnified = true, key = '', idKeys = IDS) {
     }
     return result;
   }
+  if(typeof value==='string'&&key==='storeStarts'){try{return JSON.stringify(scopeValue(JSON.parse(value),toUnified,'',idKeys))}catch{return value}}
   if (typeof value === 'string' && value && idKeys.has(key)) return toUnified ? INFERNO_ID+value : value.startsWith(INFERNO_ID)?value.slice(INFERNO_ID.length):value;
   if (typeof value === 'string' && MARKETS.has(key) && value === (toUnified?'WB':'WB3')) return toUnified?'WB3':'WB';
   return value;

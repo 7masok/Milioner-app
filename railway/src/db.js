@@ -1,3 +1,4 @@
+import {AsyncLocalStorage} from 'node:async_hooks';
 import pg from 'pg';
 import { config } from './config.js';
 
@@ -11,6 +12,11 @@ export const pool = new Pool({
   connectionTimeoutMillis: 10_000,
   application_name: 'millioner-railway-api'
 });
+
+// Report GET handlers share one repeatable read snapshot without affecting other requests.
+const queryContext=new AsyncLocalStorage(),directQuery=pool.query.bind(pool);
+pool.query=(...args)=>queryContext.getStore()?.query(...args)||directQuery(...args);
+export function withDatabaseReadClient(client,fn){return queryContext.run(client,fn)}
 
 pool.on('error', error => console.error('postgres pool error', error));
 
