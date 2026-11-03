@@ -239,11 +239,13 @@ reportsRouter.get('/kaspi-report-orders', asyncRoute(async (req, res) => {
   const ordersById = new Map(archiveResult.rows.map(row=>[String(row.payload.id),row.payload]));
   for(const order of parseCachedKaspiOrders(cachedResult.rows))ordersById.set(String(order.id),order);
   for (const order of groupLiveKaspiOrders(liveResult.rows)) {
-    if (Number(order.completionDate) >= bounds.start && Number(order.completionDate) < bounds.end) {
-      ordersById.set(String(order.id), order);
-    }
+    // Replace older dates before applying the requested range. Otherwise a
+    // cached completion survives when the live completion moved to another day.
+    ordersById.set(String(order.id), order);
   }
-  const orders = [...ordersById.values()].sort((a, b) => Number(a.completionDate || a.creationDate) - Number(b.completionDate || b.creationDate));
+  const orders = [...ordersById.values()].filter(order =>
+    Number(order.completionDate) >= bounds.start && Number(order.completionDate) < bounds.end
+  ).sort((a, b) => Number(a.completionDate || a.creationDate) - Number(b.completionDate || b.creationDate));
   const cache = latestSyncResult.rows[0] || {};
   const coverage = coverageResult.rows[0] || {};
   const archiveStatus=kaspiHistoryStatus(archiveStateResult.rows[0]?.payload);
