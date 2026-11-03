@@ -1,3 +1,4 @@
+import {amanRouter,startAmanLoop} from './amantrans.js';
 import {createUnifiedWarehouseRouter} from './unified-warehouse.js';
 import { withWarehouseScopePage, createInfernoProxy, infernoSession } from './warehouse-scope.js';
 import { startWb3OrderHistoryLoop, syncWb3OrderHistory } from './wb3-orders.js';
@@ -66,6 +67,7 @@ const frontendFiles = Object.freeze([
   'sw.js',
   'offline.html',
   'connection-status-v1.js',
+  'amantrans-v1.js',
   'app-icon.svg',
   'ozon-fbo-v1.js',
   'business-dashboard-v1.js',
@@ -334,6 +336,7 @@ app.post('/api/stock-sync-now', requireTrustedOrigin, async (req, res, next) => 
 app.use('/api', ozonRouter);
 app.use('/api', ozonPerformanceRouter);
 app.use('/api', connectionsRouter);
+if(config.storeProfile!=='WB3')app.use('/api/amantrans',amanRouter);
 app.use('/api', wbVariantsRouter);
 app.use('/api', wbReturnsRouter);
 app.use('/api', wbAdsRouter);
@@ -429,6 +432,7 @@ const server = app.listen(config.port, '::', () => {
   setTimeout(()=>verifyBackupRestoreReadiness(),4000).unref();
   setTimeout(()=>logWbHourlyOrders(30),7000).unref();
   if(config.storeProfile!=='WB3') {
+  startAmanLoop();
   startOzonSyncLoop();
   resumeOzonPerformanceRetries().catch(()=>console.warn('Ozon Performance: не удалось восстановить очередь повторов'));
   startPlannerLoop();
