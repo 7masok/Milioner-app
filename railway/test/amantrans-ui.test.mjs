@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import vm from 'node:vm';
 import {readFileSync} from 'node:fs';
 const source=readFileSync(new URL('../../amantrans-v1.js',import.meta.url),'utf8');
-function fixture(){
+function fixture(setup=()=>{}){
  const requests=[],calls={saved:0},fields=new Map(),view={ok:true,connected:true,accountId:'7',phoneHint:'•••0001',fetchedAt:1000,orders:[{id:'11',name:'Правильный',track:'DUPLICATE',amount:1,weight:0.13,priceUsd:3,totalKzt:201.2,statusLabel:'В филиале',fingerprint:'a'},{id:'12',name:'Ошибочный',track:'DUPLICATE',amount:100,weight:null,priceUsd:200,totalKzt:null,statusLabel:'Новый',fingerprint:'b'}]};let markup='';
  const field=id=>{if(!fields.has(id))fields.set(id,{value:'',textContent:'',focus(){},setSelectionRange(){}});return fields.get(id)};
  const ctx={Date,Number,String,Math,Set,Map,JSON,crypto:{randomUUID:()=> 'fixture-operation-0001'},
@@ -13,7 +13,7 @@ function fixture(){
   showSheet:html=>markup=html,esc:x=>String(x??'').replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;').replaceAll('"','&quot;').replaceAll("'",'&#39;'),
   requireWarehouseEditReady:()=>true,save:()=>calls.saved++,renderPurchases(){},renderStoreSettings(){},startAppRuntime(){},
   productNameById:()=> 'Название закупки',alert:()=>{},confirm:()=>true,setTimeout,clearTimeout,setInterval:()=>1};
- ctx.purchaseShipmentRows=key=>ctx.state.purchases.filter(x=>(x.shipmentId||x.id)===decodeURIComponent(key));ctx.window=ctx;vm.createContext(ctx);vm.runInContext(source,ctx);
+ ctx.purchaseShipmentRows=key=>ctx.state.purchases.filter(x=>(x.shipmentId||x.id)===decodeURIComponent(key));ctx.window=ctx;setup(ctx,field);vm.createContext(ctx);vm.runInContext(source,ctx);
  return{ctx,view,requests,calls,field,get html(){return markup}};
 }
 test('opening carrier data is read-only and goes through the signed-in warehouse API',async()=>{
@@ -172,4 +172,61 @@ test('legacy recovery waits for warehouse hydration even when carrier snapshot a
  const f=stagedFixture(),row=f.ctx.state.purchases[0];delete row.amantransOrderId;delete row.amantransAccountId;row.batch='LATE-HYDRATE';f.view.orders[0].track=row.batch;f.ctx.warehouseEditReady=()=>false;
  await f.ctx.openAmanTrans('main');assert.equal(row.amantransOrderId,undefined);
  f.ctx.warehouseEditReady=()=>true;f.ctx.renderPurchases();assert.equal(row.amantransOrderId,'11');assert.equal(row.workflowStageId,'delivery_warehouse');assert.equal(f.requests.length,1);
+});
+
+
+function deliveryFixture(){
+ const f=stagedFixture(),row=f.ctx.state.purchases[0];row.delivery=0;row.batch='YT7651969553711';f.view.orders[0].track=row.batch;
+ f.view.orders[0].totalKzt=(1.156+18.496)*454.7;return f;
+}
+test('carrier delivery plus box and exchange rate fill the linked paid purchase without changing goods, stock or FIFO',async()=>{
+ const f=deliveryFixture(),row=f.ctx.state.purchases[0];row.qty=10;row.buyTotal=12842;const other=structuredClone(f.ctx.state.purchases[1]);
+ await f.ctx.openAmanTrans('main');
+ assert.equal(row.delivery,8935.76);assert.equal(row.shipmentDeliveryTotal,8935.76);assert.equal(row.amantransDeliveryTotal,8935.76);
+ assert.equal(row.buyTotal,12842);assert.equal(row.qty,10);assert.equal(row.remainingQty,0);assert.equal(row.receivedAt,undefined);assert.deepEqual(f.ctx.state.purchases[1],other);
+ assert.equal(f.requests.length,1);assert.equal(f.requests[0].options.method,'GET');
+ const writes=f.calls.saved;f.ctx.renderPurchases();assert.equal(f.calls.saved,writes,'repeat render does not import twice');
+ f.view.orders[0].totalKzt=9000.25;await f.ctx.amanRefresh({});assert.equal(row.delivery,9000.25,'unchanged automatic amount follows updated carrier amount');
+ row.delivery=9500;f.view.orders[0].totalKzt=9100;await f.ctx.amanRefresh({});assert.equal(row.delivery,9500,'manual correction is preserved');
+});
+test('carrier costs allocate once across all purchase lines, preserving cents even with tiny totals',async()=>{
+ for(const zeroBuy of [false,true]){
+  const f=deliveryFixture(),row=f.ctx.state.purchases[0];row.buyTotal=zeroBuy?0:100;row.qty=1;
+  const b={...row,id:'p3',productId:'b',buyTotal:zeroBuy?0:200,qty:2};f.ctx.state.purchases.push(b);f.view.orders[0].totalKzt=100.01;
+  await f.ctx.openAmanTrans('main');assert.equal(row.delivery,33.34);assert.equal(b.delivery,66.67);assert.equal(row.shipmentDeliveryTotal,100.01);assert.equal(b.shipmentDeliveryTotal,100.01);
+ }
+ const f=deliveryFixture(),row=f.ctx.state.purchases[0];row.qty=1;row.buyTotal=1;f.ctx.state.purchases.push({...row,id:'p3'},{...row,id:'p4'});f.view.orders[0].totalKzt=0.02;await f.ctx.openAmanTrans('main');
+ const shares=f.ctx.state.purchases.filter(x=>x.shipmentId==='main').map(x=>x.delivery);assert.equal(Math.round(shares.reduce((a,b)=>a+b,0)*100),2);assert.ok(shares.every(x=>x>=0));
+});
+test('delivery import skips manual amounts, stale or missing prices, different tracking, duplicate links and locked lots',async()=>{
+ for(const scenario of ['manual','stale','failed','readonly','null','zero','nan','wrong-track','other-account','cart','at_warehouse','received','duplicate-link','manual-zero-after-import']){
+  const f=deliveryFixture(),row=f.ctx.state.purchases[0];
+  if(scenario==='manual')row.delivery=200;
+  if(scenario==='stale')f.view.fetchedAt=Date.now()-11*60000;
+  if(scenario==='failed')f.view.lastError='offline';
+  if(scenario==='readonly')f.ctx.warehouseEditReady=()=>false;
+  if(scenario==='null')f.view.orders[0].totalKzt=null;
+  if(scenario==='zero')f.view.orders[0].totalKzt=0;
+  if(scenario==='nan')f.view.orders[0].totalKzt='bad';
+  if(scenario==='wrong-track')f.view.orders[0].track='PREVIOUS-TRACK';
+  if(scenario==='other-account')row.amantransAccountId='8';
+  if(scenario==='cart')row.workflowStageId='cart';
+  if(['at_warehouse','received'].includes(scenario))row.status=scenario;
+  if(scenario==='duplicate-link')f.ctx.state.purchases.push({...row,id:'p3',shipmentId:'different'});
+  if(scenario==='manual-zero-after-import')row.amantransDeliveryTotal=500;
+  const before=row.delivery;await f.ctx.openAmanTrans('main');assert.equal(row.delivery,before,scenario);assert.equal(row.amantransDeliveryObservedAt,undefined,scenario);
+ }
+});
+test('a late carrier response fills an untouched open editor but preserves typing',async()=>{
+ for(const dirty of [false,true]){
+  let listener,calcs=0;
+  const f=fixture((ctx,field)=>{ctx.openEditPurchaseShipment=()=>{Object.assign(field('editPorDelivery'),{value:'0',dataset:{},addEventListener:(_name,fn)=>listener=fn});field('editPurchaseItems').dataset={shipmentKey:'main'};};ctx.updateEditPurchaseCalculator=()=>calcs++;});
+  const row=f.ctx.state.purchases[0];Object.assign(row,{workflowStageId:'paid',status:'to_forwarder',batch:'EXACT',delivery:0,amantransOrderId:'11',amantransAccountId:'7'});
+  f.ctx.warehouseEditReady=()=>true;f.ctx.purchaseWorkflow=stageWorkflow;f.ctx.purchaseWorkflowStage=x=>x.workflowStageId;f.ctx.purchaseStatus=x=>x.status;f.ctx.purchaseWorkflowPhase=()=> 'to_forwarder';
+  f.view.fetchedAt=Date.now();f.view.orders[0].track='EXACT';f.view.orders[0].totalKzt=123.45;
+  let release;f.ctx.fetch=async()=>{await new Promise(resolve=>release=resolve);return Response.json(f.view)};
+  f.ctx.openEditPurchaseShipment('main');if(dirty){f.field('editPorDelivery').value='777';listener();}
+  release();await new Promise(setImmediate);
+  assert.equal(f.field('editPorDelivery').value,dirty?'777':'123.45');assert.equal(calcs,dirty?0:1);
+ }
 });

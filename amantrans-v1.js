@@ -11,7 +11,7 @@
   const response=await fetch(MILLIONER_API+'/api/amantrans'+path,{method,cache:'no-store',headers:{'Content-Type':'application/json'},...(body?{body:JSON.stringify(body)}:{})});
   const data=await response.json();if(!response.ok||data.ok===false)throw Error(data.error||'Не удалось получить Aman Trans');return data;
  }
- function accept(data){snapshot=data;loaded=true;checkedAt=Date.now();const linked=applyPurchaseLinks(),changed=amanApplyPurchaseStages();paint();if(linked||changed)renderPurchases({listOnly:true});}
+ function accept(data){snapshot=data;loaded=true;checkedAt=Date.now();const linked=applyPurchaseLinks(),changed=amanApplyPurchaseStages(),delivery=amanApplyPurchaseDelivery();refreshDeliveryDraft();paint();if(linked||changed||delivery)renderPurchases({listOnly:true});}
  async function load(force=false){if(loading)return loading;if(!force&&loaded&&Date.now()-checkedAt<60000)return snapshot;loading=request('/state').then(data=>{accept(data);return data;}).catch(error=>{snapshot.lastError=error.message;paint();return snapshot;}).finally(()=>loading=null);return loading;}
  function rows(){return shipment?purchaseShipmentRows(enc(shipment)):[];}
  function order(id){return snapshot.orders.find(x=>x.id===String(id));}
@@ -71,6 +71,47 @@
   }
   if(changed)save();return changed;
  };
+ window.amanApplyPurchaseDelivery=function(){
+  if(!loaded||!snapshot.connected||snapshot.lastError||!snapshot.fetchedAt||Date.now()-snapshot.fetchedAt>10*60000||typeof warehouseEditReady!=='function'||!warehouseEditReady())return false;
+  const groups=new Map(),used=new Map(),workflow=typeof purchaseWorkflow==='function'?purchaseWorkflow():[],paid=workflow.findIndex(x=>x.id==='paid'||x.amantransStatus==='NEW');let changed=false;
+  if(paid<0)return false;
+  for(const row of state.purchases||[]){const key=String(row.shipmentId||row.id||'');if(!groups.has(key))groups.set(key,[]);groups.get(key).push(row);}
+  for(const items of groups.values())for(const id of new Set(items.map(x=>String(x.amantransOrderId||'')).filter(Boolean)))used.set(id,(used.get(id)||0)+1);
+  for(const items of groups.values()){
+   const first=items[0],id=String(first.amantransOrderId||''),carrier=order(id);
+   if(!id||used.get(id)!==1||!carrier||carrier.track!==purchaseTrack(items)||items.some(x=>String(x.amantransOrderId||'')!==id||String(x.amantransAccountId||'')!==snapshot.accountId||!['to_forwarder','to_me'].includes(purchaseStatus(x))||workflow.findIndex(stage=>stage.id===purchaseWorkflowStage(x))<paid||String(x.batch||x.amantransTrack||'').trim()!==carrier.track))continue;
+   if(carrier.totalKzt==null||!Number.isFinite(Number(carrier.totalKzt))||Number(carrier.totalKzt)<=0)continue;
+   const total=Math.round(Number(carrier.totalKzt)*100)/100,current=items.reduce((n,x)=>n+Math.max(0,Number(x.delivery)||0),0),previous=first.amantransDeliveryTotal;
+   // An entered amount is a manual override. Keep it, including a manual zero
+   // after a previous import; only our unchanged last import follows new rates.
+   if(previous==null?current>0.005:items.some(x=>x.amantransDeliveryTotal!==previous)||Math.abs(current-Number(previous))>0.005)continue;
+   const qty=items.reduce((n,x)=>n+Math.max(0,Number(x.qty)||0),0),buys=items.map(x=>Math.max(0,Number(x.buyTotal??Number(x.unitCost||0)*Number(x.qty||0))||0)),buy=buys.reduce((n,x)=>n+x,0),base=buy>0?buy:qty;
+   if(!base||items.some(x=>!Number.isSafeInteger(Number(x.qty))||Number(x.qty)<=0))continue;
+   if(previous===total&&Math.abs(current-total)<0.005)continue;
+   let allocated=0,weight=0;const cents=Math.round(total*100);
+   for(let i=0;i<items.length;i++){
+    const row=items[i];weight+=buy>0?buys[i]:Number(row.qty);const through=i===items.length-1?cents:Math.round(cents*weight/base),share=(through-allocated)/100;allocated=through;
+    row.delivery=share;row.shipmentDeliveryTotal=total;row.amantransDeliveryTotal=total;row.amantransDeliveryObservedAt=snapshot.fetchedAt;
+   }
+   changed=true;
+  }
+  if(changed)save();return changed;
+ };
+ function refreshDeliveryDraft(){
+  const input=document.getElementById('editPorDelivery'),box=document.getElementById('editPurchaseItems');
+  if(!input?.dataset?.amanDeliveryWatch||input.dataset.amanDeliveryDirty==='1'||input.value!==input.dataset.amanDeliveryValue||!box?.dataset?.shipmentKey)return;
+  const items=purchaseShipmentRows(enc(box.dataset.shipmentKey));if(!items.length||!items.every(x=>x.amantransDeliveryTotal!=null))return;
+  const value=String(Math.round(items.reduce((n,x)=>n+(Number(x.delivery)||0),0)*100)/100);if(input.value===value)return;
+  input.value=value;input.dataset.amanDeliveryValue=input.value;
+  if(typeof updateEditPurchaseCalculator==='function')updateEditPurchaseCalculator();
+ }
+ if(typeof openEditPurchaseShipment==='function'){
+  const edit=openEditPurchaseShipment;openEditPurchaseShipment=function(...args){
+   amanApplyPurchaseDelivery();const result=edit(...args),input=document.getElementById('editPorDelivery');
+   if(input?.dataset){input.dataset.amanDeliveryWatch='1';input.dataset.amanDeliveryValue=input.value;input.dataset.amanDeliveryDirty='0';input.addEventListener('input',()=>{input.dataset.amanDeliveryDirty='1';},{once:true});}
+   void load();return result;
+  };
+ }
  function purchaseTrack(items){const first=items[0]||{};return String(first.batch||first.amantransTrack||'').trim();}
  window.amanPurchaseTrackField=()=>'';
  window.amanPreparePurchase=function(items,previousStage,track,previousTrack){
@@ -140,7 +181,7 @@
   catch(error){const box=document.getElementById('amanError');if(box)box.textContent=error.message;}finally{button.disabled=false;}
  };
  window.amanHistory=async id=>{showSheet('<h3>История Aman Trans</h3><div id="amanHistory">Загружаю…</div><button class="btn full" onclick="amanBack()">Назад</button>');try{const data=await request('/orders/'+id+'/history'),box=document.getElementById('amanHistory');if(box){const seen=new Set();box.innerHTML=data.history.filter(x=>{const key=x.at+'|'+x.status;if(seen.has(key))return false;seen.add(key);return true;}).map(x=>'<div class="item"><b>'+esc(x.status)+'</b><div class="muted">'+when(x.at)+'</div></div>').join('')||'История пока отсутствует';}}catch(error){const box=document.getElementById('amanHistory');if(box)box.textContent=error.message;}};
- const render=renderPurchases;renderPurchases=function(...args){applyPurchaseLinks();amanApplyPurchaseStages();const result=render(...args);void load();return result;};
+ const render=renderPurchases;renderPurchases=function(...args){applyPurchaseLinks();amanApplyPurchaseStages();amanApplyPurchaseDelivery();refreshDeliveryDraft();const result=render(...args);void load();return result;};
  const settings=renderStoreSettings;renderStoreSettings=function(...args){const result=settings(...args);paint();void load();return result;};
  function resumePending(){if(typeof warehouseEditReady==='function'&&!warehouseEditReady())return;const keys=new Set((state.purchases||[]).filter(x=>!x.amantransOrderId&&x.amantransAutoRequestedAt||x.amantransOrderId&&x.amantransPendingTrack).map(x=>String(x.shipmentId||x.id||'')));for(const key of keys)if(purchaseShipmentRows(enc(key)).some(x=>x.amantransSyncedTrack!==purchaseTrack(purchaseShipmentRows(enc(key)))))void amanSubmitPurchase(enc(key));}
  const start=startAppRuntime;startAppRuntime=function(...args){const result=start(...args);install();const timer=setInterval(()=>{if(document.querySelector('#purchases.view.active,#settings.view.active'))void load(true).then(resumePending);},60000);return result;};
