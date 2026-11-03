@@ -73,3 +73,48 @@ test('the real quick stage action dispatches a paid intent and never dispatches 
  f.ctx.quickSetPurchaseWorkflowStage('main','paid');await new Promise(setImmediate);assert.equal(row.workflowStageId,'paid');assert.equal(row.amantransOrderId,'11');assert.equal(f.requests.filter(x=>x.options.method==='POST').length,1);
  f.ctx.renderPurchases();await new Promise(setImmediate);assert.equal(f.requests.filter(x=>x.options.method==='POST').length,1);
 });
+
+const stageWorkflow=()=>[{id:'cart',name:'Корзина',days:0},{id:'paid',name:'Оплачено',days:0,amantransStatus:'NEW'},{id:'departed',name:'У продавца',days:5},{id:'delivery_warehouse',name:'Мой Китай',days:20,amantransStatus:'CHINA'},{id:'my_border',name:'Таможня',days:2,amantransStatus:'ON_BORDER'},{id:'my_branch',name:'Можно забирать',days:0,amantransStatus:'SUB_FILIAL'},{id:'arrived',name:'Получил',days:0}];
+function stagedFixture(){
+ const f=fixture(),workflow=stageWorkflow();f.workflow=workflow;f.ctx.state.settings={purchaseWorkflow:workflow};f.ctx.warehouseEditReady=()=>true;f.ctx.purchaseWorkflow=()=>f.ctx.state.settings.purchaseWorkflow;
+ f.ctx.purchaseWorkflowStage=x=>x.workflowStageId;f.ctx.purchaseStatus=x=>x.status;f.ctx.purchaseWorkflowPhase=id=>{const i=f.ctx.purchaseWorkflow().findIndex(x=>x.id===id);return i>=f.ctx.purchaseWorkflow().findIndex(x=>x.id==='arrived')?'at_warehouse':i>=f.ctx.purchaseWorkflow().findIndex(x=>x.id==='delivery_warehouse')?'to_me':'to_forwarder'};
+ Object.assign(f.ctx.state.purchases[0],{workflowStageId:'paid',workflowStageAt:50,status:'to_forwarder',amantransOrderId:'11',amantransAccountId:'7',remainingQty:0});f.view.fetchedAt=Date.now();f.view.orders[0].status='CHINA';return f;
+}
+test('a saved stage binding advances the exact linked shipment and its filters without touching inventory, prices or carrier orders',async()=>{
+ const f=stagedFixture(),row=f.ctx.state.purchases[0],other=structuredClone(f.ctx.state.purchases[1]);await f.ctx.openAmanTrans('main');
+ assert.equal(row.workflowStageId,'delivery_warehouse');assert.equal(row.status,'to_me');assert.equal(row.workflowStageAt,f.view.fetchedAt);assert.equal(row.forwarderReceivedAt,undefined,'snapshot observation is not invented as the historical China arrival date');assert.equal(row.buyTotal,10000);assert.equal(row.delivery,500);assert.equal(row.qty,2);assert.equal(row.remainingQty,0);assert.deepEqual(f.ctx.state.purchases[1],other);assert.equal(f.calls.saved,1);
+ f.ctx.amanApplyPurchaseStages();assert.equal(f.calls.saved,1,'same stage does not write again');
+ f.view.orders[0].status='ON_BORDER';f.view.orders[0].statusLabel='На границе';await f.ctx.amanRefresh({});assert.equal(row.workflowStageId,'my_border');assert.equal(f.ctx.purchaseWorkflowStage(row),'my_border');assert.equal(f.calls.saved,2);
+ f.view.orders[0].status='SUB_FILIAL';f.view.orders[0].statusLabel='В филиале';await f.ctx.amanRefresh({});assert.equal(row.workflowStageId,'my_branch');assert.equal(row.status,'to_me');assert.equal(row.receivedAt,undefined);assert.equal(row.warehouseReceivedAt,undefined);assert.equal(f.requests.filter(x=>x.url.includes('/purchases/register')||x.url.includes('/orders/')).length,0);
+});
+test('stage sync skips stale, disconnected, failed and read-only snapshots and never mixes accounts',async()=>{
+ for(const scenario of ['stale','disconnected','failed','readonly','other-account','unmapped']){
+  const f=stagedFixture(),row=f.ctx.state.purchases[0];
+  if(scenario==='stale')f.view.fetchedAt=Date.now()-11*60000;if(scenario==='disconnected')f.view.connected=false;if(scenario==='failed')f.view.lastError='offline';if(scenario==='readonly')f.ctx.warehouseEditReady=()=>false;if(scenario==='other-account')row.amantransAccountId='8';if(scenario==='unmapped')f.view.orders[0].status='UNKNOWN';
+  await f.ctx.openAmanTrans('main');assert.equal(row.workflowStageId,'paid',scenario);assert.equal(f.calls.saved,0,scenario);
+ }
+});
+test('carrier mapping cannot regress seller departure, advance an unpaid cart, conduct receipt or alter received lots',async()=>{
+ for(const scenario of ['new-after-departure','earlier-carrier','cart','received','at_warehouse','receipt-mapping','duplicate-mapping']){
+  const f=stagedFixture(),row=f.ctx.state.purchases[0];
+  if(scenario==='new-after-departure'){row.workflowStageId='departed';f.view.orders[0].status='NEW';}
+  if(scenario==='earlier-carrier')row.workflowStageId='my_border';if(scenario==='cart')row.workflowStageId='cart';if(scenario==='received'||scenario==='at_warehouse')row.status=scenario;
+  if(scenario==='receipt-mapping'){delete f.workflow[3].amantransStatus;f.workflow.at(-1).amantransStatus='CHINA';}
+  if(scenario==='duplicate-mapping')f.workflow[4].amantransStatus='CHINA';
+  const before=JSON.stringify(row);await f.ctx.openAmanTrans('main');assert.equal(JSON.stringify(row),before,scenario);assert.equal(f.calls.saved,0,scenario);
+ }
+});
+test('bindings are configurable in the actual stage editor and survive sanitize, rename, reorder and save',()=>{
+ const f=stagedFixture(),html=readFileSync(new URL('../../index.html',import.meta.url),'utf8'),fn=name=>html.split('\n').find(line=>line.startsWith('function '+name+'('));
+ f.ctx.closeModal=()=>{};f.ctx.render=()=>{};f.ctx.purchaseWorkflowDraft=stageWorkflow();f.ctx.DEFAULT_PURCHASE_WORKFLOW=stageWorkflow();
+ const inputs=new Map();f.ctx.document.querySelector=selector=>inputs.get(selector)||null;
+ vm.runInContext([fn('purchaseWorkflow'),fn('readPurchaseWorkflowDraft'),fn('savePurchaseWorkflow'),fn('renderPurchaseWorkflowEditor')].join('\n'),f.ctx);
+ f.ctx.purchaseWorkflowDraft.splice(5,0,{id:'my_road',name:'Моя дорога',days:1});inputs.set('[data-workflow-aman="5"]',{value:'ON_ROAD_CHINA'});inputs.set('[data-workflow-name="5"]',{value:'Едет из Китая'});
+ f.ctx.savePurchaseWorkflow();assert.equal(f.calls.saved,1);assert.equal(f.ctx.purchaseWorkflow().find(x=>x.id==='my_road').amantransStatus,'ON_ROAD_CHINA');assert.equal(f.ctx.purchaseWorkflow().find(x=>x.id==='my_road').name,'Едет из Китая');
+ f.ctx.renderPurchaseWorkflowEditor();assert.match(f.html,/data-workflow-aman="5"/);assert.match(f.html,/value="ON_ROAD_CHINA" selected/);assert.match(f.html,/Статус Aman Trans/);
+ inputs.set('[data-workflow-aman="5"]',{value:''});f.ctx.savePurchaseWorkflow();assert.equal(f.ctx.purchaseWorkflow().find(x=>x.id==='my_road').amantransStatus,undefined);
+ const invalid=stageWorkflow();invalid[4].amantransStatus='CHINA';assert.throws(()=>f.ctx.amanValidateWorkflowBindings(invalid),/только к одному/);invalid[4].amantransStatus='ON_BORDER';invalid.at(-1).amantransStatus='SUB_FILIAL';assert.throws(()=>f.ctx.amanValidateWorkflowBindings(invalid),/вручную/);
+});
+test('a custom payment stage bound to New keeps the automatic carrier registration trigger',()=>{
+ const f=stagedFixture(),row=f.ctx.state.purchases[1];f.workflow[1].id='my_payment';row.workflowStageId='my_payment';f.ctx.amanPreparePurchase([row],'cart','WB3-NEW');assert.ok(row.amantransAutoRequestedAt);assert.equal(f.requests.length,0);
+});

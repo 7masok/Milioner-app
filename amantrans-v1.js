@@ -11,17 +11,52 @@
   const response=await fetch(MILLIONER_API+'/api/amantrans'+path,{method,cache:'no-store',headers:{'Content-Type':'application/json'},...(body?{body:JSON.stringify(body)}:{})});
   const data=await response.json();if(!response.ok||data.ok===false)throw Error(data.error||'Не удалось получить Aman Trans');return data;
  }
- function accept(data){snapshot=data;loaded=true;checkedAt=Date.now();paint();}
+ function accept(data){snapshot=data;loaded=true;checkedAt=Date.now();const changed=amanApplyPurchaseStages();paint();if(changed)renderPurchases({listOnly:true});}
  async function load(force=false){if(loading)return loading;if(!force&&loaded&&Date.now()-checkedAt<60000)return snapshot;loading=request('/state').then(data=>{accept(data);return data;}).catch(error=>{snapshot.lastError=error.message;paint();return snapshot;}).finally(()=>loading=null);return loading;}
  function rows(){return shipment?purchaseShipmentRows(enc(shipment)):[];}
  function order(id){return snapshot.orders.find(x=>x.id===String(id));}
+ const carrierStages=[['NEW','Новый'],['CHINA','На складе в Китае'],['ON_ROAD_CHINA','В пути из Китая'],['ON_BORDER','На границе'],['SORTING','Сортировка'],['ON_ROAD','В пути'],['SUB_FILIAL','В филиале']];
+ function carrierStageOptions(){const options=new Map(carrierStages);for(const row of snapshot.orders||[])if(/^[A-Z_]{1,40}$/.test(row.status)&&row.statusLabel)options.set(row.status,row.statusLabel);return options;}
+ window.amanStageBindingField=function(stage,index){
+  const selected=String(stage.amantransStatus||''),options=carrierStageOptions();if(selected&&!options.has(selected))options.set(selected,selected);
+  return '<div class="field"><label>Статус Aman Trans</label><select data-workflow-aman="'+index+'" '+(stage.id==='arrived'?'disabled':'')+'><option value="">Вручную · без привязки</option>'+[...options].map(([code,label])=>'<option value="'+esc(code)+'" '+(selected===code?'selected':'')+'>'+esc(label)+'</option>').join('')+'</select></div>';
+ };
+ window.amanValidateWorkflowBindings=function(workflow){
+  const seen=new Set(),delivery=workflow.findIndex(x=>x.id==='delivery_warehouse'),arrived=workflow.findIndex(x=>x.id==='arrived');
+  for(let i=0;i<workflow.length;i++){
+   const stage=workflow[i],code=String(stage.amantransStatus||'');if(!code)continue;
+   if(!/^[A-Z_]{1,40}$/.test(code))throw Error('Выбери статус Aman Trans из списка');
+   if(i>=arrived)throw Error('Получение на наш склад подтверждается вручную');
+   if(seen.has(code))throw Error('Один статус Aman Trans можно привязать только к одному этапу');
+   if(code!=='NEW'&&i<delivery)throw Error('Этапы доставки Aman Trans размести начиная со склада доставки и до поступления к тебе');
+   if(code==='NEW'&&i>=delivery)throw Error('«Новый» привяжи к оплате, до склада доставки');
+   seen.add(code);
+  }
+ };
+ window.amanApplyPurchaseStages=function(){
+  if(!loaded||!snapshot.connected||snapshot.lastError||!snapshot.fetchedAt||Date.now()-snapshot.fetchedAt>10*60000||typeof warehouseEditReady!=='function'||!warehouseEditReady()||typeof purchaseWorkflow!=='function')return false;
+  const workflow=purchaseWorkflow(),targets=new Map(),duplicates=new Set(),groups=new Map(),byId=new Map(snapshot.orders.map(x=>[x.id,x])),paid=workflow.findIndex(x=>x.id==='paid'||x.amantransStatus==='NEW');
+  if(paid<0)return false;
+  for(const stage of workflow){if(!stage.amantransStatus)continue;if(targets.has(stage.amantransStatus))duplicates.add(stage.amantransStatus);targets.set(stage.amantransStatus,stage);}
+  for(const row of state.purchases||[]){const key=String(row.shipmentId||row.id||'');if(!groups.has(key))groups.set(key,[]);groups.get(key).push(row);}
+  let changed=false;
+  for(const items of groups.values()){
+   const first=items[0],id=String(first.amantransOrderId||''),account=String(first.amantransAccountId||'');
+   if(!id||account!==snapshot.accountId||items.some(x=>String(x.amantransOrderId||'')!==id||String(x.amantransAccountId||'')!==account||!['to_forwarder','to_me'].includes(purchaseStatus(x))))continue;
+   const carrier=byId.get(id),target=targets.get(carrier?.status);if(!target||duplicates.has(carrier.status))continue;
+   const phase=purchaseWorkflowPhase(target.id),targetIndex=workflow.findIndex(x=>x.id===target.id);if(!['to_forwarder','to_me'].includes(phase)||target.id==='arrived'||carrier.status!=='NEW'&&phase!=='to_me'||carrier.status==='NEW'&&phase!=='to_forwarder')continue;
+   if(items.some(x=>{const index=workflow.findIndex(s=>s.id===purchaseWorkflowStage(x));return index<paid||index>targetIndex;}))continue;
+   for(const row of items){if(row.workflowStageId===target.id&&row.status===phase)continue;row.workflowStageId=target.id;row.workflowStageAt=snapshot.fetchedAt;row.status=phase;row.amantransStageStatus=carrier.status;row.amantransStageObservedAt=snapshot.fetchedAt;changed=true;}
+  }
+  if(changed)save();return changed;
+ };
  function purchaseTrack(items){const first=items[0]||{},batch=String(first.batch||'').trim();return first.amantransTrack||(/^[a-zA-Z0-9_-]{6,100}$/.test(batch)?batch:'');}
  function purchaseStamp(items){return JSON.stringify(items.map(x=>[x.id,x.productId,x.qty,x.buyTotal,x.unitCost,x.amantransTrack,x.batch]));}
  window.amanPurchaseTrackField=items=>'<div class="field"><label>Трек Aman Trans</label><input id="amanPurchaseTrack" value="'+esc(purchaseTrack(items))+'" autocomplete="off" placeholder="Трек-код продавца"></div>';
  window.amanPreparePurchase=function(items,previousStage,track){
   if(track!==undefined)for(const row of items)row.amantransTrack=String(track).trim();
-  if(!items.length)return;const paid=purchaseWorkflowStage(items[0])==='paid';
-  if(paid&&previousStage!=='paid'&&!items.some(x=>x.amantransOrderId))for(const row of items)row.amantransAutoRequestedAt=Date.now();
+  if(!items.length)return;const current=purchaseWorkflowStage(items[0]),stage=typeof purchaseWorkflow==='function'?purchaseWorkflow().find(x=>x.id===current):null,paid=current==='paid'||stage?.amantransStatus==='NEW';
+  if(paid&&previousStage!==current&&!items.some(x=>x.amantransOrderId))for(const row of items)row.amantransAutoRequestedAt=Date.now();
  };
  window.amanSubmitPurchase=async function(key){
   key=decodeURIComponent(String(key));const items=purchaseShipmentRows(enc(key));
@@ -41,7 +76,7 @@
   }catch(error){sendErrors.set(key,error.message);}finally{sending.delete(key);paint();}
  };
  window.amanRetryPurchase=key=>amanSubmitPurchase(key);
- function connectedCard(){return '<b>Aman Trans</b><div class="muted">'+(loaded?snapshot.connected?'Подключён '+esc(snapshot.phoneHint||''):'Не подключён':'Доставки из Китая')+'</div><button type="button" class="btn full" onclick="openAmanTrans()">'+(snapshot.connected?'Отправления и доставка':'Подключить Aman Trans')+'</button>';}
+ function connectedCard(){return '<b>Aman Trans</b><div class="muted">'+(loaded?snapshot.connected?'Подключён '+esc(snapshot.phoneHint||''):'Не подключён':'Доставки из Китая')+'</div><button type="button" class="btn full" onclick="openAmanTrans()">'+(snapshot.connected?'Отправления и доставка':'Подключить Aman Trans')+'</button><button type="button" class="btn full" onclick="openPurchaseWorkflowEditor()">Привязать этапы</button>';}
  function install(){for(const [id,target]of [['amanSettings','settings'],['amanPurchases','purchases']]){if(document.getElementById(id))continue;const root=document.getElementById(target);if(!root)continue;const box=document.createElement('div');box.id=id;box.className='item';root.append(box);}paint();}
  function paint(){for(const el of document.querySelectorAll('[data-aman-shipment]')){const key=decodeURIComponent(el.dataset.amanShipment),items=typeof state!=='undefined'?(state.purchases||[]).filter(x=>String(x.shipmentId||x.id||'')===key):[];el.outerHTML=amanShipmentHtml(key,items);}for(const id of ['amanSettings','amanPurchases']){const box=document.getElementById(id);if(box)box.innerHTML=connectedCard();}}
  window.amanShipmentHtml=function(key,items){
@@ -79,7 +114,7 @@
   catch(error){const box=document.getElementById('amanError');if(box)box.textContent=error.message;}finally{button.disabled=false;}
  };
  window.amanHistory=async id=>{showSheet('<h3>История Aman Trans</h3><div id="amanHistory">Загружаю…</div><button class="btn full" onclick="amanBack()">Назад</button>');try{const data=await request('/orders/'+id+'/history'),box=document.getElementById('amanHistory');if(box){const seen=new Set();box.innerHTML=data.history.filter(x=>{const key=x.at+'|'+x.status;if(seen.has(key))return false;seen.add(key);return true;}).map(x=>'<div class="item"><b>'+esc(x.status)+'</b><div class="muted">'+when(x.at)+'</div></div>').join('')||'История пока отсутствует';}}catch(error){const box=document.getElementById('amanHistory');if(box)box.textContent=error.message;}};
- const render=renderPurchases;renderPurchases=function(...args){const result=render(...args);void load();return result;};
+ const render=renderPurchases;renderPurchases=function(...args){amanApplyPurchaseStages();const result=render(...args);void load();return result;};
  const settings=renderStoreSettings;renderStoreSettings=function(...args){const result=settings(...args);paint();void load();return result;};
  const start=startAppRuntime;startAppRuntime=function(...args){const result=start(...args);install();const timer=setInterval(()=>{if(document.querySelector('#purchases.view.active,#settings.view.active'))void load(true);},60000);return result;};
 })();
