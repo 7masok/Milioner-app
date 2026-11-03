@@ -19,6 +19,21 @@
   if(!snapshot.connected||typeof warehouseEditReady!=='function'||!warehouseEditReady())return false;let changed=false;
   for(const row of state.purchases||[]){const key=String(row.shipmentId||row.id||''),link=snapshot.purchaseLinks?.[key];if(!link||!row.amantransAutoRequestedAt||row.amantransAccountId&&String(row.amantransAccountId)!==snapshot.accountId||row.amantransOrderId&&String(row.amantransOrderId)!==String(link.id))continue;
    if(String(row.amantransOrderId||'')!==String(link.id)||row.amantransAccountId!==snapshot.accountId||row.amantransSyncedTrack!==link.track){row.amantransOrderId=String(link.id);row.amantransAccountId=snapshot.accountId;row.amantransSyncedTrack=link.track;changed=true;}}
+  // Older paid shipments predate carrier IDs. Recover only an unambiguous,
+  // exact track from a fresh snapshot; never create an external order here.
+  if(snapshot.fetchedAt&&!snapshot.lastError&&Date.now()-snapshot.fetchedAt<=10*60000&&typeof purchaseWorkflow==='function'){
+   const groups=new Map(),tracks=new Map(),used=new Set(),workflow=purchaseWorkflow(),paid=workflow.findIndex(x=>x.id==='paid'||x.amantransStatus==='NEW');
+   for(const row of state.purchases||[]){const key=String(row.shipmentId||row.id||'');if(!groups.has(key))groups.set(key,[]);groups.get(key).push(row);if(row.amantransOrderId)used.add(String(row.amantransOrderId));}
+   for(const items of groups.values())for(const track of new Set(items.map(x=>String(x.batch||x.amantransTrack||'').trim()).filter(Boolean)))tracks.set(track,(tracks.get(track)||0)+1);
+   for(const items of groups.values()){
+    const track=purchaseTrack(items);
+    if(paid<0||!track||tracks.get(track)!==1||items.some(x=>x.amantransOrderId||x.amantransAutoRequestedAt||x.amantransPendingTrack||x.amantransAccountId&&String(x.amantransAccountId)!==snapshot.accountId||String(x.batch||x.amantransTrack||'').trim()!==track||!['to_forwarder','to_me'].includes(purchaseStatus(x))||workflow.findIndex(s=>s.id===purchaseWorkflowStage(x))<paid))continue;
+    const matches=snapshot.orders.filter(x=>x.track===track);
+    if(matches.length!==1||used.has(String(matches[0].id)))continue;
+    const carrier=matches[0];used.add(String(carrier.id));
+    for(const row of items){row.amantransOrderId=String(carrier.id);row.amantransAccountId=snapshot.accountId;row.amantransSyncedTrack=track;}changed=true;
+   }
+  }
   if(changed)save();return changed;
  }
  const carrierStages=[['NEW','Новый'],['CHINA','На складе в Китае'],['ON_ROAD_CHINA','В пути из Китая'],['ON_BORDER','На границе'],['SORTING','Сортировка'],['ON_ROAD','В пути'],['SUB_FILIAL','В филиале']];
@@ -125,7 +140,7 @@
   catch(error){const box=document.getElementById('amanError');if(box)box.textContent=error.message;}finally{button.disabled=false;}
  };
  window.amanHistory=async id=>{showSheet('<h3>История Aman Trans</h3><div id="amanHistory">Загружаю…</div><button class="btn full" onclick="amanBack()">Назад</button>');try{const data=await request('/orders/'+id+'/history'),box=document.getElementById('amanHistory');if(box){const seen=new Set();box.innerHTML=data.history.filter(x=>{const key=x.at+'|'+x.status;if(seen.has(key))return false;seen.add(key);return true;}).map(x=>'<div class="item"><b>'+esc(x.status)+'</b><div class="muted">'+when(x.at)+'</div></div>').join('')||'История пока отсутствует';}}catch(error){const box=document.getElementById('amanHistory');if(box)box.textContent=error.message;}};
- const render=renderPurchases;renderPurchases=function(...args){amanApplyPurchaseStages();const result=render(...args);void load();return result;};
+ const render=renderPurchases;renderPurchases=function(...args){applyPurchaseLinks();amanApplyPurchaseStages();const result=render(...args);void load();return result;};
  const settings=renderStoreSettings;renderStoreSettings=function(...args){const result=settings(...args);paint();void load();return result;};
  function resumePending(){if(typeof warehouseEditReady==='function'&&!warehouseEditReady())return;const keys=new Set((state.purchases||[]).filter(x=>!x.amantransOrderId&&x.amantransAutoRequestedAt||x.amantransOrderId&&x.amantransPendingTrack).map(x=>String(x.shipmentId||x.id||'')));for(const key of keys)if(purchaseShipmentRows(enc(key)).some(x=>x.amantransSyncedTrack!==purchaseTrack(purchaseShipmentRows(enc(key)))))void amanSubmitPurchase(enc(key));}
  const start=startAppRuntime;startAppRuntime=function(...args){const result=start(...args);install();const timer=setInterval(()=>{if(document.querySelector('#purchases.view.active,#settings.view.active'))void load(true).then(resumePending);},60000);return result;};

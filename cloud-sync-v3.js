@@ -44,6 +44,13 @@ window.saveWarehouseConfirmedCache=writeFastCache;
 function setReadOnlyCache(on){
   showingReadOnlyCache=Boolean(on);
   document.documentElement?.toggleAttribute('data-warehouse-readonly-cache',showingReadOnlyCache);
+  const note=document.getElementById('warehouseSnapshotNote');
+  if(note){
+    const at=showingReadOnlyCache?Number(readFastCache()?.verifiedAt||0):Date.now();
+    const time=at?new Date(at).toLocaleString('ru-RU',{timeZone:'Asia/Almaty',day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit'}):'время неизвестно';
+    note.textContent=(showingReadOnlyCache?'Сохранённые данные · ':'Сверено с сервером · ')+time+' · Алматы'+(showingReadOnlyCache?' · проверяем обновления…':'');
+    note.hidden=false;
+  }
 }
 warehouseSnapshot=function(){return serverSnapshot(state)};
 applyWarehouseSnapshot=function(remote){

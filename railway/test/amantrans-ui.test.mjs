@@ -137,3 +137,39 @@ test('a track edited while creation is in flight is sent to the newly created ID
  const creation=f.ctx.amanSubmitPurchase('main');row.batch='REAL-EARLY';f.ctx.amanPreparePurchase([row],'paid');await f.ctx.amanSubmitPurchase('main');release();await creation;await new Promise(setImmediate);
  assert.equal(f.requests.length,2);const bodies=f.requests.map(x=>JSON.parse(x.options.body));assert.equal(bodies[0].fields.track,'TEMP-ORDER');assert.equal(bodies[1].orderId,'11');assert.equal(bodies[1].fields.track,'REAL-EARLY');assert.equal(row.amantransSyncedTrack,'REAL-EARLY');
 });
+
+
+test('legacy paid shipment recovers its unique exact track and mapped stage with no carrier writes',async()=>{
+ const f=stagedFixture(),row=f.ctx.state.purchases[0],before=structuredClone(row);
+ delete row.amantransOrderId;delete row.amantransAccountId;row.batch='EXACT-LEGACY';
+ f.view.orders[0].track=row.batch;f.view.orders[0].status='ON_BORDER';
+ await f.ctx.openAmanTrans('main');
+ assert.equal(row.amantransOrderId,'11');assert.equal(row.amantransAccountId,'7');assert.equal(row.amantransSyncedTrack,row.batch);
+ assert.equal(row.workflowStageId,'my_border');assert.equal(row.status,'to_me');
+ for(const key of ['qty','buyTotal','delivery','remainingQty'])assert.equal(row[key],before[key]);
+ assert.equal(f.requests.length,1);assert.equal(f.requests[0].options.method,'GET');
+ const writes=f.calls.saved;f.ctx.renderPurchases();assert.equal(f.calls.saved,writes,'repeat render is idempotent');
+});
+test('legacy recovery rejects ambiguous tracks, stale data, other accounts, unpaid and received purchases',async()=>{
+ for(const scenario of ['carrier-duplicate','purchase-duplicate','stale','failed','readonly','other-account','cart','received','pending-create','pending-track','partial-link']){
+  const f=stagedFixture(),row=f.ctx.state.purchases[0];delete row.amantransOrderId;delete row.amantransAccountId;row.batch='EXACT-LEGACY';f.view.orders[0].track=row.batch;
+  if(scenario==='carrier-duplicate')f.view.orders[1].track=row.batch;
+  if(scenario==='purchase-duplicate')f.ctx.state.purchases[1].batch=row.batch;
+  if(scenario==='stale')f.view.fetchedAt=Date.now()-11*60000;
+  if(scenario==='failed')f.view.lastError='offline';
+  if(scenario==='readonly')f.ctx.warehouseEditReady=()=>false;
+  if(scenario==='other-account')row.amantransAccountId='8';
+  if(scenario==='cart')row.workflowStageId='cart';
+  if(scenario==='received')row.status='received';
+  if(scenario==='pending-create')row.amantransAutoRequestedAt=123;
+  if(scenario==='pending-track')row.amantransPendingTrack='OTHER';
+  if(scenario==='partial-link')f.ctx.state.purchases.push({...row,id:'p3',amantransOrderId:'11',amantransAccountId:'7'});
+  const before=JSON.stringify(f.ctx.state.purchases);await f.ctx.openAmanTrans('main');
+  assert.equal(JSON.stringify(f.ctx.state.purchases),before,scenario);assert.equal(f.calls.saved,0,scenario);assert.equal(f.requests.length,1,scenario);
+ }
+});
+test('legacy recovery waits for warehouse hydration even when carrier snapshot arrived earlier',async()=>{
+ const f=stagedFixture(),row=f.ctx.state.purchases[0];delete row.amantransOrderId;delete row.amantransAccountId;row.batch='LATE-HYDRATE';f.view.orders[0].track=row.batch;f.ctx.warehouseEditReady=()=>false;
+ await f.ctx.openAmanTrans('main');assert.equal(row.amantransOrderId,undefined);
+ f.ctx.warehouseEditReady=()=>true;f.ctx.renderPurchases();assert.equal(row.amantransOrderId,'11');assert.equal(row.workflowStageId,'delivery_warehouse');assert.equal(f.requests.length,1);
+});
