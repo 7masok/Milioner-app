@@ -43,3 +43,33 @@ test('the carrier module is static before auth and skipped on the legacy Inferno
  assert.match(source,/WAREHOUSE_SCOPE_CONFIG\?\.inferno/);assert.match(server,/'amantrans-v1.js'/);
  assert.doesNotMatch(source,/localStorage|sessionStorage|api\.amantrans/);
 });
+
+test('only an explicit paid transition registers the first visible name, total quantity, same numeric price and dedicated track',async()=>{
+ const f=fixture(),row=f.ctx.state.purchases[0],other={...row,id:'p3',productId:'second',qty:3,buyTotal:7500};f.ctx.state.purchases.push(other);
+ f.ctx.purchaseWorkflowStage=x=>x.workflowStageId;f.ctx.productNameById=id=>id==='second'?'А первый товар':'Я второй товар';row.workflowStageId=other.workflowStageId='paid';
+ f.ctx.amanPreparePurchase([row,other],'cart','NEW-TRACK');assert.ok(row.amantransAutoRequestedAt);assert.equal(f.requests.length,0);
+ f.view.createdOrderId='11';await f.ctx.amanSubmitPurchase('main');
+ const sent=f.requests.filter(x=>x.options.method==='POST');assert.equal(sent.length,1);assert.equal(sent[0].url,'https://warehouse.fixture/api/amantrans/purchases/register');
+ const body=JSON.parse(sent[0].options.body);assert.equal(body.purchaseKey,'main');assert.equal(body.fields.name,'А первый товар');assert.equal(body.fields.amount,5);assert.equal(body.fields.priceUsd,17500);assert.equal(body.fields.track,'NEW-TRACK');
+ assert.equal(row.amantransOrderId,'11');assert.equal(other.amantransOrderId,'11');assert.equal(f.ctx.state.purchases[1].amantransOrderId,undefined);assert.equal(row.buyTotal,10000);assert.equal(row.delivery,500);
+ await f.ctx.amanSubmitPurchase('main');assert.equal(f.requests.filter(x=>x.options.method==='POST').length,1);
+ assert.match(f.ctx.amanShipmentHtml('main',[row,other]),/В филиале/);
+});
+test('opening old paid purchases does not send anything and a missing track stays visible until supplied',async()=>{
+ const f=fixture(),row=f.ctx.state.purchases[0];f.ctx.purchaseWorkflowStage=x=>x.workflowStageId;row.workflowStageId='paid';
+ f.ctx.amanPreparePurchase([row],'paid');await f.ctx.amanSubmitPurchase('main');assert.equal(f.requests.length,0);assert.equal(row.amantransAutoRequestedAt,undefined);
+ f.ctx.amanPreparePurchase([row],'cart');await f.ctx.amanSubmitPurchase('main');assert.equal(f.requests.length,0);assert.match(f.ctx.amanShipmentHtml('main',[row]),/Укажи трек/);
+ f.ctx.amanPreparePurchase([row],'paid','NEW-TRACK');f.view.createdOrderId='11';await f.ctx.amanSubmitPurchase('main');assert.equal(f.requests.length,1);
+});
+test('an Inferno payment uses its own stable purchase key and never merges quantities with the main warehouse',async()=>{
+ const f=fixture(),row=f.ctx.state.purchases[1];f.ctx.purchaseWorkflowStage=x=>x.workflowStageId;row.workflowStageId='paid';f.ctx.amanPreparePurchase([row],'cart','WB3-TRACK');f.view.createdOrderId='11';await f.ctx.amanSubmitPurchase('inferno%3Achild');
+ const body=JSON.parse(f.requests[0].options.body);assert.equal(body.purchaseKey,'inferno:child');assert.equal(body.fields.amount,4);assert.equal(body.fields.priceUsd,20000);assert.equal(f.ctx.state.purchases[0].amantransOrderId,undefined);
+});
+
+test('the real quick stage action dispatches a paid intent and never dispatches old purchases on render',async()=>{
+ const f=fixture(),row=f.ctx.state.purchases[0],html=readFileSync(new URL('../../index.html',import.meta.url),'utf8');row.workflowStageId='cart';row.status='to_forwarder';row.batch='NEW-TRACK';
+ f.ctx.purchaseWorkflowStage=x=>x.workflowStageId;f.ctx.purchaseStatus=x=>x.status;f.ctx.purchaseWorkflow=()=>[{id:'cart'},{id:'paid'},{id:'delivery_warehouse'},{id:'arrived'}];f.ctx.purchaseWorkflowPhase=()=> 'to_forwarder';f.view.createdOrderId='11';
+ vm.runInContext(html.split('\n').find(line=>line.startsWith('function quickSetPurchaseWorkflowStage(')),f.ctx);
+ f.ctx.quickSetPurchaseWorkflowStage('main','paid');await new Promise(setImmediate);assert.equal(row.workflowStageId,'paid');assert.equal(row.amantransOrderId,'11');assert.equal(f.requests.filter(x=>x.options.method==='POST').length,1);
+ f.ctx.renderPurchases();await new Promise(setImmediate);assert.equal(f.requests.filter(x=>x.options.method==='POST').length,1);
+});
