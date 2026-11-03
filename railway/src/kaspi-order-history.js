@@ -43,7 +43,9 @@ export function finishKaspiHistoryRepair(input,cursor,now){
  state.nextAllowedAt=now+3000;return state;
 }
 export function kaspiHistoryRepairAt(state,bounds){return Math.max(0,...(state?.repairRevisions||[]).filter(r=>r.from<bounds.end&&r.to>bounds.start).map(r=>Number(r.at)||0))}
-export function kaspiHistoryHasGap(state,from,to){return (state?.gaps||[]).some(g=>g.from<to&&g.to>from)||(state?.repairs||[]).some(g=>!g.gapRepair&&g.from<to&&g.to>from)}
+// ARCHIVE may filter by transition date: later windows can still contain earlier orders.
+// A narrower month pass cannot acknowledge an overlapping unfinished broader scan.
+export function kaspiHistoryHasGap(state,from,to){return (state?.gaps||[]).some(g=>g.from<to&&g.to>from)||(state?.repairs||[]).some(g=>g.from<to&&g.to>from)}
 export async function requestKaspiHistoryRepair(client,from,to,now=Date.now()){
  const db=await client.connect();let locked=false;
  try{locked=Boolean((await db.query('SELECT pg_try_advisory_lock(730147,1) AS locked')).rows[0]?.locked);if(!locked)return null;
