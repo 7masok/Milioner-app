@@ -91,3 +91,21 @@ test('all carrier routes keep owner-session and trusted-origin middleware; no re
  const routes=amanRouter.stack.filter(x=>x.route).map(x=>x.route);assert.ok(routes.length>=8);assert.ok(routes.every(x=>!x.methods.delete));
  for(const r of routes.filter(x=>!x.methods.get))assert.equal(r.stack[0].handle.name,'requireWritesEnabled');
 });
+
+test('paying registers a purchase with the same numeric total and a durable shipment identity',async()=>{
+ const f=fixture();await f.connect();const body={purchaseKey:'po-paid-fixture',fields:{name:'Первый товар',track:'NEW-TRACK',priceUsd:7480,amount:140,shippingMethod:'Avto'}};
+ const first=await f.service.registerPurchase(body);assert.equal(first.createdOrderId,'15');assert.equal(first.sent,true);
+ const sent=f.calls.filter(x=>x.url.pathname==='/amantrans/orders/create');assert.equal(sent.length,1);assert.equal(sent[0].body.price,7480);assert.equal(sent[0].body.amount,140);assert.equal(sent[0].body.name,'Первый товар');assert.equal(sent[0].body.customer_id,7);
+ await f.service.registerPurchase(body);assert.equal(f.calls.filter(x=>x.url.pathname==='/amantrans/orders/create').length,1);
+ const saved=structuredClone(f.stored),restarted=createAmanService({read:async()=>structuredClone(saved),write:async()=>{},fetchImpl:async()=>assert.fail('a linked receipt must survive restart')});
+ assert.equal((await restarted.registerPurchase(body)).createdOrderId,'15');
+ await assert.rejects(f.service.registerPurchase({...body,fields:{...body.fields,amount:141}}),/другими данными/);
+ assert.equal(f.calls.filter(x=>x.url.pathname==='/amantrans/orders/create').length,1);
+ assert.doesNotMatch(JSON.stringify(await f.service.get()),/purchaseKey|NEW-TRACK.*beforeIds|fixture-only/);
+});
+test('a paid purchase never chooses a duplicate track or repeats an uncertain carrier write',async()=>{
+ const f=fixture();await f.connect();const body={purchaseKey:'inferno:po-paid-fixture',fields:{name:'Первый товар',track:'SAME-TRACK',priceUsd:10000,amount:2,shippingMethod:'Avto'}};
+ await assert.rejects(f.service.registerPurchase(body),/Такой трек уже есть/);assert.equal(f.calls.filter(x=>x.url.pathname==='/amantrans/orders/create').length,0);
+ body.fields.track='NEW-TRACK';f.mode='write-timeout';await assert.rejects(f.service.registerPurchase(body));
+ await assert.rejects(f.service.registerPurchase(body),/предыдущей отправки/);assert.equal(f.calls.filter(x=>x.url.pathname==='/amantrans/orders/create').length,1);
+});

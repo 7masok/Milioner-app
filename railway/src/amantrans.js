@@ -64,6 +64,26 @@ export function createAmanService({read=readAmanAccess,write=saveAmanAccess,fetc
  function view(data){return {ok:true,connected:Boolean(data?.phone&&data?.password),accountId:data?.accountId||'',phoneHint:data?.phone?'•••'+data.phone.slice(-4):'',fetchedAt:data?.fetchedAt||0,lastError:data?.lastError||'',nextAttemptAt:data?.nextAttemptAt||0,orders:(data?.orders||[]).map(row=>({...row,hidden:Boolean(data.hidden?.[row.id])})),deleteSupported:false};}
  async function freshOrder(data,id){const old=data.orders?.find(x=>x.id===id);if(!old)throw fail('Сначала обновите список и выберите отправление',404);const rows=await list(data,old.track);const current=rows.find(x=>x.id===id);if(!current)throw fail('Отправление изменилось или больше недоступно. Обновите список',409);return current;}
  async function refresh(data,persistFailure=true){try{await session(data);const orders=await list(data);data.orders=orders;data.fetchedAt=now();data.nextAttemptAt=now()+TTL;data.lastError='';await write(data);}catch(error){if(data&&persistFailure){data.lastError=error.message;data.nextAttemptAt=Math.max(now()+TTL,Number(error.retryAt)||0);await write(data);}throw error;}return view(data);}
+ async function sendOrder(id,body,purchaseKey=''){
+   const fields=amanEdit(body?.fields,!id),op=purchaseKey?'paid_'+crypto.createHash('sha256').update(purchaseKey).digest('hex'):text(body?.operationId,80);if(!/^[a-zA-Z0-9_-]{12,80}$/.test(op))throw fail('Откройте форму отправки заново');
+   const data=await session(await read());data.operations||={};
+   const digest=crypto.createHash('sha256').update(JSON.stringify({id,fields})).digest('hex'),receipt=data.operations[op];
+   async function resolveCreated(entry){
+    if(!entry.purchaseKey||entry.orderId)return;
+    const orders=await list(data,entry.fields.track_code),matches=orders.filter(row=>!entry.beforeIds.includes(row.id)&&row.track===entry.fields.track_code&&row.name===entry.fields.name&&row.amount===entry.fields.amount&&row.priceUsd===entry.fields.price);
+    if(matches.length===1){entry.orderId=matches[0].id;const ids=new Set(orders.map(x=>x.id));data.orders=[...(data.orders||[]).filter(x=>!ids.has(x.id)),...orders];await write(data);}
+   }
+   if(receipt){if(receipt.digest!==digest)throw fail('Эта закупка уже отправлялась с другими данными. Откройте её доставку для проверки и изменения.',409);if(receipt.state==='done'){await resolveCreated(receipt).catch(()=>{});return {...view(data),sent:true,createdOrderId:receipt.orderId||null,refreshNeeded:!data.fetchedAt};}throw fail('Результат предыдущей отправки требует проверки. Обновите список Aman Trans; автоматически запрос не повторён.',409);}
+   let current;if(id){current=await freshOrder(data,id);if(current.fingerprint!==body.fingerprint)throw fail('Запись Aman Trans изменилась. Обновите и проверьте форму',409);}
+   let before=[];if(purchaseKey){before=await list(data,fields.track_code);if(before.some(row=>row.track===fields.track_code))throw fail('Такой трек уже есть в Aman Trans. Откройте доставку и свяжите нужную запись с закупкой.',409);}
+   const ops=Object.entries(data.operations);if(ops.length>=200){for(const [key,value]of ops)if(!value.purchaseKey&&value.state==='done'&&now()-value.at>30*86400000)delete data.operations[key];if(Object.keys(data.operations).length>=200)throw fail('Очередь отправок заполнена. Неотправленные запросы требуют проверки',409);}
+   data.operations[op]={digest,state:'pending',at:now(),...(purchaseKey?{purchaseKey,fields,beforeIds:before.map(x=>x.id)}:{})};await write(data);
+   try{await call(id?'/amantrans/orders/update':'/amantrans/orders/create',{token:data.token,method:id?'PUT':'POST',body:id?{id:Number(id),...fields}:{...fields,customer_id:Number(data.accountId)}});}
+   catch(error){data.operations[op].error=error.status;await write(data);throw error;}
+   data.operations[op].state='done';data.fetchedAt=0;await write(data);
+   await resolveCreated(data.operations[op]).catch(()=>{});
+   return {...view(data),sent:true,createdOrderId:data.operations[op].orderId||null,refreshNeeded:true};
+ }
  return {
   get:()=>locked(async()=>view(await read())),
   connect:body=>locked(async()=>{const phone=String(body?.phone||'').replace(/\D/g,''),password=String(body?.password||'');if(!/^7\d{10}$/.test(phone)||password.length<6||password.length>200)throw fail('Проверьте телефон и пароль');const auth=await login(phone,password),old=await read(),same=old?.accountId===auth.accountId,data={...(same?old:{}),phone,password,...auth,orders:same?old.orders:[],hidden:same?old.hidden:{},operations:same?old.operations:{}};await refresh(data,false);return view(data);}),
@@ -72,19 +92,8 @@ export function createAmanService({read=readAmanAccess,write=saveAmanAccess,fetc
   syncIfDue:()=>locked(async()=>{const data=await read();if(data?.phone&&data?.password&&now()>=Number(data.nextAttemptAt||0)&&now()-Number(data.fetchedAt||0)>TTL)await refresh(data);}),
   hide:(id,hidden)=>locked(async()=>{const data=await read();if(!data?.orders?.some(x=>x.id===id))throw fail('Отправление не найдено',404);data.hidden||={};if(hidden)data.hidden[id]=true;else delete data.hidden[id];await write(data);return view(data);}),
   history:id=>locked(async()=>{const data=await session(await read());if(!data.orders?.some(x=>x.id===id))throw fail('Отправление не найдено',404);const rows=await call('/amantrans/order_turkey/get-status-info?'+new URLSearchParams({id,country:'China'}),{token:data.token});if(!Array.isArray(rows))throw fail('История недоступна',502);return {ok:true,history:rows.map(x=>({at:x.update_date,status:x.status_to?.name_ru||x.status_to?.name||''}))};}),
-  send:(id,body)=>locked(async()=>{
-   const fields=amanEdit(body?.fields,!id),op=text(body?.operationId,80);if(!/^[a-zA-Z0-9_-]{12,80}$/.test(op))throw fail('Откройте форму отправки заново');
-   const data=await session(await read());data.operations||={};
-   const digest=crypto.createHash('sha256').update(JSON.stringify({id,fields})).digest('hex'),receipt=data.operations[op];
-   if(receipt){if(receipt.digest!==digest)throw fail('Состав запроса изменился. Откройте форму заново',409);if(receipt.state==='done')return {...view(data),sent:true,refreshNeeded:!data.fetchedAt};throw fail('Результат предыдущей отправки требует проверки. Обновите список Aman Trans; автоматически запрос не повторён.',409);}
-   let current;if(id){current=await freshOrder(data,id);if(current.fingerprint!==body.fingerprint)throw fail('Запись Aman Trans изменилась. Обновите и проверьте форму',409);}
-   const ops=Object.entries(data.operations);if(ops.length>=200){for(const [key,value]of ops)if(value.state==='done'&&now()-value.at>30*86400000)delete data.operations[key];if(Object.keys(data.operations).length>=200)throw fail('Очередь отправок заполнена. Неотправленные запросы требуют проверки',409);}
-   data.operations[op]={digest,state:'pending',at:now()};await write(data);
-   try{await call(id?'/amantrans/orders/update':'/amantrans/orders/create',{token:data.token,method:id?'PUT':'POST',body:id?{id:Number(id),...fields}:{...fields,customer_id:Number(data.accountId)}});}
-   catch(error){data.operations[op].error=error.status;await write(data);throw error;}
-   data.operations[op].state='done';data.fetchedAt=0;await write(data);
-   return {...view(data),sent:true,refreshNeeded:true};
-  })
+  send:(id,body)=>locked(()=>sendOrder(id,body)),
+  registerPurchase:body=>locked(()=>{const key=String(body?.purchaseKey||'');if(!key||key.length>200||/[\x00-\x1f]/.test(key))throw fail('Закупка не найдена');return sendOrder(null,{fields:body.fields},key);})
  };
 }
 export const amanService=createAmanService();
@@ -97,6 +106,7 @@ amanRouter.post('/connect',requireWritesEnabled,route(req=>amanService.connect(r
 amanRouter.post('/disconnect',requireWritesEnabled,route(()=>amanService.disconnect()));
 amanRouter.post('/sync',requireWritesEnabled,route(()=>amanService.sync()));
 amanRouter.post('/orders',requireWritesEnabled,route(req=>amanService.send(null,req.body)));
+amanRouter.post('/purchases/register',requireWritesEnabled,route(req=>amanService.registerPurchase(req.body)));
 amanRouter.patch('/orders/:id',requireWritesEnabled,route(req=>amanService.send(String(req.params.id),req.body)));
 amanRouter.post('/orders/:id/visibility',requireWritesEnabled,route(req=>{if(typeof req.body?.hidden!=='boolean')throw fail('Укажите видимость отправления');return amanService.hide(String(req.params.id),req.body.hidden);}));
 export function startAmanLoop(){if(config.storeProfile==='WB3'||!config.writesEnabled)return;const timer=setInterval(()=>{void amanService.syncIfDue().catch(()=>{});},60000);timer.unref();}
