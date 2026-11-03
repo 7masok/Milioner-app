@@ -261,7 +261,7 @@ async function renderSelectedReports(){
  if(!ids.length){for(const id of ['rRevenue','rCost','rFees','rAds','rProfit']){const el=document.getElementById(id);if(el)el.textContent='—'}document.getElementById('mpReport').innerHTML='<div class="empty">Выберите магазины</div>';return}
  showLoading(reportMarket);
  const settled=await Promise.allSettled(ids.map(async market=>{
-  if(market==='Kaspi'){const model=buildModel(await loadKaspiOrders(days),days);return {market,model,view:{...model,profit:reportProfitView(model).value}}}
+  if(market==='Kaspi'){let model=warmKaspi(days);if(!model){await loadKaspiOrders(days);model=warmKaspi(days)}return {market,model,view:{...model,profit:reportProfitView(model).value}}}
   if(market==='Ozon'){const model=await loadOzonSummary(days);return {market,model,view:{...model,revenue:model.sales,profit:model.missing?null:model.profit}}}
   const model=await loadWbModel(market,days),live=[-1,1].includes(Number(days))&&typeof ensureWbLiveOverview==='function'?await ensureWbLiveOverview(market,days).catch(()=>null):null;
   return {market,model,view:resolvedWbReportStats(model,live,market,days)};
