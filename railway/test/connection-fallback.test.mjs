@@ -13,7 +13,7 @@ function worker(fetch){
  return {handlers,navigate,cached};
 }
 test('navigation failure supplies a deliberate page with the observed error, never old orders',async()=>{
- const w=worker(async()=>new Response('upstream failure',{status:502}));const r=await w.navigate();const html=await r.text();assert.equal(r.status,503);assert.match(html,/HTTP 502/);assert.match(html,/Старая страница не подставляется/);assert.doesNotMatch(html,/__CONNECTION_CODE__/);
+ const w=worker(async()=>new Response('upstream failure',{status:502}));const r=await w.navigate();const html=await r.text();assert.equal(r.status,503);assert.match(html,/HTTP 502/);assert.match(html,/Нет связи со складом/);assert.doesNotMatch(html,/Старая страница не подставляется|Не нужно очищать|Кнопка открытия доступна/);assert.ok(html.indexOf('<details>')<html.indexOf('id="pageCheck"'));assert.doesNotMatch(html,/__CONNECTION_CODE__/);
 });
 test('network failure and timeout remain distinguishable, success is passed through',async()=>{
  for(const [error,code] of [[new TypeError('fetch failed'),'NETWORK'],[Object.assign(new Error(),{name:'AbortError'}),'TIMEOUT']]){const w=worker(async()=>{throw error});assert.match(await (await w.navigate()).text(),new RegExp(code))}
