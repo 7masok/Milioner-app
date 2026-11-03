@@ -121,10 +121,10 @@ test('repair worker uses the selected July cursor, with report-only inserts and 
  assert.equal(f.state.repairs[0].cursor.stateIndex,1);assert.equal(f.state.stateIndex,0);assert.ok(f.queries.every(sql=>!/(INSERT INTO|UPDATE|DELETE FROM) (marketplace_order_lines|warehouse|reservations)/.test(sql)));
 });
 
-test('a verified July stops being partial while a wider migration scan continues elsewhere',()=>{
+test('a month pass remains partial until an overlapping broader transition-date scan finishes',()=>{
  const from=Date.parse('2026-07-01T00:00:00+05:00'),to=from+31*DAY;
  let s=queueKaspiHistoryRepair(initialKaspiHistory(NOW),from-DAY,to+DAY,NOW);s.repairs[0].gapRepair=true;s.gaps=[{from:from-DAY,to:to+DAY}];
  s=queueKaspiHistoryRepair(s,from,to,NOW+1);s=finishKaspiHistoryRepair(s,{complete:true},NOW+3000);
- assert.equal(s.repairs.length,1);assert.equal(kaspiHistoryHasGap(s,from,to),false);assert.equal(kaspiHistoryHasGap(kaspiHistoryStatus(s),from,to),false);
- assert.equal(kaspiHistoryHasGap(s,from-DAY,from),true);
+ assert.equal(s.repairs.length,1);assert.equal(kaspiHistoryHasGap(s,from,to),true);assert.equal(kaspiHistoryHasGap(kaspiHistoryStatus(s),from,to),true);s=finishKaspiHistoryRepair(s,{complete:true},NOW+6000);assert.equal(kaspiHistoryHasGap(s,from,to),false);
+ assert.equal(kaspiHistoryHasGap(s,from-DAY,from),false);
 });
