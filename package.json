@@ -11,6 +11,7 @@
   },
   "dependencies": {
     "@simplewebauthn/server": "^13.3.3",
+    "acorn": "^8.19.0",
     "dejavu-fonts-ttf": "2.37.3",
     "express": "^5.1.0",
     "helmet": "^8.1.0",

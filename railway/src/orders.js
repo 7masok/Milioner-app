@@ -82,7 +82,7 @@ ordersRouter.get('/orders', asyncRoute(async (req, res) => {
   const selected = market(req.query.market);
   const limit = Math.max(1, Math.min(15000, Number(req.query.limit || 1000) || 1000));
   const after = Math.max(0, Number(req.query.after || 0) || 0);
-  if(config.storeProfile==='WB3')return res.json(await readWb3Orders({after,limit,cursor:String(req.query.cursor||'')}));
+  if(config.storeProfile==='WB3')return res.json(await readWb3Orders({after,before:Math.max(0,Number(req.query.before||0)||0),limit,cursor:String(req.query.cursor||'')}));
   const params = [], clauses = [];
   if (selected) clauses.push('o.market=' + '$' + params.push(selected));
   if (after) clauses.push('o.creation_date >= ' + '$' + params.push(after));

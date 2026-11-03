@@ -1,3 +1,4 @@
+import {composeBusinessSelection} from './business-dashboard-cache.js';
 import express from 'express';
 import crypto from 'node:crypto';
 import {infernoSession} from './warehouse-scope.js';
@@ -57,6 +58,21 @@ export function createUnifiedWarehouseRouter({mainOrigin,infernoOrigin,infernoSe
  }catch(e){next(e);}});
  router.get('/market-status',async(req,res,next)=>{try{const [main,child]=await Promise.all([call(req,false,'/api/market-status'),call(req,true,'/api/market-status').catch(()=>({markets:[{market:'WB',configured:null,unavailable:true}]}))]);res.json({...main,markets:[...(main.markets||[]),...scopeValue(child.markets||[])]});}catch(e){next(e);}});
  router.get('/connections',async(req,res,next)=>{try{const [main,child]=await Promise.all([call(req,false,'/api/connections'),call(req,true,'/api/connections').catch(()=>({connections:[]}))]);res.json({...main,connections:[...(main.connections||[]),...(child.connections||[]).filter(x=>x.id==='WB').map(x=>({...x,id:'WB3',label:'WB3 · Инферно'}))]});}catch(e){next(e);}});
+ // Federate prepared snapshots only; no browser/marketplace calculations.
+ router.get('/business-dashboard-days',async(req,res,next)=>{try{
+  const markets=String(req.query.markets||req.query.market||'').split(',').filter(Boolean),allowed=['Kaspi','WB','WB2','WB3','Ozon'],from=Number(req.query.from),to=Number(req.query.to),day=86400000;
+  if(!markets.length||markets.some(m=>!allowed.includes(m))||new Set(markets).size!==markets.length||!Number.isSafeInteger(from)||!Number.isSafeInteger(to)||to<=from||to-from>366*day||(from+18000000)%day||(to+18000000)%day)return res.status(400).json({ok:false,error:'Некорректный диапазон или магазины'});
+  const parts=await Promise.all(markets.map(async m=>{try{const x=await call(req,m==='WB3','/api/business-dashboard-days?market='+(m==='WB3'?'WB':m)+'&from='+from+'&to='+to);if(m==='WB3'){const scoped=scopeApiValue(x);for(const row of scoped.days||[]){try{row.day.storeStarts=JSON.stringify(scopeValue(JSON.parse(row.day.storeStarts||'{}')))}catch{}}return scoped}return x}catch{return null}}));
+  const result=composeBusinessSelection(parts,markets,from,to);if(markets.length===1){for(const row of result.days)row.day.market=markets[0]}
+  res.json(result);
+ }catch(e){next(e)}});
+ router.get('/business-dashboard-progress',async(req,res,next)=>{try{
+  const markets=String(req.query.markets||req.query.market||'').split(',').filter(Boolean),allowed=['Kaspi','WB','WB2','WB3','Ozon'];if(!markets.length||markets.some(m=>!allowed.includes(m)))return res.status(400).json({ok:false,error:'Некорректные магазины'});
+  const parts=await Promise.all(markets.map(async m=>{try{const x=await call(req,m==='WB3','/api/business-dashboard-progress?market='+(m==='WB3'?'WB':m)+'&from='+encodeURIComponent(req.query.from)+'&to='+encodeURIComponent(req.query.to));return m==='WB3'?scopeApiValue(x):x}catch{return null}}));
+  const total=Math.ceil((Number(req.query.to)-Number(req.query.from))/86400000),known=parts.filter(Boolean),preps=known.map(p=>p.preparation).filter(Boolean);
+  res.json({ok:true,serverManaged:true,market:markets.length===1?markets[0]:'all',sources:known.flatMap(p=>p.sources||[]),historyRepairs:known.find(p=>p.historyRepairs?.market==='Kaspi')?.historyRepairs,
+   preparation:{serverManaged:true,from:Number(req.query.from),to:Number(req.query.to),total,saved:preps.length===markets.length?(preps[0]?.savedDays||[]).filter(d=>preps.every(p=>(p.savedDays||[]).includes(d))).length:0,orders:preps.length===markets.length?(preps[0]?.orderDays||[]).filter(d=>preps.every(p=>(p.orderDays||[]).includes(d))).length:0,finance:preps.length===markets.length?(preps[0]?.financeDays||[]).filter(d=>preps.every(p=>(p.financeDays||[]).includes(d))).length:0,status:known.length<markets.length||preps.some(p=>p.status==='retry')?'retry':preps.some(p=>p.status==='loading')?'loading':'ready',revisions:preps.flatMap(p=>p.revisions||[])}});
+ }catch(e){next(e)}});
  // WB3 is served by its existing workers and API; the browser uses the same
  // public origin and its normal main session for every store.
  router.use(async(req,res,next)=>{try{
