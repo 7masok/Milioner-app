@@ -76,6 +76,7 @@ function populateOzonOrderFeed(){
      totalPrice,
      creationDate,
      deliveredDate,
+     fulfillment:String(posting.fulfillment||'FBO'),
      status,
      productId:null
     };
