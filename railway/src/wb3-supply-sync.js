@@ -76,21 +76,30 @@ export async function syncWbSupplies({dbPool=pool,fetchImpl=fetch,tokenFor=crede
     // Reserve the request slot before I/O. A restart cannot erase Retry-After.
     s.nextAt=now+HALF_HOUR;await write(db,s);
     const offset=Number(s.listOffset)||0,key=target&&supplyKey(target);
-    const path=listDue?'/api/v1/supplies?limit=1000&offset='+offset:'/api/v1/supplies/'+target.preorderID+'/goods?isPreorderID=true&limit=1000&offset='+(s.goodsStaging?.key===key?s.goodsStaging.offset:0);
+    // A dispatched supply has its own WB ID. Keep preorderID as our durable
+    // accounting identity, but use the actual supply ID for the goods API.
+    const hasSupply=Number.isSafeInteger(Number(target?.supplyID))&&Number(target.supplyID)>0;
+    const requestId=target?(hasSupply?'supply:':'preorder:')+(hasSupply?target.supplyID:target.preorderID):'';
+    const staging=s.goodsStaging?.key===key&&s.goodsStaging.requestId===requestId?s.goodsStaging:{key,requestId,offset:0,rows:[]};
+    const path=listDue?'/api/v1/supplies?limit=1000&offset='+offset:'/api/v1/supplies/'+(hasSupply?target.supplyID:target.preorderID)+'/goods?isPreorderID='+(!hasSupply)+'&limit=1000&offset='+staging.offset;
     try{
      const response=await fetchImpl('https://supplies-api.wildberries.ru'+path,{method:listDue?'POST':'GET',headers:{Authorization:token,'Content-Type':'application/json',Accept:'application/json'},...(listDue?{body:JSON.stringify({dates:[],statusIDs:[]})}:{}),signal:AbortSignal.timeout(30000)});
      const limit=Number(response.headers.get('x-ratelimit-limit')),cadence=supplyCadence(token,limit);
      const retry=Math.max(0,...['retry-after','x-ratelimit-retry','x-ratelimit-reset'].map(h=>{const v=Number(response.headers.get(h));return v>1e12?v-now:v>1e9?v*1000-now:v*1000||0}));
      s.nextAt=clock()+Math.max(cadence,retry);
-     if(!response.ok){s.nextAt=Math.max(s.nextAt,now+HALF_HOUR);throw Error('Поставки WB: HTTP '+response.status)}
+     if(!response.ok){
+      s.nextAt=Math.max(s.nextAt,now+HALF_HOUR);
+      let detail='';try{const body=await response.json();detail=[body.title,body.detail,body.message].filter(v=>typeof v==='string').join(' · ').slice(0,160)}catch{}
+      throw Error('Поставки WB: HTTP '+response.status+(key?' · '+requestId:'')+(detail?' · '+detail:''));
+     }
      const rows=await response.json();if(!Array.isArray(rows))throw Error('Некорректный ответ WB по поставке');
      if(listDue){
       const all=[...(s.listStaging||[]),...rows];
       if(rows.length===1000){s.listOffset=offset+1000;s.listStaging=all}
       else s=mergeSupplyList(s,all,clock());
      }else{
-      const prev=s.goodsStaging?.key===key?s.goodsStaging:{key,offset:0,rows:[]},all=[...prev.rows,...rows];
-      if(rows.length===1000)s.goodsStaging={key,offset:prev.offset+1000,rows:all};
+      const all=[...staging.rows,...rows];
+      if(rows.length===1000)s.goodsStaging={key,requestId,offset:staging.offset+1000,rows:all};
       else{s.goods={...s.goods,[key]:{listAt:s.listAt,rows:all}};delete s.goodsStaging}
       s.error='';
      }
