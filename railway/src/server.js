@@ -1,3 +1,4 @@
+import {readWb3Supplies} from './wb3-supplies.js';
 import {startBusinessReportLoop} from './business-report-worker.js';
 import {amanRouter,startAmanLoop} from './amantrans.js';
 import {createUnifiedWarehouseRouter} from './unified-warehouse.js';
@@ -188,6 +189,10 @@ app.post('/api/wb3/sync', requireTrustedOrigin, async (_req,res,next) => {
     const value=r=>r.status==='fulfilled'?r.value:{ok:false,error:String(r.reason?.message||r.reason)};
     res.json({ok:true,fbs:value(results[0]),history:value(results[1]),inventory:value(results[2])});
   } catch(error) { next(error); }
+});
+app.get('/api/wb3/supplies',requireTrustedOrigin,async(_req,res,next)=>{
+ if(config.storeProfile!=='WB3')return res.sendStatus(404);
+ try{res.json(await readWb3Supplies())}catch(error){next(error)}
 });
 app.get('/api/wb3/inventory', requireTrustedOrigin, async (_req,res,next) => {
   if(config.storeProfile!=='WB3') return res.sendStatus(404);
