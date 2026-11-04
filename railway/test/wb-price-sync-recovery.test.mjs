@@ -16,7 +16,7 @@ test('missing upload history cannot starve actual reads or new pending discounts
   const actions = [], client = { query: async () => ({ rows: [{ locked: true }] }), release() {} };
   const ctx = { Date: { now: () => now }, Number, String, Boolean, console,
     pool: { connect: async () => client },
-    syncWbPriceProtection: async () => {}, syncWbNightSchedules: async () => {}, syncWbDiscountBlocks: async () => {},
+    syncWbPromoStops: async () => {}, syncWbPriceProtection: async () => {}, syncWbNightSchedules: async () => {}, syncWbDiscountBlocks: async () => {},
     wbPriceState: async () => ({ lastAction: 'verify-upload', nextAllowedAt: 0 }),
     wbToken: async () => 'fixture', syncWbWarehouseStocksMaybe: async () => {},
     wbPriceQueueRows: async () => queue, wbPriceSnapshot: async () => ({ fetchedAt: now - 3 * slot }),
@@ -172,7 +172,7 @@ test('real sync completes gradual night return and zero discount across timed sl
       console: { info() {}, warn() {} }, pool: { connect: async () => client },
       WB_PRICE_SLOT_MS: slot, WB_PRICE_PAGE_LIMIT: 1000, wbPriceSyncAction, wbPriceRetryAfterRead,
       number: value => Number(value) || 0, cleanText: value => String(value ?? ''), clampDiscount: Number,
-      syncWbPriceProtection: async () => {}, syncWbNightSchedules: async () => {}, syncWbDiscountBlocks: async () => {},
+      syncWbPromoStops: async () => {}, syncWbPriceProtection: async () => {}, syncWbNightSchedules: async () => {}, syncWbDiscountBlocks: async () => {},
       wbPriceState: async () => ({ ...state }), wbPriceSnapshot: async () => snapshot,
       wbPriceQueueRows: async () => [...queue.values()].map(row => ({ ...row })),
       wbPriceSchedules: async () => [], wbToken: async () => 'fixture',
