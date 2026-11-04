@@ -54,3 +54,9 @@ test('re-enabling does not strand a previously tracked reserve when shipment hap
  const now=Date.parse('2026-11-04T17:00:00Z');const s=enableSupplyState({listAt:now,enabled:false,observedPreparing:['preorder:123'],supplies:[supply(6)]},now);
  assert.ok(!s.excluded.includes('preorder:123'));assert.ok(s.observedPreparing.includes('preorder:123'));
 });
+test('a current-day shipment is not incorrectly treated as old history on activation',()=>{
+ const now=Date.parse('2026-11-04T18:00:00Z');const s=enableSupplyState({listAt:now,supplies:[{...supply(6),factDate:'2026-11-04T17:00:00Z'},{...supply(5),preorderID:999,factDate:'2026-08-01T00:00:00Z'}]},now);
+ assert.ok(!s.excluded.includes('preorder:123'));assert.ok(s.excluded.includes('preorder:999'));
+ const next=mergeSupplyList({...s,observedPreparing:[]},[{...supply(6),preorderID:456,createDate:'2026-10-01T00:00:00Z',factDate:'2026-11-04T18:10:00Z'}],now+900000);
+ assert.ok(!next.excluded.includes('preorder:456'));
+});
