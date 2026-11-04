@@ -19,6 +19,7 @@ function setup(){
  apiJson:async url=>{requests.push({url});if(url.includes('market-status'))return {markets:[]};return url.includes('cursor=')?{orders:[rows[1]],nextCursor:null,sync:[]}:{orders:[rows[0]],nextCursor:'second',sync:[]};},
  fetch:async(url,options)=>{requests.push({url,options});return {ok:true,json:async()=>({ok:true})};},Date,Intl,console};
  vm.createContext(ctx);
+ vm.runInContext(html.split('\n').find(line=>line.startsWith('function marketplaceOrderDisplayCode(')),ctx);
  vm.runInContext(html.split('\n').find(line=>line.startsWith('function marketplaceOrderKey(')),ctx);
  vm.runInContext(html.split('\n').find(line=>line.startsWith('function groupMarketplaceOrders(')),ctx);
  vm.runInContext(source,ctx);
