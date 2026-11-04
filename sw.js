@@ -12,12 +12,12 @@ self.addEventListener('fetch',event=>{
   event.respondWith(Promise.resolve(Response.redirect(new URL('/',self.location.origin).href,303)));return;
  }
  if(event.request.method==='GET'&&!url.pathname.includes('/api/')&&/\.(js|css|svg|png|webmanifest)$/.test(url.pathname)){
-  event.respondWith((async()=>{const cache=await caches.open(APP_CACHE);try{const r=await fetch(event.request);if(r.ok)await cache.put(event.request,r.clone());if(r.status>=500){const saved=await cache.match(event.request);if(saved)return saved}return r}catch(error){const saved=await cache.match(event.request);if(saved)return saved;throw error}})());return;
+  event.respondWith((async()=>{const cache=await caches.open(APP_CACHE);try{const r=await fetch(event.request);if(r.ok)try{await cache.put(event.request,r.clone())}catch{}if(r.status>=500){const saved=await cache.match(event.request);if(saved)return saved}return r}catch(error){const saved=await cache.match(event.request);if(saved)return saved;throw error}})());return;
  }
  if(event.request.method!=='GET'||event.request.mode!=='navigate'||![SCOPE_BASE,SCOPE_BASE+'index.html'].includes(url.pathname))return;
  event.respondWith((async()=>{
   const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),10000);let code='NETWORK';
-  try{if(self.navigator?.onLine===false)throw new TypeError('offline');const response=await fetch(event.request,{cache:'no-store',signal:controller.signal});if(response.ok||response.status<500){if(response.ok)await (await caches.open(APP_CACHE)).put(SCOPE_BASE,response.clone());return response;}code='HTTP '+response.status}
+  try{if(self.navigator?.onLine===false)throw new TypeError('offline');const response=await fetch(event.request,{cache:'no-store',signal:controller.signal});if(response.ok||response.status<500){if(response.ok)try{await (await caches.open(APP_CACHE)).put(SCOPE_BASE,response.clone())}catch{}return response;}code='HTTP '+response.status}
   catch(error){if(error.name==='AbortError')code='TIMEOUT'}finally{clearTimeout(timer)}
   const savedApp=await (await caches.open(APP_CACHE)).match(SCOPE_BASE);if(savedApp)return savedApp;
  const cached=await (await caches.open(OFFLINE_CACHE)).match(OFFLINE_PATH);
