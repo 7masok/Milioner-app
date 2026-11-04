@@ -47,5 +47,5 @@ test('bulk and single pickers preselect saved days, expose seven accessible choi
  const dom={getElementById:id=>id==='picked'?{querySelectorAll:()=>[{value:'2'},{value:'5'}]}:null};
  const u={document:dom};const a=ui.indexOf('function priceNightWeekdays('),b=ui.indexOf('window.savePriceCardNight=',a);runInNewContext(ui.slice(a,b),u);
  const html=u.priceNightDaysPicker('picked',[2,5]);assert.equal((html.match(/type="checkbox"/g)||[]).length,7);assert.equal((html.match(/ checked/g)||[]).length,2);assert.match(html,/value="2" checked aria-label="Вт"/);assert.equal(u.priceNightDaysLabel([2,5]),'Вт, Пт');assert.equal(u.priceNightDaysLabel(), 'Ежедневно');assert.deepEqual(Array.from(u.readPriceNightWeekdays('picked')),[2,5]);
- assert.ok(ui.includes("priceNightDaysPicker('priceNightCardDays',row.nightPriceWeekdays)"));assert.ok(ui.includes("priceNightDaysPicker('priceNightDays',first.nightPriceWeekdays)"));
+ assert.ok(!ui.includes("priceNightDaysPicker('priceNightCardDays',row.nightPriceWeekdays)"));assert.ok(ui.includes("priceNightDaysPicker('priceNightDays',first.nightPriceWeekdays)"));
 });
