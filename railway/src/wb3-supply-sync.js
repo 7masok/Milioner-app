@@ -14,8 +14,10 @@ async function write(db,state){await db.query('UPDATE wb3_supply_sync SET payloa
 export async function readWbSupplySnapshot(){await ensureWbSupplies();const s=await read();return {ok:true,ready:!!s.listAt,supplies:s.supplies||[],fetchedAt:s.listAt||0,nextAt:s.nextAt||0,error:s.error||'',enabled:!!s.enabled,enabledAt:s.enabledAt||0,results:s.results||[],receipts:s.receipts||{},excluded:s.excluded||[]}}
 export function enableSupplyState(state,now){
  if(state.error||state.listOffset>0||!state.listAt||now-state.listAt>HALF_HOUR||state.listAt>now)fail('Дождитесь свежего полного списка поставок WB3');
- const excluded=(state.supplies||[]).filter(s=>!preparing(s)).map(supplyKey);
- return {...state,enabled:true,enabledAt:now,excluded:[...new Set([...(state.excluded||[]),...excluded])],observedPreparing:(state.supplies||[]).filter(preparing).map(supplyKey)};
+ const observed=new Set(state.observedPreparing||[]);
+ const excluded=(state.supplies||[]).filter(s=>!preparing(s)&&!observed.has(supplyKey(s))).map(supplyKey);
+ for(const row of (state.supplies||[]).filter(preparing))observed.add(supplyKey(row));
+ return {...state,enabled:true,enabledAt:now,excluded:[...new Set([...(state.excluded||[]),...excluded])],observedPreparing:[...observed]};
 }
 export async function setWbSupplyAccounting(enabled){
  await ensureWbSupplies();if(!config.writesEnabled)fail('Запись склада отключена');
@@ -56,7 +58,7 @@ export async function syncWbSupplies({dbPool=pool,fetchImpl=fetch,tokenFor=crede
  try{
   locked=!!(await db.query('SELECT pg_try_advisory_lock(hashtext($1)) AS locked',[LOCK])).rows[0].locked;if(!locked)return {skipped:true};
   let s=await read(db),now=clock();const original=JSON.stringify(s);const token=await tokenFor('WB');if(!token)return {skipped:true};const tokenHash=hash(token);
-  if(s.tokenHash&&s.tokenHash!==tokenHash){s={...s,enabled:false,error:'Ключ WB3 изменился. Проверьте подключение и включите учёт заново.',tokenHash,supplies:[],goods:{},listAt:0,listOffset:0,listStaging:[],goodsStaging:null};await write(db,s)}else s.tokenHash=tokenHash;
+  if(s.tokenHash&&s.tokenHash!==tokenHash){s={...s,enabled:false,error:'Ключ WB3 изменился. Проверьте подключение и включите учёт заново.',tokenHash,supplies:[],goods:{},listAt:0,listOffset:0,listStaging:[],goodsStaging:null,observedPreparing:[]};await write(db,s)}else s.tokenHash=tokenHash;
   if((Number(s.nextAt)||0)<=now){
    const target=s.enabled&&s.listAt?(s.supplies||[]).find(row=>supplyKey(row)&&!(s.excluded||[]).includes(supplyKey(row))&&s.goods?.[supplyKey(row)]?.listAt!==s.listAt):null;
    const listDue=!s.listAt||s.listOffset>0||(!target&&now-s.listAt>=HALF_HOUR);
