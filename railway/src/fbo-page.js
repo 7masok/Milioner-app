@@ -1,5 +1,5 @@
 export function withFboPage(html){
- return html.replace(/<button id="ozonFboSuppliesBtn"[^>]*>[^<]*<\/button>/,'').replace("source==='WB'?'WB1'","source==='FBO'?'Планы FBO':source==='WB'?'WB1'").replace('<section id="purchases"','<section id="fbo" class="view"><div id="wb3SupplyPanel"></div><div id="fboRoot"></div></section>\n<section id="purchases"')
+ return html.replace(/<button id="ozonFboSuppliesBtn"[^>]*>[^<]*<\/button>/,'').replace("source==='WB'?'WB1'","source==='FBO'?'Планы FBO':source==='WB'?'WB1'").replace('<section id="purchases"','<section id="fbo" class="view"><div id="fboStoreSwitch" class="market-tabs" role="group" aria-label="Магазин FBO"><button type="button" class="market-tab" data-fbo-store="Ozon" onclick="selectFboStore(\'Ozon\')">Ozon</button><button type="button" class="market-tab" data-fbo-store="WB3" onclick="selectFboStore(\'WB3\')">WB3</button></div><div id="wb3SupplyPanel" hidden></div><div id="fboRoot"></div></section>\n<section id="purchases"')
   .replace('<button data-view="reports">','<button data-view="fbo"><span>▤</span>FBO</button><button data-view="reports">')
   .replaceAll("'purchases','reports'","'purchases','fbo','reports'")
   .replace("}else if(activeView==='purchases'){","}else if(activeView==='fbo'){\n    renderFboDashboard();\n  }else if(activeView==='purchases'){")
