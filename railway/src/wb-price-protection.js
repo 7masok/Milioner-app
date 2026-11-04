@@ -93,7 +93,8 @@ export async function isWbPromoBlocked(market,nmId,client=pool){
   return row.promoBlock||row.priceProtected;
 }
 export async function decorateWbProtectionRows(market,rows){
-  const [prefs,inventory]=await Promise.all([protectionRows(market),warehouseAvailability()]);
+  const [prefs,inventory,stops]=await Promise.all([protectionRows(market),warehouseAvailability(),promoStopRows(market)]);
+  const stopsByNm=new Map(stops.map(stop=>[String(stop.nmId),stop]));
   const byNm=new Map(prefs.map(row=>[row.nmId,row]));
   return (Array.isArray(rows)?rows:[]).map(raw=>{
     const row={...raw},pref=byNm.get(cleanText(row.remoteId))||{};
@@ -102,6 +103,7 @@ export async function decorateWbProtectionRows(market,rows){
     row.autoZeroEnabled=Boolean(pref.autoZeroEnabled);
     row.autoZeroLock=Boolean(pref.autoZeroLock);
     row.promoBlocked=Boolean(pref.promoBlock);
+    row.promoStop=stopsByNm.get(String(row.remoteId))||null;
     row.priceProtected=Boolean(row.manualPriceLock||row.autoZeroLock);
     row.protectionReason=row.manualPriceLock?'Включено вручную':row.autoZeroLock?'Нет на моём складе':'';
     row.ownStockKnown=available!==null;
@@ -306,4 +308,103 @@ wbPriceProtectionRouter.post('/market-prices/protection',requireWritesEnabled,as
   const result=await applyProtection(market,ids,req.body,actorFrom(req));
   return res.json({ok:true,market,remoteIds:result.applied,count:result.applied.length,protection:result.rows,
     limitation:'Блок поддерживает скидку продавца 0% через регулярные проверки WB. Скидки самой площадки отдельно.'});
+}));
+
+function promoStopError(message,status=400){return Object.assign(new Error(message),{status})}
+export function promoStopSpec(input,basePrice){
+  const base=Number(basePrice),value=Number(input?.value),mode=input?.mode;
+  if(!['price','percent'].includes(mode)||!Number.isFinite(base)||base<=0||!Number.isFinite(value)||(mode==='percent'?value<0:value<=0))
+    throw promoStopError('Укажите минимальную цену больше 0 или скидку от 0 до 100%.');
+  if(mode==='percent'&&value>=100)throw promoStopError('Максимальная скидка должна быть меньше 100%.');
+  const minPrice=mode==='price'?value:base*(1-value/100);
+  if(minPrice>base)throw promoStopError('Минимальная цена не может быть выше исходной цены.');
+  return {mode,value,basePrice:base,minPrice};
+}
+export function promoStopCrossed(stop,row){
+  const price=Number(row?.price),discount=Number(row?.discount);
+  return Number.isFinite(price)&&price>0&&Number.isFinite(discount)&&discount>=0&&discount<100&&
+    price*(1-discount/100)<Number(stop.minPrice)-0.000001;
+}
+async function promoStopRows(market,client=pool){
+  return (await client.query(`SELECT nm_id AS "nmId",enabled,mode,value,base_price AS "basePrice",
+    min_price AS "minPrice",triggered_at AS "triggeredAt",restoring FROM wb_promo_stops WHERE market=$1`,[market])).rows;
+}
+export async function saveWbPromoStop(market,nmId,input,actor='owner',db=pool){
+  const client=await db.connect(),now=Date.now();
+  try{
+    await client.query('BEGIN');
+    await client.query('SELECT pg_advisory_xact_lock(hashtext($1))',['millioner:wb-prices:'+market]);
+    const old=(await client.query('SELECT enabled,base_price,restoring FROM wb_promo_stops WHERE market=$1 AND nm_id=$2 FOR UPDATE',[market,nmId])).rows[0];
+    if(old?.restoring)throw promoStopError('Сначала дождитесь возврата исходной цены.',409);
+    if(input.enabled===false){
+      await client.query('UPDATE wb_promo_stops SET enabled=false,updated_at=$3 WHERE market=$1 AND nm_id=$2',[market,nmId,now]);
+    }else{
+      const row=(await priceRows(market,client)).find(r=>Number(r.remoteId)===nmId);
+      if(!row)throw promoStopError('Сначала загрузите цены магазина.',409);
+      if(row.canEditPrice===false)throw promoStopError('Разные цены по размерам: общий стоп нельзя установить.',409);
+      const pref=await protectionFor(market,nmId,client);
+      if(pref.promoBlock)throw promoStopError('Сначала выключите «Не участвовать в акциях».',409);
+      const queue=(await client.query('SELECT status FROM wb_price_update_queue WHERE market=$1 AND nm_id=$2',[market,nmId])).rows[0];
+      if(queue&&['pending','sent','checking'].includes(queue.status))throw promoStopError('Дождитесь применения текущего изменения цены.',409);
+      const spec=promoStopSpec(input,old?.enabled?old.base_price:row.price);
+      await client.query(`INSERT INTO wb_promo_stops(market,nm_id,enabled,mode,value,base_price,min_price,triggered_at,restoring,updated_at)
+        VALUES($1,$2,true,$3,$4,$5,$6,0,false,$7) ON CONFLICT(market,nm_id) DO UPDATE SET
+        enabled=true,mode=excluded.mode,value=excluded.value,base_price=excluded.base_price,min_price=excluded.min_price,
+        triggered_at=0,restoring=false,updated_at=excluded.updated_at`,[market,nmId,spec.mode,spec.value,spec.basePrice,spec.minPrice,now]);
+    }
+    await history(client,market,nmId,'promo-stop',actor,{enabled:input.enabled!==false,mode:input.mode,value:input.value},now);
+    await client.query('COMMIT');
+  }catch(error){await client.query('ROLLBACK').catch(()=>{});throw error}finally{client.release()}
+  return {ok:true};
+}
+// Called under the existing per-market price worker lock. No extra WB request:
+// snapshot observation, trigger latch and price queue share one DB transaction.
+export async function syncWbPromoStops(market,now=Date.now(),db=pool){
+  const client=await db.connect();let changed=0;
+  try{
+    await client.query('BEGIN');
+    const rows=await priceRows(market,client),byNm=new Map(rows.map(r=>[String(r.remoteId),r]));
+    const stops=(await client.query(`SELECT nm_id AS "nmId",enabled,base_price AS "basePrice",min_price AS "minPrice",
+      triggered_at AS "triggeredAt",restoring FROM wb_promo_stops WHERE market=$1 AND (enabled OR restoring) FOR UPDATE`,[market])).rows;
+    for(const stop of stops){
+      const row=byNm.get(String(stop.nmId));if(!row)continue;
+      let restoring=stop.restoring;
+      if(!restoring){
+        const pref=await protectionFor(market,stop.nmId,client);
+        if(pref.promoBlock||!promoStopCrossed(stop,row))continue;
+        await client.query('UPDATE wb_promo_stops SET enabled=false,restoring=true,triggered_at=$3,updated_at=$3 WHERE market=$1 AND nm_id=$2',[market,stop.nmId,now]);
+        await setWbDiscountBlock(market,stop.nmId,true,client,now);
+        await disableAutomationForLock(market,stop.nmId,client,now);
+        await client.query("UPDATE wb_price_schedules SET enabled=false,base_price=NULL,window_key='',phase='off' WHERE market=$1 AND nm_id=$2",[market,stop.nmId]);
+        // Protected return must agree with a pre-existing manual/zero-stock lock.
+        await client.query('UPDATE wb_price_protection SET locked_price=$3,locked_discount=0 WHERE market=$1 AND nm_id=$2',[market,stop.nmId,stop.basePrice]);
+        await history(client,market,stop.nmId,'promo-stop-trigger','system',{basePrice:stop.basePrice,minPrice:stop.minPrice,observedPrice:row.price,observedDiscount:row.discount},now);
+        restoring=true;changed++;
+      }
+      const queue=(await client.query(`SELECT desired_price AS "desiredPrice",desired_discount AS "desiredDiscount",status,source
+        FROM wb_price_update_queue WHERE market=$1 AND nm_id=$2 FOR UPDATE`,[market,stop.nmId])).rows[0];
+      // Preserve the WB upload ID, and preserve rejections instead of retrying blindly.
+      if(queue&&(['sent','checking'].includes(queue.status)||queue.status==='error'))continue;
+      if(Math.abs(Number(row.price)-Number(stop.basePrice))<0.000001&&Number(row.discount)===0&&!queue){
+        await client.query('UPDATE wb_promo_stops SET restoring=false,updated_at=$3 WHERE market=$1 AND nm_id=$2',[market,stop.nmId,now]);changed++;continue;
+      }
+      if(row.canEditPrice===false)continue;
+      const target=protectedReturnPrice(row.price,stop.basePrice);
+      if(queue?.status==='pending'&&Number(queue.desiredPrice)===target&&Number(queue.desiredDiscount)===0)continue;
+      await client.query(`INSERT INTO wb_price_update_queue
+        (market,nm_id,desired_price,desired_discount,status,queued_at,sent_at,upload_id,last_error,updated_at,source,promotion_id)
+        VALUES($1,$2,$3,0,'pending',$4,0,0,'',$4,'protection',0)
+        ON CONFLICT(market,nm_id) DO UPDATE SET desired_price=excluded.desired_price,desired_discount=0,
+        status='pending',queued_at=excluded.queued_at,sent_at=0,upload_id=0,last_error='',updated_at=excluded.updated_at,
+        source='protection',promotion_id=0 WHERE wb_price_update_queue.status NOT IN ('sent','checking','error')`,[market,stop.nmId,target,now]);changed++;
+    }
+    await client.query('COMMIT');
+  }catch(error){await client.query('ROLLBACK').catch(()=>{});throw error}finally{client.release()}
+  return {changed};
+}
+wbPriceProtectionRouter.post('/market-prices/promo-stop',requireWritesEnabled,asyncRoute(async(req,res)=>{
+  if(req.body?.confirm!==true)return res.status(400).json({ok:false,error:'Подтвердите установку стопа.'});
+  const market=marketName(req.body.market),nmId=Number(req.body.remoteId);
+  if(!Number.isSafeInteger(nmId)||nmId<=0)throw promoStopError('Не выбран товар WB.');
+  return res.json(await saveWbPromoStop(market,nmId,req.body,actorFrom(req)));
 }));

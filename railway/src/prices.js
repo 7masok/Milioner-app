@@ -9,7 +9,7 @@ import { credentialFor } from './connections.js';
 import { asyncRoute, requireTrustedOrigin, requireWritesEnabled } from './http.js';
 import { readWarehouseProducts } from './warehouse-products.js';
 import { decorateWbPromotionRows, requestWbPromotionDiscovery } from './wb-promotions.js';
-import { decorateWbProtectionRows, protectionFor, syncWbPriceProtection, syncWbDiscountBlocks, setWbDiscountBlock, updateProtectionBaseline } from './wb-price-protection.js';
+import { decorateWbProtectionRows, protectionFor, syncWbPriceProtection, syncWbDiscountBlocks, syncWbPromoStops, setWbDiscountBlock, updateProtectionBaseline } from './wb-price-protection.js';
 import { decorateWbCardGroupRows } from './wb-card-groups.js';
 import { prepareWbPriceChange, nightUploadInFlight } from './wb-price-workbench.js';
 import { wbPriceSyncAction, wbPriceRetryAfterRead } from './wb-price-sync-policy.js';
@@ -1158,6 +1158,7 @@ async function syncWbPriceMarket(market) {
     if (!locked) return { ok: true, market, skipped: true, reason: 'already-running' };
 
     const now = Date.now();
+    await syncWbPromoStops(market, now);
     await syncWbPriceProtection(market, now);
     await syncWbNightSchedules(market, now);
     await syncWbDiscountBlocks(market, now);
