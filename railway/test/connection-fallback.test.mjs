@@ -6,8 +6,8 @@ const sw=readFileSync(new URL('../../sw.js',import.meta.url),'utf8');
 const ui=readFileSync(new URL('../../connection-status-v1.js',import.meta.url),'utf8');
 const page=readFileSync(new URL('../../offline.html',import.meta.url),'utf8');
 function worker(fetch){
- const handlers={};const cached=[];
- const context={URL,Request,Response,AbortController,setTimeout,clearTimeout,fetch,caches:{open:async()=>({add:async r=>cached.push(r.url),match:async()=>new Response(page)})},self:{location:{origin:'https://warehouse.test'},addEventListener:(name,fn)=>handlers[name]=fn,skipWaiting:async()=>{},clients:{claim:async()=>{}}}};
+ const handlers={};const cached=[];const pages=new Map();
+ const context={URL,Request,Response,AbortController,setTimeout,clearTimeout,fetch,caches:{open:async name=>({add:async r=>cached.push(r.url),put:async(k,r)=>pages.set(name+':'+(k.url||k),r.clone()),match:async k=>pages.get(name+':'+(k.url||k))?.clone()||(name.startsWith('sklad-connection-screen')?new Response(page):undefined)})},self:{location:{origin:'https://warehouse.test'},addEventListener:(name,fn)=>handlers[name]=fn,skipWaiting:async()=>{},clients:{claim:async()=>{}}}};
  vm.runInNewContext(sw,context);
  const navigate=()=>{let result;handlers.fetch({request:{url:'https://warehouse.test/',method:'GET',mode:'navigate'},respondWith:r=>result=r});return result};
  return {handlers,navigate,cached};
@@ -23,7 +23,7 @@ test('worker leaves authenticated API, unrelated pages and foreign sites alone',
  const w=worker(()=>{throw new Error('must not fetch')});
  for(const [url,mode] of [['https://warehouse.test/api/warehouse-state','cors'],['https://warehouse.test/developers','navigate'],['https://other.test/','navigate']])w.handlers.fetch({request:{url,method:'GET',mode},respondWith:()=>assert.fail('intercepted unrelated request')});
 });
-test('worker caches only the public status page, no business snapshot',async()=>{
+test('worker prepares public offline shell without caching API business snapshots',async()=>{
  // Cache.add uses a browser-relative URL; substitute Request for this install check.
  const handlers={},cached=[];vm.runInNewContext(sw,{URL,Response,AbortController,setTimeout,clearTimeout,Request:class{constructor(url){this.url=url}},fetch:async()=>{},caches:{open:async()=>({add:async r=>cached.push(r.url)})},self:{location:{origin:'https://warehouse.test'},addEventListener:(name,fn)=>handlers[name]=fn,skipWaiting:async()=>{},clients:{claim:async()=>{}}}});
  let pending;handlers.install({waitUntil:p=>pending=p});await pending;assert.deepEqual(cached,['/offline.html']);
@@ -96,4 +96,12 @@ test('recovered diagnostics are authenticated, bounded and strip secrets and que
  let response;handler({body:{attempts:[{path:'/?token=secret',code:'BOOT_TIMEOUT',at:Date.now(),ms:15000,secret:'do-not-log'},{path:'/api/orders',code:'NETWORK'},{path:'/health',code:'PASSWORD secret'}]}},{set(){return this},json:r=>response=r});
  assert.equal(response.ok,true);assert.equal(logs.length,1);const payload=JSON.parse(logs[0][1]);assert.equal(payload.attempts.length,1);assert.equal(payload.attempts[0].path,'/');assert.doesNotMatch(logs[0][1],/secret|token|password/i);
  assert.ok(server.indexOf("app.use('/api', requireAppSession)")<server.indexOf("app.post('/api/system/client-diagnostics'"));
+});
+
+test('offline navigation reopens the previously loaded application shell',async()=>{
+ let connected=true;
+ const w=worker(async()=>{if(!connected)throw new TypeError('offline');return new Response('<h1>Warehouse shell</h1>')});
+ await w.navigate();connected=false;
+ const result=await w.navigate();
+ assert.equal(result.status,200);assert.match(await result.text(),/Warehouse shell/);
 });
