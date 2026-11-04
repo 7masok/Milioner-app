@@ -126,7 +126,8 @@ function updatePriceBulkTools(indexed=priceVisibleRows()){
   const isWb=priceIsWbMarket(),selection=priceSelection(),visibleIds=indexed.filter(({row})=>!row.error).map(({row})=>priceSelectionId(row)).filter(Boolean),
     selectedVisible=visibleIds.filter(id=>selection.has(id)).length;
   if(tools){tools.hidden=!priceCanSelect();tools.classList.toggle('kaspi',priceUi.market==='Kaspi');}
-  for(const button of [enable,disable,night,protection])if(button)button.hidden=!isWb;
+  if(night)night.hidden=true;
+  for(const button of [enable,disable,protection])if(button)button.hidden=!isWb;
   if(price)price.textContent=isWb?'Цена / скидка':'Изменить цену';
   if(all){
     all.checked=Boolean(visibleIds.length)&&selectedVisible===visibleIds.length;
@@ -246,11 +247,6 @@ function priceInlineEditor(row,index){
       '<div class="field"><label>Скидка, %</label><input id="priceEditDiscount" type="number" min="0" max="99" step="1" inputmode="numeric" value="'+pEsc(Math.round(pNum(row.discount)))+'" oninput="priceInlinePreview()"></div></div>'+
       '<div id="priceInlineTotal" class="muted">После скидки: '+pMoney(ordinary*(1-pNum(row.discount)/100),row.currency)+'</div>'+
       '<div id="priceInlineProfit">'+priceProfitHtml(row,ordinary*(1-pNum(row.discount)/100))+'</div>'+
-      '<div class="price-night-row"><label class="price-promo-toggle"><input id="priceNightEnabled" type="checkbox" '+(row.nightPriceEnabled?'checked':'')+' '+(priceDisabled?'disabled':'')+'>Ночь</label>'+
-      '<div class="field"><label>Ночная цена, '+pEsc(row.currency||'RUB')+'</label><input id="priceNightCardValue" type="number" min="1" step="1" inputmode="decimal" value="'+pEsc(pNum(row.nightPriceTarget)||'')+'" '+(priceDisabled?'disabled':'')+'></div></div>'+
-      '<div class="price-night-times"><div class="field"><label>С · Алматы</label><input id="priceNightCardStart" type="time" value="'+pEsc(row.nightPriceStart||'04:00')+'"></div><div class="field"><label>До</label><input id="priceNightCardEnd" type="time" value="'+pEsc(row.nightPriceEnd||'06:00')+'"></div><button type="button" class="btn" onclick="savePriceCardNight('+Number(index)+',document.getElementById(\'priceNightEnabled\').checked)">Сохранить ночь</button></div>'+
-      priceNightDaysPicker('priceNightCardDays',row.nightPriceWeekdays)+
-      '<div class="muted">Возврат: '+pMoney(ordinary,row.currency)+' до скидки</div>'+
       (priceDisabled?'<div class="price-inline-warning">Разные цены по размерам · меняется только скидка</div>':'')+
       '<details class="price-advanced"><summary>Защита</summary><div class="price-protection-grid">'+
         '<label class="price-protection-toggle"><input type="checkbox" '+(row.manualPriceLock?'checked':'')+' onchange="togglePriceProtection('+Number(index)+',\'manualPriceLock\',this.checked)"> <span><b>Зафиксировать цену продавца</b><br><span class="muted">Блокирует наши автоматические изменения цены и скидки.</span></span></label>'+
@@ -306,9 +302,7 @@ function priceCard(row,index){
       row.promoEnabled&&row.promoStatus==='auto_only'?'Автоакции вручную':
       row.promoEnabled?'Подбирает условия акции':'Участие проверяйте в WB')+'</span>'
     :'';
-  const night=((row.market==='WB'||row.market==='WB2'||row.market==='WB3'))&&(row.nightPriceEnabled||row.nightPricePhase==='restoring')
-    ?'<span class="price-night-badge"> · 🌙 '+pEsc(priceNightDaysLabel(row.nightPriceWeekdays))+' · '+pEsc(row.nightPriceStart||'04:00')+'–'+pEsc(row.nightPriceEnd||'06:00')+' · '+pMoney(row.nightPriceTarget,row.currency)+' · '+pEsc(({idle:'Запланировано',raising:'Устанавливается',active:'Установлена',restoring:'Возвращается',manual:'Ручная цена',locked:'Защита',off:'Выключено',error:'Ошибка'})[row.nightPricePhase]||'Запланировано')+(row.nightProtectionOverride?' · Поверх защиты':'')+(row.nightPriceError?' · '+pEsc(row.nightPriceError):'')+'</span>'
-    :'';
+  const night=row.nightPricePhase==='restoring'?'<span class="muted"> · Возвращаем обычную цену</span>':'';
   const discountBlock=row.promoBlocked?'<span class="price-lock-badge"> · Скидки заблокированы · 0%</span>':'';
   const protection=row.priceProtected?'<span class="price-lock-badge"> · 🔒 '+pEsc(row.protectionReason||'Защита цены')+'</span>':'';
   const group=priceIsWbMarket(row.market)?'<span> · '+(row.grouped?(pEsc(priceGroupLabel(row))+' · '+Number(row.groupSize||0)):'Без группы')+'</span>':'';

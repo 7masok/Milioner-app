@@ -69,13 +69,15 @@ test('an exact reserved plan is consumed automatically; ambiguous plans and miss
  assert.throws(()=>accountAutomaticOrder({state:s}, {supplies:[part()]},'Ozon','900',2000),/Несколько планов/);
  const f=fixture();await runAutoAccounting(account,{payload:{supplies:[{...part(),items:[]}]},updated_at:1500},f.options);assert.equal(f.writes,0);assert.equal(f.row.last_results[0].status,'attention');
 });
-test('UI displays server opt-in and requires confirmation before enabling; toggle itself never consumes stock',async()=>{
- const el={innerHTML:''},requests=[],alerts=[];let approved=false;
- const data={warehouse:{revision:2},autoAccounting:{enabled:false,results:[]}};
- const c={window:{fboWarehouseData:()=>data,fboWarehouseReload:async()=>{}},document:{getElementById:()=>el,addEventListener(){}},confirm:()=>approved,alert:m=>alerts.push(m),MILLIONER_API:'',AbortSignal,console,requireWarehouseEditReady:()=>true,fetch:async(url,opts)=>{requests.push({url,body:JSON.parse(opts.body)});return {ok:true,json:async()=>({ok:true})}}};
+test('FBO UI shows only actionable accounting errors without a manual enable switch',()=>{
+ const el={innerHTML:''},c={window:{},document:{getElementById:()=>el,addEventListener(){}},console};
  vm.runInNewContext(readFileSync(new URL('../../fbo-warehouse-v1.js',import.meta.url),'utf8'),c);
- c.window.renderFboAutoAccounting(data);assert.match(el.innerHTML,/Автосписание новых отправок · выключено/);assert.doesNotMatch(el.innerHTML,/<input[^>]*checked/);
- const input={checked:true,disabled:false};await c.window.setFboAutoAccounting(input);assert.equal(requests.length,0);assert.equal(input.checked,false);
- approved=true;input.checked=true;await c.window.setFboAutoAccounting(input);assert.deepEqual(requests,[{url:'/api/fbo-warehouse/automatic',body:{enabled:true,baseRevision:2}}]);assert.equal(input.disabled,false);assert.equal(alerts.length,0);
+ c.window.renderFboAutoAccounting({autoAccounting:{enabled:true,results:[{orderId:'900',status:'attention',message:'Нет привязки'}]}});
+ assert.match(el.innerHTML,/Нет привязки/);assert.doesNotMatch(el.innerHTML,/checkbox|Автосписание новых отправок|Включить/);
+ assert.equal(c.window.setFboAutoAccounting,undefined);
 });
 test.after(()=>pool.end());
+test('automatic operation self-enables with a historical baseline rather than requiring a UI toggle',async()=>{
+ const f=fixture();f.row.enabled=false;await runAutoAccounting(account,{payload:{supplies:[part()]},updated_at:1500},f.options);
+ assert.equal(f.row.enabled,true);assert.deepEqual(f.row.excluded_orders,['900']);assert.equal(f.writes,0);
+});
