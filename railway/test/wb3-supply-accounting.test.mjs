@@ -50,3 +50,7 @@ test('activation baselines history; delayed historical rows are excluded; known 
  a=mergeSupplyList(a,[{...supply(6),supplyID:999},{...supply(5),preorderID:789,createDate:'2026-08-01T00:00:00Z'}],now+1000);
  assert.ok(!a.excluded.includes('preorder:123'));assert.ok(a.excluded.includes('preorder:789'));
 });
+test('re-enabling does not strand a previously tracked reserve when shipment happened during pause',()=>{
+ const now=Date.parse('2026-11-04T17:00:00Z');const s=enableSupplyState({listAt:now,enabled:false,observedPreparing:['preorder:123'],supplies:[supply(6)]},now);
+ assert.ok(!s.excluded.includes('preorder:123'));assert.ok(s.observedPreparing.includes('preorder:123'));
+});
