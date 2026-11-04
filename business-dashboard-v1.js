@@ -553,7 +553,7 @@ function businessYearFromMonths(bounds,parts){
  }
  orders.coverage=orders.amount>0?orders.coveredAmount/orders.amount:1;
  const summary=businessCombineSummary(rows);
- return businessStamp({ordersPartialMarkets:[...new Set(parts.flatMap(m=>m?.ordersPartialMarkets||[]))],period:'year',bounds,buckets,orders,summary,netProfit:summary.profit,knownMonths,expectedMonths,yearPartial:knownMonths<expectedMonths,unavailable:knownMonths===0,hourly:{ozonHourlyComplete:true},pending:parts.some(m=>m?.pending),ordersReady:parts.every(m=>!m||!m.pending||m.ordersReady===true)});
+ return businessStamp({ordersPartialMarkets:[...new Set(parts.flatMap(m=>m?.ordersPartialMarkets||[]))],period:'year',bounds,buckets,orders,summary,netProfit:summary.profit,knownMonths,expectedMonths,yearPartial:knownMonths<expectedMonths,unavailable:knownMonths===0||(knownMonths<expectedMonths&&parts.filter(Boolean).every(month=>month.beforeOpening)),hourly:{ozonHourlyComplete:true},pending:parts.some(m=>m?.pending),ordersReady:parts.every(m=>!m||!m.pending||m.ordersReady===true)});
 }
 function businessSeedYear(offset){
  businessHydrateDays();businessHydrateMonths();const bounds=businessYearBounds(offset),previousBounds=businessYearBounds(offset-1),currentParts=[],previousParts=[],alignedParts=[],currentMonth=new Date(Date.now()+18000000).getUTCMonth();
@@ -706,7 +706,7 @@ async function businessReadOnlineMonths(offset){
 }
 async function businessResolveModel(force,period,offset,key){
  const scope=businessScope;
- if(businessServerManaged&&!force&&period!=='year'&&typeof fetch==='function'&&typeof window.loadBusinessMarketplaceDaily==='function'){
+ if(businessServerManaged&&!force&&typeof fetch==='function'&&typeof window.loadBusinessMarketplaceDaily==='function'){
   const selected=businessBounds(period,offset),bounds={start:selected.start,end:Math.min(selected.end,businessDayBounds(0).end)};
   try{
    await businessReadSavedDays(bounds,scope);
