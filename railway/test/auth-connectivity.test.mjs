@@ -5,7 +5,7 @@ import {readFileSync} from 'node:fs';
 const html=readFileSync(new URL('../../index.html',import.meta.url),'utf8');
 function fixture(fetch,token='saved-session'){
  const timers=new Map(),local=new Map([['session',token]]),session=new Map(local),button={disabled:false,textContent:'Войти'},input={value:'test-code'},errors=[],modes=[];let id=0,started=0;
- const storage=map=>({removeItem:key=>map.delete(key),setItem:(key,value)=>map.set(key,value)});
+ const storage=map=>({getItem:key=>map.get(key)||null,removeItem:key=>map.delete(key),setItem:(key,value)=>map.set(key,value)});
  const ctx=vm.createContext({AbortController,Promise,Error,Boolean,Number,String,JSON,nativeFetch:fetch,MILLIONER_API:'https://warehouse.test',APP_SESSION_KEY:'session',ownerSessionToken:token,ownerAuthEnabled:false,ownerAuthInfo:{},localStorage:storage(local),sessionStorage:storage(session),setTimeout:fn=>{timers.set(++id,fn);return id},clearTimeout:key=>timers.delete(key),document:{getElementById:key=>key==='ownerLoginButton'?button:key==='ownerPassword'?input:null},setOwnerLoginError:value=>errors.push(value),setOwnerAuthMode:(mode,error)=>modes.push({mode,error}),startOwnerRuntimeAfterAuth:()=>started++,renderOwnerLogin:()=>{},rememberOwnerSession:()=>started++});
  for(const [start,end] of [['async function ownerAuthRequest(', 'async function initOwnerAuth('],['async function initOwnerAuth(', 'function rememberOwnerSession('],['async function ownerAuthSubmit(', 'async function ownerWebAuthnLogin(']]) vm.runInContext(html.slice(html.indexOf(start),html.indexOf(end,html.indexOf(start))),ctx);
  return {ctx,timers,local,session,button,errors,modes,get started(){return started}};
@@ -31,4 +31,16 @@ test('expired sessions are cleared while invalid config never bypasses login',as
 });
 test('wrong code is visible and permits retry',async()=>{
  const f=fixture(async()=>reply(401,{error:'wrong-password'}));await f.ctx.ownerAuthSubmit();assert.equal(f.errors.at(-1),'Неверный код доступа');assert.equal(f.button.disabled,false);assert.equal(f.started,0);assert.match(html, /id="ownerLoginError" class="login-error" role="alert"/);
+});
+
+test('an existing session can view a confirmed local snapshot offline without a network request',async()=>{
+ const f=fixture(()=>assert.fail('offline startup must not wait for the server'));
+ f.ctx.navigator={onLine:false};f.ctx.cloudStatus=()=>{};
+ f.local.set('milioner_server_snapshot_cache_v2',JSON.stringify({verifiedAt:1,state:{products:[{id:'p'}]}}));
+ await f.ctx.initOwnerAuth();assert.equal(f.started,1);
+});
+test('a server-rejected session cannot unlock a cached snapshot',async()=>{
+ const f=fixture(async url=>url.endsWith('/session')?reply(401):reply(200,{enabled:true}));
+ f.local.set('milioner_server_snapshot_cache_v2',JSON.stringify({verifiedAt:1,state:{products:[{id:'p'}]}}));
+ await f.ctx.initOwnerAuth();assert.equal(f.started,0);assert.equal(f.ctx.ownerSessionToken,'');
 });
