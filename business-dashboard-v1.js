@@ -706,7 +706,7 @@ async function businessReadOnlineMonths(offset){
 }
 async function businessResolveModel(force,period,offset,key){
  const scope=businessScope;
- if(period!=='year'&&typeof fetch==='function'&&typeof window.loadBusinessMarketplaceDaily==='function'){
+ if(businessServerManaged&&!force&&period!=='year'&&typeof fetch==='function'&&typeof window.loadBusinessMarketplaceDaily==='function'){
   const selected=businessBounds(period,offset),bounds={start:selected.start,end:Math.min(selected.end,businessDayBounds(0).end)};
   try{
    await businessReadSavedDays(bounds,scope);
