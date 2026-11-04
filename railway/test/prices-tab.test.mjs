@@ -244,7 +244,7 @@ test('WB inline promotion actions change the discount through the workbench',()=
   const inline=ui.slice(ui.indexOf('function priceInlineEditor'),ui.indexOf('function priceCard'));
   const wb=inline.slice(inline.indexOf("if((row.market==='WB'||row.market==='WB2'||row.market==='WB3'))"),inline.indexOf("if(row.market==='Ozon')"));
   const kaspi=inline.slice(inline.indexOf("if(row.market==='Kaspi')"),inline.indexOf("if((row.market==='WB'"));
-  assert.match(wb,/price-promo-toggle/);
+  assert.doesNotMatch(wb,/id="priceNightEnabled"/);
   assert.match(wb,/openPriceWorkbench\(\\'enter/);
   assert.match(wb,/openPriceWorkbench\(\\'exit/);
   assert.doesNotMatch(wb,/onchange="togglePricePromo/);
@@ -363,13 +363,13 @@ test('WB night schedule accepts normal HH:MM time values',()=>{
   assert.doesNotMatch(api,/const match = \/\^\(\\\\d\{2\}\):\(\\\\d\{2\}\)\$\//);
 });
 
-test('WB card has a night switch and a separate night price field',()=>{
+test('retired night price controls are absent while safe restoration remains',()=>{
   const inline=ui.slice(ui.indexOf('function priceInlineEditor'),ui.indexOf('function priceCard'));
-  assert.match(inline,/id="priceNightEnabled"/);
-  assert.match(inline,/>Ночь</);
-  assert.match(inline,/id="priceNightCardValue"/);
-  assert.match(inline,/Ночная цена/);
-  assert.match(inline,/savePriceCardNight\(/);
+  assert.doesNotMatch(inline,/id="priceNightEnabled"/);
+  assert.doesNotMatch(inline,/>Ночь</);
+  assert.doesNotMatch(inline,/id="priceNightCardValue"/);
+  assert.doesNotMatch(inline,/Ночная цена/);
+  assert.doesNotMatch(inline,/savePriceCardNight\(/);
   assert.match(ui,/window\.savePriceCardNight=async function\(index,enabled\)/);
   assert.match(ui,/Укажите ночную цену/);
   assert.match(api,/enabled=false,start_minute=excluded.start_minute/);
@@ -410,11 +410,11 @@ test('WB night price schedule is persisted, bulk-configurable and reuses the 15-
   assert.match(api,/status='held'/);
   assert.match(api,/markManualScheduleOverride/);
   assert.match(api,/pricesRouter\.post\('\/market-prices\/night-schedule', requireWritesEnabled/);
-  assert.match(html,/id="priceBulkNight"/);
+  assert.doesNotMatch(html,/id="priceBulkNight"/);
   assert.match(ui,/window\.openPriceNightSchedule=function\(\)/);
   assert.match(ui,/window\.savePriceNightSchedule=async function\(enabled\)/);
   assert.match(ui,/\/api\/market-prices\/night-schedule/);
-  assert.match(ui,/price-night-badge/);
+  assert.match(ui,/Возвращаем обычную цену/);
   assert.match(passport,/PRICE-18/);
   assert.match(agents,/действие «Ночь»/);
 });
