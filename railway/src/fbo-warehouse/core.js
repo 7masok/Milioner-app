@@ -57,9 +57,10 @@ function unitCost(lot){const qty=num(lot.qty);if(!qty)return 0;if(lot.landedUnit
 export function dispatchDraft(state,id,remote,now=Date.now()){
  const d=draftGroups(state).find(d=>d.id===id);if(!d)fail('План не найден',404);if(d.status==='sent'){if(d.orderId!==String(remote.orderId))fail('Этот план уже отправлен по другой заявке');return{draft:d,changed:false}}if(d.status!=='reserved')fail('План уже отменён');if(d.orderId&&d.orderId!==String(remote.orderId))fail('Резерв связан с другой заявкой Ozon.');
  const remoteLines=list(remote.lines),aggregated=new Map();for(const x of remoteLines){const key=x.sku+'|'+x.clusterKey;if(!aggregated.has(key))aggregated.set(key,{...x,qty:0});aggregated.get(key).qty+=x.qty}const totals=[...aggregated.values()];if(totals.length!==d.lines.length||totals.some(x=>!d.lines.some(l=>l.sku===x.sku&&l.clusterKey===x.clusterKey&&l.qty===x.qty)))fail('Состав заявки Ozon не совпадает с планом. Проверьте товары, кластеры и количества.');
- const transfers=state.settings?.ozonFboTransfers||{},prefix=d.account+'|'+remote.orderId+'|';if(Object.entries(transfers).some(([k,t])=>k.startsWith(prefix)||String(t.account||k.split('|')[0])===d.account&&remoteLines.some(l=>String(t.supplyId||k.split('|')[2])===String(l.supplyId)&&String(t.sku||k.split('|')[4])===l.sku)))fail('Эта заявка Ozon уже учтена. Повторное списание запрещено.');
+ const transferField=remote.marketplace==='WB3'?'wb3FboTransfers':'ozonFboTransfers',marketLabel=remote.marketplace==='WB3'?'WB3 FBO':'Ozon FBO';
+ const transfers=state.settings?.[transferField]||{},prefix=d.account+'|'+remote.orderId+'|';if(Object.entries(transfers).some(([k,t])=>k.startsWith(prefix)||String(t.account||k.split('|')[0])===d.account&&remoteLines.some(l=>String(t.supplyId||k.split('|')[2])===String(l.supplyId)&&String(t.sku||k.split('|')[4])===l.sku)))fail('Эта заявка Ozon уже учтена. Повторное списание запрещено.');
  const pool=inventory(state,{excludeDraft:id});for(const r of d.rows){const p=pool.get(String(r.productId));if(!p||p.sale<num(r.qty)||p.warehouse<num(r.warehouseQty))fail('Остаток изменился: пересоберите план');p.sale-=num(r.qty);p.warehouse-=num(r.warehouseQty);for(const x of r.warehouseLots){const lot=p.lots.find(l=>String(l.lot.id)===x.purchaseId);if(!lot||lot.available<x.qty)fail('Зарезервированная партия изменилась');lot.available-=x.qty}}
- state.movements=list(state.movements);state.settings={...state.settings,ozonFboTransfers:{...transfers}};const costs=new Map();
+ state.movements=list(state.movements);state.settings={...state.settings,[transferField]:{...transfers}};const costs=new Map();
  for(const r of d.rows){const p=list(state.products).find(p=>String(p.id)===r.productId),used=[];let total=0;
   for(const part of r.warehouseLots){const lot=list(state.purchases).find(x=>String(x.id)===part.purchaseId),take=part.qty,cost=unitCost(lot),original=num(lot.qty);total+=take*cost;let released;
    if(take===original){lot.status='received';lot.receivedAt=now;lot.remainingQty=0;released=lot}
@@ -68,12 +69,12 @@ export function dispatchDraft(state,id,remote,now=Date.now()){
   }
   let need=num(r.qty);for(const lot of list(state.purchases).filter(l=>String(l.productId)===r.productId&&!['to_forwarder','to_me','at_warehouse'].includes(l.status)&&num(l.remainingQty)>0).sort((a,b)=>num(a.receivedAt||a.date)-num(b.receivedAt||b.date))){const take=Math.min(need,num(lot.remainingQty)),cost=unitCost(lot);lot.remainingQty-=take;need-=take;total+=take*cost;used.push({purchaseId:String(lot.id),qty:take,unitCost:cost});if(!need)break}if(need){total+=need*num(p.cost);used.push({purchaseId:null,qty:need,unitCost:num(p.cost),fallback:true})}
   p.stock=num(p.stock)-num(r.qty);const remaining=list(state.purchases).filter(l=>String(l.productId)===r.productId&&!['to_forwarder','to_me','at_warehouse'].includes(l.status)&&num(l.remainingQty)>0),q=remaining.reduce((n,l)=>n+num(l.remainingQty),0);if(q)p.cost=remaining.reduce((n,l)=>n+num(l.remainingQty)*unitCost(l),0)/q;
-  const extra='Ozon FBO · '+d.title+' · заявка '+remote.orderId;
+  const extra=marketLabel+' · '+d.title+' · заявка '+remote.orderId;
   if(r.warehouseQty)state.movements.unshift(captureMovementBalance({id:'fbo-in-'+uid(id,r.id),date:now,type:'приход',productId:r.productId,qty:r.warehouseQty,extra:'со склада для отправки · '+extra},num(p.stock)+num(r.qty)+num(r.warehouseQty)));
-  state.movements.unshift(captureMovementBalance({id:'fbo-out-'+uid(id,r.id),date:now,type:'FBO Ozon',productId:r.productId,qty:-(num(r.qty)+num(r.warehouseQty)),extra,fifoLots:used},p.stock));
+  state.movements.unshift(captureMovementBalance({id:'fbo-out-'+uid(id,r.id),date:now,type:remote.marketplace==='WB3'?'FBO WB3':'FBO Ozon',productId:r.productId,qty:-(num(r.qty)+num(r.warehouseQty)),extra,fifoLots:used},p.stock));
   costs.set(r.lineId,(costs.get(r.lineId)||0)+total);r.active=false;r.stage='sent';r.orderId=String(remote.orderId);r.sentAt=now;r.updatedAt=now;
  }
- for(const line of remoteLines){const own=d.lines.find(x=>x.sku===line.sku&&x.clusterKey===line.clusterKey),key=[d.account,remote.orderId,line.supplyId,line.bundleId,line.sku].map(x=>String(x||'')).join('|');state.settings.ozonFboTransfers[key]={key,productId:own.productId,sku:line.sku,qty:line.qty,account:d.account,orderId:String(remote.orderId),supplyId:line.supplyId,bundleId:line.bundleId,warehouseName:line.warehouse||own.cluster,warehouseId:line.warehouseId||'',crossdock:!!line.crossdock,sentAt:now,unitCost:(costs.get(own.id)||0)/own.qty,stockSource:d.rows.some(r=>r.lineId===own.id&&r.warehouseQty>0)?(d.rows.some(r=>r.lineId===own.id&&r.qty>0)?'mixed':'at_warehouse'):'sale',status:'in_transit',serverDraftId:id}}
+ for(const line of remoteLines){const own=d.lines.find(x=>x.sku===line.sku&&x.clusterKey===line.clusterKey),key=[d.account,remote.orderId,line.supplyId,line.bundleId,line.sku].map(x=>String(x||'')).join('|');state.settings[transferField][key]={key,productId:own.productId,sku:line.sku,qty:line.qty,account:d.account,orderId:String(remote.orderId),supplyId:line.supplyId,bundleId:line.bundleId,warehouseName:line.warehouse||own.cluster,warehouseId:line.warehouseId||'',crossdock:!!line.crossdock,sentAt:now,unitCost:(costs.get(own.id)||0)/own.qty,stockSource:d.rows.some(r=>r.lineId===own.id&&r.warehouseQty>0)?(d.rows.some(r=>r.lineId===own.id&&r.qty>0)?'mixed':'at_warehouse'):'sale',status:'in_transit',serverDraftId:id}}
  return{draft:draftGroups(state).find(d=>d.id===id),changed:true};
 }
 export function reservationViolation(previous,next){
@@ -86,9 +87,10 @@ export function reservationViolation(previous,next){
 }
 
 export function transferViolation(previous,next){
- const old=previous.settings?.ozonFboTransfers||{},incoming=next.settings?.ozonFboTransfers||{};
+ for(const field of ['ozonFboTransfers','wb3FboTransfers']){
+ const old=previous.settings?.[field]||{},incoming=next.settings?.[field]||{};
  for(const [key,row]of Object.entries(old))if(row?.serverDraftId){const current=incoming[key],stable=x=>JSON.stringify(Object.keys(x||{}).sort().map(k=>[k,x[k]]));if(!current||stable(current)!==stable(row))return{reason:'fbo-transfer-history-protected',transferKey:key};}
  for(const [key,t]of Object.entries(incoming)){if(old[key])continue;const account=String(t?.account||key.split('|')[0]||''),supply=String(t?.supplyId||key.split('|')[2]||''),sku=String(t?.sku||key.split('|')[4]||'');if(!account||!supply||!sku)continue;
   if(Object.entries(old).some(([k,r])=>String(r?.account||k.split('|')[0])===account&&String(r?.supplyId||k.split('|')[2])===supply&&String(r?.sku||k.split('|')[4])===sku))return{reason:'fbo-transfer-already-accounted',supplyId:supply,sku};
- }return null;
+ }}return null;
 }

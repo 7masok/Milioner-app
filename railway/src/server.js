@@ -1,4 +1,4 @@
-import {readWb3Supplies} from './wb3-supplies.js';
+import {readWbSupplySnapshot,setWbSupplyAccounting,cancelWbSupplyReservation,startWbSupplyLoop} from './wb3-supply-sync.js';
 import {startBusinessReportLoop} from './business-report-worker.js';
 import {amanRouter,startAmanLoop} from './amantrans.js';
 import {createUnifiedWarehouseRouter} from './unified-warehouse.js';
@@ -64,6 +64,7 @@ const frontendFiles = Object.freeze([
   'store-selection-v1.js',
   'wb3-profile.js',
   'wb3-orders-v1.js',
+  'wb3-supplies-v1.js',
   'product-history-v1.js',
   'manifest.webmanifest',
   'sw.js',
@@ -192,7 +193,17 @@ app.post('/api/wb3/sync', requireTrustedOrigin, async (_req,res,next) => {
 });
 app.get('/api/wb3/supplies',requireTrustedOrigin,async(_req,res,next)=>{
  if(config.storeProfile!=='WB3')return res.sendStatus(404);
- try{res.json(await readWb3Supplies())}catch(error){next(error)}
+ try{res.json(await readWbSupplySnapshot())}catch(error){next(error)}
+});
+app.post('/api/wb3/supplies/accounting',requireTrustedOrigin,async(req,res,next)=>{
+ if(config.storeProfile!=='WB3')return res.sendStatus(404);
+ if(typeof req.body.enabled!=='boolean')return res.sendStatus(400);
+ try{res.json(await setWbSupplyAccounting(req.body.enabled))}catch(error){next(error)}
+});
+app.post('/api/wb3/supplies/cancel-reservation',requireTrustedOrigin,async(req,res,next)=>{
+ if(config.storeProfile!=='WB3')return res.sendStatus(404);
+ if(!/^preorder:[1-9][0-9]*$/.test(req.body.key||''))return res.sendStatus(400);
+ try{res.json(await cancelWbSupplyReservation(req.body.key))}catch(error){next(error)}
 });
 app.get('/api/wb3/inventory', requireTrustedOrigin, async (_req,res,next) => {
   if(config.storeProfile!=='WB3') return res.sendStatus(404);
@@ -450,6 +461,7 @@ const server = app.listen(config.port, '::', () => {
   startWbSyncLoop();
   startWb3OrderHistoryLoop();
   startWb3InventoryLoop();
+  startWbSupplyLoop();
   startWbPriceSyncLoop();
   startWbDeliveryTariffLoop();
   if(config.storeProfile!=='WB3')startWbOrderHistoryLoop();
