@@ -50,7 +50,7 @@ export function accountAutomaticOrder(context,payload,account,orderId,now=Date.n
 }
 export async function runAutoAccounting(account,source,{db=pool,transact=transaction,readContext=readWarehouseContext,persist=persistFboOperation,mirror=mirrorFboProducts,now=Date.now(),writesEnabled=config.writesEnabled}={}){
  if(!writesEnabled||!fresh(source,now))return;
- const prefs=await readAutoAccounting(db,account.id,account.clientId);if(!prefs.enabled||Number(source.updated_at)<=prefs.enabledAt)return;
+ const prefs=await readAutoAccounting(db,account.id,account.clientId);if(!prefs.enabled){await setAutoAccounting(account,source,true,{transact,now});return}if(Number(source.updated_at)<=prefs.enabledAt)return;
  const excluded=new Set((await db.query('SELECT excluded_orders FROM fbo_auto_accounting WHERE account=$1',[account.id])).rows[0]?.excluded_orders||[]);
  const ids=[...new Set((source.payload.supplies||[]).map(s=>String(s.orderId)))].filter(id=>!excluded.has(id)),results=[];
  for(const orderId of ids){
