@@ -28,3 +28,19 @@ test('incomplete list pagination never publishes a partial baseline',async()=>{
  assert.equal(f.stored.listOffset,1000);assert.equal(f.stored.listAt,undefined);assert.throws(()=>enableSupplyState(f.stored,Date.now()));
  f.advance(3000);f.fetch(url=>{assert.match(url,/offset=1000/);return new Response('[]',{headers:{'x-ratelimit-limit':'30'}})});await syncWbSupplies(f.options);assert.equal(f.stored.supplies.length,1000);assert.ok(f.stored.listAt);
 });
+test('shipped goods use supplyID while retaining preorder accounting identity',async()=>{
+ const f=fixture({enabled:true,listAt:Date.parse('2026-11-04T18:00:00Z'),automaticVersion:2,supplies:[{preorderID:123,supplyID:456,statusID:6}]});
+ f.fetch(url=>{assert.match(url,/\/supplies\/456\/goods\?isPreorderID=false&limit=1000&offset=0/);return new Response('[{"barcode":"a","quantity":2}]')});
+ await syncWbSupplies(f.options);assert.equal(f.stored.goods['preorder:123'].rows[0].quantity,2);assert.equal(f.stored.goods['supply:456'],undefined);
+});
+test('preorder pages are not mixed with goods after supplyID is assigned',async()=>{
+ const f=fixture({enabled:true,listAt:Date.parse('2026-11-04T18:00:00Z'),automaticVersion:2,supplies:[{preorderID:123,supplyID:456,statusID:6}],goodsStaging:{key:'preorder:123',requestId:'preorder:123',offset:1000,rows:[{barcode:'stale',quantity:1}]}});
+ f.fetch(url=>{assert.match(url,/isPreorderID=false&limit=1000&offset=0/);return new Response('[{"barcode":"current","quantity":2}]')});
+ await syncWbSupplies(f.options);assert.deepEqual(f.stored.goods['preorder:123'].rows,[{barcode:'current',quantity:2}]);assert.equal(f.stored.goodsStaging,undefined);
+});
+test('WB rejection retains the reason and request identity without retrying before cooldown',async()=>{
+ const f=fixture({enabled:true,listAt:Date.parse('2026-11-04T18:00:00Z'),automaticVersion:2,supplies:[{preorderID:123,supplyID:456,statusID:6}]});
+ f.fetch(()=>new Response('{"title":"Invalid supply","detail":"Supply is unavailable"}',{status:400}));
+ await syncWbSupplies(f.options);assert.match(f.stored.error,/HTTP 400 · supply:456 · Invalid supply · Supply is unavailable/);
+ f.advance(10000);await syncWbSupplies(f.options);assert.equal(f.calls,1);
+});
