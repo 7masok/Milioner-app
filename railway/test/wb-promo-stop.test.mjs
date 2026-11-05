@@ -72,12 +72,13 @@ test('editing the threshold keeps the original baseline and trigger SQL failure 
   assert.equal((await f.one('wb_promo_stops')).restoring,false);assert.equal(await f.one('wb_price_protection'),undefined);assert.equal(await f.one('wb_price_update_queue'),undefined);
  }finally{await f.pg.close()}
 });
-test('linked UI inputs preserve the last edited unit and calculate rubles/percent from the original',()=>{
- const ui=read('../../prices-v1.js'),start=ui.indexOf('function pricePromoStopEditor('),end=ui.indexOf('window.savePricePromoStop=',start),nodes={priceStopBase:{value:'1000'},priceStopAmount:{value:'800'},priceStopPercent:{value:''},priceStopMode:{value:''}};
- const c={window:{},document:{getElementById:id=>nodes[id]},pMoney:x=>x,pEsc:String};vm.runInNewContext(ui.slice(start,end),c);
- c.window.pricePromoStopInput('price');assert.equal(nodes.priceStopPercent.value,20);assert.equal(nodes.priceStopMode.value,'price');
- nodes.priceStopPercent.value='25';c.window.pricePromoStopInput('percent');assert.equal(nodes.priceStopAmount.value,750);assert.equal(nodes.priceStopMode.value,'percent');
- const html=c.pricePromoStopEditor({market:'WB',price:1000},0);assert.match(html,/Минимальная цена, ₽/);assert.match(html,/Максимальная скидка, %/);assert.match(html,/pricePromoStopInput\('price'\)/);
+test('stop configuration has one entry point and no duplicate inline install/save controls',()=>{
+ const ui=read('../../prices-v1.js'),html=read('../../index.html');
+ assert.ok(!ui.includes('pricePromoStopEditor'));assert.ok(!ui.includes('savePricePromoStop='));
+ assert.ok(!ui.includes('Установить стоп\''));assert.ok(!ui.includes('Сохранить стоп'));
+ assert.equal((html.match(/id="priceBulkPromoStop"/g)||[]).length,1);
+ assert.match(html,/onclick="openPriceBulkPromoStop\(\)"[^>]*>Стоп акции/);
+ assert.match(ui,/window.openPriceBulkPromoStop=/);assert.match(ui,/window.savePriceBulkPromoStop=/);
 });
 
 test('bulk stops freeze each original price, share the percentage and roll back the entire group on an invalid floor',async()=>{
