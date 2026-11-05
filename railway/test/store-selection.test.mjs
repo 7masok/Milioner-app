@@ -77,3 +77,12 @@ test('product analytics include only selected store sources even for a shared pr
 test('turning off Ozon clears its hidden FBO-only filter before rendering another store',()=>{
  const f=fixture();f.ctx.productFboOnly=true;f.ctx.toggleStoreSelection('products','Ozon');assert.equal(f.ctx.productFboOnly,false);
 });
+
+test('WB products awaiting relink remain visible in their own store without selecting Ozon',()=>{
+ const p={id:'ring',name:'Кольцо 3 розовое',wb:'',wbAliases:[],wbRelinkRequired:{oldSku:'Кольцо 3 розовое'}},before=JSON.stringify(p);
+ for(const [stores,expected]of [[['WB'],true],[['Kaspi','WB','WB2'],true],[['Ozon'],false],[['WB2'],false],[['WB3'],false],[[],false]]){
+  const f=fixture(new Map([['sklad_stores_v2_products',JSON.stringify(stores)]]));assert.equal(f.ctx.productMatchesSelectedStores(p,'products'),expected,stores.join(','));
+ }
+ assert.equal(JSON.stringify(p),before);assert.equal(p.wb,'');
+ const second={id:'ring2',wb2RelinkRequired:{oldSku:'old'}};const f=fixture(new Map([['sklad_stores_v2_products','["WB2"]']]));assert.equal(f.ctx.productMatchesSelectedStores(second,'products'),true);assert.equal(f.ctx.productMatchesSelectedStores(p,'products'),false);
+});

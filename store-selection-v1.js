@@ -14,7 +14,7 @@
  window.productMatchesSelectedStores=function(p,section){
   const ids=selectedStoreIds(section),child=String(p.id||'').startsWith('inferno:');
   if(!child&&defaults.every(m=>ids.includes(m)))return true;
-  return ids.some(m=>m==='WB3'?child:!child&&Boolean(p[fields[m]]||(p[fields[m]+'Aliases']||[]).length));
+  return ids.some(m=>m==='WB3'?child:!child&&Boolean(p[fields[m]]||(p[fields[m]+'Aliases']||[]).length||p[fields[m]+'RelinkRequired']?.oldSku));
  };
  window.paintStoreSelection=function(section,box){
   if(!box)return;box.classList.add('store-multi-tabs');box.setAttribute('role','group');box.setAttribute('aria-label','Магазины');

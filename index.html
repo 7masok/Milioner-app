@@ -1149,7 +1149,7 @@ function productStoreEmptyText(fallback){
 }
 function productStoreLinksHtml(p){
  const links=[['kaspi','Kaspi'],['wb',globalThis.WB3_ONLY?'Инферно':'WB 1'],['wb2','WB 2'],['wb3','WB3'],['ozon','Ozon']].filter(([field])=>!globalThis.WB3_ONLY||field==='wb').map(([field,label])=>{const codes=productStoreCodes(p,field);if(!codes.length)return '';const selected=globalThis.unifiedWarehouseEnabled?selectedStoreIds('products').includes({kaspi:'Kaspi',wb:'WB',wb2:'WB2',wb3:'WB3',ozon:'Ozon'}[field]):productStoreFilter===field;return '<span'+(selected?' class="selected"':'')+'>'+label+(selected?' · '+esc(codes.join(', ')):'')+'</span>'}).filter(Boolean);
- return '<div class="product-store-links">'+(links.join('')||'<span>Без привязок к магазинам</span>')+'</div>';
+ return '<div class="product-store-links">'+(links.join('')||(['wb','wb2','wb3'].some(field=>p[field+'RelinkRequired']?.oldSku)?'<span>Привязка требует проверки</span>':'<span>Без привязок к магазинам</span>'))+'</div>';
 }
 function syncProductStoreTabs(){
  if(globalThis.unifiedWarehouseEnabled){window.paintStoreSelection('products',document.getElementById('productStoreTabs'));return;}
@@ -2162,7 +2162,7 @@ function enhanceArrivalProductSearch(){}
 <script src="./purchase-pdf-v1.js?v=20261030-two-way-total"></script>
 <script src="./kaspi-order-content-v1.js?v=20261019-content"></script>
 <script src="./warehouse-scope-v1.js?v=20261102"></script>
-<script src="./store-selection-v1.js?v=20261105-selected-metrics"></script>
+<script src="./store-selection-v1.js?v=20261105-relink-filter"></script>
 <script src="./amantrans-v1.js?v=20261103-track-sync"></script>
 <script>initOwnerAuth();</script>
 </body>
