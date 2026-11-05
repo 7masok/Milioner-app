@@ -1013,7 +1013,21 @@ let orderPage=1;
 const ORDER_PAGE_SIZE=15;
 let orderSearchText=normalizeName(sessionStorage.getItem(ORDER_SEARCH_SESSION_KEY)||'');
 function setOrderSearch(value){orderPage=1;const raw=String(value||'');orderSearchText=normalizeName(raw);try{sessionStorage.setItem(ORDER_SEARCH_SESSION_KEY,raw)}catch{}renderMarketplaceOrders()}
-function filterMarketplaceOrdersBySearch(orders){if(!orderSearchText)return orders||[];return (orders||[]).filter(g=>normalizeName([g.code,g.orderId,...(g.lines||[]).flatMap(o=>[o.productName,o.sku,prod(o.productId)?.name])].join(' ')).includes(orderSearchText))}
+function filterMarketplaceOrdersBySearch(orders){
+ if(!orderSearchText)return orders||[];
+ const words=normalizeName(orderSearchText).split(/\s+/).filter(Boolean),namesBySku=new Map();
+ for(const p of state.products||[]){
+  const parent=p.variantGroupId?prod(p.variantGroupId):null,name=[p.name,parent?.name].filter(Boolean).join(' ');
+  for(const [market,field]of [['Kaspi','kaspi'],['WB','wb'],['WB2','wb2'],['WB3','wb3'],['Ozon','ozon']]){
+   if(market!=='WB3'&&String(p.id||'').startsWith('inferno:'))continue;
+   for(const sku of [p[field],...(Array.isArray(p[field+'Aliases'])?p[field+'Aliases']:[])]){
+    const code=String(sku??'').trim();if(!code)continue;const key=market+'|'+code;
+    namesBySku.set(key,[namesBySku.get(key),name].filter(Boolean).join(' '));
+   }
+  }
+ }
+ return (orders||[]).filter(g=>{const hay=normalizeName([g.code,g.orderId,...(g.lines||[]).flatMap(o=>{const p=prod(o.productId);return [o.productName,o.orderedProductName,o.sku,p?.name,p?.variantGroupId?prod(p.variantGroupId)?.name:'',namesBySku.get(String(o.market||g.market||'')+'|'+String(o.sku??'').trim())]})].join(' '));return words.every(word=>hay.includes(word))});
+}
 function setOrderPage(page){orderPage=Math.max(1,Number(page)||1);renderMarketplaceOrders();const list=document.getElementById('kaspiOrderList');if(list)window.scrollTo({top:Math.max(0,list.offsetTop-16),behavior:'smooth'})}
 function renderOrderPager(totalItems){const box=document.getElementById('orderPager');if(!box)return;const totalPages=Math.max(1,Math.ceil((Number(totalItems)||0)/ORDER_PAGE_SIZE));if(totalPages<=1){box.innerHTML='';return}box.innerHTML=`<div class="item" style="padding:10px;margin-top:8px"><div class="row" style="justify-content:space-between"><button class="btn" ${orderPage<=1?'disabled':''} onclick="setOrderPage(${orderPage-1})">← Назад</button><div class="muted" style="text-align:center">Страница ${orderPage} из ${totalPages}<br>${totalItems} заказов</div><button class="btn" ${orderPage>=totalPages?'disabled':''} onclick="setOrderPage(${orderPage+1})">Вперёд →</button></div></div>`}
 let homeOrdersSettled=false;
