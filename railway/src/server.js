@@ -473,7 +473,7 @@ const server = app.listen(config.port, '::', () => {
     try{for(const market of await configuredWbConnectionIds()){
       try{const result=await validateWbStockLinks(market);if(Number(result?.detached||0)>0)console.info('WB link validation',JSON.stringify(result));}
       catch(error){console.warn('WB link validation failed',market,String(error.message||error));}
-    }}finally{checkingLinks=false;}
+    }}catch(error){console.warn('WB link configuration check failed',String(error.message||error));}finally{checkingLinks=false;}
   };
   setTimeout(checkLinks,15000).unref();
   setInterval(checkLinks,10*60*1000).unref();
