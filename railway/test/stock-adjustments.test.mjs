@@ -14,6 +14,7 @@ function frontendFunction(name) {
 
 function runFrontendFunction(name, context) {
   vm.createContext(context);
+  if(name==='doInventory')vm.runInContext(frontendFunction('applyInventoryCount'), context);
   vm.runInContext(frontendFunction(name), context);
   vm.runInContext(`${name}()`, context);
 }
