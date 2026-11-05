@@ -1,4 +1,7 @@
 import crypto from 'node:crypto';
+import {readFileSync} from 'node:fs';
+const scopeBootstrap=readFileSync(new URL('../../warehouse-scope-bootstrap.js',import.meta.url),'utf8');
+const bootGuard=readFileSync(new URL('../../warehouse-boot-guard.js',import.meta.url),'utf8');
 import { Readable } from 'node:stream';
 
 // A gateway to the existing Inferno service, never a second database writer.
@@ -10,8 +13,11 @@ export function infernoSession(parentToken, secret, now = Date.now()) {
 }
 
 export function withWarehouseScopePage(page, { inferno = false, enabled = false } = {}) {
-  const setup = `<script>window.WAREHOUSE_SCOPE_CONFIG=${JSON.stringify({ inferno, enabled })};</script><script src="./warehouse-scope-bootstrap.js?v=20261102"></script>`;
-  page = page.replace('<head>', '<head>' + setup);
+  page=page.replace(/(<script id="warehouse-boot-guard">)[\s\S]*?<\/script>/,(_match,open)=>open+'\n'+bootGuard+'</script>');
+  const setup = `<script>window.WAREHOUSE_SCOPE_CONFIG=${JSON.stringify({ inferno, enabled })};</script><script data-source="warehouse-scope-bootstrap.js">${scopeBootstrap}</script>`;
+  const guard=page.indexOf('<script id="warehouse-boot-guard">');
+  const guardEnd=guard<0?-1:page.indexOf('</script>',guard);
+  page=guardEnd<0?page.replace('<head>','<head>'+setup):page.slice(0,guardEnd+9)+setup+page.slice(guardEnd+9);
   if (inferno) {
     page = page.replace('<title>Склад — MVP</title>', '<title>Инферно · склад</title>');
     page = page.replace('<script>initOwnerAuth();</script>', '<script src="./wb3-profile.js?v=20261102"></script><script src="./wb3-orders-v1.js?v=20261102"></script><script>initOwnerAuth();</script>');
