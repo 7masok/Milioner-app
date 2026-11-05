@@ -72,9 +72,9 @@ test('editing the threshold keeps the original baseline and trigger SQL failure 
   assert.equal((await f.one('wb_promo_stops')).restoring,false);assert.equal(await f.one('wb_price_protection'),undefined);assert.equal(await f.one('wb_price_update_queue'),undefined);
  }finally{await f.pg.close()}
 });
-test('stop configuration has one entry point and no duplicate inline install/save controls',()=>{
+test('inline stop uses the ordinary save action without duplicate buttons',()=>{
  const ui=read('../../prices-v1.js'),html=read('../../index.html');
- assert.ok(!ui.includes('pricePromoStopEditor'));assert.ok(!ui.includes('savePricePromoStop='));
+ assert.ok(ui.includes('pricePromoStopEditor(row,index)+'));assert.ok(ui.includes('await writeInlinePromoStop(row,stopSettings)'));
  assert.ok(!ui.includes('Установить стоп\''));assert.ok(!ui.includes('Сохранить стоп'));
  assert.equal((html.match(/id="priceBulkPromoStop"/g)||[]).length,1);
  assert.match(html,/onclick="openPriceBulkPromoStop\(\)"[^>]*>Стоп акции/);

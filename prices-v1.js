@@ -254,6 +254,7 @@ function priceInlineEditor(row,index){
         '<label class="price-protection-toggle"><input type="checkbox" '+(row.promoBlocked?'checked':'')+' onchange="togglePriceProtection('+Number(index)+',\'promoBlock\',this.checked)"> <span><b>Не участвовать в акциях</b><br><span class="muted">Поддерживает скидку продавца 0%. Склад регулярно проверяет WB и убирает появившуюся скидку.</span></span></label>'+
         '<label class="price-protection-toggle"><input type="checkbox" '+(row.autoZeroEnabled?'checked':'')+' onchange="togglePriceProtection('+Number(index)+',\'autoZeroEnabled\',this.checked)"> <span><b>Защита при нулевом моём остатке</b><br><span class="muted">Включается только при подтверждённом доступном остатке 0.</span></span></label>'+
       '</div></details>'+
+      pricePromoStopEditor(row,index)+
       '<div class="price-inline-actions"><button type="button" class="btn" onclick="openPriceWorkbench(\'enter\','+Number(index)+')">В акцию</button><button type="button" class="btn" onclick="openPriceWorkbench(\'exit\','+Number(index)+')">Выйти из акции</button></div>'+
       '<div class="price-inline-actions wb"><button type="button" class="btn dark" onclick="submitPriceEdit('+Number(index)+')">Сохранить</button><button type="button" class="btn price-hide-action" onclick="hidePriceRow('+Number(index)+')">Скрыть</button></div>'+
       '</div>';
@@ -694,6 +695,48 @@ async function remotePriceProtection(body){
   if(!response.ok||data?.ok===false){const error=new Error(data?.error||('HTTP '+response.status));error.status=response.status;throw error}
   return data;
 }
+function pricePromoStopEditor(row,index){
+  const stop=row.promoStop;
+  if(row.canEditPrice===false&&!stop?.restoring)return '<div class="muted">Стоп недоступен при разных ценах размеров.</div>';
+  if(row.promoBlocked)return stop?.triggeredAt?'<div class="price-inline-warning">Стоп сработал · '+(stop.restoring?'возвращаем ':'возвращена ')+pMoney(stop.basePrice,row.currency)+'. Акции заблокированы.</div>':'';
+  const base=Number(stop?.enabled?stop.basePrice:(row.confirmedPrice??row.price)),floor=stop?.enabled?Number(stop.minPrice):'',percent=stop?.enabled?100*(1-floor/base):'';
+  return '<div class="price-promo-stop"><b>Стоп акции</b><div class="muted">Исходная цена: '+pMoney(base,row.currency)+'. При пересечении стопа вернём её и включим блок акций.</div>'+
+    '<input id="priceStopBase" type="hidden" value="'+pEsc(base)+'"><input id="priceStopMode" type="hidden" value="'+pEsc(stop?.mode||'price')+'">'+
+    '<div class="price-inline-fields"><div class="field"><label>Минимальная цена, ₽</label><input id="priceStopAmount" type="number" min="0.01" step="0.01" value="'+pEsc(floor===''?'':Number(floor.toFixed(2)))+'" oninput="pricePromoStopInput(\'price\')"></div>'+
+    '<div class="field"><label>Максимальная скидка, %</label><input id="priceStopPercent" type="number" min="0" max="99.99" step="0.01" value="'+pEsc(percent===''?'':Number(percent.toFixed(2)))+'" oninput="pricePromoStopInput(\'percent\')"></div></div>'+
+    '<div class="muted">Контролируем цену продавца после скидки, без скидок самого WB. Проверяем периодически. Возврат не мгновенный.</div>'+
+    (stop?.enabled?'<div class="muted">Стоп ниже '+pMoney(floor,row.currency)+'</div><button type="button" class="btn" onclick="removeInlinePromoStop('+Number(index)+')">Убрать стоп</button>':'')+'</div>';
+}
+window.pricePromoStopInput=function(mode){
+  const base=Number(document.getElementById('priceStopBase')?.value),amount=document.getElementById('priceStopAmount'),percent=document.getElementById('priceStopPercent');
+  const modeField=document.getElementById('priceStopMode');
+  modeField.value=mode;
+  modeField.dataset.edited='1';
+  const input=mode==='price'?amount:percent,other=mode==='price'?percent:amount;if(!input||!other)return;
+  if(input.value===''||!(base>0)){other.value='';return}
+  const value=Number(input.value),computed=mode==='price'?100*(1-value/base):base*(1-value/100);
+  other.value=Number(computed.toFixed(2));
+};
+
+async function writeInlinePromoStop(row, settings){
+  const response=await fetch(MILLIONER_API+'/api/market-prices/promo-stop',{
+    method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({market:row.market,remoteId:row.remoteId,confirm:true,...settings})
+  });
+  const data=await response.json();
+  if(!response.ok||!data.ok)throw Error(data.error||'Не удалось сохранить стоп');
+}
+window.removeInlinePromoStop=async function(index){
+  const row=activeRows()[Number(index)];
+  if(!row||!priceIsWbMarket(row.market)||!confirm('Убрать стоп акции?'))return;
+  try{
+    await writeInlinePromoStop(row,{enabled:false});
+    bumpPriceEpoch(row.market);
+    await window.renderPrices(true);
+    setPriceStatus('Стоп выключен','ok');
+  }catch(error){alert(priceErrorText(error))}
+};
+
 let priceBulkStopContext=null;
 window.openPriceBulkPromoStop=function(){
  if(!priceIsWbMarket())return;
@@ -1123,6 +1166,7 @@ async function remotePriceUpdate(body){
 window.submitPriceEdit=async function(index){
   const row=activeRows()[Number(index)];if(!row)return;
   const button=document.querySelector('[data-price-row="'+Number(index)+'"] .price-inline-editor .btn.dark');if(button){button.disabled=true;button.textContent='Сохраняю…';}
+  let stopSaved=false;
   try{
     if(row.market==='Kaspi'){
       const price=inputNumber('priceEditCurrent');
@@ -1147,16 +1191,42 @@ window.submitPriceEdit=async function(index){
       if(!Number.isInteger(enteredDiscount)||enteredDiscount<0||enteredDiscount>99)throw new Error('Скидка должна быть целым числом от 0 до 99');
       const priceChanged=row.canEditPrice!==false&&Math.abs(enteredPrice-pNum(row.price))>0.000001;
       const discountChanged=enteredDiscount!==Math.round(pNum(row.discount));
-      if(!priceChanged&&!discountChanged){priceExpanded=null;paintPrices();return;}
+      const modeField=document.getElementById('priceStopMode');
+      let stopSettings=null;
+      if(modeField?.dataset.edited==='1'){
+        const mode=modeField.value;
+        const raw=document.getElementById(mode==='price'?'priceStopAmount':'priceStopPercent')?.value;
+        const value=Number(raw),base=Number(document.getElementById('priceStopBase')?.value);
+        if(!raw||!Number.isFinite(value)||(mode==='price'?value<=0||value>base:value<0||value>=100))
+          throw new Error('Укажите корректный порог стопа');
+        stopSettings={enabled:true,mode,value};
+      }
+      if(!priceChanged&&!discountChanged&&!stopSettings){priceExpanded=null;paintPrices();return;}
       const changes=[];
       if(priceChanged)changes.push('цену на '+pMoney(enteredPrice,row.currency));
       if(discountChanged)changes.push('скидку на '+enteredDiscount+'%');
+      if(stopSettings)changes.push('порог стопа');
       const question='Сохранить для '+marketLabel(row.market)+' '+changes.join(' и ')+'?';
       if(!confirm(question))return;
       const body={market:row.market,remoteId:row.remoteId};
       if(priceChanged)body.price=enteredPrice;
       if(discountChanged)body.discount=enteredDiscount;
-      const result=await remotePriceUpdate(body);if(!result)return;
+      if(stopSettings){
+        await writeInlinePromoStop(row,stopSettings);
+        stopSaved=true;
+        delete modeField.dataset.edited;
+        const basePrice=Number(document.getElementById('priceStopBase')?.value);
+        const minPrice=stopSettings.mode==='price'?stopSettings.value:basePrice*(1-stopSettings.value/100);
+        row.promoStop={...stopSettings,basePrice,minPrice};
+        if(!priceChanged&&!discountChanged){
+          priceExpanded=null;paintPrices();setPriceStatus('Порог стопа сохранён','ok');return;
+        }
+      }
+      const result=await remotePriceUpdate(body);
+      if(!result){
+        if(stopSaved)setPriceStatus('Порог стопа сохранён. Изменение цены не отправлено.','warn');
+        return;
+      }
       if(priceChanged){row.nightBasePrice=enteredPrice;row.price=enteredPrice;row.priceMax=enteredPrice;row.finalPrice=enteredPrice*(1-enteredDiscount/100);row.finalPriceMax=row.finalPrice}
       if(discountChanged){row.discount=enteredDiscount;if(!priceChanged&&pNum(row.price)>0){row.finalPrice=pNum(row.price)*(1-enteredDiscount/100);row.finalPriceMax=pNum(row.priceMax||row.price)*(1-enteredDiscount/100)}}
       row.syncState='pending';row.syncQueuedAt=Number(result.queuedAt)||Date.now();row.syncSentAt=0;row.syncError='';
@@ -1182,7 +1252,7 @@ window.submitPriceEdit=async function(index){
       priceExpanded=null;paintPrices();setPriceStatus('Ozon подтвердил обновление цены. Нажмите ↻ для проверки.','ok');
     }
   }catch(error){
-    alert(priceErrorText(error));
+    alert((stopSaved?'Порог стопа сохранён. ':'')+priceErrorText(error));
   }finally{
     if(button&&document.body.contains(button)){button.disabled=false;button.textContent='Сохранить';}
   }

@@ -420,6 +420,6 @@ test('WB night price schedule is persisted, bulk-configurable and reuses the 15-
 });
 
 test('Saving an unchanged WB price after toggling promotions closes quietly',()=>{
-  assert.match(ui,/if\(!priceChanged&&!discountChanged\)\{priceExpanded=null;paintPrices\(\);return;\}/);
+  assert.match(ui,/if\(!priceChanged&&!discountChanged&&!stopSettings\)\{priceExpanded=null;paintPrices\(\);return;\}/);
   assert.doesNotMatch(ui,/throw new Error\('Цена и скидка не изменились'\)/);
 });
