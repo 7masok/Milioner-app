@@ -23,10 +23,31 @@ function shell(){
  const bar=document.getElementById('fboStoreSwitch');if(bar){bar.hidden=!!window.WB3_ONLY;bar.querySelectorAll('button').forEach(b=>{b.classList.toggle('active',b.dataset.fboStore===selected);b.setAttribute('aria-pressed',String(b.dataset.fboStore===selected))})}
  const own=document.getElementById('wb3SupplyPanel'),ozon=document.getElementById('fboRoot');if(own)own.hidden=selected!=='WB3';if(ozon)ozon.hidden=selected==='WB3';
 }
+function card(s,archived=false){
+ const key='preorder:'+s.preorderID,d=snapshot.details?.[key]||{},lines=d.lines||[],r=(snapshot.results||[]).find(r=>r.key===key),needsLink=lines.some(l=>!l.productId),sent=r?.status==='sent'||d.accounted;
+ const title=lines.length?e(lines[0].name)+(lines.length>1?' · ещё '+(lines.length-1):''):'Поставка WB3';
+ const status=archived?'Старая незавершённая заявка':sent?'Списано с нашего склада':r?.status==='attention'?'Не списано с нашего склада':r?.status==='loading'?'Обновляем состав поставки':e(labels[s.statusID]||'Проверяем статус');
+ const problem=!archived&&r?.status==='attention'?(needsLink?'Укажите товары склада для отмеченных строк. После этого поставка спишется автоматически.':e(r.message)):'';
+ const date=d.date?new Date(d.date).toLocaleDateString('ru-RU',{timeZone:'Asia/Almaty'}):'';
+ return '<article class="item" style="margin-bottom:10px"><b>'+title+'</b><p class="muted">'+status+(d.totalQty?' · '+e(d.totalQty)+' шт.':'')+(date?' · '+e(date):'')+'</p>'+(problem?'<p role="alert">'+problem+'</p>':'')+
+  lines.map(l=>'<div class="row" style="justify-content:space-between;margin:8px 0"><span>'+e(l.name)+'</span><b>'+e(l.qty)+' шт.</b></div>'+(!archived&&!sent&&!l.productId?'<button type="button" class="btn" data-wb3-link="'+e(key)+'" data-barcode="'+e(l.barcode)+'">Выбрать товар склада</button>':'')).join('')+
+  (!lines.length&&!archived?'<p class="muted">Состав поставки загружается</p>':'')+
+  '<details><summary class="muted">Номер и подробности</summary><p class="muted">№ '+e(s.supplyID||s.preorderID)+' · '+e(labels[s.statusID]||'Проверяем статус')+'</p>'+lines.map(l=>'<div class="muted">'+e(l.name)+' · баркод '+e(l.barcode)+(l.accepted!==null?' · принято WB: '+e(l.accepted)+' шт.':'')+'</div>').join('')+'</details></article>';
+}
 function render(){shell();const box=document.getElementById('wb3SupplyPanel');if(!box||selected!=='WB3')return;
  if(!snapshot){box.innerHTML='<h2>Поставки WB3</h2><p class="muted">Получаем поставки…</p>';return}
- const d=snapshot;
- box.innerHTML='<h2>Поставки WB3</h2>'+(d.error?'<p role="alert">'+e(d.error)+'</p>':'')+(d.supplies||[]).filter(s=>!(d.excluded||[]).includes('preorder:'+s.preorderID)).map(s=>{const key='preorder:'+s.preorderID,r=(d.results||[]).find(r=>r.key===key),receipt=d.receipts?.[key];return '<article class="item" style="margin-bottom:10px"><b>Поставка '+e(s.supplyID||s.preorderID)+'</b><p class="muted">'+e(labels[s.statusID]||'Проверяем статус')+(r?' · '+e(r.message):'')+'</p>'+(receipt?.lines||[]).map(l=>'<div>'+e(l.name||l.barcode)+' · отправлено '+e(l.sent)+(l.accepted===null?'':' · принято '+e(l.accepted))+'</div>').join('')+'</article>'}).join('')+(!d.supplies?.length?'<p class="muted">Поставок пока нет</p>':'');
+ const supplies=(snapshot.supplies||[]).filter(s=>!(snapshot.excluded||[]).includes('preorder:'+s.preorderID)),old=supplies.filter(s=>snapshot.details?.['preorder:'+s.preorderID]?.archived),current=supplies.filter(s=>!old.includes(s));
+ box.innerHTML='<h2>Поставки WB3</h2>'+(snapshot.error?'<p role="alert">'+e(snapshot.error)+'</p>':'')+current.map(s=>card(s)).join('')+(!current.length?'<p class="muted">Текущих поставок нет</p>':'')+(old.length?'<details><summary>Старые незавершённые заявки · '+old.length+'</summary>'+old.map(s=>card(s,true)).join('')+'</details>':'');
+ box.querySelectorAll?.('[data-wb3-link]').forEach(b=>b.onclick=()=>chooseProduct(b.dataset.wb3Link,b.dataset.barcode));
+}
+function chooseProduct(key,barcode){
+ const line=snapshot.details?.[key]?.lines?.find(l=>l.barcode===barcode);if(!line||typeof showSheet!=='function')return;
+ const catalog=snapshot.catalog||[];
+ showSheet('<h3>Товар для поставки</h3><p>'+e(line.name)+' · '+e(line.qty)+' шт.</p><div class="field"><label>Товар на нашем складе</label><select id="wb3SupplyProduct"><option value="">Выберите товар</option>'+catalog.map(p=>'<option value="'+e(p.id)+'">'+e(p.name)+(p.article?' · '+e(p.article):'')+'</option>').join('')+'</select></div><button id="wb3SupplyProductSave" type="button" class="btn dark full">Привязать к поставке</button>');
+ document.getElementById('wb3SupplyProductSave').onclick=async function(){
+  const productId=document.getElementById('wb3SupplyProduct').value;if(!productId)return alert('Выберите товар склада');this.disabled=true;
+  try{const r=await fetch(path()+'/link-product',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({key,barcode,productId,confirm:true})}),d=await r.json();if(!r.ok||!d.ok)throw Error(d.error||'Не удалось связать товар');closeModal();await load()}catch(error){alert(String(error.message||error));this.disabled=false}
+ };
 }
 async function load(){if(pending)return pending;pending=(async()=>{const c=new AbortController(),timer=setTimeout(()=>c.abort(),20000);try{const r=await fetch(path(),{cache:'no-store',signal:c.signal}),d=await r.json();if(!r.ok)throw Error(d.error==='login-required'?'Сеанс закончился. Обновите страницу.':d.error||'HTTP '+r.status);snapshot=d;render()}catch(err){const box=document.getElementById('wb3SupplyPanel');if(box&&selected==='WB3'){if(snapshot){render();box.insertAdjacentHTML('beforeend','<p class="muted">Не удалось обновить поставки</p>')}else box.textContent='Поставки WB3: '+String(err.message||err)}}finally{clearTimeout(timer);pending=null}})();return pending}
 const base=window.renderFboDashboard;

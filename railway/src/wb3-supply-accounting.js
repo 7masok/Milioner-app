@@ -10,13 +10,17 @@ export function resolveWbSupplyProduct(state,row){
  const products=arr(state.products).filter(p=>p.kind!=='variant-group');
  // Size identity wins. An article shared by several sizes is never sufficient.
  const barcode=str(row.barcode),nm=str(row.nmID),size=str(row.techSize);
- const identity=p=>p.wbVariant||p.wbIdentity||{};
- let matches=products.filter(p=>{const v=identity(p);return barcode&&[v.barcode,...arr(v.barcodes)].map(str).includes(barcode)&&(!nm||!str(v.nmId||p.variantNmId)||str(v.nmId||p.variantNmId)===nm)});
- if(!matches.length)matches=products.filter(p=>{const v=identity(p);return nm&&str(v.nmId||p.variantNmId)===nm&&size&&str(v.techSize||v.size)===size});
+ const identity=p=>({...p.wbIdentity,...(!p.wbVariant?.market||p.wbVariant.market==='WB'?p.wbVariant:{})});
+ const chrt=str(row.chrtId),currentArticle=str(row.currentVendorCode);
+ const permitted=p=>!currentArticle||str(p.wb)===currentArticle&&(!str(identity(p).vendorCode)||str(identity(p).vendorCode)===currentArticle);
+ if(row.manualProductId){const p=products.find(p=>str(p.id)===str(row.manualProductId));if(!p)fail('Выбранный товар склада удалён');return p}
+ let matches=chrt&&nm?products.filter(p=>permitted(p)&&str(identity(p).nmId||p.variantNmId)===nm&&str(identity(p).chrtId)===chrt):[];
+ if(!matches.length)matches=products.filter(p=>{const v=identity(p);return permitted(p)&&barcode&&[v.barcode,...arr(v.barcodes)].map(str).includes(barcode)&&(!nm||!str(v.nmId||p.variantNmId)||str(v.nmId||p.variantNmId)===nm)});
+ if(!matches.length)matches=products.filter(p=>{const v=identity(p);return permitted(p)&&nm&&str(v.nmId||p.variantNmId)===nm&&size&&str(v.techSize||v.size)===size});
  if(!matches.length){
   const article=str(row.vendorCode);
-  matches=products.filter(p=>article&&[p.wb,...arr(p.wbAliases)].map(str).includes(article));
-  if(matches.some(p=>p.kind==='variant'||str(identity(p).barcode)||str(identity(p).techSize||identity(p).size)))matches=[];
+  matches=products.filter(p=>permitted(p)&&article&&[p.wb,...arr(p.wbAliases)].map(str).includes(article));
+  if(matches.some(p=>p.kind==='variant'||str(identity(p).nmId)||str(identity(p).chrtId)||str(identity(p).barcode)||str(identity(p).techSize||identity(p).size)))matches=[];
  }
  if(matches.length!==1)fail('Баркод '+barcode+': '+(matches.length?'несколько привязок':'нет точной привязки товара или размера'));
  return matches[0];

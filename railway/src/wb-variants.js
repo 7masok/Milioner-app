@@ -50,7 +50,7 @@ async function requestJson(url, options, label) {
   }
 }
 
-async function fetchCatalog(token, market) {
+export async function fetchCatalog(token, market) {
   const cached = catalogCache.get(market);
   if (cached && Date.now() - cached.at < CACHE_MS) return cached.cards;
   const cards = [];

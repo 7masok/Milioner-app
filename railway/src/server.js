@@ -1,4 +1,4 @@
-import {readWbSupplySnapshot,setWbSupplyAccounting,cancelWbSupplyReservation,startWbSupplyLoop} from './wb3-supply-sync.js';
+import {readWbSupplySnapshot,linkWbSupplyProduct,setWbSupplyAccounting,cancelWbSupplyReservation,startWbSupplyLoop} from './wb3-supply-sync.js';
 import {startBusinessReportLoop} from './business-report-worker.js';
 import {amanRouter,startAmanLoop} from './amantrans.js';
 import {createUnifiedWarehouseRouter} from './unified-warehouse.js';
@@ -194,6 +194,10 @@ app.post('/api/wb3/sync', requireTrustedOrigin, async (_req,res,next) => {
 app.get('/api/wb3/supplies',requireTrustedOrigin,async(_req,res,next)=>{
  if(config.storeProfile!=='WB3')return res.sendStatus(404);
  try{res.json(await readWbSupplySnapshot())}catch(error){next(error)}
+});
+app.post('/api/wb3/supplies/link-product',requireTrustedOrigin,async(req,res,next)=>{
+ if(config.storeProfile!=='WB3')return res.sendStatus(404);
+ try{res.json(await linkWbSupplyProduct(req.body||{}))}catch(error){next(error)}
 });
 app.post('/api/wb3/supplies/accounting',requireTrustedOrigin,async(req,res,next)=>{
  if(config.storeProfile!=='WB3')return res.sendStatus(404);

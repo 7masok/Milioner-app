@@ -5,6 +5,8 @@ import {credentialFor} from './connections.js';
 import {readWarehouseContext,persistFboOperation} from './fbo-warehouse/store.js';
 import {cancelDraft,draftGroups,fail} from './fbo-warehouse/core.js';
 import {ACCOUNT,accountWbSupply,preparing,shipped,supplyKey} from './wb3-supply-accounting.js';
+import {fetchCatalog} from './wb-variants.js';
+import {enrichSupplyGoods,supplyPresentation,historicalSupplyDraft,goodsIdentity} from './wb3-supply-view.js';
 const LOCK='wb3:fbw-supplies',HALF_HOUR=1800000;
 let ready;
 export const dayStart=now=>{const d=new Date(now+5*3600000);return Date.UTC(d.getUTCFullYear(),d.getUTCMonth(),d.getUTCDate())-5*3600000};
@@ -20,7 +22,23 @@ const hash=t=>crypto.createHash('sha256').update(t).digest('hex');
 export function ensureWbSupplies(){return ready ||= pool.query(`CREATE TABLE IF NOT EXISTS wb3_supply_sync (id INTEGER PRIMARY KEY CHECK(id=1),payload JSONB NOT NULL)` ).then(()=>pool.query(`INSERT INTO wb3_supply_sync VALUES(1,'{}') ON CONFLICT DO NOTHING`)).catch(e=>{ready=null;throw e})}
 async function read(db=pool){return (await db.query('SELECT payload FROM wb3_supply_sync WHERE id=1')).rows[0]?.payload||{}}
 async function write(db,state){await db.query('UPDATE wb3_supply_sync SET payload=$1::jsonb WHERE id=1',[JSON.stringify(state)])}
-export async function readWbSupplySnapshot(){await ensureWbSupplies();const s=await read();return {ok:true,ready:!!s.listAt,supplies:s.supplies||[],fetchedAt:s.listAt||0,nextAt:s.nextAt||0,error:s.error||'',enabled:!!s.enabled,enabledAt:s.enabledAt||0,results:s.results||[],receipts:s.receipts||{},excluded:s.excluded||[]}}
+export async function readWbSupplySnapshot(){
+ await ensureWbSupplies();const s=await read(),context=await readWarehouseContext(pool,ACCOUNT);
+ return {ok:true,ready:!!s.listAt,supplies:s.supplies||[],fetchedAt:s.listAt||0,nextAt:s.nextAt||0,error:s.error||'',enabled:!!s.enabled,enabledAt:s.enabledAt||0,results:s.results||[],receipts:s.receipts||{},excluded:s.excluded||[],details:supplyPresentation(s,context.state),catalog:(context.state.products||[]).filter(p=>p.kind!=='variant-group').map(p=>({id:String(p.id),name:p.name,article:p.wb||''}))};
+}
+export async function linkWbSupplyProduct({key,barcode,productId,confirm},{writesEnabled=config.writesEnabled}={}){
+ await ensureWbSupplies();if(!writesEnabled)fail('Запись склада отключена');if(confirm!==true)fail('Подтвердите выбор товара',400);
+ return transaction(async db=>{
+  await db.query('SELECT pg_advisory_xact_lock(hashtext($1))',[LOCK]);const s=await read(db),supply=(s.supplies||[]).find(r=>supplyKey(r)===key),entry=s.goods?.[key];
+  if(!supply||!entry||entry.listAt!==s.listAt)fail('Дождитесь свежего состава поставки');
+  const rows=entry.rows.filter(r=>String(r.barcode)===String(barcode));if(!rows.length||new Set(rows.map(goodsIdentity)).size!==1)fail('Не удалось однозначно определить строку поставки');
+  const context=await readWarehouseContext(db,ACCOUNT,{lock:true});if(!context.ready)fail('Склад не загружен');
+  if(draftGroups(context.state).some(d=>d.account===ACCOUNT&&d.orderId===key&&d.status==='sent'))fail('Отправка уже учтена, её состав менять нельзя');
+  const product=(context.state.products||[]).find(p=>String(p.id)===String(productId)&&p.kind!=='variant-group');if(!product)fail('Товар склада не найден');
+  s.manualLinks={...s.manualLinks,[key]:{...s.manualLinks?.[key],[barcode]:{productId:String(product.id),identity:goodsIdentity(rows[0]),tokenHash:s.tokenHash}}};
+  await write(db,s);return {ok:true};
+ });
+}
 export function enableSupplyState(state,now){
  if(state.error||state.listOffset>0||!state.listAt||now-state.listAt>HALF_HOUR||state.listAt>now)fail('Дождитесь свежего полного списка поставок WB3');
  const observed=new Set(state.observedPreparing||[]);
@@ -38,19 +56,21 @@ export async function cancelWbSupplyReservation(key){
  await ensureWbSupplies();if(!config.writesEnabled)fail('Запись склада отключена');
  return transaction(async db=>{await db.query('SELECT pg_advisory_xact_lock(hashtext($1))',[LOCK]);const c=await readWarehouseContext(db,ACCOUNT,{lock:true});if(!c.ready)fail('Склад не загружен');const drafts=draftGroups(c.state).filter(d=>d.account===ACCOUNT&&d.orderId===key),d=drafts.find(d=>d.status==='reserved')||drafts.find(d=>d.status==='sent')||drafts[0];if(!d)fail('Резерв не найден',404);const r=cancelDraft(c.state,d.id);if(r.changed)await persistFboOperation(db,c,{source:'wb3-supply-cancel'});const s=await read(db);s.results=(s.results||[]).map(r=>r.key===key?{key,status:'cancelled',message:'Резерв снят вручную'}:r);await write(db,s);return {ok:true}});
 }
-export async function reconcileWbSupplies(db,s,now=Date.now()){
- if(!s.enabled||!config.writesEnabled||!s.listAt||now-s.listAt>6*60*60000||s.error||s.listOffset>0)return;
+export async function reconcileWbSupplies(db,s,now=Date.now(),{writesEnabled=config.writesEnabled}={}){
+ if(!s.enabled||!writesEnabled||!s.listAt||s.error||s.listOffset>0)return;
  const context=await readWarehouseContext(db,ACCOUNT,{lock:true,movements:true});if(!context.ready)return;
- const initial=new Set((context.state.movements||[]).map(m=>m.id)),results=[];let changed=false;
+ const initial=new Set((context.state.movements||[]).map(m=>m.id)),results=[],tracked=new Set(draftGroups(context.state).filter(d=>d.account===ACCOUNT&&['reserved','sent'].includes(d.status)).map(d=>d.orderId));let changed=false;
  for(const supply of s.supplies||[]){
-  const key=supplyKey(supply);if(!key||(s.excluded||[]).includes(key))continue;
+  const key=supplyKey(supply);if(!key||(s.excluded||[]).includes(key)||historicalSupplyDraft(supply,s.enabledAt)&&!tracked.has(key))continue;
   const entry=s.goods?.[key];
+  const freshShippedGoods=shipped(supply)&&Number.isFinite(Date.parse(supply.factDate))&&Date.parse(supply.factDate)<=now&&Number(entry?.fetchedAt)>0&&now-Number(entry.fetchedAt)<=6*60*60000&&Number(entry.fetchedAt)<=now;
+  if(now-s.listAt>6*60*60000&&!freshShippedGoods){results.push({key,status:'loading',message:'Обновляем данные WB перед списанием'});continue}
   if(!entry||entry.listAt!==s.listAt){results.push({key,status:'loading',message:'Получаем состав поставки'});continue}
-  try{const r=accountWbSupply(context.state,supply,entry.rows,now,s.tokenHash);if(r.changed){context.state=r.state;changed=true}results.push({key,status:r.status,message:r.status==='reserved'?'Резерв до отгрузки':r.status==='sent'?'Отправка учтена':r.status==='cancelled'?'Резерв снят вручную':'Проверьте статус WB'})}
+  try{const r=accountWbSupply(context.state,supply,enrichSupplyGoods(s,key,entry.rows),now,s.tokenHash);if(r.changed){context.state=r.state;changed=true}results.push({key,status:r.status,message:r.status==='reserved'?'Резерв до отгрузки':r.status==='sent'?'Отправка учтена':r.status==='cancelled'?'Резерв снят вручную':'Проверьте статус WB'})}
   catch(e){results.push({key,status:'attention',message:String(e.message).slice(0,250)})}
  }
  if(changed)await persistFboOperation(db,context,{products:true,purchases:true,movements:(context.state.movements||[]).filter(m=>!initial.has(m.id)),source:'wb3-supply-auto'});
- s.results=results;s.receipts=context.state.settings?.wb3SupplyReceipts||{};
+ s.results=results;s.receipts=context.state.settings?.wb3SupplyReceipts||{};s.trackedKeys=draftGroups(context.state).filter(d=>d.account===ACCOUNT&&['reserved','sent'].includes(d.status)).map(d=>d.orderId);
 }
 export function mergeSupplyList(s,rows,now){
  const excluded=new Set(s.excluded||[]),observed=new Set(s.observedPreparing||[]);
@@ -62,15 +82,15 @@ export function mergeSupplyList(s,rows,now){
  }
  return {...s,supplies:rows,listAt:now,listOffset:0,listStaging:[],excluded:[...excluded],observedPreparing:[...observed],error:''};
 }
-export async function syncWbSupplies({dbPool=pool,fetchImpl=fetch,tokenFor=credentialFor,ensure=ensureWbSupplies,reconcile=reconcileWbSupplies,profile=config.storeProfile,clock=Date.now}={}){
+export async function syncWbSupplies({dbPool=pool,fetchImpl=fetch,tokenFor=credentialFor,ensure=ensureWbSupplies,reconcile=reconcileWbSupplies,catalogFor=fetchCatalog,profile=config.storeProfile,clock=Date.now}={}){
  if(profile!=='WB3')return {skipped:true};await ensure();const db=await dbPool.connect();let locked=false;
  try{
   locked=!!(await db.query('SELECT pg_try_advisory_lock(hashtext($1)) AS locked',[LOCK])).rows[0].locked;if(!locked)return {skipped:true};
   let s=await read(db),now=clock();const original=JSON.stringify(s);const token=await tokenFor('WB');if(!token)return {skipped:true};const tokenHash=hash(token);
-  if(s.tokenHash&&s.tokenHash!==tokenHash){s={...s,enabled:false,error:'Ключ WB3 изменился. Проверьте подключение и включите учёт заново.',tokenHash,supplies:[],goods:{},listAt:0,listOffset:0,listStaging:[],goodsStaging:null,observedPreparing:[]};await write(db,s)}else s.tokenHash=tokenHash;
+  if(s.tokenHash&&s.tokenHash!==tokenHash){s={...s,enabled:false,error:'Ключ WB3 изменился. Проверьте подключение и включите учёт заново.',tokenHash,supplies:[],goods:{},listAt:0,listOffset:0,listStaging:[],goodsStaging:null,observedPreparing:[],catalog:[],catalogAt:0,catalogNextAt:0,manualLinks:{}};await write(db,s)}else s.tokenHash=tokenHash;
   s=useAutomaticSupplies(s,now);
   if((Number(s.nextAt)||0)<=now){
-   const target=s.enabled&&s.listAt?(s.supplies||[]).find(row=>supplyKey(row)&&!(s.excluded||[]).includes(supplyKey(row))&&s.goods?.[supplyKey(row)]?.listAt!==s.listAt):null;
+   const target=s.enabled&&s.listAt?(s.supplies||[]).find(row=>supplyKey(row)&&!(s.excluded||[]).includes(supplyKey(row))&&(!historicalSupplyDraft(row,s.enabledAt)||(s.trackedKeys||[]).includes(supplyKey(row))||(s.results||[]).some(r=>r.key===supplyKey(row)&&['reserved','sent'].includes(r.status)))&&(s.goods?.[supplyKey(row)]?.listAt!==s.listAt||shipped(row)&&!s.goods?.[supplyKey(row)]?.fetchedAt&&!s.receipts?.[supplyKey(row)])):null;
    const listDue=!s.listAt||s.listOffset>0||(!target&&now-s.listAt>=HALF_HOUR);
    if(listDue||target){
     // Reserve the request slot before I/O. A restart cannot erase Retry-After.
@@ -100,11 +120,16 @@ export async function syncWbSupplies({dbPool=pool,fetchImpl=fetch,tokenFor=crede
      }else{
       const all=[...staging.rows,...rows];
       if(rows.length===1000)s.goodsStaging={key,requestId,offset:staging.offset+1000,rows:all};
-      else{s.goods={...s.goods,[key]:{listAt:s.listAt,rows:all}};delete s.goodsStaging}
+      else{s.goods={...s.goods,[key]:{listAt:s.listAt,fetchedAt:clock(),rows:all}};delete s.goodsStaging}
       s.error='';
      }
     }catch(e){s.error=String(e.message).slice(0,250)}
    }
+  }
+  // Content reads happen outside the warehouse transaction and share the existing catalog cache.
+  if(s.enabled&&Object.values(s.goods||{}).some(e=>e.listAt===s.listAt)&&clock()>=(Number(s.catalogNextAt)||0)){
+   s.catalogNextAt=clock()+10*60000;await write(db,s);
+   try{s.catalog=await catalogFor(token,'WB');s.catalogAt=clock();s.catalogError=''}catch(e){s.catalogError=String(e.message).slice(0,250)}
   }
   await db.query('BEGIN');try{s=useAutomaticSupplies(s,clock());await reconcile(db,s,clock());if(JSON.stringify(s)!==original)await write(db,s);await db.query('COMMIT')}catch(e){await db.query('ROLLBACK');throw e}
   return {ok:!s.error,enabled:!!s.enabled,results:s.results||[],nextAt:s.nextAt};
