@@ -177,11 +177,16 @@ pushWarehouseToServer=async function(){
 pullWarehouseFromServer=async function({force=false}={}){
   if(warehousePullInFlight||warehouseSaveInFlight||warehouseLocalDirty)return false;
   warehousePullInFlight=true;
+  const startRevision=warehouseRemoteRevision,startText=snapshotText(state);
+  const superseded=()=>warehouseSaveInFlight||warehouseLocalDirty||warehouseRemoteRevision!==startRevision||snapshotText(state)!==startText;
   try{
     const meta=await fetchServer(true,2),revision=Number(meta.revision||0);
+    if(superseded())return false;
     if(!meta.exists){cloudStatus('серверная база недоступна · показаны последние данные','warn');return false}
     if(revision<=warehouseRemoteRevision&&warehouseRemoteReady){setReadOnlyCache(false);cloudStatus('сервер подключён','ok');return true}
-    const remote=await fetchServer(false,3);warehouseRemoteRevision=Number(remote.revision||revision);warehouseRemoteUpdatedAt=Number(remote.updatedAt||0);
+    const remote=await fetchServer(false,3);
+    if(superseded())return false;
+    warehouseRemoteRevision=Number(remote.revision||revision);warehouseRemoteUpdatedAt=Number(remote.updatedAt||0);
     warehouseRemoteReady=true;warehouseLastCloudSnapshot=serverSnapshot(remote.state);warehouseLastSyncedText=snapshotText(remote.state);
     applyWarehouseSnapshot(remote.state);clearWarehouseDirty();setReadOnlyCache(false);writeFastCache(remote.state,warehouseRemoteRevision,warehouseRemoteUpdatedAt);cloudStatus('обновлено с сервера','ok');
     try{render()}catch(error){console.error('warehouse pull render failed',error)}

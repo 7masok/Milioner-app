@@ -13,7 +13,7 @@ function fixture(saved=new Map()){
   localStorage:{getItem:k=>saved.get(k)||null,setItem:(k,v)=>saved.set(k,v)},sessionStorage:{getItem:()=>null},APP_FRESH_LOGIN_KEY:'fresh',
   document:{getElementById:id=>elements.get(id)||null,querySelectorAll:()=>[]},
   state:{products:[{id:'main',wb:'MAIN',stock:6},{id:'inferno:child',wb3:'CHILD',stock:6,wbVariant:{nmId:'123',chrtId:456}}],settings:{},purchases:[],movements:[],wbOrderFeed:[]},
-  MILLIONER_API:'https://warehouse.test',selectedOrderMarket:'all',selectedWbAccount:'all',orderPage:1,productPage:1,
+  MILLIONER_API:'https://warehouse.test',selectedOrderMarket:'all',selectedWbAccount:'all',orderPage:1,productPage:1,productFboOnly:false,
   fetch:async(url,options)=>{requests.push({url,options});return Response.json({ok:true,fetchedAt:1,sizes:{'123:456':{quantity:12}},items:{}});},
   normalizeWarehouseSnapshot:s=>({...s}),renderMarketplaceOrders(){calls.renders++;},renderIntegrationStatus(){},renderProducts(){},renderPurchases(){},renderPurchasePlan(){},renderMovement(){},
   purchaseShipmentGroups:()=>[],purchaseRecommendations:()=>[],productForm:()=>'<h3>Добавить товар</h3>',validateProductMarketplaceSkus:()=>true,
@@ -67,4 +67,13 @@ test('new Inferno record IDs are canonical on the wire without changing foreign 
  const f=fixture();f.ctx.state.purchases=[{id:'new-lot',productId:'inferno:child',shipmentId:'new-shipment',adjustmentMovementId:'new-move'}];f.ctx.state.movements=[{id:'new-move',productId:'inferno:child'}];
  const wire=f.ctx.normalizeWarehouseSnapshot(f.ctx.state);assert.equal(wire.purchases[0].id,'inferno:new-lot');assert.equal(wire.purchases[0].shipmentId,'inferno:new-shipment');assert.equal(wire.purchases[0].adjustmentMovementId,wire.movements[0].id);assert.equal(f.ctx.state.purchases[0].id,'new-lot');
  f.ctx.state.products[1].components=[{productId:'main',qty:1}];const invalid=f.ctx.normalizeWarehouseSnapshot(f.ctx.state);assert.equal(invalid.products[1].components[0].productId,'main');
+});
+
+test('product analytics include only selected store sources even for a shared product',()=>{
+ const start=html.indexOf('function selectedProductPeriodStats('),end=html.indexOf('function currentProductPeriodStats(',start),ctx={Map,Set,Object,Number,globalThis:null,unifiedWarehouseEnabled:true,selectedStoreIds:()=>['WB3']};ctx.globalThis=ctx;vm.createContext(ctx);vm.runInContext(html.slice(start,end),ctx);
+ const source=new Map([['shared',{qty:12,profit:600,unitProfit:50,sources:{Ozon:{qty:10,profit:500},WB3:{qty:2,profit:100}}}]]),row=ctx.selectedProductPeriodStats(source).get('shared');assert.equal(row.qty,2);assert.equal(row.profit,100);assert.equal(row.unitProfit,50);assert.deepEqual(Object.keys(row.sources),['WB3']);assert.equal(source.get('shared').qty,12);
+});
+
+test('turning off Ozon clears its hidden FBO-only filter before rendering another store',()=>{
+ const f=fixture();f.ctx.productFboOnly=true;f.ctx.toggleStoreSelection('products','Ozon');assert.equal(f.ctx.productFboOnly,false);
 });

@@ -25,7 +25,7 @@
   if(!stores.includes(market))return;selectedStoreIds(section);const set=selection.get(section);set.has(market)?set.delete(market):set.add(market);
   localStorage.setItem('sklad_stores_v2_'+section,JSON.stringify([...set]));
   if(section==='home'){selectedOrderMarket='all';selectedWbAccount='all';orderPage=1;renderMarketplaceOrders();}
-  if(section==='products'){productPage=1;renderProducts(false);}
+  if(section==='products'){if(!set.has('Ozon'))productFboOnly=false;productPage=1;renderProducts(false);}
   if(section==='reports'){window.renderSelectedStoreReports?.();}
   if(section==='purchases')renderPurchases();
   if(section==='movement')renderMovement();

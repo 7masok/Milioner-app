@@ -52,8 +52,8 @@ pushWarehouseToServer=async function(){
     if(response.status===409){
       // Keep every edit that exists locally at conflict time. Merge it against
       // the last common snapshot and the newest server snapshot, then retry.
-      const localNow=normalizeWarehouseSnapshot(warehouseSnapshot());
       const remoteData=await fetchWarehouseCloud();
+      const localNow=normalizeWarehouseSnapshot(warehouseSnapshot());
       const remoteSnap=normalizeWarehouseSnapshot(remoteData.state);
       const baseSnap=normalizeWarehouseSnapshot(warehouseLastCloudSnapshot||{});
       const mergedSnap=mergeWarehouseSnapshots(
