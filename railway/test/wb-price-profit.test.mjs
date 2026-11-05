@@ -58,3 +58,17 @@ test('UI recalculates ruble price to positive/zero/negative tenge without clampi
  ctx.putModel({...model,available:false,reason:'Нет себестоимости'});assert.match(ctx.priceProfitHtml(row,150),/Прибыль: —/);assert.match(ctx.priceProfitHtml(row,150),/Нет себестоимости/);
  assert.ok(ui.includes("loadPriceProfit(priceWorkbench.market)"));assert.ok(ui.includes('priceProfitHtml(item.row,item.final)'));
 });
+
+test('unit cost is visible before collapsed details even without a complete profit model',()=>{
+ const ui=readFileSync(new URL('../../prices-v1.js',import.meta.url),'utf8'),at=ui.indexOf('const priceProfitCache='),end=ui.indexOf('async function loadPriceProfit',at);
+ const c={Map,Number,pEsc:String};runInNewContext(ui.slice(at,end)+';function putModel(m){priceProfitCache.set("WB",{data:{models:[m]}})}',c);
+ const row={remoteId:'100',market:'WB',currency:'RUB'},model=build([sale(),delivery()]).models[0];c.putModel(model);
+ const markup=c.priceProfitHtml(row,150);assert.match(markup,/Себестоимость: <b>200 ₸\/шт\.<\/b> · ≈ 33,33 ₽\/шт\./);assert.ok(markup.indexOf('Себестоимость:')<markup.indexOf('<details'));
+ c.putModel({...model,available:false,reason:'Нет продаж',fx:null});const partial=c.priceProfitHtml(row,150);assert.match(partial,/Себестоимость: <b>200 ₸/);assert.match(partial,/Прибыль: —/);assert.ok(!partial.includes('₽/шт.'));
+ for(const cost of [null,undefined,0,-1,NaN]){c.putModel({...model,available:false,unitCostKzt:cost});assert.match(c.priceProfitHtml(row,150),/Себестоимость: <b>—<\/b>/)}
+});
+
+test('WB3 loads its own cost model through the existing scoped server endpoint',async()=>{
+ const ui=readFileSync(new URL('../../prices-v1.js',import.meta.url),'utf8'),a=ui.indexOf('const priceProfitCache='),b=ui.indexOf('window.retryPriceProfit=',a),requests=[];
+ const c={Map,Number,pEsc:String,window:{},priceUi:{market:'WB'},MILLIONER_API:'https://fixture.test',fetch:async url=>{requests.push(url);return {ok:true,json:async()=>({ok:true,models:[]})}}};runInNewContext(ui.slice(a,b),c);await c.loadPriceProfit('WB3');assert.deepEqual(requests,['https://fixture.test/api/market-prices/profit-estimates?market=WB3']);
+});
