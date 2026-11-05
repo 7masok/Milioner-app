@@ -11,10 +11,28 @@
    let fallback=defaults;if(section==='home'&&initialHome!=='all')fallback=initialHome==='WB'?(initialAccount==='all'?['WB','WB2']:[initialAccount]):[initialHome];if(section==='reports'){const old=localStorage.getItem('milioner_report_market_v1');if(stores.includes(old))fallback=[old];}selection.set(section,new Set(Array.isArray(saved)?saved.filter(s=>stores.includes(s)):fallback));}
   return [...selection.get(section)];
  };
+ // Catalog membership is independent of marketplace orders and link-validation flags.
+ let catalogCache=null;
+ function warehouseCatalogIds(){
+  const products=state.products||[],purchases=state.purchases||[],movements=state.movements||[],observed=typeof warehouseLastObservedSnapshot==='undefined'?null:warehouseLastObservedSnapshot;
+  if(catalogCache&&catalogCache.products===products&&catalogCache.purchases===purchases&&catalogCache.movements===movements&&catalogCache.pl===products.length&&catalogCache.bl===purchases.length&&catalogCache.ml===movements.length&&catalogCache.observed===observed)return catalogCache.ids;
+  const ids=new Set(purchases.map(row=>String(row.productId||'')));
+  for(const row of movements)if(Number(row.qty)>0&&!row.externalKey&&['приход','инвентаризация','коррекция'].includes(row.type))ids.add(String(row.productId||''));
+  catalogCache={products,purchases,movements,pl:products.length,bl:purchases.length,ml:movements.length,observed,ids};return ids;
+ }
+ window.isWarehouseCatalogProduct=function(p,seen=new Set()){
+  if(!p||seen.has(String(p.id)))return false;seen.add(String(p.id));
+  if(p.warehouseAdded===true||Number(p.stock)>0||warehouseCatalogIds().has(String(p.id)))return true;
+  if(p.kind==='variant-group')return (state.products||[]).filter(row=>String(row.variantGroupId||'')===String(p.id)).some(row=>isWarehouseCatalogProduct(row,seen));
+  if(p.kind==='bundle')return (p.components||[]).some(row=>isWarehouseCatalogProduct(prod(row.productId),seen));
+  return false;
+ };
  window.productMatchesSelectedStores=function(p,section){
+  if(section==='products'&&!isWarehouseCatalogProduct(p))return false;
   const ids=selectedStoreIds(section),child=String(p.id||'').startsWith('inferno:');
   if(!child&&defaults.every(m=>ids.includes(m)))return true;
-  return ids.some(m=>m==='WB3'?child:!child&&Boolean(p[fields[m]]||(p[fields[m]+'Aliases']||[]).length||p[fields[m]+'RelinkRequired']?.oldSku));
+  const rows=p.kind==='variant-group'?[p,...(state.products||[]).filter(row=>String(row.variantGroupId||'')===String(p.id))]:[p];
+  return ids.some(m=>m==='WB3'?child:!child&&rows.some(row=>Boolean(row[fields[m]]||(row[fields[m]+'Aliases']||[]).length||row[fields[m]+'RelinkRequired']?.oldSku||row.kind==='variant-group'&&row.variantMarket===m)));
  };
  window.paintStoreSelection=function(section,box){
   if(!box)return;box.classList.add('store-multi-tabs');box.setAttribute('role','group');box.setAttribute('aria-label','Магазины');

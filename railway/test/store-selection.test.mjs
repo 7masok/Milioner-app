@@ -79,10 +79,26 @@ test('turning off Ozon clears its hidden FBO-only filter before rendering anothe
 });
 
 test('WB products awaiting relink remain visible in their own store without selecting Ozon',()=>{
- const p={id:'ring',name:'Кольцо 3 розовое',wb:'',wbAliases:[],wbRelinkRequired:{oldSku:'Кольцо 3 розовое'}},before=JSON.stringify(p);
+ const p={id:'ring',warehouseAdded:true,name:'Кольцо 3 розовое',wb:'',wbAliases:[],wbRelinkRequired:{oldSku:'Кольцо 3 розовое'}},before=JSON.stringify(p);
  for(const [stores,expected]of [[['WB'],true],[['Kaspi','WB','WB2'],true],[['Ozon'],false],[['WB2'],false],[['WB3'],false],[[],false]]){
   const f=fixture(new Map([['sklad_stores_v2_products',JSON.stringify(stores)]]));assert.equal(f.ctx.productMatchesSelectedStores(p,'products'),expected,stores.join(','));
  }
  assert.equal(JSON.stringify(p),before);assert.equal(p.wb,'');
- const second={id:'ring2',wb2RelinkRequired:{oldSku:'old'}};const f=fixture(new Map([['sklad_stores_v2_products','["WB2"]']]));assert.equal(f.ctx.productMatchesSelectedStores(second,'products'),true);assert.equal(f.ctx.productMatchesSelectedStores(p,'products'),false);
+ const second={id:'ring2',warehouseAdded:true,wb2RelinkRequired:{oldSku:'old'}};const f=fixture(new Map([['sklad_stores_v2_products','["WB2"]']]));assert.equal(f.ctx.productMatchesSelectedStores(second,'products'),true);assert.equal(f.ctx.productMatchesSelectedStores(p,'products'),false);
+});
+
+test('unstocked legacy marketplace cards stay outside Products even when all stores or their old WB marker are selected',()=>{
+ const f=fixture(),ghost={id:'old-empty',name:'Старая карточка',wbRelinkRequired:{oldSku:'old'}},before=JSON.stringify(f.ctx.state);f.ctx.state.products.push(ghost);
+ assert.equal(f.ctx.productMatchesSelectedStores(ghost,'products'),false);
+ f.ctx.toggleStoreSelection('products','Ozon');assert.equal(f.ctx.productMatchesSelectedStores(ghost,'products'),false);
+ assert.equal(f.ctx.state.products.includes(ghost),true);assert.equal(f.ctx.state.products.length,3);
+});
+test('a manually added zero-stock card stays in the catalog and old purchased zero-stock cards remain available',()=>{
+ const f=fixture(),manual={id:'manual',warehouseAdded:true,wb:'new'},old={id:'old',wb:'old',stock:0};f.ctx.state.products.push(manual,old);f.ctx.state.purchases.push({id:'old-lot',productId:'old',qty:1,remainingQty:0,status:'received'});
+ assert.equal(f.ctx.productMatchesSelectedStores(manual,'products'),true);assert.equal(f.ctx.productMatchesSelectedStores(old,'products'),true);
+});
+test('a user-owned size group is visible in WB1 from its child links and variant market without Ozon',()=>{
+ const f=fixture(new Map([['sklad_stores_v2_products','["WB"]']])),group={id:'ring-group',name:'Кольцо три серебристое',kind:'variant-group',variantMarket:'WB',wb:''},legacy={id:'ring-old',variantGroupId:'ring-group',stock:2},size={id:'ring-size',variantGroupId:'ring-group',wb:'barcode',stock:0};f.ctx.state.products.push(group,legacy,size);
+ assert.equal(f.ctx.productMatchesSelectedStores(group,'products'),true);assert.equal(group.wb,'');assert.equal(f.ctx.productMatchesSelectedStores({...group,kind:'simple',variantMarket:''},'products'),false);
+ f.ctx.toggleStoreSelection('products','WB');f.ctx.toggleStoreSelection('products','Ozon');assert.equal(f.ctx.productMatchesSelectedStores(group,'products'),false);
 });
