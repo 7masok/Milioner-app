@@ -215,7 +215,8 @@ test('Products CRUD and stock actions keep write guards and ledger-safe entry po
   assert.match(html,/function releaseProductWarehouseQty\(pid\)[\s\S]*log\('приход'/);
   assert.match(html,/function delistProductQty\(pid\)[\s\S]*log\('снятие с продажи'/);
   assert.match(html,/function createWriteoff\(\)[\s\S]*log\('списание'/);
-  assert.match(html,/function doInventory\(\)[\s\S]*log\('инвентаризация'/);
+  assert.match(html,/function doInventory\(\)[^\n]*applyInventoryCount/);
+  assert.match(html,/function applyInventoryCount\(p,actual,unit\)[^\n]*log\('инвентаризация'/);
   assert.match(html,/Нельзя удалить товар с остатком/);
 });
 
