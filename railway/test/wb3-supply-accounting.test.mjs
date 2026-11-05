@@ -60,3 +60,15 @@ test('a current-day shipment is not incorrectly treated as old history on activa
  const next=mergeSupplyList({...s,observedPreparing:[]},[{...supply(6),preorderID:456,createDate:'2026-10-01T00:00:00Z',factDate:'2026-11-04T18:10:00Z'}],now+900000);
  assert.ok(!next.excluded.includes('preorder:456'));
 });
+
+test('saved nmID and characteristic link survives missing duplicate barcode metadata, with exact catalog evidence',async()=>{
+ const {enrichSupplyGoods}=await import('../src/wb3-supply-view.js');
+ const a=state();a.products=[{id:'pink',name:'ВФ розовый',stock:0,cost:211.35,wb:'ВФ розовый',wbIdentity:{nmId:'1187433677',chrtId:1749120906,vendorCode:'ВФ розовый'}}];a.purchases=[{id:'pink-lot',productId:'pink',status:'at_warehouse',qty:50,buyTotal:9495,delivery:1072.565}];
+ const sync={catalog:[{nmId:'1187433677',vendorCode:'ВФ розовый',sizes:[{chrtId:1749120906,size:'A',barcodes:['2052587286559']}]}]};
+ const rows=enrichSupplyGoods(sync,'preorder:123',[{barcode:'2052587286559',nmID:1187433677,techSize:'A',vendorCode:'ВФ розовый',quantity:50}]);
+ assert.equal(resolveWbSupplyProduct(a,rows[0]).id,'pink');
+ const sent=accountWbSupply(a,supply(6),rows,2000);assert.equal(inventory(sent.state).get('pink').warehouse,0);assert.equal(sent.state.products[0].stock,0);assert.equal(Object.values(sent.state.settings.wb3FboTransfers)[0].qty,50);assert.equal(stockLedgerViolation(a,sent.state),null);
+ const repeat=accountWbSupply(sent.state,supply(6),rows,3000);assert.equal(repeat.changed,false);assert.equal(sent.state.movements.length,2);
+ const wrong=structuredClone(sync);wrong.catalog[0].sizes[0].chrtId=999;assert.throws(()=>resolveWbSupplyProduct(a,enrichSupplyGoods(wrong,'preorder:123',rows)[0]),/привязки/);
+ const renamed=structuredClone(sync);renamed.catalog[0].vendorCode='renamed elsewhere';assert.throws(()=>resolveWbSupplyProduct(a,enrichSupplyGoods(renamed,'preorder:123',rows)[0]),/привязки/);
+});

@@ -4,7 +4,7 @@ import {syncWbSupplies,enableSupplyState} from '../src/wb3-supply-sync.js';
 function fixture(initial={}){
  let stored=structuredClone(initial),now=Date.parse('2026-11-04T18:00:00Z'),calls=0,reconciles=0;
  const db={async query(sql,args){if(sql.includes('pg_try_advisory_lock'))return {rows:[{locked:true}]};if(sql.startsWith('SELECT payload'))return {rows:[{payload:structuredClone(stored)}]};if(sql.startsWith('UPDATE wb3_supply_sync'))stored=JSON.parse(args[0]);return {rows:[]}},release(){}};
- const options={profile:'WB3',dbPool:{async connect(){return db}},ensure:async()=>{},tokenFor:async()=> 'fixture-token',clock:()=>now,reconcile:async()=>{reconciles++}};
+ const options={profile:'WB3',dbPool:{async connect(){return db}},ensure:async()=>{},catalogFor:async()=>[],tokenFor:async()=> 'fixture-token',clock:()=>now,reconcile:async()=>{reconciles++}};
  return {options,get stored(){return stored},set stored(s){stored=s},advance(ms){now+=ms},get calls(){return calls},fetch(fn){options.fetchImpl=async(...args)=>{calls++;return fn(...args)}}};
 }
 test('collector persists list, sends goods request next, and never refetches on an idle tick or restart',async()=>{
@@ -43,4 +43,15 @@ test('WB rejection retains the reason and request identity without retrying befo
  f.fetch(()=>new Response('{"title":"Invalid supply","detail":"Supply is unavailable"}',{status:400}));
  await syncWbSupplies(f.options);assert.match(f.stored.error,/HTTP 400 · supply:456 · Invalid supply · Supply is unavailable/);
  f.advance(10000);await syncWbSupplies(f.options);assert.equal(f.calls,1);
+});
+test('catalog recovery is outside the stock transaction and cached across ticks without resetting WB request slots',async()=>{
+ const at=Date.parse('2026-11-04T18:00:00Z'),f=fixture({enabled:true,listAt:at,nextAt:at+1800000,goods:{'preorder:123':{listAt:at,rows:[{barcode:'b',quantity:3}]}}});let calls=0;
+ f.options.catalogFor=async()=>{calls++;throw Error('catalog temporarily unavailable')};
+ await syncWbSupplies(f.options);assert.equal(calls,1);assert.match(f.stored.catalogError,/unavailable/);assert.equal(f.stored.nextAt,at+1800000);
+ f.advance(30000);await syncWbSupplies(f.options);assert.equal(calls,1);assert.equal(f.calls,0);
+});
+test('a legacy composition is refreshed at its permitted slot and gains a real fetch timestamp',async()=>{
+ const at=Date.parse('2026-11-04T18:00:00Z'),listAt=at-8*3600000,f=fixture({enabled:true,listAt,nextAt:at+1000,automaticVersion:2,supplies:[{preorderID:123,supplyID:456,statusID:6,factDate:'2026-11-04T17:00:00Z'}],goods:{'preorder:123':{listAt,rows:[{barcode:'old',quantity:3}]}}});
+ f.fetch(url=>{assert.match(url,/\/456\/goods/);return new Response('[{"barcode":"fresh","quantity":3}]')});
+ await syncWbSupplies(f.options);assert.equal(f.calls,0);f.advance(1001);await syncWbSupplies(f.options);assert.equal(f.calls,1);assert.equal(f.stored.goods['preorder:123'].fetchedAt,at+1001);assert.equal(f.stored.goods['preorder:123'].rows[0].barcode,'fresh');
 });
