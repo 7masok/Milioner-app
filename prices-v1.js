@@ -122,12 +122,12 @@ function updatePriceGroupTools(){
 function updatePriceBulkTools(indexed=priceVisibleRows()){
   const tools=document.getElementById('priceBulkTools'),all=document.getElementById('priceSelectAll'),count=document.getElementById('priceSelectedCount'),
     enable=document.getElementById('priceBulkEnablePromo'),disable=document.getElementById('priceBulkDisablePromo'),night=document.getElementById('priceBulkNight'),
-    protection=document.getElementById('priceBulkProtection'),price=document.getElementById('priceBulkPrice');
+    protection=document.getElementById('priceBulkProtection'),stop=document.getElementById('priceBulkPromoStop'),price=document.getElementById('priceBulkPrice');
   const isWb=priceIsWbMarket(),selection=priceSelection(),visibleIds=indexed.filter(({row})=>!row.error).map(({row})=>priceSelectionId(row)).filter(Boolean),
     selectedVisible=visibleIds.filter(id=>selection.has(id)).length;
   if(tools){tools.hidden=!priceCanSelect();tools.classList.toggle('kaspi',priceUi.market==='Kaspi');}
   if(night)night.hidden=true;
-  for(const button of [enable,disable,protection])if(button)button.hidden=!isWb;
+  for(const button of [enable,disable,protection,stop])if(button)button.hidden=!isWb;
   if(price)price.textContent=isWb?'Цена / скидка':'Изменить цену';
   if(all){
     all.checked=Boolean(visibleIds.length)&&selectedVisible===visibleIds.length;
@@ -138,6 +138,7 @@ function updatePriceBulkTools(indexed=priceVisibleRows()){
   if(disable)disable.disabled=!selection.size;
   if(night)night.disabled=!selection.size;
   if(protection)protection.disabled=!selection.size;
+  if(stop)stop.disabled=!selection.size;
   if(price)price.disabled=!selection.size;
   updatePriceGroupTools();
 }
@@ -722,6 +723,33 @@ window.savePricePromoStop=async function(index,enabled){
     const data=await response.json();if(!response.ok||!data.ok)throw Error(data.error||'Не удалось сохранить стоп.');
     bumpPriceEpoch(row.market);await window.renderPrices(true);setPriceStatus(enabled?'Стоп акции установлен':'Стоп акции выключен','ok');
   }catch(error){alert(priceErrorText(error))}
+};
+let priceBulkStopContext=null;
+window.openPriceBulkPromoStop=function(){
+ if(!priceIsWbMarket())return;
+ const selected=priceSelection(),rows=activeRows().filter(row=>!row.error&&selected.has(priceSelectionId(row)));if(!rows.length)return;
+ priceBulkStopContext={market:priceUi.market,rows:rows.map(row=>({...row})),ids:rows.map(row=>String(row.remoteId))};
+ showSheet('<h3>Стоп акции · '+rows.length+' товаров</h3><div class="two"><div class="field"><label>Условие</label><select id="priceBulkStopMode" onchange="previewPriceBulkPromoStop()"><option value="percent">Максимальная скидка, %</option><option value="price">Минимальная цена, ₽</option></select></div><div class="field"><label>Значение</label><input id="priceBulkStopValue" type="number" min="0" step="0.01" oninput="previewPriceBulkPromoStop()"></div></div><div class="muted">Исходная цена для возврата у каждого товара своя. Проверяем цену продавца после скидки.</div><div id="priceBulkStopPreview" class="price-workbench-preview"></div><div id="priceBulkStopError" role="alert"></div><button id="priceBulkStopSave" type="button" class="btn dark full" onclick="savePriceBulkPromoStop(true)" disabled>Установить стопы</button><button id="priceBulkStopRemove" type="button" class="btn full" onclick="savePriceBulkPromoStop(false)">Убрать стопы</button>');
+ previewPriceBulkPromoStop();
+};
+window.previewPriceBulkPromoStop=function(){
+ const ctx=priceBulkStopContext;if(!ctx)return;
+ const mode=document.getElementById('priceBulkStopMode')?.value,input=document.getElementById('priceBulkStopValue'),value=Number(input?.value),valid=input?.value!==''&&Number.isFinite(value)&&(mode==='percent'?value>=0&&value<100:value>0);
+ let blocked=false;
+ const markup=ctx.rows.map(row=>{const base=Number(row.promoStop?.enabled?row.promoStop.basePrice:(row.confirmedPrice??row.price)),floor=mode==='percent'?base*(1-value/100):value,reason=row.promoStop?.restoring?'Ожидается возврат цены':row.promoBlocked?'Сначала снимите блок акций':row.canEditPrice===false?'Разные цены размеров':!(base>0)?'Нет исходной цены':valid&&floor>base?'Стоп выше исходной цены':'';if(reason)blocked=true;
+ return '<div class="item"><b>'+pEsc(row.name||row.sku||row.remoteId)+'</b><div class="muted">Возврат '+pMoney(base,row.currency)+(valid&&!reason?' · стоп ниже '+pMoney(floor,row.currency):'')+'</div>'+(reason?'<div class="price-inline-warning">'+pEsc(reason)+'</div>':'')+'</div>'});
+ document.getElementById('priceBulkStopPreview').innerHTML=markup.join('');document.getElementById('priceBulkStopSave').disabled=!valid||blocked;
+};
+window.savePriceBulkPromoStop=async function(enabled){
+ const ctx=priceBulkStopContext;if(!ctx)return;
+ const mode=document.getElementById('priceBulkStopMode')?.value,input=document.getElementById('priceBulkStopValue'),saveButton=document.getElementById('priceBulkStopSave'),removeButton=document.getElementById('priceBulkStopRemove'),errorBox=document.getElementById('priceBulkStopError');
+ if(enabled&&(saveButton?.disabled||!input||input.value===''))return;
+ if(saveButton)saveButton.disabled=true;if(removeButton)removeButton.disabled=true;if(errorBox)errorBox.textContent='';
+ try{
+  const response=await fetch(MILLIONER_API+'/api/market-prices/promo-stop/bulk',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({market:ctx.market,remoteIds:ctx.ids,enabled,mode,value:Number(input?.value),confirm:true})}),data=await response.json();
+  if(!response.ok||!data.ok)throw Error(data.error||'Не удалось сохранить стопы');
+  for(const id of ctx.ids)priceSelection(ctx.market).delete(id);priceBulkStopContext=null;closeModal();bumpPriceEpoch(ctx.market);await window.renderPrices(true);setPriceStatus((enabled?'Стоп установлен':'Стоп выключен')+' · '+Number(data.count||ctx.ids.length)+' товаров','ok');
+ }catch(error){if(errorBox)errorBox.textContent=priceErrorText(error);if(removeButton)removeButton.disabled=false;previewPriceBulkPromoStop();}
 };
 window.togglePriceProtection=async function(index,field,enabled){
   const row=activeRows()[Number(index)];if(!row||!priceIsWbMarket(row.market))return;
