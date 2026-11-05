@@ -330,16 +330,24 @@ async function promoStopRows(market,client=pool){
     min_price AS "minPrice",triggered_at AS "triggeredAt",restoring FROM wb_promo_stops WHERE market=$1`,[market])).rows;
 }
 export async function saveWbPromoStop(market,nmId,input,actor='owner',db=pool){
+  return saveWbPromoStops(market,[nmId],input,actor,db);
+}
+export async function saveWbPromoStops(market,nmIds,input,actor='owner',db=pool){
+  market=marketName(market);
+  if(!Array.isArray(nmIds)||!nmIds.length||nmIds.length>1000||nmIds.some(id=>!Number.isSafeInteger(Number(id))||Number(id)<=0))throw promoStopError('Выберите от 1 до 1000 товаров WB.');
+  nmIds=[...new Set(nmIds.map(Number))].sort((a,b)=>a-b);
   const client=await db.connect(),now=Date.now();
   try{
     await client.query('BEGIN');
     await client.query('SELECT pg_advisory_xact_lock(hashtext($1))',['millioner:wb-prices:'+market]);
+    const snapshot=input.enabled===false?[]:await priceRows(market,client),byNm=new Map(snapshot.map(row=>[Number(row.remoteId),row]));
+    for(const nmId of nmIds){
     const old=(await client.query('SELECT enabled,base_price,restoring FROM wb_promo_stops WHERE market=$1 AND nm_id=$2 FOR UPDATE',[market,nmId])).rows[0];
     if(old?.restoring)throw promoStopError('Сначала дождитесь возврата исходной цены.',409);
     if(input.enabled===false){
       await client.query('UPDATE wb_promo_stops SET enabled=false,updated_at=$3 WHERE market=$1 AND nm_id=$2',[market,nmId,now]);
     }else{
-      const row=(await priceRows(market,client)).find(r=>Number(r.remoteId)===nmId);
+      const row=byNm.get(nmId);
       if(!row)throw promoStopError('Сначала загрузите цены магазина.',409);
       if(row.canEditPrice===false)throw promoStopError('Разные цены по размерам: общий стоп нельзя установить.',409);
       const pref=await protectionFor(market,nmId,client);
@@ -353,9 +361,10 @@ export async function saveWbPromoStop(market,nmId,input,actor='owner',db=pool){
         triggered_at=0,restoring=false,updated_at=excluded.updated_at`,[market,nmId,spec.mode,spec.value,spec.basePrice,spec.minPrice,now]);
     }
     await history(client,market,nmId,'promo-stop',actor,{enabled:input.enabled!==false,mode:input.mode,value:input.value},now);
+    }
     await client.query('COMMIT');
   }catch(error){await client.query('ROLLBACK').catch(()=>{});throw error}finally{client.release()}
-  return {ok:true};
+  return {ok:true,count:nmIds.length};
 }
 // Called under the existing per-market price worker lock. No extra WB request:
 // snapshot observation, trigger latch and price queue share one DB transaction.
@@ -407,4 +416,9 @@ wbPriceProtectionRouter.post('/market-prices/promo-stop',requireWritesEnabled,as
   const market=marketName(req.body.market),nmId=Number(req.body.remoteId);
   if(!Number.isSafeInteger(nmId)||nmId<=0)throw promoStopError('Не выбран товар WB.');
   return res.json(await saveWbPromoStop(market,nmId,req.body,actorFrom(req)));
+}));
+
+wbPriceProtectionRouter.post('/market-prices/promo-stop/bulk',requireWritesEnabled,asyncRoute(async(req,res)=>{
+  if(req.body?.confirm!==true)return res.status(400).json({ok:false,error:'Подтвердите установку стопов.'});
+  return res.json(await saveWbPromoStops(req.body.market,req.body.remoteIds,req.body,actorFrom(req)));
 }));

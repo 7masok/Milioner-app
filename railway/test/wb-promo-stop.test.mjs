@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
 import vm from 'node:vm';
 import {PGlite} from '@electric-sql/pglite';
-import {promoStopSpec,promoStopCrossed,saveWbPromoStop,syncWbPromoStops} from '../src/wb-price-protection.js';
+import {promoStopSpec,promoStopCrossed,saveWbPromoStop,saveWbPromoStops,syncWbPromoStops} from '../src/wb-price-protection.js';
 const read=p=>readFileSync(new URL(p,import.meta.url),'utf8');
 async function fixture(){
  const pg=new PGlite();
@@ -78,4 +78,24 @@ test('linked UI inputs preserve the last edited unit and calculate rubles/percen
  c.window.pricePromoStopInput('price');assert.equal(nodes.priceStopPercent.value,20);assert.equal(nodes.priceStopMode.value,'price');
  nodes.priceStopPercent.value='25';c.window.pricePromoStopInput('percent');assert.equal(nodes.priceStopAmount.value,750);assert.equal(nodes.priceStopMode.value,'percent');
  const html=c.pricePromoStopEditor({market:'WB',price:1000},0);assert.match(html,/Минимальная цена, ₽/);assert.match(html,/Максимальная скидка, %/);assert.match(html,/pricePromoStopInput\('price'\)/);
+});
+
+test('bulk stops freeze each original price, share the percentage and roll back the entire group on an invalid floor',async()=>{
+ const f=await fixture();try{
+  await f.pg.query("UPDATE wb_price_snapshots SET payload=$1 WHERE market='WB'",[JSON.stringify({rows:[{remoteId:'1',price:1000,discount:0},{remoteId:'2',price:500,discount:0}]})]);
+  const result=await saveWbPromoStops('WB',['1','2','1'],{mode:'percent',value:20},'fixture',f.db);assert.equal(result.count,2);
+  let rows=(await f.pg.query("SELECT * FROM wb_promo_stops WHERE market='WB' ORDER BY nm_id")).rows;assert.deepEqual(rows.map(r=>Number(r.base_price)),[1000,500]);assert.deepEqual(rows.map(r=>Number(r.min_price)),[800,400]);
+  await assert.rejects(saveWbPromoStops('WB',[1,2],{mode:'price',value:600},'fixture',f.db),/выше исходной/);
+  rows=(await f.pg.query("SELECT * FROM wb_promo_stops WHERE market='WB' ORDER BY nm_id")).rows;assert.deepEqual(rows.map(r=>Number(r.min_price)),[800,400]);
+  await f.pg.query("UPDATE wb_price_snapshots SET payload=$1 WHERE market='WB'",[JSON.stringify({rows:[{remoteId:'1',price:900,discount:0},{remoteId:'2',price:450,discount:0}]})]);
+  await saveWbPromoStops('WB',[1,2],{mode:'price',value:350},'fixture',f.db);rows=(await f.pg.query("SELECT * FROM wb_promo_stops WHERE market='WB' ORDER BY nm_id")).rows;assert.deepEqual(rows.map(r=>Number(r.base_price)),[1000,500]);assert.deepEqual(rows.map(r=>Number(r.min_price)),[350,350]);
+  await saveWbPromoStops('WB',[1,2],{enabled:false},'fixture',f.db);assert.equal((await f.pg.query("SELECT count(*)::int AS n FROM wb_promo_stops WHERE enabled")).rows[0].n,0);assert.equal((await f.pg.query('SELECT count(*)::int AS n FROM wb_price_update_queue')).rows[0].n,0);
+ }finally{await f.pg.close()}
+});
+
+test('bulk UI previews individual baselines and submits only the selection captured in its store',async()=>{
+ const ui=read('../../prices-v1.js'),a=ui.indexOf('let priceBulkStopContext=null;'),b=ui.indexOf('window.togglePriceProtection=',a),nodes={priceBulkStopMode:{value:'percent'},priceBulkStopValue:{value:'20'},priceBulkStopPreview:{innerHTML:''},priceBulkStopSave:{disabled:true},priceBulkStopRemove:{disabled:false},priceBulkStopError:{textContent:''}},selected=new Map([['WB',new Set(['1','2'])],['WB2',new Set(['3'])]]),requests=[];
+ const c={window:null,document:{getElementById:id=>nodes[id]},priceUi:{market:'WB'},priceIsWbMarket:()=>true,priceSelection:m=>selected.get(m||c.priceUi.market),priceSelectionId:r=>String(r.remoteId),activeRows:()=>[{market:'WB',remoteId:1,name:'Первый',price:1000,currency:'RUB'},{market:'WB',remoteId:2,name:'Второй',price:400,promoStop:{enabled:true,basePrice:500},currency:'RUB'}],showSheet(){},pEsc:String,pMoney:x=>String(x),MILLIONER_API:'https://warehouse.test',fetch:async(url,options)=>{requests.push({url,body:JSON.parse(options.body)});return {ok:true,json:async()=>({ok:true,count:2})}},bumpPriceEpoch(){},closeModal(){},renderPrices:async()=>{},setPriceStatus(){},priceErrorText:e=>e.message};c.window=c;vm.runInNewContext(ui.slice(a,b),c);
+ c.openPriceBulkPromoStop();assert.match(nodes.priceBulkStopPreview.innerHTML,/стоп ниже 800/);assert.match(nodes.priceBulkStopPreview.innerHTML,/стоп ниже 400/);assert.equal(nodes.priceBulkStopSave.disabled,false);
+ c.priceUi.market='WB2';await c.savePriceBulkPromoStop(true);assert.equal(requests[0].body.market,'WB');assert.deepEqual(requests[0].body.remoteIds,['1','2']);assert.equal(selected.get('WB2').has('3'),true);assert.equal(selected.get('WB').size,0);
 });
