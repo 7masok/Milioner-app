@@ -103,3 +103,12 @@ test('gateway reads and writes only the isolated backend and preserves auth, rev
   response=await fetch(origin+'/inferno/api/purchase.pdf',{headers}); assert.equal(await response.text(),'%PDF-fixture');
   assert.equal(response.headers.get('cache-control'),'no-store');
 });
+
+test('critical scope bootstrap is inline after the boot observer, with no blocking network dependency',()=>{
+ const page=withWarehouseScopePage(html,{enabled:true});
+ assert.ok(page.indexOf('warehouse-boot-guard')<page.indexOf('data-source="warehouse-scope-bootstrap.js"'));
+ assert.doesNotMatch(page,/<script[^>]*src="[^\"]*warehouse-scope-bootstrap\.js/);
+ assert.ok(page.includes(bootstrap));
+ assert.match(page,/Загрузка продолжается/);
+ assert.doesNotMatch(page,/Загрузка страницы не завершилась за 15 секунд/);
+});

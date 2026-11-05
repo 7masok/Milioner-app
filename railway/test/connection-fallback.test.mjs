@@ -75,18 +75,19 @@ test('warehouse request ends even when the transport ignores abort',async()=>{
  p.respond(()=>new Promise(()=>{}));const request=p.window.fetch('https://warehouse.test/api/warehouse-state');const rejected=assert.rejects(request,{name:'TimeoutError'});timers[0]();await rejected;assert.match(p.elements.get('connectionCode').textContent,/TIMEOUT/);
 });
 const html=readFileSync(new URL('../../index.html',import.meta.url),'utf8');
+const bootSource=readFileSync(new URL('../../warehouse-boot-guard.js',import.meta.url),'utf8');
 function boot(){
  const elements=new Map(),events={},timers=[];let removed=false;
  const document={scripts:[{src:'https://warehouse.test/module.js',dataset:{}}],createElement:()=>({setAttribute(){},style:{},remove(){removed=true}}),documentElement:{appendChild(){}},getElementById:id=>{if(!elements.has(id))elements.set(id,{});return elements.get(id)}};
  const window={addEventListener:(name,fn)=>events[name]=fn};
- vm.runInNewContext(html.match(/<script id="warehouse-boot-guard">([\s\S]*?)<\/script>/)[1],{window,document,Date,URL,Array,location:{href:'https://warehouse.test/',reload(){}},setTimeout:f=>(timers.push(f),1),clearTimeout(){}});
+ vm.runInNewContext(bootSource,{window,document,Date,URL,Array,location:{href:'https://warehouse.test/',reload(){}},setTimeout:f=>(timers.push(f),1),clearTimeout(){}});
  return {window,events,timers,elements,removed:()=>removed};
 }
 test('boot watchdog reports a stuck script before auth runtime and allows late recovery',()=>{
  const p=boot();p.timers[0]();assert.match(p.elements.get('warehouseBootResource').textContent,/module.js/);assert.equal(p.window.warehouseBoot.canStart(),true);p.window.warehouseBoot.complete();assert.equal(p.removed(),true);
 });
 test('a failed required script blocks launching a partially loaded app',()=>{
- const p=boot();p.events.error({target:{tagName:'SCRIPT',src:'https://warehouse.test/missing.js'}});assert.equal(p.window.warehouseBoot.canStart(),false);assert.match(p.elements.get('warehouseBootReason').textContent,/missing.js/);
+ const p=boot();p.events.error({target:{tagName:'SCRIPT',src:'https://warehouse.test/missing.js'}});assert.equal(p.window.warehouseBoot.canStart(),false);assert.match(p.elements.get('warehouseBootResource').textContent,/missing.js/);
 });
 const server=readFileSync(new URL('../src/server.js',import.meta.url),'utf8');
 test('recovered diagnostics are authenticated, bounded and strip secrets and query strings',()=>{
@@ -96,4 +97,41 @@ test('recovered diagnostics are authenticated, bounded and strip secrets and que
  let response;handler({body:{attempts:[{path:'/?token=secret',code:'BOOT_TIMEOUT',at:Date.now(),ms:15000,secret:'do-not-log'},{path:'/api/orders',code:'NETWORK'},{path:'/health',code:'PASSWORD secret'}]}},{set(){return this},json:r=>response=r});
  assert.equal(response.ok,true);assert.equal(logs.length,1);const payload=JSON.parse(logs[0][1]);assert.equal(payload.attempts.length,1);assert.equal(payload.attempts[0].path,'/');assert.doesNotMatch(logs[0][1],/secret|token|password/i);
  assert.ok(server.indexOf("app.use('/api', requireAppSession)")<server.indexOf("app.post('/api/system/client-diagnostics'"));
+});
+
+function recoveryBoot(fetch){
+ let now=0,reloads=0;const elements=new Map(),events={},timers=[],store=new Map([['owner_session','keep']]);
+ class Clock extends Date{constructor(...args){super(...(args.length?args:[now]))}static now(){return now}}
+ const document={scripts:[{src:'https://warehouse.test/module.js',dataset:{}}],createElement:()=>({setAttribute(){},style:{},remove(){}}),documentElement:{appendChild(){}},getElementById:id=>{if(!elements.has(id))elements.set(id,{});return elements.get(id)}};
+ const sessionStorage={getItem:k=>store.get(k)||null,setItem:(k,v)=>store.set(k,v),removeItem:k=>store.delete(k)};
+ const context={window:{fetch,addEventListener:(k,f)=>events[k]=f},document,Date:Clock,URL,Array,AbortController,sessionStorage,location:{href:'https://warehouse.test/',reload:()=>reloads++},setTimeout:(fn,ms)=>{const t={fn,ms,cancelled:false};timers.push(t);return t},clearTimeout:t=>{if(t)t.cancelled=true}};
+ vm.runInNewContext(bootSource,context);
+ const fire=ms=>{const t=timers.find(t=>t.ms===ms&&!t.cancelled);assert.ok(t,'timer '+ms);t.cancelled=true;return t.fn()};
+ return {context,events,timers,elements,store,fire,advance:ms=>now+=ms,reloads:()=>reloads};
+}
+test('slow startup is a continuing status, with no fifteen-second failure or blocked auth',()=>{
+ const f=recoveryBoot(async()=>new Response(''));f.fire(10000);
+ assert.equal(f.elements.get('warehouseBootTitle').textContent,'Загружаем склад');assert.match(f.elements.get('warehouseBootReason').textContent,/Загрузка продолжается/);
+ assert.equal(f.context.window.warehouseBoot.canStart(),true);assert.ok(!f.timers.some(t=>t.ms===15000));assert.equal(f.reloads(),0);
+});
+test('a stalled dependency recovers by one navigation after public GET probes, preserving the session',async()=>{
+ const paths=[],f=recoveryBoot(async url=>{paths.push(url);return new Response(url.endsWith('/module.js')?'window.module=true':'<script id="warehouse-boot-guard"></script>')});
+ f.advance(31000);await f.fire(30000);assert.equal(f.reloads(),1);assert.equal(f.store.get('owner_session'),'keep');assert.ok(paths.every(url=>!url.includes('/api/')));
+ assert.equal(JSON.parse(f.store.get('warehouse_boot_retries_v2')).count,1);
+});
+test('recovery never reloads after successful boot or after scripts resume progressing',async()=>{
+ let resolve;const f=recoveryBoot(()=>new Promise(r=>resolve=r));f.advance(31000);const pending=f.fire(30000);
+ f.context.window.warehouseBoot.complete();resolve(new Response('<script id="warehouse-boot-guard"></script>'));
+ // The completed check must not even continue probing the old missing dependency.
+ await new Promise(r=>setImmediate(r));
+ // It can still have an in-progress asset check: terminate it as a real response.
+ if(resolve)resolve(new Response('module'));
+ await pending;assert.equal(f.reloads(),0);
+ const g=recoveryBoot(async url=>{g.advance(1);g.events.load({target:{tagName:'SCRIPT',dataset:{}}});return new Response(url.endsWith('/module.js')?'module':'warehouse-boot-guard')});
+ g.advance(31000);await g.fire(30000);assert.equal(g.reloads(),0);
+});
+test('automatic startup navigation is bounded, and an offline failure is kept recoverable',async()=>{
+ const f=recoveryBoot(async()=>new Response('warehouse-boot-guard'));f.store.set('warehouse_boot_retries_v2',JSON.stringify({at:1,count:2}));f.advance(31000);await f.fire(30000);
+ assert.equal(f.reloads(),0);assert.match(f.elements.get('warehouseBootReason').textContent,/вручную/);
+ const g=recoveryBoot(async()=>{throw Error('offline')});g.advance(31000);await g.fire(30000);assert.equal(g.reloads(),0);assert.ok(g.timers.some(t=>t.ms===10000&&!t.cancelled));
 });
