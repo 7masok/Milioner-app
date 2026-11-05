@@ -31,15 +31,16 @@ test('per-product historical estimate remains visible below the product',()=>{
 });
 
 
-function runReceivedCorrection({remainingQty=20,newQty=0,addReplacement=true}={}){
+function runReceivedCorrection({remainingQty=20,newQty=0,addReplacement=true,status='received',warehouseWrittenOffQty=0,reference=false,keepOther=false,delivery=0}={}){
   const oldProduct={id:'black',name:'Чёрный',stock:20};
   const replacement={id:'blue',name:'Синий',stock:0};
   const products=new Map([[oldProduct.id,oldProduct],[replacement.id,replacement]]);
   const state={purchases:[{
-    id:'old-row',shipmentId:'ship-1',status:'received',productId:'black',
+    id:'old-row',shipmentId:'ship-1',status,warehouseWrittenOffQty,productId:'black',
     qty:20,remainingQty,buyTotal:200,unitCost:10,delivery:0,landedUnitCost:10,
     batch:'Поставка',orderedAt:1,receivedAt:2,date:1
   }]};
+  state.sales=reference?[{fifoLots:[{purchaseId:'old-row',qty:2}]}]:[];
   const existingEl={
     dataset:{id:'old-row'},
     querySelector(selector){
@@ -57,17 +58,19 @@ function runReceivedCorrection({remainingQty=20,newQty=0,addReplacement=true}={}
       return null;
     }
   };
+  if(keepOther)state.purchases.push({id:'keep-row',shipmentId:'ship-1',status:'at_warehouse',productId:'blue',qty:20,remainingQty:0,unitCost:10,buyTotal:200,delivery:0});
+  const keepEl={dataset:{id:'keep-row'},querySelector:s=>({value:s==='.correct-purchase-qty'?'20':'10'})};
   const fields={
     correctPorDate:{value:'2026-10-01'},
     correctPorBatch:{value:'Поставка'},
-    correctPorDelivery:{value:'0'}
+    correctPorDelivery:{value:String(delivery)}
   };
   const alerts=[],movements=[];
   const context={
     state,
     document:{
       querySelectorAll(selector){
-        if(selector==='.correct-purchase-row')return [existingEl];
+        if(selector==='.correct-purchase-row')return keepOther?[existingEl,keepEl]:[existingEl];
         if(selector==='.correct-purchase-new-row')return addReplacement?[replacementEl]:[];
         return [];
       },
@@ -90,6 +93,7 @@ function runReceivedCorrection({remainingQty=20,newQty=0,addReplacement=true}={}
     fmt(value){return String(value)}
   };
   vm.createContext(context);
+  vm.runInContext(extract('purchaseCorrectionMinimumQty','removeCorrectPurchaseItem'),context);
   vm.runInContext(extract('saveCorrectReceivedPurchaseShipment','addEditPurchaseItem'),context);
   vm.runInContext("saveCorrectReceivedPurchaseShipment('ship-1')",context);
   return {state,oldProduct,replacement,alerts,movements};
@@ -112,4 +116,24 @@ test('received purchase correction still cannot go below units already consumed 
   assert.ok(result.alerts.some(message=>message.includes('нельзя указать меньше 3 шт.')));
   assert.equal(result.state.purchases[0].qty,20);
   assert.equal(result.oldProduct.stock,20);
+});
+
+
+test('a warehouse-only mistaken item can be removed without changing sale stock or the product catalog',()=>{
+ const r=runReceivedCorrection({status:'at_warehouse'});
+ assert.equal(r.state.purchases.some(x=>x.id==='old-row'),false);
+ assert.equal(r.oldProduct.stock,20);
+ assert.ok(r.movements.some(x=>x.productId==='black'&&x.qty===0&&x.note.includes('ошибочно добавленный')));
+ assert.ok(r.state.purchases.some(x=>x.productId==='blue'&&x.qty===20));
+});
+for(const opts of [{status:'at_warehouse',warehouseWrittenOffQty:3},{status:'at_warehouse',reference:true}])test('used warehouse lot cannot disappear: '+JSON.stringify(opts),()=>{
+ const r=runReceivedCorrection(opts);assert.ok(r.state.purchases.some(x=>x.id==='old-row'&&x.qty===20));assert.equal(r.oldProduct.stock,20);assert.equal(r.movements.length,0);assert.equal(r.replacement.stock,0);
+});
+test('the last line cannot be removed through correction and requires explicit whole-shipment deletion',()=>{
+ const r=runReceivedCorrection({status:'at_warehouse',addReplacement:false});assert.equal(r.state.purchases[0].qty,20);assert.equal(r.movements.length,0);assert.ok(r.alerts.some(x=>x.includes('хотя бы один товар')));
+});
+
+test('removing only one warehouse line keeps its neighbour and reallocates the entered delivery total',()=>{
+ const r=runReceivedCorrection({status:'at_warehouse',addReplacement:false,keepOther:true,delivery:120});
+ assert.equal(r.state.purchases.length,1);const kept=r.state.purchases[0];assert.equal(kept.id,'keep-row');assert.equal(kept.qty,20);assert.equal(kept.buyTotal,200);assert.equal(kept.delivery,120);assert.equal(kept.landedUnitCost,16);assert.equal(kept.shipmentPurchaseTotal,200);assert.equal(kept.shipmentDeliveryTotal,120);assert.equal(r.oldProduct.stock,20);assert.equal(r.replacement.stock,0);
 });
