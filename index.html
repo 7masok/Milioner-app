@@ -1142,7 +1142,7 @@ function productMatchesStore(p){
  const linked=productStoreCodes(p,productStoreFilter).length>0;return productStoreUnlinked?!linked:linked;
 }
 function productStoreEmptyText(fallback){
- if(productStoreFilter==='all')return fallback;
+ if(globalThis.unifiedWarehouseEnabled||productStoreFilter==='all')return fallback;
  if(productStoreFilter==='unlinked')return 'Товаров без привязок к магазинам по выбранным фильтрам нет.';
  const label={kaspi:'Kaspi',wb:globalThis.WB3_ONLY?'Инферно':'WB 1',wb2:'WB 2',ozon:'Ozon'}[productStoreFilter];
  return productStoreUnlinked?'Товаров без привязки к '+label+' по выбранным фильтрам нет.':'Нет товаров с привязкой к '+label+' по выбранным фильтрам.';
