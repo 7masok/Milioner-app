@@ -639,8 +639,21 @@ export async function syncWbOrders(market, { force = false } = {}) {
 
 export function startWbSyncLoop() {
   const run = async (force = false) => {
+    let markets;
+    try {
+      markets = await configuredWbConnectionIds();
+    } catch (error) {
+      console.error('WB background sync skipped: failed to read connections', {
+        message: error.message,
+        poolTotal: pool.totalCount,
+        poolIdle: pool.idleCount,
+        poolWaiting: pool.waitingCount,
+        poolMax: pool.options.max
+      });
+      return;
+    }
     await Promise.all(
-      (await configuredWbConnectionIds()).map(async (market) => {
+      markets.map(async (market) => {
         try {
           await syncWbOrders(market, { force });
         } catch (error) {
