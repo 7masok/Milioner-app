@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {accountAutomaticOrder,historicalOrders,runAutoAccounting,setAutoAccounting,readAutoAccounting} from '../src/fbo-warehouse/automatic.js';
 import {pool} from '../src/db.js';
 import {createDraft,resolver} from '../src/fbo-warehouse/core.js';
+import {reserveSupplyOrder} from "../src/fbo-warehouse/supply-reservations.js";
 import vm from 'node:vm';
 import {readFileSync} from 'node:fs';
 
@@ -80,4 +81,18 @@ test.after(()=>pool.end());
 test('automatic operation self-enables with a historical baseline rather than requiring a UI toggle',async()=>{
  const f=fixture();f.row.enabled=false;await runAutoAccounting(account,{payload:{supplies:[part()]},updated_at:1500},f.options);
  assert.equal(f.row.enabled,true);assert.deepEqual(f.row.excluded_orders,['900']);assert.equal(f.writes,0);
+});
+test('historical exclusion does not strand a matching active reservation from the same cabinet',async()=>{
+ const f=fixture();
+ f.row.excluded_orders=['900'];
+ const reserve=reserveSupplyOrder({state:f.state},{supplies:[part('900','READY_TO_SUPPLY')]},account,'900');
+ f.state.reservations=reserve.state.reservations;
+ const source={payload:{supplies:[part()]},updated_at:1500};
+ await runAutoAccounting(account,{...source,payload:{supplies:[part('900','IN_TRANSIT',29)]}},f.options);
+ assert.equal(f.writes,0);
+ await runAutoAccounting(account,source,f.options);
+ await runAutoAccounting(account,source,f.options);
+ assert.equal(f.writes,1);
+ assert.equal(f.state.movements.filter(m=>m.type==='FBO Ozon').length,1);
+ assert.deepEqual(f.row.excluded_orders,['900']);
 });
