@@ -5,7 +5,7 @@ const PRICE_UI_KEY=(typeof KEY==='string'?KEY:'sklad_mvp_v2')+'_prices_ui_v1';
 const PRICE_MARKETS=window.WB3_ONLY?['WB']:['Kaspi','WB','WB2','WB3','Ozon'];
 const PRICE_CLIENT_TTL_MS=2*60*1000;
 let priceUi={market:'Kaspi',q:'',sort:'asc',hidden:{},groupFilter:'all',groupId:''};
-Object.assign(priceUi,{deliveryRank:'',deliverySettings:{},sortMetric:'price'});
+Object.assign(priceUi,{deliverySettings:{},sortMetric:'price'});
 if(window.WB3_ONLY)priceUi.market='WB';
 let priceExpanded=null;
 const priceSelected={Kaspi:new Set(),WB:new Set(),WB2:new Set(),WB3:new Set()};
@@ -18,7 +18,6 @@ try{
   if(saved.hidden&&typeof saved.hidden==='object')priceUi.hidden=saved.hidden;
   if(saved.groupFilter==='ungrouped')priceUi.groupFilter='ungrouped';
   priceUi.groupId=String(saved.groupId||'');
-  if(['share','amount'].includes(saved.deliveryRank))priceUi.deliveryRank=saved.deliveryRank;
   if(saved.deliverySettings&&typeof saved.deliverySettings==='object')priceUi.deliverySettings=saved.deliverySettings;
 }catch{}
 const priceCache=new Map();
@@ -162,7 +161,6 @@ function priceSortValue(row){
 }
 function priceQuantityValue(row){const value=row?.ownAvailable;return row?.error||row?.ownStockKnown!==true||value===null||value===undefined||value===''||!Number.isFinite(Number(value))||Number(value)<0?NaN:Number(value)}
 function priceCompareRows(a,b){
-  if(priceIsWbMarket()&&priceUi.deliveryRank)return priceDeliveryCompare(a,b);
   const quantity=priceUi.sortMetric==='quantity',av=quantity?priceQuantityValue(a.row):priceSortValue(a.row),bv=quantity?priceQuantityValue(b.row):priceSortValue(b.row),aMissing=quantity?!Number.isFinite(av):!(av>0),bMissing=quantity?!Number.isFinite(bv):!(bv>0);
   if(aMissing!==bMissing)return aMissing?1:-1;
   if(!aMissing&&Math.abs(av-bv)>.000001)return priceUi.sort==='desc'?bv-av:av-bv;
@@ -450,9 +448,9 @@ window.priceSearch=function(value){
   priceUi.q=String(value||'');rememberPriceUi();paintPrices();
 };
 window.priceToggleSortMenu=function(){const menu=document.getElementById('priceSortMenu'),button=document.getElementById('priceSortMenuButton');if(menu){menu.hidden=!menu.hidden;button?.setAttribute('aria-expanded',String(!menu.hidden))}};
-window.priceSetSortMetric=function(metric){if(!['price','quantity'].includes(metric))return;priceUi.sortMetric=metric;priceUi.deliveryRank='';const menu=document.getElementById('priceSortMenu');if(menu)menu.hidden=true;document.getElementById('priceSortMenuButton')?.setAttribute('aria-expanded','false');rememberPriceUi();paintPrices()};
+window.priceSetSortMetric=function(metric){if(!['price','quantity'].includes(metric))return;priceUi.sortMetric=metric;const menu=document.getElementById('priceSortMenu');if(menu)menu.hidden=true;document.getElementById('priceSortMenuButton')?.setAttribute('aria-expanded','false');rememberPriceUi();paintPrices()};
 window.priceToggleSort=function(){
-  priceUi.deliveryRank='';priceUi.sort=priceUi.sort==='desc'?'asc':'desc';rememberPriceUi();setPriceTabs();paintPrices();
+  priceUi.sort=priceUi.sort==='desc'?'asc':'desc';rememberPriceUi();setPriceTabs();paintPrices();
 };
 window.priceSelectRow=function(index,checked){
   const row=activeRows()[Number(index)];if(!row||row.error||!priceCanSelect(row.market))return;
@@ -508,12 +506,6 @@ function priceDeliveryModel(row){
   if(!priceDeliveryModels.has(row))priceDeliveryModels.set(row,priceDeliveryEstimate(row,priceDeliveryCache.get(row.market)?.data,priceDeliverySetting(row.market)));
   return priceDeliveryModels.get(row);
 }
-function priceDeliveryCompare(a,b){
-  const x=priceDeliveryModel(a.row),y=priceDeliveryModel(b.row),key=priceUi.deliveryRank==='amount'?'rub':'share';
-  const av=x.available?x[key]:null,bv=y.available?y[key]:null;
-  if(av===null&&bv!==null)return 1;if(av!==null&&bv===null)return -1;
-  return (av!==null&&bv!==null?bv-av:0)||String(a.row.name||a.row.sku||'').localeCompare(String(b.row.name||b.row.sku||''),'ru')||a.index-b.index;
-}
 function priceDeliveryHtml(row){
   const m=priceDeliveryModel(row);
   if(!m.available)return '<div class="price-delivery-unknown">Доставка WB · '+pEsc(m.reason)+'</div>';
@@ -528,15 +520,12 @@ function priceDeliveryHtml(row){
 function priceDeliveryControls(){
   const host=document.getElementById('priceDeliveryTools');if(!host)return;
   host.hidden=!priceIsWbMarket();if(host.hidden)return;
-  const data=priceDeliveryCache.get(priceUi.market)?.data,setting=priceDeliverySetting(),rank=priceUi.deliveryRank,opened=host.querySelector?.('details')?.open;
+  const data=priceDeliveryCache.get(priceUi.market)?.data,setting=priceDeliverySetting(),opened=host.querySelector?.('details')?.open;
   const warehouses=[...(data?.warehouses||[])].sort((a,b)=>(/Казахстан/i.test(b.country)?1:0)-(/Казахстан/i.test(a.country)?1:0)||a.name.localeCompare(b.name,'ru'));
-  host.innerHTML='<div class="price-delivery-buttons"><button class="chip '+(rank?'active':'')+'" type="button" onclick="priceToggleDelivery()" aria-pressed="'+Boolean(rank)+'">Дорогая доставка '+(rank?'↓':'')+'</button><details class="price-delivery-settings" '+(opened||(!setting.warehouse&&rank)?'open':'')+'><summary>Доставка WB · настройки</summary><div class="price-delivery-config"><label>Схема<select class="select" onchange="priceDeliveryChange(\'scheme\',this.value)"><option value="fbs" '+(setting.scheme!=='fbw'?'selected':'')+'>FBS · свой склад</option><option value="fbw" '+(setting.scheme==='fbw'?'selected':'')+'>FBW · склад WB</option></select></label><label>Склад / пункт приёма<select class="select" onchange="priceDeliveryChange(\'warehouse\',this.value)"><option value="">Выберите свой склад</option>'+warehouses.map(w=>'<option value="'+pEsc(w.id)+'" '+(w.id===setting.warehouse?'selected':'')+'>'+pEsc(w.country+' · '+w.name)+'</option>').join('')+'</select></label><label>Дорогие сверху<select class="select" onchange="priceDeliveryChange(\'rank\',this.value)"><option value="share" '+(rank!=='amount'?'selected':'')+'>По доле доставки в цене, %</option><option value="amount" '+(rank==='amount'?'selected':'')+'>По стоимости доставки, ₽</option></select></label><div class="muted">'+pEsc(data?.error||data?.lastError||(!data?'Загружаю тарифы…':!warehouses.length?'Тарифы загружаются в фоне. Повторите через минуту.':'Выберите место отгрузки. Это сравнение по текущему тарифу WB.'))+'</div></div></details></div>'+
-    (rank?'<div class="price-delivery-note">'+(rank==='amount'?'Сначала самая дорогая доставка за штуку':'Сначала доставка с наибольшей долей в цене')+' · без данных — внизу</div>':'');
+  host.innerHTML='<div class="price-delivery-buttons"><details class="price-delivery-settings" '+(opened?'open':'')+'><summary>Доставка WB · настройки</summary><div class="price-delivery-config"><label>Схема<select class="select" onchange="priceDeliveryChange(\'scheme\',this.value)"><option value="fbs" '+(setting.scheme!=='fbw'?'selected':'')+'>FBS · свой склад</option><option value="fbw" '+(setting.scheme==='fbw'?'selected':'')+'>FBW · склад WB</option></select></label><label>Склад / пункт приёма<select class="select" onchange="priceDeliveryChange(\'warehouse\',this.value)"><option value="">Выберите свой склад</option>'+warehouses.map(w=>'<option value="'+pEsc(w.id)+'" '+(w.id===setting.warehouse?'selected':'')+'>'+pEsc(w.country+' · '+w.name)+'</option>').join('')+'</select></label><div class="muted">'+pEsc(data?.error||data?.lastError||(!data?'Загружаю тарифы…':!warehouses.length?'Тарифы загружаются в фоне. Повторите через минуту.':'Выберите место отгрузки. Это сравнение по текущему тарифу WB.'))+'</div></div></details></div>';
 }
-window.priceToggleDelivery=function(){priceUi.deliveryRank=priceUi.deliveryRank?'':'share';priceExpanded=null;rememberPriceUi();paintPrices();};
 window.priceDeliveryChange=function(key,value){
-  if(key==='rank'){priceUi.deliveryRank=value==='amount'?'amount':'share';}
-  else {const setting={...priceDeliverySetting()};if(key==='scheme')setting.scheme=value==='fbw'?'fbw':'fbs';if(key==='warehouse')setting.warehouse=String(value);priceUi.deliverySettings={...priceUi.deliverySettings,[priceUi.market]:setting};}
+  const setting={...priceDeliverySetting()};if(key==='scheme')setting.scheme=value==='fbw'?'fbw':'fbs';if(key==='warehouse')setting.warehouse=String(value);priceUi.deliverySettings={...priceUi.deliverySettings,[priceUi.market]:setting};
   priceExpanded=null;rememberPriceUi();paintPrices();
 };
 async function loadPriceDelivery(market,force=false){
