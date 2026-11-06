@@ -189,7 +189,6 @@ window.priceToggleWithoutStop=function(){
 function setPriceTabs(){
   const withoutStop=document.getElementById('priceWithoutStop');
   if(withoutStop){withoutStop.hidden=!priceIsWbMarket();withoutStop.classList.toggle('active',!!priceUi.withoutStop);withoutStop.setAttribute('aria-pressed',String(!!priceUi.withoutStop));}
-  priceDeliveryControls();
   document.querySelectorAll('[data-price-market]').forEach(button=>{
     button.classList.toggle('active',button.dataset.priceMarket===priceUi.market);
   });
@@ -528,17 +527,6 @@ function priceDeliveryHtml(row){
     'Одна прямая доставка. Без возвратов, хранения, приёмки и дополнительных услуг. Для FBW — текущий тариф, без фиксации старой поставки.'+
     '</div></details>';
 }
-function priceDeliveryControls(){
-  const host=document.getElementById('priceDeliveryTools');if(!host)return;
-  host.hidden=!priceIsWbMarket();if(host.hidden)return;
-  const data=priceDeliveryCache.get(priceUi.market)?.data,setting=priceDeliverySetting(),opened=host.querySelector?.('details')?.open;
-  const warehouses=[...(data?.warehouses||[])].sort((a,b)=>(/Казахстан/i.test(b.country)?1:0)-(/Казахстан/i.test(a.country)?1:0)||a.name.localeCompare(b.name,'ru'));
-  host.innerHTML='<div class="price-delivery-buttons"><details class="price-delivery-settings" '+(opened?'open':'')+'><summary>Доставка WB · настройки</summary><div class="price-delivery-config"><label>Схема<select class="select" onchange="priceDeliveryChange(\'scheme\',this.value)"><option value="fbs" '+(setting.scheme!=='fbw'?'selected':'')+'>FBS · свой склад</option><option value="fbw" '+(setting.scheme==='fbw'?'selected':'')+'>FBW · склад WB</option></select></label><label>Склад / пункт приёма<select class="select" onchange="priceDeliveryChange(\'warehouse\',this.value)"><option value="">Выберите свой склад</option>'+warehouses.map(w=>'<option value="'+pEsc(w.id)+'" '+(w.id===setting.warehouse?'selected':'')+'>'+pEsc(w.country+' · '+w.name)+'</option>').join('')+'</select></label><div class="muted">'+pEsc(data?.error||data?.lastError||(!data?'Загружаю тарифы…':!warehouses.length?'Тарифы загружаются в фоне. Повторите через минуту.':'Выберите место отгрузки. Это сравнение по текущему тарифу WB.'))+'</div></div></details></div>';
-}
-window.priceDeliveryChange=function(key,value){
-  const setting={...priceDeliverySetting()};if(key==='scheme')setting.scheme=value==='fbw'?'fbw':'fbs';if(key==='warehouse')setting.warehouse=String(value);priceUi.deliverySettings={...priceUi.deliverySettings,[priceUi.market]:setting};
-  priceExpanded=null;rememberPriceUi();paintPrices();
-};
 async function loadPriceDelivery(market,force=false){
   if(priceDeliveryLoads.has(market))return priceDeliveryLoads.get(market);
   const hit=priceDeliveryCache.get(market);if(!force&&hit&&Date.now()-hit.at<120000)return;
@@ -548,7 +536,7 @@ async function loadPriceDelivery(market,force=false){
     catch{data={error:'Не удалось загрузить тарифы. Нажмите ↻ для повтора.'};}
     priceDeliveryCache.set(market,{at:Date.now(),data});
     if(market===priceUi.market){
-      if(priceExpanded){priceDeliveryModels.clear();priceDeliveryControls();document.querySelectorAll('[data-delivery-index]').forEach(el=>{const row=activeRows()[Number(el.dataset.deliveryIndex)];if(row)el.innerHTML=priceDeliveryHtml(row);});}
+      if(priceExpanded){priceDeliveryModels.clear();document.querySelectorAll('[data-delivery-index]').forEach(el=>{const row=activeRows()[Number(el.dataset.deliveryIndex)];if(row)el.innerHTML=priceDeliveryHtml(row);});}
       else paintPrices();
     }
   })();priceDeliveryLoads.set(market,task);try{await task}finally{priceDeliveryLoads.delete(market)}
