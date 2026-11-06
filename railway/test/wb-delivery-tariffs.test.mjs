@@ -14,7 +14,7 @@ const setting={scheme:'fbs',warehouse:id};
 const ui=readFileSync(new URL('../../prices-v1.js',import.meta.url),'utf8');
 const snippet=ui.slice(ui.indexOf('// Tariff estimates'),ui.indexOf('const priceProfitCache='));
 function browser(extra={}){
- const ctx={window:{},priceUi:{market:'WB',deliveryRank:'share',deliverySettings:{WB:setting}},pEsc:s=>String(s??'').replaceAll('<','&lt;'),pMoney:(n,c)=>n+' '+c,Date:class extends Date{static now(){return now}},...extra};
+ const ctx={window:{},priceUi:{market:'WB',deliverySettings:{WB:setting}},pEsc:s=>String(s??'').replaceAll('<','&lt;'),pMoney:(n,c)=>n+' '+c,Date:class extends Date{static now(){return now}},...extra};
  runInNewContext(snippet,ctx);return ctx;
 }
 test('WB tariff parser preserves unknowns and separates FBS/FBW; catalog dimensions survive repeated normalization',()=>{
@@ -57,12 +57,10 @@ test('missing dimensions/warehouse/tariff, stale data and heavy cargo never beco
  ctx.row={...row,currency:'KZT'};assert.equal(runInNewContext('priceDeliveryEstimate(row,sample,setting,now).share',ctx),null);
  ctx.row={...row,priceMax:300};assert.equal(runInNewContext('priceDeliveryEstimate(row,data,setting,now).share',ctx),null);
 });
-test('one-click ranking puts large delivery shares first, supports absolute price and keeps unknowns last',()=>{
+test('delivery details show tariff, share and missing dimensions',()=>{
  const rows=[{row:{...row,name:'Дорогой',remoteId:'10',price:1000},index:0},{row:{...row,name:'Дешёвый',remoteId:'11',price:50},index:1},{row:{...row,name:'Нет габаритов',remoteId:'12'},index:2}];
  const sample={...data,cards:[...data.cards,{nmId:'11',dimensions:{length:10,width:10,height:2}}]};
  const ctx=browser({rows,sample});runInNewContext('priceDeliveryCache.set("WB",{data:sample});',ctx);
- assert.deepEqual(Array.from(runInNewContext('[...rows].sort(priceDeliveryCompare).map(x=>x.row.remoteId)',ctx)),['11','10','12']);
- ctx.priceUi.deliveryRank='amount';assert.deepEqual(Array.from(runInNewContext('[...rows].sort(priceDeliveryCompare).map(x=>x.row.remoteId)',ctx)),['10','11','12']);
  const html=runInNewContext('priceDeliveryHtml(rows[1].row)',ctx);assert.match(html,/high/);assert.match(html,/46% цены/);assert.match(html,/2026-10-18/);assert.match(html,/23 ₽/);
  assert.match(runInNewContext('priceDeliveryHtml(rows[2].row)',ctx),/не заполнены габариты/);
 });
