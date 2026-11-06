@@ -82,9 +82,30 @@ export async function validateWbStockLinks(market) {
     if(!current.rowCount)return;
     const state=parse(current.rows[0].payload),now=Date.now();let changed=false,detached=0;
     await hydrateWarehouseProducts(client, state);
+    for(const product of state.products||[]){
+      const marker=product[field+'RelinkRequired'];
+      if(product[field]||product.kind==='variant-group'||marker?.reason!=='seller-article-not-found')continue;
+      const sku=String(marker.oldSku||'').trim();
+      if(!sku||cards.filter(card=>card.vendorCode===sku).length!==1)continue;
+      if((state.products||[]).some(other=>other!==product&&wbStockAliases(other,field).includes(sku)))continue;
+      const result=validateWbLink({...product,[field]:sku},field,cards);
+      if(!result?.valid)continue;
+      const prior=marker.previousVariant;
+      if(prior?.market===id&&(String(prior.nmId)!==String(result.identity.nmId)||Number(prior.chrtId)!==result.identity.chrtId))continue;
+      const link=await client.query(`INSERT INTO product_links(product_id,market,sku,created_at,updated_at)
+        VALUES($1,$2,$3,$4,$4) ON CONFLICT(market,sku) DO UPDATE SET updated_at=excluded.updated_at
+        WHERE product_links.product_id=excluded.product_id RETURNING product_id`,[String(product.id),id,sku,now]);
+      if(!link.rowCount)continue;
+      product[field]=sku;
+      product._syncUpdatedAt=now;
+      changed=applyLinkObservation(product,field,result,now)||changed;
+    }
     for(const observation of observations){
       const product=(state.products||[]).find(p=>String(p.id)===observation.id);
       if(!product||linkFingerprint(product,field)!==observation.fingerprint)continue;
+      // An absent card is inconclusive. Stock publishing separately checks the
+      // current catalog and skips any unresolved article.
+      if(observation.result?.reason==='seller-article-not-found')continue;
       if(!observation.result.valid){
         if(!detached){
           await client.query('INSERT INTO warehouse_backups(label,payload,revision,created_at) VALUES($1,$2,$3,$4)',['Before WB article unlink '+id, await legacyCompatibleWarehousePayload(client, current.rows[0].payload), current.rows[0].revision, now]);
