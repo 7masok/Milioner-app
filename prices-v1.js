@@ -14,6 +14,7 @@ try{
   if(PRICE_MARKETS.includes(saved.market))priceUi.market=saved.market;
   priceUi.q=String(saved.q||'');
   if(saved.sort==='desc'||saved.sort==='asc')priceUi.sort=saved.sort;
+  priceUi.withoutStop=saved.withoutStop===true;
   if(saved.sortMetric==='quantity')priceUi.sortMetric='quantity';
   if(saved.hidden&&typeof saved.hidden==='object')priceUi.hidden=saved.hidden;
   if(saved.groupFilter==='ungrouped')priceUi.groupFilter='ungrouped';
@@ -91,6 +92,7 @@ function priceVisibleRows(){
   const q=priceUi.q.trim().toLocaleLowerCase('ru-RU');
   return activeRows().map((row,index)=>({row,index})).filter(({row})=>{
     if(row?.error||priceIsHidden(row)||!priceMatchesGroup(row))return false;
+    if(priceIsWbMarket()&&priceUi.withoutStop&&(row.promoStop?.enabled||row.promoStop?.restoring))return false;
     if(!q)return true;
     return [row.name,row.sku,row.remoteId,row.account,row.groupName].some(value=>String(value||'').toLocaleLowerCase('ru-RU').includes(q));
   });
@@ -177,7 +179,16 @@ function setPriceStatus(text,kind=''){
   el.textContent=text||'';
   el.className='price-status'+(kind?' '+kind:'');
 }
+window.priceToggleWithoutStop=function(){
+  priceUi.withoutStop=!priceUi.withoutStop;
+  priceExpanded=null;
+  rememberPriceUi();
+  setPriceTabs();
+  paintPrices();
+};
 function setPriceTabs(){
+  const withoutStop=document.getElementById('priceWithoutStop');
+  if(withoutStop){withoutStop.hidden=!priceIsWbMarket();withoutStop.classList.toggle('active',!!priceUi.withoutStop);withoutStop.setAttribute('aria-pressed',String(!!priceUi.withoutStop));}
   priceDeliveryControls();
   document.querySelectorAll('[data-price-market]').forEach(button=>{
     button.classList.toggle('active',button.dataset.priceMarket===priceUi.market);
