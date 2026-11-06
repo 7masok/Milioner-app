@@ -52,15 +52,39 @@ export async function runAutoAccounting(account,source,{db=pool,transact=transac
  if(!writesEnabled||!fresh(source,now))return;
  const prefs=await readAutoAccounting(db,account.id,account.clientId);if(!prefs.enabled){await setAutoAccounting(account,source,true,{transact,now});return}if(Number(source.updated_at)<=prefs.enabledAt)return;
  const excluded=new Set((await db.query('SELECT excluded_orders FROM fbo_auto_accounting WHERE account=$1',[account.id])).rows[0]?.excluded_orders||[]);
- const ids=[...new Set((source.payload.supplies||[]).map(s=>String(s.orderId)))].filter(id=>!excluded.has(id)),results=[];
+ const cabinetHash=crypto.createHash('sha256').update(String(account.clientId)).digest('hex');
+ const linkedReserves=state=>draftGroups(state).filter(d=>d.account===account.id&&d.status==='reserved'&&d.orderId&&d.rows.every(r=>r.autoOzonSupply&&r.supplyClientHash===cabinetHash));
+ const ids=[...new Set((source.payload.supplies||[]).map(s=>String(s.orderId)))];
+ const recover=new Set();
+ if(ids.some(id=>excluded.has(id))){
+  const context=await readContext(db,account.id);
+  if(context.ready)for(const draft of linkedReserves(context.state))recover.add(draft.orderId);
+ }
+ const results=[];
  for(const orderId of ids){
+  if(excluded.has(orderId)&&!recover.has(orderId))continue;
   // Ineligible/preparation and incomplete orders do not invoke warehouse writes.
   if(!(source.payload.supplies||[]).some(s=>String(s.orderId)===orderId&&!['CANCELLED','REJECTED_AT_SUPPLY_WAREHOUSE','OVERDUE'].includes(s.orderState||s.state)&&(CONFIRMED.has(s.state)||CONFIRMED.has(s.orderState))))continue;
   await transact(async client=>{
    await client.query('SELECT pg_advisory_xact_lock($1)',[730021]);
    const row=(await client.query('SELECT * FROM fbo_auto_accounting WHERE account=$1 FOR UPDATE',[account.id])).rows[0];
-   if(!row?.enabled||row.client_id!==account.clientId||Number(source.updated_at)<=Number(row.enabled_at)||(row.excluded_orders||[]).includes(orderId))return;
+   if(!row?.enabled||row.client_id!==account.clientId||Number(source.updated_at)<=Number(row.enabled_at))return;
    const context=await readContext(client,account.id,{lock:true,movements:true});if(!context.ready)return;
+   const wasExcluded=(row.excluded_orders||[]).includes(orderId);
+   if(wasExcluded){
+    const linked=linkedReserves(context.state).filter(d=>d.orderId===orderId);
+    if(linked.length!==1)return;
+    const draft=linked[0];
+    try{
+     const remote=remoteForOrder(source,orderId);
+     const totals=new Map();
+     for(const line of remote.lines){
+      const key=line.sku+'|'+line.clusterKey;
+      totals.set(key,(totals.get(key)||0)+line.qty);
+     }
+     if(totals.size!==draft.lines.length||draft.lines.some(l=>totals.get(l.sku+'|'+l.clusterKey)!==l.qty))fail('Состав отправки не совпадает с действующим резервом.');
+    }catch(error){results.push({orderId,status:'attention',message:String(error.message).slice(0,250)});return}
+   }
    let result;
    try{result=accountAutomaticOrder(context,source.payload,account.id,orderId,now)}catch(error){results.push({orderId,status:'attention',message:String(error.message||'Не удалось учесть поставку').slice(0,250)});return}
    if(result.changed){
@@ -69,7 +93,7 @@ export async function runAutoAccounting(account,source,{db=pool,transact=transac
     await persist(client,context,{products:true,purchases:true,movements,source:'fbo-automatic'});
     const changed=new Set(result.draft.rows.map(r=>r.productId));await mirror(client,result.state.products.filter(p=>changed.has(String(p.id))));
    }
-   await client.query('UPDATE fbo_auto_accounting SET excluded_orders=array_append(excluded_orders,$2) WHERE account=$1',[account.id,orderId]);
+   if(!wasExcluded)await client.query('UPDATE fbo_auto_accounting SET excluded_orders=array_append(excluded_orders,$2) WHERE account=$1',[account.id,orderId]);
    results.push({orderId,status:result.changed?'accounted':'already',message:result.changed?'Отправка списана со склада':'Уже учтено, повторного списания нет'});
   });
  }
