@@ -56,10 +56,18 @@ export function createWbQueryHistory({db,tokenFor,request,snapshot,clock=Date.no
  async function syncOne(market){
   const today=queryDay(clock()),earliest=shiftDay(today,-29);const sources=(await db.query('SELECT * FROM wb_query_sources WHERE market=$1',[market])).rows;
   const saved=(await db.query('SELECT campaign_id,nm_id,date_from::text AS f,date_to::text AS t FROM wb_query_windows WHERE market=$1',[market])).rows;const known=new Map(saved.map(w=>[[w.campaign_id,w.nm_id,w.f].join(':'),w.t]));
-  for(const source of sources){const first=String(source.first_day instanceof Date?source.first_day.toISOString():source.first_day).slice(0,10);for(const w of queryWindows(first,today)){
-   if(known.get([source.campaign_id,source.nm_id,w.from].join(':'))===w.to)continue;
-   await db.query(`INSERT INTO wb_query_windows(market,campaign_id,nm_id,date_from,date_to) VALUES($1,$2,$3,$4,$5) ON CONFLICT(market,campaign_id,nm_id,date_from) DO UPDATE SET date_to=EXCLUDED.date_to`,[market,source.campaign_id,source.nm_id,w.from,w.to]);
-  }}
+  const windows=[];
+  for(const source of sources){
+   const first=String(source.first_day instanceof Date?source.first_day.toISOString():source.first_day).slice(0,10);
+   for(const w of queryWindows(first,today)){
+    if(w.from<earliest||known.get([source.campaign_id,source.nm_id,w.from].join(':'))===w.to)continue;
+    windows.push({campaign_id:source.campaign_id,nm_id:source.nm_id,date_from:w.from,date_to:w.to});
+   }
+  }
+  if(windows.length)await db.query(`INSERT INTO wb_query_windows(market,campaign_id,nm_id,date_from,date_to)
+   SELECT $1,campaign_id,nm_id,date_from,date_to FROM jsonb_to_recordset($2::jsonb)
+    AS w(campaign_id bigint,nm_id bigint,date_from date,date_to date)
+   ON CONFLICT(market,campaign_id,nm_id,date_from) DO UPDATE SET date_to=GREATEST(wb_query_windows.date_to,EXCLUDED.date_to)`,[market,JSON.stringify(windows)]);
   // Expired segments stay frozen; never replace a full segment with a partial WB horizon.
   const job=(await db.query(`SELECT *,date_from::text AS date_from,date_to::text AS date_to FROM wb_query_windows WHERE market=$1 AND date_from >= $2 AND (attempted_at=0 OR attempted_at<$3) ORDER BY synced_at ASC,attempted_at ASC,wb_query_windows.date_from DESC,campaign_id,nm_id LIMIT 1`,[market,earliest,clock()-60*60*1000])).rows[0];
   if(!job)return;
