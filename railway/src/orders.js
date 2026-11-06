@@ -17,67 +17,6 @@ function market(value) {
   return normalized;
 }
 
-function normalizeName(value) {
-  return String(value || '')
-    .toLocaleLowerCase('ru-RU')
-    .replace(/ё/g, 'е')
-    .replace(/[^a-zа-я0-9]+/gi, ' ')
-    .trim()
-    .replace(/\s+/g, ' ');
-}
-
-function nameTokens(value) {
-  return normalizeName(value).split(' ').filter(Boolean);
-}
-
-function levenshtein(a, b) {
-  if (a === b) return 0;
-  if (!a) return b.length;
-  if (!b) return a.length;
-  const prev = Array.from({ length: b.length + 1 }, (_, i) => i);
-  const cur = new Array(b.length + 1);
-  for (let i = 1; i <= a.length; i++) {
-    cur[0] = i;
-    for (let j = 1; j <= b.length; j++) {
-      cur[j] = Math.min(
-        cur[j - 1] + 1,
-        prev[j] + 1,
-        prev[j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1)
-      );
-    }
-    for (let j = 0; j <= b.length; j++) prev[j] = cur[j];
-  }
-  return prev[b.length];
-}
-
-function similarity(a, b) {
-  const left = normalizeName(a), right = normalizeName(b);
-  if (!left || !right) return 0;
-  if (left === right) return 1;
-  const max = Math.max(left.length, right.length);
-  return max ? 1 - levenshtein(left, right) / max : 0;
-}
-
-function candidateScore(orderName, productName) {
-  const direct = similarity(orderName, productName);
-  const orderTokens = new Set(nameTokens(orderName));
-  const productTokens = nameTokens(productName);
-  if (productTokens.length >= 2 && productTokens.every(token => orderTokens.has(token))) {
-    // A short warehouse name such as "Стич Розовый" can be a strict subset of
-    // the longer Kaspi title "Брелок LuxAr Стич Розовый 6 см ...". Treat this
-    // as high confidence, while still requiring uniqueness below.
-    return Math.max(direct, 0.985 + Math.min(0.014, productTokens.length * 0.002));
-  }
-  return direct;
-}
-
-function safeNameFallback(row, products) {
-  // Never create a marketplace link silently from a similar title. A new SKU
-  // must be confirmed by the owner in "Нужно привязать" before it can reserve
-  // warehouse stock. Existing exact SKU links continue to resolve normally.
-  return null;
-}
-
 ordersRouter.get('/orders', asyncRoute(async (req, res) => {
   const selected = market(req.query.market);
   const limit = Math.max(1, Math.min(15000, Number(req.query.limit || 1000) || 1000));
@@ -90,8 +29,7 @@ ordersRouter.get('/orders', asyncRoute(async (req, res) => {
   if (before) clauses.push('o.creation_date < ' + '$' + params.push(before));
   const where = clauses.length ? `WHERE ${clauses.join(' AND ')}` : '';
   params.push(limit);
-  const [rows, products, warehouse] = await Promise.all([
-    pool.query(`SELECT o.market,o.order_id AS "orderId",o.code,o.entry_id AS "entryId",o.status,o.state,
+  const rows = await pool.query(`SELECT o.market,o.order_id AS "orderId",o.code,o.entry_id AS "entryId",o.status,o.state,
       o.creation_date AS "creationDate",o.sku,o.product_name AS "productName",o.qty,o.unit_price AS "unitPrice",
       o.total_price AS "totalPrice",o.seller_delivery_cost AS "sellerDeliveryCost",o.marketplace_fee AS "marketplaceFee",
       o.fee_source AS "feeSource",o.updated_at AS "updatedAt",resolved.product_id AS "productId",resolved.link_source AS "linkSource"
@@ -102,10 +40,8 @@ ordersRouter.get('/orders', asyncRoute(async (req, res) => {
         WHERE pl.market=o.market AND pl.sku=o.sku
         LIMIT 1
       ) resolved ON TRUE
-      ${where} ORDER BY o.creation_date DESC LIMIT $${params.length}`, params),
-    pool.query('SELECT id,name FROM products'),
-    pool.query('SELECT payload FROM warehouse_state WHERE id=1')
-  ]);
+      ${where} ORDER BY o.creation_date DESC LIMIT $${params.length}`, params);
+  const warehouse = await pool.query('SELECT payload FROM warehouse_state WHERE id=1');
   let stateProducts = [];
   try { stateProducts = (await hydrateWarehouseProducts(pool, JSON.parse(String(warehouse.rows[0]?.payload || '{}')))).products || []; } catch {}
   const visibleLinks = new Map();
@@ -115,28 +51,13 @@ ordersRouter.get('/orders', asyncRoute(async (req, res) => {
       for (const value of values) if (String(value || '').trim()) visibleLinks.set(`${linkMarket}\u0000${String(value).trim()}`, String(product.id));
     }
   }
-  const inferredLinks = new Map();
   const history=before&&after&&req.query.history==='1'?await readWbOrderHistory(pool,after,before,selected,limit):null;
   const kaspiHistory=history?await readKaspiHistory(pool,after,before,selected,limit):null;
   const reportingRows=history?mergeReportingOrders(rows.rows,[...history.rows,...kaspiHistory.rows],limit):rows.rows;
   const out = reportingRows.map(row => {
     if (row.productId && visibleLinks.get(`${row.market}\u0000${String(row.sku || '').trim()}`) === String(row.productId)) return row;
-    if (row.productId) row = { ...row, productId: null, linkSource: null };
-    const fallback = safeNameFallback(row, products.rows);
-    if (!fallback) return row;
-    if (['Kaspi','WB','WB2'].includes(row.market) && row.sku) inferredLinks.set(`${row.market}\u0000${String(row.sku)}`, String(fallback.product.id));
-    return { ...row, productId: fallback.product.id, productName: fallback.product.name, linkSource: 'name-safe-fallback' };
+    return row.productId ? { ...row, productId: null, linkSource: null } : row;
   });
-
-  // Persist only unique, high-confidence Kaspi title matches so the next load is
-  // resolved by SKU and does not depend on title matching again.
-  const now = Date.now();
-  for (const [key, productId] of inferredLinks) {
-    const [linkMarket,sku]=key.split('\u0000');
-    await pool.query(`INSERT INTO product_links(product_id,market,sku,created_at,updated_at)
-      VALUES($1,$2,$3,$4,$4)
-      ON CONFLICT(market,sku) DO NOTHING`, [productId, linkMarket, sku, now]);
-  }
 
   let contentState={};try{const raw=warehouse.rows[0]?.payload;contentState=typeof raw==='string'?JSON.parse(raw):raw||{}}catch{}
   for(let i=0;i<out.length;i++){
