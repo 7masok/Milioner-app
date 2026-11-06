@@ -91,33 +91,33 @@ function populateOzonOrderFeed(){
  for(const [key,newLine] of ozonKeys){const existing=existingByKey.get(key);if(existing){Object.assign(existing,newLine);}else{feed.push(newLine);}}
 }
 function resolveOzonProductIds(){
- if(!data?.accounts)return;
- const ozonStockMap=new Map();
- for(const account of data.accounts){
-  for(const stock of account.stocks?.rows||[]){
-   const offerIdStr=String(stock.offer_id||'').trim();
-   const productIdStr=String(stock.product_id||'').trim();
-   const skus=((stock.stocks||[]).map(s=>String(s.sku||'').trim()).filter(Boolean));
-   const keys=[offerIdStr,productIdStr,...skus];
-   for(const k of keys.filter(Boolean)){ozonStockMap.set(k,[offerIdStr,productIdStr]);}
+ const feed=state.ozonOrderFeed||[];
+ if(!feed.length)return;
+ const owners=new Map(),offers=new Map();
+ for(const product of state.products||[]){
+  if(!product.id||product.kind==='variant-group')continue;
+  for(const key of productOzonKeys(product)){
+   if(!owners.has(key))owners.set(key,product.id);
+   else if(owners.get(key)!==product.id)owners.set(key,null);
   }
  }
- for(const line of state.ozonOrderFeed||[]){
-  if(line.productId)continue;
-  const sku=String(line.sku||'').trim();
-  const ozonAllocations=ozonStockMap.get(sku)||[];
-  let matched=null;
-  for(const p of state.products||[]){
-   const keys=productOzonKeys(p);
-   if(keys.length===0)continue;
-   const offerIdMatch=ozonAllocations[0]&&keys.includes(ozonAllocations[0]);
-   const skuMatch=keys.includes(sku);
-   if(offerIdMatch||skuMatch){
-    matched=p.id;
-    break;
+ for(const account of data?.accounts||[]){
+  for(const stock of account.stocks?.rows||[]){
+   const offer=String(stock.offer_id||'').trim();
+   if(!offer)continue;
+   const keys=[stock.product_id,...(stock.stocks||[]).map(item=>item.sku)];
+   for(const value of keys){
+    const key=String(value||'').trim();
+    if(!key)continue;
+    if(!offers.has(key))offers.set(key,offer);
+    else if(offers.get(key)!==offer)offers.set(key,null);
    }
   }
-  if(matched){line.productId=matched;}
+ }
+ for(const line of feed){
+  const sku=String(line.sku||'').trim();
+  const offer=String(line.offerId||'').trim()||offers.get(sku);
+  line.productId=(owners.has(sku)?owners.get(sku):owners.get(offer))??null;
  }
 }
 function updateOzonHeaderIndicator(){
@@ -213,6 +213,7 @@ window.ozonFboSync=async()=>{
 };
 renderMarketplaceOrders=function(){
  if(selectedOrderMarket!=='Ozon'){
+  resolveOzonProductIds();
   return baseRenderOrders();
  }
  const target=document.getElementById('kaspiOrderList');
