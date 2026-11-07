@@ -2,7 +2,7 @@
 'use strict';
 let settled=false,blocked=false,box=null,recoveryTimer=null,lastProgress=Date.now();
 const started=Date.now(),retryKey='warehouse_boot_retries_v2',bootFetch=window.fetch?.bind(window);
-function pendingScript(){return Array.from(document.scripts||[]).find(s=>s.src&&!s.dataset.bootLoaded)}
+function pendingScript(){return Array.from(document.scripts||[]).find(s=>s.src&&!s.dataset.bootOptional&&!s.dataset.bootLoaded)}
 function show(failed=false,reason='',code='BOOT_TIMEOUT'){
  if(settled)return;
  if(failed)try{const key='sklad_connection_attempts_v1',list=JSON.parse(localStorage.getItem(key)||'[]');list.push({path:'/',code,at:Date.now(),ms:Date.now()-started});localStorage.setItem(key,JSON.stringify(list.slice(-12)))}catch{}
@@ -49,6 +49,7 @@ scheduleRecovery(30000);
 window.addEventListener('load',event=>{if(event.target?.tagName==='SCRIPT'){event.target.dataset.bootLoaded='1';lastProgress=Date.now();if(box&&!blocked)show()}},true);
 window.addEventListener('error',event=>{
  if(settled)return;
+ if(event.target?.tagName==='SCRIPT'&&event.target.dataset?.bootOptional)return;
  if(event.target?.tagName==='SCRIPT'){blocked=true;show(true,'Не удалось загрузить часть страницы. Проверяем соединение.','BOOT_SCRIPT');document.getElementById('warehouseBootResource').textContent=new URL(event.target.src,location.href).pathname;scheduleRecovery(3000)}
  else if(event.message){blocked=true;show(true,'Не удалось завершить запуск. Попробуем подключиться снова.','BOOT_ERROR');document.getElementById('warehouseBootResource').textContent=String(event.message).slice(0,180);scheduleRecovery(3000)}
 },true);
