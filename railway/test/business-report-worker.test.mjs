@@ -84,5 +84,5 @@ test('a missing forecast source does not block another store calculation',async(
 
 test('the report worker starts for both the main warehouse and the WB3 service',()=>{
  const source=readFileSync(new URL('../src/server.js',import.meta.url),'utf8'),startup=source.slice(source.indexOf("const server = app.listen"));
- assert.ok(startup.indexOf('startBusinessReportLoop();')>=0);assert.ok(startup.indexOf('startBusinessReportLoop();')<startup.indexOf("if(config.storeProfile!=='WB3')"));
+ assert.ok(startup.indexOf('startBusinessReportProcess();')>=0);assert.ok(startup.indexOf('startBusinessReportProcess();')<startup.indexOf("if(config.storeProfile!=='WB3')"));
 });
