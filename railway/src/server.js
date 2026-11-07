@@ -1,5 +1,5 @@
 import {readWbSupplySnapshot,linkWbSupplyProduct,setWbSupplyAccounting,cancelWbSupplyReservation,startWbSupplyLoop} from './wb3-supply-sync.js';
-import {startBusinessReportLoop} from './business-report-worker.js';
+import {startBusinessReportProcess} from './business-report-process.js';
 import {amanRouter,startAmanLoop} from './amantrans.js';
 import {createUnifiedWarehouseRouter} from './unified-warehouse.js';
 import { withWarehouseScopePage, createInfernoProxy, infernoSession } from './warehouse-scope.js';
@@ -452,7 +452,7 @@ const server = app.listen(config.port, '::', () => {
   console.log(`millioner Railway API listening on ${config.port}`);
   setTimeout(()=>verifyBackupRestoreReadiness(),4000).unref();
   setTimeout(()=>logWbHourlyOrders(30),7000).unref();
-  startBusinessReportLoop();
+  startBusinessReportProcess();
   if(config.storeProfile!=='WB3') {
   startAmanLoop();
   startOzonSyncLoop();
