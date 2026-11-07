@@ -109,3 +109,11 @@ test('deselecting all product stores shows owned unlinked stock only',()=>{
  assert.equal(f.ctx.productMatchesSelectedStores({id:'linked',warehouseAdded:true,kaspi:'123'},'products'),false);
  assert.equal(f.ctx.productMatchesSelectedStores({id:'alias',warehouseAdded:true,kaspiAliases:['123']},'products'),false);
 });
+
+
+test('legacy manual empty cards and confirmed WB cards survive introduction of ownership flag',()=>{
+ const f=fixture(),manual={id:'legacy0000001',name:'Legacy manual',kind:'simple',stock:0},linked={id:'legacy0000002',stock:0,wb:'legacy C',wbIdentity:{nmId:'123',chrtId:456,vendorCode:'legacy C'}};
+ for(const p of [manual,linked]){const before=JSON.stringify(p);assert.equal(f.ctx.productMatchesSelectedStores(p,'products'),true);assert.equal(JSON.stringify(p),before);}
+ const onlyWb=fixture(new Map([['sklad_stores_v2_products','["WB"]']]));assert.equal(onlyWb.ctx.productMatchesSelectedStores(linked,'products'),true);assert.equal(onlyWb.ctx.productMatchesSelectedStores(manual,'products'),false);
+ for(const p of [{...linked,id:'recovered-wb1-123'}, {...manual,wbVariant:{nmId:'123'}}, {...linked,wbRelinkRequired:{oldSku:'old'}}, {...manual,warehouseAdded:false}, {...linked,wbIdentity:{nmId:'123',chrtId:456,vendorCode:'other'}}])assert.equal(f.ctx.productMatchesSelectedStores(p,'products'),false);
+});
