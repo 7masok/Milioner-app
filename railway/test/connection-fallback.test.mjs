@@ -135,3 +135,9 @@ test('automatic startup navigation is bounded, and an offline failure is kept re
  assert.equal(f.reloads(),0);assert.match(f.elements.get('warehouseBootReason').textContent,/вручную/);
  const g=recoveryBoot(async()=>{throw Error('offline')});g.advance(31000);await g.fire(30000);assert.equal(g.reloads(),0);assert.ok(g.timers.some(t=>t.ms===10000&&!t.cancelled));
 });
+test('a failed optional analytics script allows the warehouse to start',()=>{
+ const p=boot();
+ p.events.error({target:{tagName:'SCRIPT',src:'https://warehouse.test/warehouse-insights.js',dataset:{bootOptional:'1'}}});
+ assert.equal(p.window.warehouseBoot.canStart(),true);
+ assert.equal(p.elements.has('warehouseBootResource'),false);
+});
