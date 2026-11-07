@@ -333,6 +333,7 @@ function paintPrices(){
   const rows=activeRows(),visibleRows=rows.filter(row=>!priceIsHidden(row)&&priceMatchesGroup(row)),q=priceUi.q.trim().toLocaleLowerCase('ru-RU');
   const indexed=rows.map((row,index)=>({row,index})).filter(({row})=>{
     if(priceIsHidden(row)||!priceMatchesGroup(row))return false;
+    if(priceIsWbMarket()&&priceUi.withoutStop&&(row.promoStop?.enabled||row.promoStop?.restoring))return false;
     if(!q)return true;
     return [row.name,row.sku,row.remoteId,row.account,row.groupName].some(value=>String(value||'').toLocaleLowerCase('ru-RU').includes(q));
   }).sort(priceCompareRows);
