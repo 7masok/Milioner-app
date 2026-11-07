@@ -96,11 +96,18 @@ export async function loadWbPriceProfit(market,client,now=Date.now()){
  const task=(async()=>{
   const snapshot=await client.query('SELECT payload FROM wb_price_snapshots WHERE market=$1',[market]);
   const priceRows=object(snapshot.rows[0]?.payload).rows||[],ids=[...new Set(priceRows.map(row=>text(row.remoteId)).filter(Boolean))];
-  const [finance,orders,productRows,purchaseRows]=await Promise.all([
+  const [finance,orders,productRows,purchaseRows,links]=await Promise.all([
    client.query('SELECT * FROM wb_finance_rows WHERE market=$1 AND rr_date >= $2 AND nm_id=ANY($3::text[]) ORDER BY rr_date DESC,rrd_id LIMIT 50001',[market,now-90*DAY,ids]),
    client.query('SELECT order_id,creation_date,raw_json FROM marketplace_order_lines WHERE market=$1 AND creation_date >= $2 ORDER BY creation_date DESC LIMIT 1000',[market,now-7*DAY]),
-   client.query('SELECT payload FROM warehouse_products'),client.query("SELECT payload FROM warehouse_purchases WHERE status IN ('received','at_warehouse') LIMIT 50001")
+   client.query('SELECT payload FROM warehouse_products'),client.query("SELECT payload FROM warehouse_purchases WHERE status IN ('received','at_warehouse') LIMIT 50001"),
+   client.query('SELECT sku,product_id FROM product_links WHERE market=$1',[market])
   ]);
-  const data=buildWbPriceProfit({priceRows,financeRows:finance.rows,orderRows:orders.rows,products:productRows.rows.map(x=>object(x.payload)),purchases:purchaseRows.rows.map(x=>object(x.payload)),now,truncated:finance.rows.length>50000||purchaseRows.rows.length>50000});cached.set(market,{at:now,data});return data;
+  const byCode=new Map();
+  for(const link of links.rows){const key=text(link.sku),pid=text(link.product_id);if(!key||!pid)continue;byCode.set(key,byCode.has(key)&&byCode.get(key)!==pid?null:pid);}
+  const currentPrices=priceRows.map(row=>{
+   const candidates=[...new Set([row.sku,row.remoteId].map(text).filter(key=>byCode.has(key)).map(key=>byCode.get(key)))];
+   return {...row,productId:candidates.length===1?candidates[0]:candidates.length>1?null:row.productId};
+  });
+  const data=buildWbPriceProfit({priceRows:currentPrices,financeRows:finance.rows,orderRows:orders.rows,products:productRows.rows.map(x=>object(x.payload)),purchases:purchaseRows.rows.map(x=>object(x.payload)),now,truncated:finance.rows.length>50000||purchaseRows.rows.length>50000});cached.set(market,{at:now,data});return data;
  })();running.set(market,task);try{return await task}finally{running.delete(market)}
 }

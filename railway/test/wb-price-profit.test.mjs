@@ -48,7 +48,7 @@ test('cost reads remaining lots, warehouse landed delivery and bundle components
 });
 test('server model is cached/deduplicated and reads only PostgreSQL, separately per market',async()=>{
  let reads=0;const client={query:async(sql,args)=>{reads++;assert.match(sql,/^SELECT/);if(sql.includes('wb_price_snapshots'))return{rows:[{payload:{rows:base.priceRows}}]};if(sql.includes('wb_finance_rows')){assert.equal(args[0],'WB2');return{rows:[sale(),delivery()]}};if(sql.includes('marketplace_order_lines'))return{rows:[order()]};if(sql.includes('warehouse_products'))return{rows:base.products.map(payload=>({payload}))};return{rows:[]}}};
- const [a,b]=await Promise.all([loadWbPriceProfit('WB2',client,now),loadWbPriceProfit('WB2',client,now)]);assert.equal(reads,5);assert.equal(a,b);assert.equal(a.models[0].available,true);await loadWbPriceProfit('WB2',client,now+1);assert.equal(reads,5);
+ const [a,b]=await Promise.all([loadWbPriceProfit('WB2',client,now),loadWbPriceProfit('WB2',client,now)]);assert.equal(reads,6);assert.equal(a,b);assert.equal(a.models[0].available,true);await loadWbPriceProfit('WB2',client,now+1);assert.equal(reads,6);
 });
 test('UI recalculates ruble price to positive/zero/negative tenge without clamping loss, and shows unknowns',()=>{
  const ui=readFileSync(new URL('../../prices-v1.js',import.meta.url),'utf8'),at=ui.indexOf('const priceProfitCache='),end=ui.indexOf('async function loadPriceProfit',at);
@@ -71,4 +71,16 @@ test('unit cost is visible before collapsed details even without a complete prof
 test('WB3 loads its own cost model through the existing scoped server endpoint',async()=>{
  const ui=readFileSync(new URL('../../prices-v1.js',import.meta.url),'utf8'),a=ui.indexOf('const priceProfitCache='),b=ui.indexOf('window.retryPriceProfit=',a),requests=[];
  const c={Map,Number,pEsc:String,window:{},priceUi:{market:'WB'},MILLIONER_API:'https://fixture.test',fetch:async url=>{requests.push(url);return {ok:true,json:async()=>({ok:true,models:[]})}}};runInNewContext(ui.slice(a,b),c);await c.loadPriceProfit('WB3');assert.deepEqual(requests,['https://fixture.test/api/market-prices/profit-estimates?market=WB3']);
+});
+test('new warehouse links supply landed cost before price snapshot is refreshed',async()=>{
+ const client={query:async sql=>{
+  if(sql.includes('wb_price_snapshots'))return {rows:[{payload:{rows:[{remoteId:'200',sku:'article-new',productId:''}]}}]};
+  if(sql.includes('product_links'))return {rows:[{sku:'article-new',product_id:'new'}]};
+  if(sql.includes('warehouse_products'))return {rows:[{payload:{id:'new',cost:211.35}}]};
+  if(sql.includes('warehouse_purchases'))return {rows:[{payload:{productId:'new',status:'received',qty:10,remainingQty:10,unitCost:189.9,delivery:214.5,landedUnitCost:211.35}}]};
+  return {rows:[]};
+ }};
+ const result=await loadWbPriceProfit('WB',client,now);
+ assert.equal(result.models[0].unitCostKzt,211.35);
+ assert.equal(result.models[0].available,false);
 });
