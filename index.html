@@ -2136,7 +2136,7 @@ window.addEventListener('pagehide',()=>{if(homeOrdersSettled)writeHomeCache()});
 if('serviceWorker'in navigator)window.addEventListener('load',()=>navigator.serviceWorker.register(window.warehouseScope?.embedded?'/inferno/sw.js':'/sw.js',{scope:window.warehouseScope?.embedded?'/inferno/':'/'}).catch(e=>console.warn('service worker failed',e)),{once:true});
 function enhanceArrivalProductSearch(){}
 </script>
-<script src="./warehouse-insights.js?v=20260906"></script>
+<script async data-boot-optional="1" src="./warehouse-insights.js?v=20261107" onload="try{renderWarehouseInsights()}catch{}"></script>
 <script src="./connection-status-v1.js?v=20261102"></script>
 <script src="./cloud-sync-v3.js?v=20261105-edit-race"></script>
 <script src="./packaging-model.js?v=20261019-receipt-delivery"></script>
