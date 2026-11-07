@@ -32,10 +32,11 @@
   const ids=selectedStoreIds(section),child=String(p.id||'').startsWith('inferno:');
   if(!child&&defaults.every(m=>ids.includes(m)))return true;
   const rows=p.kind==='variant-group'?[p,...(state.products||[]).filter(row=>String(row.variantGroupId||'')===String(p.id))]:[p];
+  if(section==='products'&&!ids.length)return !rows.some(row=>Object.values(fields).some(field=>Boolean(row[field]||(row[field+'Aliases']||[]).length||row[field+'RelinkRequired']?.oldSku))||row.kind==='variant-group'&&row.variantMarket);
   return ids.some(m=>m==='WB3'?child:!child&&rows.some(row=>Boolean(row[fields[m]]||(row[fields[m]+'Aliases']||[]).length||row[fields[m]+'RelinkRequired']?.oldSku||row.kind==='variant-group'&&row.variantMarket===m)));
  };
  window.paintStoreSelection=function(section,box){
-  if(!box)return;box.classList.add('store-multi-tabs');box.setAttribute('role','group');box.setAttribute('aria-label','Магазины');
+  if(!box)return;box.classList.add('store-multi-tabs');box.setAttribute('role','group');box.setAttribute('aria-label','Магазины');box.title=section==='products'&&!selectedStoreIds(section).length?'Товары без привязок к магазинам':'';
   const selected=new Set(selectedStoreIds(section));
   box.innerHTML=stores.map(m=>'<button type="button" class="market-tab '+(selected.has(m)?'active':'')+'" aria-pressed="'+selected.has(m)+'" data-store-select="'+m+'" '+(section==='home'?'data-market="'+m+'"':section==='reports'?'data-report-market="'+m+'"':'')+' onclick="toggleStoreSelection(\''+section+'\',\''+m+'\')">'+labels[m]+'</button>').join('');
  };
