@@ -23,6 +23,13 @@
  window.isWarehouseCatalogProduct=function(p,seen=new Set()){
   if(!p||seen.has(String(p.id)))return false;seen.add(String(p.id));
   if(p.warehouseAdded===true||Number(p.stock)>0||warehouseCatalogIds().has(String(p.id)))return true;
+  // warehouseAdded was introduced after manual cards already existed. Keep
+  // legacy editor records and confirmed single-card WB links, but not raw
+  // catalog imports, auto-recovered order records or invalidated old links.
+  const legacyId=/^[a-z0-9]{13}$/.test(String(p.id||''));
+  const imported=Boolean(p.wbVariant||p.wbRelinkRequired||p.wb2RelinkRequired||p.wb3RelinkRequired);
+  const confirmedWb=['wb','wb2'].some(field=>{const identity=p[field+'Identity'];return p[field]&&identity?.nmId&&identity?.chrtId&&String(identity.vendorCode||'')===String(p[field]);});
+  if(p.warehouseAdded===undefined&&legacyId&&!imported&&(p.kind==='simple'||confirmedWb))return true;
   if(p.kind==='variant-group')return (state.products||[]).filter(row=>String(row.variantGroupId||'')===String(p.id)).some(row=>isWarehouseCatalogProduct(row,seen));
   if(p.kind==='bundle')return (p.components||[]).some(row=>isWarehouseCatalogProduct(prod(row.productId),seen));
   return false;
