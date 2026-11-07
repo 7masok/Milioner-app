@@ -102,3 +102,10 @@ test('a user-owned size group is visible in WB1 from its child links and variant
  assert.equal(f.ctx.productMatchesSelectedStores(group,'products'),true);assert.equal(group.wb,'');assert.equal(f.ctx.productMatchesSelectedStores({...group,kind:'simple',variantMarket:''},'products'),false);
  f.ctx.toggleStoreSelection('products','WB');f.ctx.toggleStoreSelection('products','Ozon');assert.equal(f.ctx.productMatchesSelectedStores(group,'products'),false);
 });
+test('deselecting all product stores shows owned unlinked stock only',()=>{
+ const f=fixture(new Map([['sklad_stores_v2_products','[]']]));
+ assert.equal(f.ctx.productMatchesSelectedStores({id:'owned',warehouseAdded:true},'products'),true);
+ assert.equal(f.ctx.productMatchesSelectedStores({id:'external'},'products'),false);
+ assert.equal(f.ctx.productMatchesSelectedStores({id:'linked',warehouseAdded:true,kaspi:'123'},'products'),false);
+ assert.equal(f.ctx.productMatchesSelectedStores({id:'alias',warehouseAdded:true,kaspiAliases:['123']},'products'),false);
+});
