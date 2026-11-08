@@ -26,7 +26,9 @@ function businessStamp(model){return {...model,...(window.unifiedWarehouseEnable
 let businessKaspiHistory=null,businessServerManaged=false;const businessServerRevisions=[];
 function businessKaspiGap(bounds){return bounds&&businessIncludesMarket('Kaspi')&&[...(businessKaspiHistory?.gaps||[]),...(businessKaspiHistory?.repairs||[])].some(r=>r.from<bounds.end&&r.to>bounds.start)}
 
-function businessOrderRepairAt(bounds){return Math.max(bounds?Math.max(0,...businessServerRevisions.filter(r=>r.from<bounds.end&&r.to>bounds.start).map(r=>r.at)):0,bounds&&businessIncludesMarket('Ozon')&&typeof window.ozonFboOrderRepairAt==='function'?window.ozonFboOrderRepairAt(bounds):0,bounds&&businessIncludesMarket('Kaspi')?Math.max(0,...(businessKaspiHistory?.repairRevisions||[]).filter(r=>r.from<bounds.end&&r.to>bounds.start).map(r=>Number(r.at)||0)):0)}
+// Job completion triggers a fresh read, not invalidation of other stores.
+// A composed day deliberately carries the oldest contributing store timestamp.
+function businessOrderRepairAt(bounds){return Math.max(bounds&&businessIncludesMarket('Ozon')&&typeof window.ozonFboOrderRepairAt==='function'?window.ozonFboOrderRepairAt(bounds):0,bounds&&businessIncludesMarket('Kaspi')?Math.max(0,...(businessKaspiHistory?.repairRevisions||[]).filter(r=>r.from<bounds.end&&r.to>bounds.start).map(r=>Number(r.at)||0)):0)}
 function businessOrdersClosedReady(data,at,now=Date.now()){return Boolean(data&&Number(at)>=businessOrderRepairAt(data.bounds)&&!businessKaspiGap(data.bounds)&&data.ordersReady===true&&!data.ordersPartialMarkets?.length&&data.bounds.end+2*86400000<=now&&at>=data.bounds.end+2*86400000)}
 function businessClosedReady(data,at,now=Date.now()){return Boolean(data&&Number(at)>=businessOrderRepairAt(data.bounds)&&data.bounds.end+2*86400000<=now&&at>=data.bounds.end+2*86400000&&!businessKaspiGap(data.bounds)&&!data.pending&&!data.ordersPartialMarkets?.length&&!data.summary?.missingMarkets?.length&&!data.summary?.partialOzonHistory)}
 function businessAnnualFloor(){return businessDayBounds(0).start-364*86400000}

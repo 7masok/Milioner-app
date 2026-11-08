@@ -12,7 +12,7 @@ function fixture(saved={period:'year'}){
  const el=id=>{if(!elements.has(id))elements.set(id,{id,innerHTML:'',textContent:'',dataset:{},classList:{contains:()=>true,toggle(){}},setAttribute(k,v){this[k]=v},addEventListener(){}});return elements.get(id)};
  for(const id of ['reports','businessDashboard','businessChart','businessPeriodTitle','businessPeriodSub','businessDayNav','businessDayDate','businessDayPrevious','businessDayNext','businessValueMetric','businessValueLabel','businessValue','businessValueMeta','businessYesterdayLabel','businessYesterdayValue','businessYesterdayMeta','businessYesterdayCompare'])el(id);
  const window={setTimeout:(cb,delay=0)=>delay?setTimeout(cb,delay).unref():cb(),clearTimeout};const ctx={window,Date:Clock,Intl,Map,Set,console:{warn(){}},state:{},localStorage:{getItem:k=>storage.get(k),setItem:(k,v)=>storage.set(k,v)},document:{readyState:'loading',getElementById:id=>elements.get(id)||null,querySelectorAll:()=>[],addEventListener(){}},fmt:n=>String(n)+' ₸'};
- vm.createContext(ctx);vm.runInContext(source.replace(/\}\)\(\);\s*$/, 'window.testApi={businessYearBounds,businessSelectedYearOffset,businessBuckets,businessBuildYearModel,businessYearFromMonths,businessPaint,businessPaintTabs,businessModelKey,businessLoadYearMonth,businessDays,businessMakeDay,businessRememberMonth,businessSaveDays};})();'),ctx);
+ vm.createContext(ctx);vm.runInContext(source.replace(/\}\)\(\);\s*$/, 'window.testApi={businessYearBounds,businessSelectedYearOffset,businessBuckets,businessBuildYearModel,businessYearFromMonths,businessPaint,businessPaintTabs,businessModelKey,businessLoadYearMonth,businessDays,businessMakeDay,businessRememberMonth,businessSaveDays,businessModelFromDays,businessServerRevisions};})();'),ctx);
  return{ctx,window,api:window.testApi,el,storage,setNow:t=>{now=t}};
 }
 function monthData(bucket,n=100){return{period:'month',bounds:{start:bucket.start,end:bucket.end},buckets:[{...bucket,orders:n,orderQty:2,orderProfit:20,buyouts:n/2,buyoutQty:1,buyoutProfit:10}],orders:{amount:n,qty:2,profit:20,orderCount:1,coverage:1},summary:{revenue:n/2,qty:1,profit:10}}}
@@ -120,4 +120,12 @@ test('saving a busy 80-day history serializes only the bounded retained slice on
  let bytes=0;f.ctx.JSON={parse:JSON.parse,stringify(value){const text=JSON.stringify(value);bytes+=text.length;return text}};
  f.api.businessSaveDays();const saved=f.storage.get('milioner_business_days_v2'),rows=JSON.parse(saved).days;
  assert.ok(saved.length<=1500000);assert.ok(bytes<1600000);assert.ok(rows.length>0&&rows.length<80);assert.equal(rows.at(-1).data.bounds.start,start+79*DAY);
+});
+
+
+test('later store jobs do not invalidate composed year days stamped with the oldest contributing store',()=>{
+ const f=fixture(),bounds=f.api.businessYearBounds(0),end=Date.parse('2026-10-18T00:00:00+05:00');
+ for(let t=bounds.start;t<end;t+=DAY)f.api.businessDays.set(t,{data:f.api.businessMakeDay(t,[],{revenue:10,qty:1,profit:2}),at:NOW});
+ f.api.businessServerRevisions.push({from:bounds.start,to:end,at:NOW+1000});
+ const year=f.api.businessModelFromDays('year',0);assert.ok(year);assert.equal(year.knownMonths,10);assert.equal(year.unavailable,false);assert.equal(year.summary.revenue,2900);
 });
