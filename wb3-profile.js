@@ -46,7 +46,7 @@ window.wb3PurchaseRecommendations=function(){
 };
 window.wb3DecoratePurchasePlan=function(root,rows){
  const lines=[...root.querySelectorAll('.purchase-plan .purchase-lines > .purchase-line')];
- lines.forEach((line,index)=>{const x=rows[index],detail=line.querySelector('.grow > .muted');if(!x||!detail)return;
+ lines.forEach(line=>{const x=rows.find(row=>String(row.productId)===String(line.dataset.purchaseProductId||'')),detail=line.querySelector('.grow > .muted');if(!x||!detail)return;
   detail.textContent='У меня '+x.localAvailable+' · FBO '+x.fbo+' · закуплено '+x.inbound+' · нужно на '+purchaseCoverDays()+' дн.: '+x.target+' шт.';
  });
  const note=document.createElement('div');note.className='muted';note.style.cssText='font-size:12px;margin:6px 0';
