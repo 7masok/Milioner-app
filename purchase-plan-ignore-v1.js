@@ -79,11 +79,12 @@ function decoratePurchasePlan(){
 
   // originalRenderPurchasePlan() has already calculated these rows. Reuse them
   // instead of running the expensive purchase recommendation calculation twice.
-  const visible=lastVisibleRecommendations;
+  // Store filters can change the provider array after the inner wrapper runs.
+  // Actions must use the identity stamped on the rendered row, never its index.
   const lines=[...root.querySelectorAll('.purchase-plan .purchase-lines > .purchase-line')];
-  lines.forEach((line,index)=>{
-    const row=visible[index];
-    if(!row||line.querySelector('[data-purchase-plan-ignore]'))return;
+  lines.forEach(line=>{
+    const productId=String(line.dataset.purchaseProductId||'');
+    if(!productId||line.querySelector('[data-purchase-plan-ignore]'))return;
     const right=line.querySelector('.right')||line;
     const button=document.createElement('button');
     button.type='button';
@@ -99,7 +100,7 @@ function decoratePurchasePlan(){
     button.onclick=e=>{
       e.preventDefault();
       e.stopPropagation();
-      window.ignorePurchasePlanProduct(encodeURIComponent(String(row.productId)));
+      window.ignorePurchasePlanProduct(encodeURIComponent(productId));
     };
     right.appendChild(button);
   });
@@ -114,7 +115,7 @@ function decoratePurchasePlan(){
     manager.innerHTML=`<div class="row"><b>Скрытые</b><button type="button" class="btn" style="margin-left:auto" onclick="openIgnoredPurchasePlanProducts()">Показать · ${hidden.length}</button></div>`;
     root.appendChild(manager);
   }
-  if(window.WB3_ONLY&&typeof window.wb3DecoratePurchasePlan==='function')window.wb3DecoratePurchasePlan(root,visible);
+  if(window.WB3_ONLY&&typeof window.wb3DecoratePurchasePlan==='function')window.wb3DecoratePurchasePlan(root,window.__lastPurchaseRecommendations||lastVisibleRecommendations);
 }
 
 renderPurchasePlan=function(){
