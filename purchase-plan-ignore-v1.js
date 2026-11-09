@@ -40,8 +40,8 @@ window.ignorePurchasePlanProduct=function(encodedProductId){
   const productId=decodeURIComponent(String(encodedProductId||''));
   let p=null;
   try{p=typeof prod==='function'?prod(productId):null}catch{}
-  const row=lastVisibleRecommendations.find(x=>String(x?.productId)===String(productId));
-  const name=String(p?.name||row?.product?.name||'этот товар');
+  const row=window.__lastPurchaseRecommendations?.find(x=>String(x.productId)===productId);
+  const name=String(row?.product?.name||p?.name||'этот товар');
   if(!confirm(`Больше не предлагать «${name}» к закупке?\n\nТовар останется в складе. Остатки, продажи и история не изменятся. Вернуть его можно через «Скрытые из закупки».`))return;
   const map=ignoredMap();
   map[String(productId)]={hidden:true,hiddenAt:Date.now(),name};
@@ -77,14 +77,18 @@ function decoratePurchasePlan(){
   const root=document.getElementById('purchasePlan');
   if(!root)return;
 
-  // originalRenderPurchasePlan() has already calculated these rows. Reuse them
-  // instead of running the expensive purchase recommendation calculation twice.
-  const visible=lastVisibleRecommendations;
-  const lines=[...root.querySelectorAll('.purchase-plan .purchase-lines > .purchase-line')];
-  lines.forEach((line,index)=>{
-    const row=visible[index];
-    if(!row||line.querySelector('[data-purchase-plan-ignore]'))return;
-    const right=line.querySelector('.right')||line;
+  const visible=window.__lastPurchaseRecommendations||lastVisibleRecommendations;
+  // The existing Buy action contains the rendered row's exact product ID.
+  const productIdsByAction=new Map(visible.map(({productId})=>{
+    const encodedId=encodeURIComponent(String(productId));
+    return [`openRecommendedPurchase('${encodedId}')`,encodedId];
+  }));
+  const lines=root.querySelectorAll('.purchase-plan .purchase-lines > .purchase-line');
+  for(const line of lines){
+    const right=line.querySelector('.right');
+    const action=right?.querySelector('button[onclick]')?.getAttribute('onclick');
+    const encodedId=productIdsByAction.get(action);
+    if(!encodedId||line.querySelector('[data-purchase-plan-ignore]'))continue;
     const button=document.createElement('button');
     button.type='button';
     button.className='btn danger';
@@ -99,10 +103,10 @@ function decoratePurchasePlan(){
     button.onclick=e=>{
       e.preventDefault();
       e.stopPropagation();
-      window.ignorePurchasePlanProduct(encodeURIComponent(String(row.productId)));
+      window.ignorePurchasePlanProduct(encodedId);
     };
     right.appendChild(button);
-  });
+  }
 
   root.querySelector('[data-purchase-plan-hidden-manager]')?.remove();
   const hidden=ignoredEntries();
