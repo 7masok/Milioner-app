@@ -25,4 +25,120 @@ window.exportPurchasePdf=async function(mode,key,button){
  }catch(error){alert(error.message||'Не удалось выгрузить PDF');}
  finally{busy=false;if(button){button.disabled=false;button.textContent=label;}}
 };
+
+const quantity=row=>Math.max(0,Number(row.qty)||0);
+const shipmentKey=row=>String(row.shipmentId||row.id||'');
+const dateOf=row=>Number(row.orderedAt||row.date||row.createdAt)||0;
+const buyAmount=row=>Number(row.buyTotal)>0?Number(row.buyTotal):Math.max(0,Number(row.unitCost)||0)*quantity(row);
+const percent=new Intl.NumberFormat('ru-RU',{maximumFractionDigits:1,signDisplay:'exceptZero'});
+
+function historicalCosts(rows,current,date){
+ const totals=new Map(rows.map(row=>[String(row.productId),{buy:0,buyQty:0,delivery:0,deliveryQty:0}]));
+ for(const row of state.purchases||[]){
+  const cost=totals.get(String(row.productId)),qty=quantity(row);
+  if(!cost||!qty||!isRealPurchase(row)||row.returnAdjustment||row.relocation)continue;
+  const stage=purchaseStatus(row),orderDate=dateOf(row);
+  if(stage!=='received'&&stage!=='at_warehouse')continue;
+  if(!orderDate||orderDate>date||current&&shipmentKey(row)===shipmentKey(current))continue;
+  if(current&&orderDate===date&&(Number(row.createdAt)||0)>=(Number(current.createdAt)||0))continue;
+  const buy=buyAmount(row);
+  if(buy>0){cost.buy+=buy;cost.buyQty+=qty;}
+  if(Number(row.delivery)>0){cost.delivery+=Number(row.delivery);cost.deliveryQty+=qty;}
+ }
+ return totals;
+}
+
+function summarize(rows,current,date){
+ const history=historicalCosts(rows,current,date);
+ const buy={estimate:0,actual:0,count:0,compared:0,baseline:0};
+ const delivery={estimate:0,actual:0,count:0,compared:0,baseline:0};
+ for(const row of rows){
+  const cost=history.get(String(row.productId)),qty=quantity(row);
+  for(const [key,total] of [['buy',buy],['delivery',delivery]]){
+   if(!cost[key+'Qty'])continue;
+   const estimate=cost[key]/cost[key+'Qty']*qty;
+   total.estimate+=estimate;
+   total.count++;
+   const actual=key==='buy'?buyAmount(row):Number(row.delivery);
+   const delivered=['received','at_warehouse'].includes(purchaseStatus(row));
+   if(current&&(actual>0||key==='delivery'&&actual===0&&delivered)){
+    total.actual+=actual;
+    total.baseline+=estimate;
+    total.compared++;
+   }
+  }
+ }
+ return {buy,delivery};
+}
+
+function estimateLabel(cost,count){
+ if(!cost.count)return 'нет данных по прошлым закупкам';
+ return '≈ '+fmt(cost.estimate)+(cost.count<count?' · по '+cost.count+' из '+count+' поз.':'');
+}
+
+function comparisonLabel(cost,count,pending){
+ if(!cost.count)return 'нет данных по прошлым закупкам';
+ if(!cost.compared)return pending+' · ориентир '+estimateLabel(cost,count);
+ const change=(cost.actual/cost.baseline-1)*100;
+ return fmt(cost.actual)+' вместо ≈ '+fmt(cost.baseline)+' · <b>'+percent.format(change)+'%</b>'
+  +(cost.compared<count?' · по '+cost.compared+' из '+count+' поз.':'');
+}
+
+function addDraftEstimate(mode){
+ const edit=mode==='edit',box=document.getElementById(edit?'editPurchaseCalc':'purchaseOrderCalc');
+ if(!box)return;
+ const rows=(edit?editPurchaseDraftRows():purchaseDraftRows()).filter(row=>row.productId&&quantity(row)>0);
+ if(!rows.length)return;
+ const key=edit?document.getElementById('editPurchaseItems')?.dataset.shipmentKey:'';
+ const current=key?purchaseShipmentRows(encodeURIComponent(key))[0]:null;
+ const dateInput=document.getElementById(edit?'editPorDate':'porDate');
+ const date=Number(localDateStart(dateInput?.value))||Date.now();
+ if(dateInput&&!dateInput.dataset.purchaseEstimate){
+  dateInput.dataset.purchaseEstimate='1';
+  dateInput.addEventListener('change',edit?()=>updateEditPurchaseCalculator():()=>updatePurchaseOrderCalculator());
+ }
+ const {buy,delivery}=summarize(rows,current,date);
+ const count=rows.length;
+ box.insertAdjacentHTML('beforeend','<div style="margin-top:10px"><b>Ориентир по прошлым закупкам</b>'
+  +'<div>Товары · '+estimateLabel(buy,count)+'</div>'
+  +'<div>Доставка · '+estimateLabel(delivery,count)+'</div>'
+  +(buy.count===count&&delivery.count===count?'<div><b>Всего ≈ '+fmt(buy.estimate+delivery.estimate)+'</b></div>':'')
+  +'</div>');
+}
+
+if(typeof updatePurchaseOrderCalculator==='function'){
+ const updateNew=updatePurchaseOrderCalculator;
+ updatePurchaseOrderCalculator=function(){
+  updateNew();
+  addDraftEstimate('new');
+ };
+}
+if(typeof updateEditPurchaseCalculator==='function'){
+ const updateEdit=updateEditPurchaseCalculator;
+ updateEditPurchaseCalculator=function(){
+  updateEdit();
+  addDraftEstimate('edit');
+ };
+}
+
+if(typeof openPurchaseShipment==='function'){
+ const openShipment=openPurchaseShipment;
+ openPurchaseShipment=function(key){
+  openShipment(key);
+  const rows=purchaseShipmentRows(key);
+  const current=rows[0];
+  const sheet=document.getElementById('sheet');
+  if(!current||!sheet)return;
+  const workflow=purchaseWorkflow();
+  const stage=purchaseWorkflowStage(current);
+  const unpaid=workflow.some(row=>row.id===stage&&(row.id==='cart'||normalizeName(row.name)==='корзина'));
+  if(unpaid)return;
+  const button=sheet.querySelector('button[onclick^="exportPurchasePdf("]');
+  if(!button)return;
+  const {buy,delivery}=summarize(rows,current,dateOf(current));
+  button.insertAdjacentHTML('beforebegin','<div class="link-note"><b>Сравнение с прошлыми закупками</b>'
+   +'<div style="margin-top:6px">Товары · '+comparisonLabel(buy,rows.length,'цена пока не указана')+'</div>'
+   +'<div>Доставка · '+comparisonLabel(delivery,rows.length,'стоимость пока не указана')+'</div></div>');
+ };
+}
 })();

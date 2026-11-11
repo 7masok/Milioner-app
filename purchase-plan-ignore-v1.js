@@ -7,6 +7,8 @@ const SETTINGS_KEY='purchasePlanIgnored';
 const originalPurchaseRecommendations=purchaseRecommendations;
 const originalRenderPurchasePlan=renderPurchasePlan;
 let lastVisibleRecommendations=[];
+let refreshingPlan=false;
+let planRefreshMessage='';
 
 function ignoredMap(){
   state.settings||={};
@@ -26,12 +28,21 @@ function ignoredEntries(){
     .sort((a,b)=>a.name.localeCompare(b.name,'ru'));
 }
 
+window.isHistoricalPurchasePlanRow=function({product,available,inbound}){
+  if(!product?.variantGroupId||!product.variantLegacyLink||product.wbVariant?.chrtId)return false;
+  if(Number(product.stock)>0||Number(available)>0||Number(inbound)>0||reserved(product)>0)return false;
+  return !['kaspi','wb','wb2','ozon'].some(field=>
+    Boolean(String(product[field]||'').trim())||
+    (Array.isArray(product[field+'Aliases'])&&product[field+'Aliases'].some(value=>String(value||'').trim()))
+  );
+};
+
 purchaseRecommendations=function(){
   const rows=window.WB3_ONLY&&typeof window.wb3PurchaseRecommendations==='function'
     ?window.wb3PurchaseRecommendations():originalPurchaseRecommendations();
   const all=Array.isArray(rows)?rows:[];
   const ignored=ignoredMap();
-  lastVisibleRecommendations=all.filter(x=>!ignored[String(x?.productId)]?.hidden);
+  lastVisibleRecommendations=all.filter(row=>!ignored[String(row.productId)]?.hidden&&!window.isHistoricalPurchasePlanRow(row));
   window.__lastPurchaseRecommendations=lastVisibleRecommendations;
   return lastVisibleRecommendations;
 };
@@ -73,9 +84,70 @@ window.openIgnoredPurchasePlanProducts=function(){
   showSheet(`<h3>Скрытые из закупки · ${rows.length}</h3><div class="link-note">Эти товары остаются в складе, отчётах и истории, но не попадают в автоматический список «Надо купить». Вернуть рекомендацию можно вручную.</div>${html}`);
 };
 
+function paintPlanRefresh(root){
+  const controls=root?.querySelector('[data-purchase-plan-refresh-controls]');
+  if(!controls)return;
+  const button=controls.querySelector('button');
+  button.disabled=refreshingPlan;
+  button.textContent=refreshingPlan?'Обновляю…':'Обновить';
+  controls.querySelector('[role="status"]').textContent=planRefreshMessage;
+}
+
+async function refreshPurchasePlan(){
+  if(refreshingPlan)return;
+  const root=()=>document.getElementById('purchasePlan');
+  refreshingPlan=true;
+  planRefreshMessage='';
+  paintPlanRefresh(root());
+  try{
+    // Refresh warehouse links before matching the server's orders to products.
+    const warehouseReady=await pullWarehouseFromServer({force:true});
+    const stores=window.selectedStoreIds?.('purchases')||[];
+    const days=Math.max(45,purchaseCoverDays(),stores.includes('WB3')?Number(state.settings?.infernoSettings?.purchaseCoverDays)||0:0);
+    const refreshes=[window.loadSharedOrderCache({silent:true,after:reportPeriodStart(days)}).then(result=>Boolean(result&&!result.error))];
+    if(stores.includes('Ozon')&&window.ozonFboRefreshStatus){
+      refreshes.push(window.ozonFboRefreshStatus({force:true}).then(Boolean));
+    }
+    if(stores.includes('WB3')&&window.refreshPurchaseWb3Inventory){
+      refreshes.push(window.refreshPurchaseWb3Inventory());
+    }else if(window.WB3_ONLY&&window.refreshWb3Stock){
+      refreshes.push(window.refreshWb3Stock().then(()=>Boolean(window.WB3_inventory?.fetchedAt&&!window.WB3_inventory.error)));
+    }
+    const results=await Promise.allSettled(refreshes);
+    if(!warehouseReady||results.some(result=>result.status!=='fulfilled'||!result.value)){
+      planRefreshMessage='Часть данных не обновилась. Показаны последние доступные.';
+    }
+  }catch(error){
+    console.warn('purchase plan refresh failed',error);
+    planRefreshMessage='Не удалось обновить. Показаны последние доступные данные.';
+  }finally{
+    refreshingPlan=false;
+    renderPurchasePlan();
+  }
+}
+
+function addPlanRefresh(root){
+  const plan=root.querySelector('.purchase-plan');
+  if(!plan||root.querySelector('[data-purchase-plan-refresh-controls]'))return;
+  const controls=document.createElement('div');
+  controls.className='row';
+  controls.dataset.purchasePlanRefreshControls='1';
+  controls.style.cssText='gap:8px;flex-wrap:wrap;margin-bottom:10px';
+  controls.innerHTML='<button type="button" class="btn">Обновить</button><span class="muted" role="status"></span>';
+  controls.querySelector('button').onclick=refreshPurchasePlan;
+  const period=plan.previousElementSibling;
+  if(period?.matches('button')){
+    period.style.marginBottom='0';
+    root.insertBefore(controls,period);
+    controls.prepend(period);
+  }else root.insertBefore(controls,plan);
+  paintPlanRefresh(root);
+}
+
 function decoratePurchasePlan(){
   const root=document.getElementById('purchasePlan');
   if(!root)return;
+  addPlanRefresh(root);
 
   const visible=window.__lastPurchaseRecommendations||lastVisibleRecommendations;
   // The existing Buy action contains the rendered row's exact product ID.

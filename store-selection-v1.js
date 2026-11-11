@@ -129,7 +129,30 @@
  let inventory={fetchedAt:0},inventoryTimer,inventoryError='';
  function infernoFbo(p){if(!Number(inventory.fetchedAt))return null;const nm=String(p.variantNmId||p.wbVariant?.nmId||p.wb3Identity?.nmId||p.wbIdentity?.nmId||''),chrt=String(p.wbVariant?.chrtId||p.wb3Identity?.chrtId||p.wbIdentity?.chrtId||'');if(!nm)return null;const size=inventory.sizes?.[nm+':'+chrt];if(size)return Number(size.quantity)||0;if(chrt&&Object.keys(inventory.sizes||{}).some(k=>k.startsWith(nm+':')))return 0;const peers=state.products.filter(x=>String(x.id).startsWith('inferno:')&&x.kind!=='variant-group'&&String(x.wbVariant?.nmId||x.variantNmId||x.wb3Identity?.nmId||x.wbIdentity?.nmId||'')===nm);return p.kind==='variant-group'||peers.length===1?Number(inventory.items?.[nm]?.quantity)||0:null;}
  function paintInventory(){const host=document.getElementById('products')?.querySelector('.product-stock-metrics');if(!host)return;let card=document.getElementById('wb3InventoryCard');if(!card){card=document.createElement('div');card.id='wb3InventoryCard';card.className='card';host.append(card);}card.style.display=selectedStoreIds('products').includes('WB3')?'':'none';card.replaceChildren();const label=document.createElement('div');label.className='label';label.textContent='На FBO WB3';const value=document.createElement('div');value.className='num';value.textContent=Number(inventory.fetchedAt)?Number(inventory.total??Object.values(inventory.items||{}).reduce((n,x)=>n+(Number(x.quantity)||0),0))+' шт.':inventoryError?'Не загружено':'Загружаю…';card.append(label,value);if(inventoryError||inventory.error){const note=document.createElement('div');note.className='muted';note.textContent=Number(inventory.fetchedAt)?'Сохранённые остатки':'Не удалось получить остатки WB3';card.append(note);}}
- async function loadInventory(){try{const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),12000);let response;try{response=await fetch(MILLIONER_API+'/api/wb3/inventory?market=WB3',{cache:'no-store',signal:controller.signal});const data=await response.json();if(!response.ok||data.ok===false)throw Error(data.error||'WB3 inventory');inventory=data;inventoryError='';}finally{clearTimeout(timer);}if(!response.ok)throw Error('WB3 inventory');if(document.getElementById('purchases')?.classList.contains('active'))renderPurchasePlan();}catch(error){inventoryError=String(error?.message||error);}finally{paintInventory();}}
+ let inventoryLoad;
+ function loadInventory(){
+  if(inventoryLoad)return inventoryLoad;
+  inventoryLoad=(async()=>{
+   const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),12000);
+   try{
+    const response=await fetch(MILLIONER_API+'/api/wb3/inventory?market=WB3',{cache:'no-store',signal:controller.signal});
+    const data=await response.json();
+    if(!response.ok||data.ok===false)throw Error(data.error||'WB3 inventory');
+    inventory=data;
+    inventoryError='';
+    if(document.getElementById('purchases')?.classList.contains('active'))renderPurchasePlan();
+    return !data.error;
+   }catch(error){
+    inventoryError=String(error?.message||error);
+    return false;
+   }finally{
+    clearTimeout(timer);
+    paintInventory();
+   }
+  })().finally(()=>{inventoryLoad=null;});
+  return inventoryLoad;
+ }
+ window.refreshPurchaseWb3Inventory=loadInventory;
  const recommendations=purchaseRecommendations;
  purchaseRecommendations=function(){
   const main=recommendations().filter(r=>!String(r.productId).startsWith('inferno:')&&productMatchesSelectedStores(r.product,'purchases'));
@@ -143,7 +166,7 @@
    const local=productAvailableStock(p),timeline=purchaseInboundTimeline(p.id).filter(x=>purchaseWorkflowStage(x.row)!=='cart').map(x=>({...x,qty:x.status==='at_warehouse'?purchaseWarehouseQty(x.row):x.qty})),inbound=timeline.reduce((n,x)=>n+x.qty,0),qty=Math.max(0,Math.ceil(qtyDemand-local-fbo-inbound));if(!qty)continue;
    const unitCost=purchaseLastUnitCost(p.id),daily=qtyDemand/cover;child.push({productId:p.id,product:p,qty,demand:qtyDemand,daily,target:qtyDemand,available:local+fbo,localAvailable:local,fbo,inbound,days:(local+fbo)/daily,stockDays:(local+fbo)/daily,unitCost,estimatedCost:qty*unitCost,timeline,nextArrivalDays:timeline.length?Math.min(...timeline.map(x=>x.days)):Infinity});
   }
-  const rows=[...main,...child];window.__lastPurchaseRecommendations=rows;return rows;
+  const rows=[...main,...child.filter(row=>!window.isHistoricalPurchasePlanRow?.(row))];window.__lastPurchaseRecommendations=rows;return rows;
  };
  const plan=renderPurchasePlan;
  renderPurchasePlan=function(...args){const result=plan(...args),root=document.getElementById('purchasePlan');if(!root)return result;const rows=window.__lastPurchaseRecommendations||[];for(const [index,line]of [...root.querySelectorAll('.purchase-plan .purchase-lines > .purchase-line')].entries()){const row=rows[index];if(!String(row?.productId||'').startsWith('inferno:'))continue;const detail=line.querySelector('.grow > .muted');if(detail)detail.textContent='WB3 · У меня '+row.localAvailable+' · FBO '+row.fbo+' · уже закуплено '+row.inbound+' · потребность '+row.target+' шт.';}if(selectedStoreIds('purchases').includes('WB3')&&!Number(inventory.fetchedAt)){let note=document.getElementById('wb3PurchaseAvailability');if(!note){note=document.createElement('div');note.id='wb3PurchaseAvailability';note.className='muted';root.append(note);}note.textContent=inventoryError?'Расчёт закупки WB3 ждёт обновления остатков FBO.':'Загружаю остатки FBO для расчёта закупки WB3…';}return result;};
