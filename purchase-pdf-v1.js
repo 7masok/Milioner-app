@@ -4,7 +4,7 @@ let busy=false;
 function purchasePdfInput(mode,key){
  if(mode==='saved'){
   const rows=purchaseShipmentRows(key);if(!rows.length)throw Error('Закупка не найдена');
-  return {title:rows[0].batch||'Закупка',date:localDateInputValue(rows[0].orderedAt||rows[0].date),draft:false,delivery:rows.reduce((n,r)=>n+(Number(r.delivery)||0),0),items:rows.map(r=>({productId:r.productId,qty:Number(r.qty),buyTotal:Number(r.buyTotal)||Number(r.unitCost)*Number(r.qty)||0}))};
+  return {title:typeof amanPurchaseTitle==='function'?amanPurchaseTitle(rows[0]):rows[0].batch||'Закупка',date:localDateInputValue(rows[0].orderedAt||rows[0].date),draft:false,delivery:rows.reduce((n,r)=>n+(Number(r.delivery)||0),0),items:rows.map(r=>({productId:r.productId,qty:Number(r.qty),buyTotal:Number(r.buyTotal)||Number(r.unitCost)*Number(r.qty)||0}))};
  }
  const edit=mode==='edit',prefix=edit?'editPor':'por',rows=edit?editPurchaseDraftRows():purchaseDraftRows();
  if(!rows.length||rows.some(r=>!r.productId||!Number.isSafeInteger(r.qty)||r.qty<1||r.priceValid===false))throw Error('Проверьте товар и количество в каждой позиции');
@@ -48,7 +48,7 @@ function historicalCosts(rows,current,date){
  return totals;
 }
 
-function summarize(rows,current,date){
+function summarize(rows,current,date,{draft=false,pendingBuy=false}={}){
  const history=historicalCosts(rows,current,date);
  const buy={estimate:0,actual:0,count:0,compared:0,baseline:0};
  const delivery={estimate:0,actual:0,count:0,compared:0,baseline:0};
@@ -59,9 +59,9 @@ function summarize(rows,current,date){
    const estimate=cost[key]/cost[key+'Qty']*qty;
    total.estimate+=estimate;
    total.count++;
-   const actual=key==='buy'?buyAmount(row):Number(row.delivery);
-   const delivered=['received','at_warehouse'].includes(purchaseStatus(row));
-   if(current&&(actual>0||key==='delivery'&&actual===0&&delivered)){
+   const actual=key==='buy'?(pendingBuy?0:buyAmount(row)):Number(draft?row.deliveryShare:row.delivery);
+   const confirmedFreeDelivery=!draft&&key==='delivery'&&actual===0&&['received','at_warehouse'].includes(purchaseStatus(row));
+   if(actual>0||confirmedFreeDelivery){
     total.actual+=actual;
     total.baseline+=estimate;
     total.compared++;
@@ -97,11 +97,18 @@ function addDraftEstimate(mode){
   dateInput.dataset.purchaseEstimate='1';
   dateInput.addEventListener('change',edit?()=>updateEditPurchaseCalculator():()=>updatePurchaseOrderCalculator());
  }
- const {buy,delivery}=summarize(rows,current,date);
+ const prefix=edit?'editPor':'por';
+ const deliveryAmount=Number(document.getElementById(prefix+'Delivery')?.value)||0;
+ const pendingBuy=document.getElementById(prefix+'BuyTotal')?.dataset?.pendingTotal==='1';
+ const costs=purchaseDraftCosts(rows,0,deliveryAmount);
+ const {buy,delivery}=summarize(costs,current,date,{draft:true,pendingBuy});
  const count=rows.length;
+ const buyText=buy.compared?comparisonLabel(buy,count,'цена пока не указана'):estimateLabel(buy,count);
+ const deliveryText=delivery.compared?comparisonLabel(delivery,count,'стоимость пока не указана')
+  :estimateLabel(delivery,count)+(delivery.count&&buy.compared?' · сумма доставки пока не указана':'');
  box.insertAdjacentHTML('beforeend','<div style="margin-top:10px"><b>Ориентир по прошлым закупкам</b>'
-  +'<div>Товары · '+estimateLabel(buy,count)+'</div>'
-  +'<div>Доставка · '+estimateLabel(delivery,count)+'</div>'
+  +'<div>Товары · '+buyText+'</div>'
+  +'<div>Доставка · '+deliveryText+'</div>'
   +(buy.count===count&&delivery.count===count?'<div><b>Всего ≈ '+fmt(buy.estimate+delivery.estimate)+'</b></div>':'')
   +'</div>');
 }

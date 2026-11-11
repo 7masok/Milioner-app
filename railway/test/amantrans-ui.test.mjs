@@ -58,7 +58,10 @@ test('only an explicit paid transition registers the first visible name, total q
 test('old purchases are not sent by opening; a new payment without a track gets its own temporary warehouse code',async()=>{
  const f=fixture(),row=f.ctx.state.purchases[0];f.ctx.purchaseWorkflowStage=x=>x.workflowStageId;row.workflowStageId='paid';
  f.ctx.amanPreparePurchase([row],'paid');await f.ctx.amanSubmitPurchase('main');assert.equal(f.requests.length,0);assert.equal(row.amantransAutoRequestedAt,undefined);
- f.ctx.amanPreparePurchase([row],'cart');assert.equal(row.batch,'TMP-main');f.view.createdOrderId='11';await f.ctx.amanSubmitPurchase('main');assert.equal(f.requests.length,1);assert.equal(JSON.parse(f.requests[0].options.body).fields.track,row.batch);
+ row.batch='Китай 11.11.2026';
+ f.ctx.amanPreparePurchase([row],'cart');assert.equal(row.batch,'Китай 11.11.2026');assert.equal(row.amantransTrack,'TMP-main');
+ assert.match(f.ctx.amanPurchaseTrackHtml([row]),/Временный трек · TMP-main/);
+ f.view.createdOrderId='11';await f.ctx.amanSubmitPurchase('main');assert.equal(f.requests.length,1);assert.equal(JSON.parse(f.requests[0].options.body).fields.track,row.amantransTrack);
 });
 test('an Inferno payment uses its own stable purchase key and never merges quantities with the main warehouse',async()=>{
  const f=fixture(),row=f.ctx.state.purchases[1];f.ctx.purchaseWorkflowStage=x=>x.workflowStageId;row.workflowStageId='paid';f.ctx.amanPreparePurchase([row],'cart','WB3-TRACK');f.view.createdOrderId='11';await f.ctx.amanSubmitPurchase('inferno%3Achild');
@@ -118,13 +121,13 @@ test('a custom payment stage bound to New keeps the automatic carrier registrati
  const f=stagedFixture(),row=f.ctx.state.purchases[1];f.workflow[1].id='my_payment';row.workflowStageId='my_payment';f.ctx.amanPreparePurchase([row],'cart','WB3-NEW');assert.ok(row.amantransAutoRequestedAt);assert.equal(f.requests.length,0);
 });
 
-test('editing the existing purchase track field automatically updates its linked record, with no second track input or manual link button',async()=>{
+test('editing the separate purchase track updates the linked record without changing the title',async()=>{
  const f=fixture(),row=f.ctx.state.purchases[0],html=readFileSync(new URL('../../index.html',import.meta.url),'utf8');let n=0;f.ctx.crypto.randomUUID=()=> 'track-operation-fixture-'+(++n);row.batch='TEMP-ORDER';row.workflowStageId='paid';f.ctx.purchaseWorkflowStage=x=>x.workflowStageId;
  f.ctx.amanPreparePurchase([row],'cart');f.view.createdOrderId='11';await f.ctx.amanSubmitPurchase('main');assert.equal(row.amantransSyncedTrack,'TEMP-ORDER');
- f.ctx.purchaseEditStagePlan=()=>null;f.ctx.applyPurchaseEditStage=()=>{};f.ctx.closeModal=()=>{};f.field('quickPurchaseBatch').value='REAL-TRACK';
+ f.ctx.purchaseEditStagePlan=()=>null;f.ctx.applyPurchaseEditStage=()=>{};f.ctx.closeModal=()=>{};f.field('quickPurchaseBatch').value='Китай 11.11.2026';f.field('amanPurchaseTrackInput').value='REAL-TRACK';
  vm.runInContext(html.split('\n').find(line=>line.startsWith('function saveQuickPurchaseBatch(')),f.ctx);f.ctx.saveQuickPurchaseBatch('main');await new Promise(setImmediate);
  assert.equal(f.requests.filter(x=>x.url.endsWith('/purchases/register')).length,2);const body=JSON.parse(f.requests.at(-1).options.body);assert.equal(body.orderId,'11');assert.equal(body.accountId,'7');assert.equal(body.previousTrack,'TEMP-ORDER');assert.equal(body.fields.track,'REAL-TRACK');assert.equal(row.amantransOrderId,'11');assert.equal(row.amantransSyncedTrack,'REAL-TRACK');assert.equal(row.buyTotal,10000);assert.equal(row.qty,2);
- assert.equal(f.ctx.amanPurchaseTrackField([row]),'');assert.doesNotMatch(f.ctx.amanShipmentHtml('main',[row]),/<button|Привязать отправление/);
+ assert.equal(row.batch,'Китай 11.11.2026');assert.match(f.ctx.amanPurchaseTrackField([row]),/value="REAL-TRACK"/);assert.doesNotMatch(f.ctx.amanShipmentHtml('main',[row]),/<button|Привязать отправление/);
  f.ctx.saveQuickPurchaseBatch('main');await new Promise(setImmediate);assert.equal(f.requests.filter(x=>x.url.endsWith('/purchases/register')).length,2);
 });
 test('server purchase identity restores a lost local link without track guessing or manual actions',async()=>{
@@ -134,7 +137,7 @@ test('server purchase identity restores a lost local link without track guessing
 test('a track edited while creation is in flight is sent to the newly created ID after the first response',async()=>{
  const f=fixture(),row=f.ctx.state.purchases[0];row.batch='TEMP-ORDER';row.workflowStageId='paid';f.ctx.purchaseWorkflowStage=x=>x.workflowStageId;f.ctx.amanPreparePurchase([row],'cart');f.view.createdOrderId='11';
  let release;const gate=new Promise(resolve=>release=resolve),original=f.ctx.fetch;let first=true;f.ctx.fetch=async(...args)=>{if(first){first=false;await gate;}return original(...args);};
- const creation=f.ctx.amanSubmitPurchase('main');row.batch='REAL-EARLY';f.ctx.amanPreparePurchase([row],'paid');await f.ctx.amanSubmitPurchase('main');release();await creation;await new Promise(setImmediate);
+ const creation=f.ctx.amanSubmitPurchase('main');f.ctx.amanPreparePurchase([row],'paid','REAL-EARLY','TEMP-ORDER');await f.ctx.amanSubmitPurchase('main');release();await creation;await new Promise(setImmediate);
  assert.equal(f.requests.length,2);const bodies=f.requests.map(x=>JSON.parse(x.options.body));assert.equal(bodies[0].fields.track,'TEMP-ORDER');assert.equal(bodies[1].orderId,'11');assert.equal(bodies[1].fields.track,'REAL-EARLY');assert.equal(row.amantransSyncedTrack,'REAL-EARLY');
 });
 
@@ -229,4 +232,13 @@ test('a late carrier response fills an untouched open editor but preserves typin
   release();await new Promise(setImmediate);
   assert.equal(f.field('editPorDelivery').value,dirty?'777':'123.45');assert.equal(calcs,dirty?0:1);
  }
+});
+
+test('an existing automatic TMP title displays the original order date and retains its exact track',()=>{
+ const f=fixture(),row=f.ctx.state.purchases[0];
+ row.batch='TMP-main';row.orderedAt=Date.parse('2026-11-10T21:00:00Z');
+ assert.equal(f.ctx.amanPurchaseTitle(row),'Китай 11.11.2026');
+ assert.equal(f.ctx.amanPurchaseTrack([row]),'TMP-main');
+ assert.match(f.ctx.amanPurchaseTrackHtml([row]),/Временный трек · TMP-main/);
+ assert.equal(row.batch,'TMP-main');
 });
