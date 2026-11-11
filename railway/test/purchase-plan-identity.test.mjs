@@ -75,3 +75,70 @@ test('hiding a filtered purchase row confirms and saves its own product ID', () 
 test('the purchase renderer puts the encoded product ID in the Buy action', () => {
   assert.ok(page.includes("onclick=\"openRecommendedPurchase('${encodeURIComponent(key)}')\""));
 });
+
+test('only empty historical rows are excluded from purchase recommendations', () => {
+  const old = {id: 'old', variantGroupId: 'group', variantLegacyLink: {market: 'WB'}, stock: 0};
+  const products = [
+    old,
+    {...old, id: 'reserved'},
+    {...old, id: 'stock', stock: 1},
+    {...old, id: 'linked', wb2Aliases: ['live-code']},
+    {...old, id: 'inbound'},
+    {...old, id: 'sized', wbVariant: {chrtId: 4}},
+    {id: 'ordinary'},
+  ];
+  const context = {
+    state: {settings: {}},
+    purchaseRecommendations: () => products.map(product => ({productId: product.id, product, inbound: product.id === 'inbound' ? 1 : 0})),
+    reserved: product => product.id === 'reserved' ? 1 : 0,
+    renderPurchasePlan() {},
+    setTimeout() {},
+  };
+  context.window = context;
+  vm.runInNewContext(hideScript, context);
+  assert.deepEqual(Array.from(context.purchaseRecommendations(), row => row.productId),
+    ['reserved', 'stock', 'linked', 'inbound', 'sized', 'ordinary']);
+});
+
+test('refresh reads the server, rerenders the plan, and labels partial failure', async () => {
+  const calls = [];
+  const button = {};
+  const status = {};
+  const controls = {
+    dataset: {}, style: {},
+    querySelector: selector => selector === 'button' ? button : status,
+  };
+  let inserted = false;
+  const root = {
+    querySelector(selector) {
+      if (selector === '.purchase-plan') return {};
+      return selector === '[data-purchase-plan-refresh-controls]' && inserted ? controls : null;
+    },
+    querySelectorAll: () => [],
+    insertBefore() { inserted = true; },
+  };
+  const context = {
+    state: {settings: {}},
+    document: {getElementById: () => root, createElement: () => controls},
+    purchaseRecommendations: () => [],
+    renderPurchasePlan() { calls.push('render'); inserted = false; },
+    async pullWarehouseFromServer() { calls.push('warehouse'); return true; },
+    async loadSharedOrderCache(options) { calls.push('orders'); assert.equal(options.after, 55); return {}; },
+    async ozonFboRefreshStatus(options) { calls.push('ozon'); assert.equal(options.force, true); return null; },
+    async refreshPurchaseWb3Inventory() { calls.push('wb3'); return true; },
+    selectedStoreIds: () => ['Ozon', 'WB3'],
+    purchaseCoverDays: () => 55,
+    reportPeriodStart: days => days,
+    setTimeout() {},
+  };
+  context.window = context;
+  vm.runInNewContext(hideScript, context);
+  context.renderPurchasePlan();
+  const refresh = button.onclick();
+  assert.equal(button.disabled, true);
+  await button.onclick();
+  await refresh;
+  assert.deepEqual(calls, ['render', 'warehouse', 'orders', 'ozon', 'wb3', 'render']);
+  assert.equal(button.disabled, false);
+  assert.match(status.textContent, /Часть данных не обновилась/);
+});

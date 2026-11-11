@@ -196,7 +196,7 @@ function load(force=false){
 }
 window.ozonFboPaintStatus=updateOzonHeaderIndicator;
 window.ozonFboSnapshot=()=>data?{payload:data,loadedAt}:null;
-window.ozonFboRefreshStatus=async()=>{await load();updateOzonHeaderIndicator();return data;};
+window.ozonFboRefreshStatus=async({force=false}={})=>{await load(force);updateOzonHeaderIndicator();return force&&message?null:data;};
 window.ozonFboSync=async()=>{
  try{
   const response=await fetch(MILLIONER_API+'/api/ozon-sync-now',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'});
