@@ -4,7 +4,7 @@ import crypto from 'node:crypto';
 import {infernoSession} from './warehouse-scope.js';
 import {combinedRevision,mergeWarehouses,splitWarehouses,scopeValue,scopeApiValue,stable,LISTS,applyUnifiedPatch,warehouseDelta} from './unified-warehouse-model.js';
 
-export function createUnifiedWarehouseRouter({mainOrigin,infernoOrigin,infernoSecret,fetchImpl=fetch}){
+export function createUnifiedWarehouseRouter({mainOrigin,infernoOrigin,infernoSecret,fetchImpl=fetch,numberShipments}){
  const router=express.Router(),baselines=new Map();let lastChild=null;
  function remember(main,inferno){const revision=combinedRevision(Number(main.revision),Number(inferno.revision));baselines.set(revision,{main,inferno,receipts:new Map()});while(baselines.size>24)baselines.delete(baselines.keys().next().value);return revision;}
  async function call(req,child,path,options={}){
@@ -15,19 +15,27 @@ export function createUnifiedWarehouseRouter({mainOrigin,infernoOrigin,infernoSe
  }
  const snapshot=async(req,child,meta=false)=>{const data=await call(req,child,'/api/warehouse-state'+(meta?'?meta=1':''));if(child&&!meta)lastChild=data;return data;};
  async function readChild(req,meta=false){try{return await snapshot(req,true,meta);}catch(error){return {...(lastChild||{revision:0,updatedAt:0,state:{...Object.fromEntries(LISTS.map(k=>[k,[]])),settings:{}}}),unavailable:true};}}
+ async function shipmentNumbers(purchases,inferno){
+  if(!numberShipments)return undefined;
+  try{return await numberShipments(purchases,{allocate:!inferno.unavailable});}
+  catch(error){console.warn('Purchase shipment numbering failed',error.message);return undefined;}
+ }
  router.get('/warehouse-state',async(req,res,next)=>{try{
   const meta=req.query.meta==='1';
   const [main,inferno]=await Promise.all([snapshot(req,false,meta),readChild(req,meta)]);
   const revision=meta?combinedRevision(Number(main.revision),Number(inferno.revision)):remember(main,inferno);
+  const state=meta?undefined:mergeWarehouses(main.state,inferno.state);
+  if(state)state.purchaseShipmentNumbers=await shipmentNumbers(state.purchases,inferno);
   res.set('X-Inferno-Available',inferno.unavailable?'false':'true');
-  res.json({ok:true,exists:main.exists!==false,revision,updatedAt:Math.max(Number(main.updatedAt)||0,Number(inferno.updatedAt)||0),...(!meta?{state:mergeWarehouses(main.state,inferno.state)}:{})});
+  res.json({ok:true,exists:main.exists!==false,revision,updatedAt:Math.max(Number(main.updatedAt)||0,Number(inferno.updatedAt)||0),state});
  }catch(error){next(error);}});
  router.put('/warehouse-state',async(req,res,next)=>{try{
   if((req.body.patch?req.body.unifiedWarehouseVersion:req.body.state?.settings?.unifiedWarehouseVersion)!==1)return res.status(409).json({ok:false,error:'unified-snapshot-required'});
   const baseline=baselines.get(Number(req.body.baseRevision));
   if(!baseline)return res.status(409).json({ok:false,error:'warehouse-revision-conflict'});
   const incoming=req.body.patch?applyUnifiedPatch(mergeWarehouses(baseline.main.state,baseline.inferno.state),req.body.state):req.body.state;
-  const wanted=splitWarehouses(incoming,baseline.inferno.state,baseline.main.state);
+  const {purchaseShipmentNumbers:_shipmentNumbers,...editable}=incoming;
+  const wanted=splitWarehouses(editable,baseline.inferno.state,baseline.main.state);
   const fingerprint=crypto.createHash('sha256').update(stable(wanted)).digest('hex');
   const applied=baseline.receipts.get(fingerprint)||{};baseline.receipts.set(fingerprint,applied);
   const targets=['main','inferno'].filter(k=>stable(wanted[k])!==stable(baseline[k].state));
@@ -46,7 +54,10 @@ export function createUnifiedWarehouseRouter({mainOrigin,infernoOrigin,infernoSe
    }
   }
   for(const key of targets)current[key]=await snapshot(req,key==='inferno');
-  const revision=remember(current.main,current.inferno);res.json({ok:true,revision,updatedAt:Math.max(Number(current.main.updatedAt)||0,Number(current.inferno.updatedAt)||0)});
+  const revision=remember(current.main,current.inferno);
+  const purchases=[...(current.main.state?.purchases||[]),...scopeValue(current.inferno.state?.purchases||[])];
+  const purchaseShipmentNumbers=await shipmentNumbers(purchases,current.inferno);
+  res.json({ok:true,revision,purchaseShipmentNumbers,updatedAt:Math.max(Number(current.main.updatedAt)||0,Number(current.inferno.updatedAt)||0)});
  }catch(error){if(error.status)return res.status(error.status).json(error.data||{ok:false,error:error.message});next(error);}});
  router.get('/orders',async(req,res,next)=>{try{
   const url=new URL(req.url,'http://scope.local');const selected=url.searchParams.get('market');
@@ -83,7 +94,7 @@ export function createUnifiedWarehouseRouter({mainOrigin,infernoOrigin,infernoSe
   if(body&&typeof body==='object')body=scopeValue(body,false);
   const path='/api'+url.pathname+url.search;
   const data=await call(req,true,path,{method:req.method,...(!['GET','HEAD'].includes(req.method)?{body:JSON.stringify(body||{})}:{})});
-  if(data.state&&Array.isArray(data.state.products)&&data.state.settings){const main=await snapshot(req,false),child=await snapshot(req,true);return res.json({...data,state:mergeWarehouses(main.state,child.state),revision:remember(main,child)});}
+  if(data.state&&Array.isArray(data.state.products)&&data.state.settings){const main=await snapshot(req,false),child=await snapshot(req,true);const state=mergeWarehouses(main.state,child.state);state.purchaseShipmentNumbers=await shipmentNumbers(state.purchases,child);return res.json({...data,state,revision:remember(main,child)});}
   res.json(scopeApiValue(data));
  }catch(error){if(error.status)return res.status(error.status).json(error.data||{ok:false,error:error.message});next(error);}});
  return router;

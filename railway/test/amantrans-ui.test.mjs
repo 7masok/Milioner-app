@@ -124,10 +124,10 @@ test('a custom payment stage bound to New keeps the automatic carrier registrati
 test('editing the separate purchase track updates the linked record without changing the title',async()=>{
  const f=fixture(),row=f.ctx.state.purchases[0],html=readFileSync(new URL('../../index.html',import.meta.url),'utf8');let n=0;f.ctx.crypto.randomUUID=()=> 'track-operation-fixture-'+(++n);row.batch='TEMP-ORDER';row.workflowStageId='paid';f.ctx.purchaseWorkflowStage=x=>x.workflowStageId;
  f.ctx.amanPreparePurchase([row],'cart');f.view.createdOrderId='11';await f.ctx.amanSubmitPurchase('main');assert.equal(row.amantransSyncedTrack,'TEMP-ORDER');
- f.ctx.purchaseEditStagePlan=()=>null;f.ctx.applyPurchaseEditStage=()=>{};f.ctx.closeModal=()=>{};f.field('quickPurchaseBatch').value='Китай 11.11.2026';f.field('amanPurchaseTrackInput').value='REAL-TRACK';
+ f.ctx.purchaseEditStagePlan=()=>null;f.ctx.applyPurchaseEditStage=()=>{};f.ctx.closeModal=()=>{};f.field('amanPurchaseTrackInput').value='REAL-TRACK';
  vm.runInContext(html.split('\n').find(line=>line.startsWith('function saveQuickPurchaseBatch(')),f.ctx);f.ctx.saveQuickPurchaseBatch('main');await new Promise(setImmediate);
  assert.equal(f.requests.filter(x=>x.url.endsWith('/purchases/register')).length,2);const body=JSON.parse(f.requests.at(-1).options.body);assert.equal(body.orderId,'11');assert.equal(body.accountId,'7');assert.equal(body.previousTrack,'TEMP-ORDER');assert.equal(body.fields.track,'REAL-TRACK');assert.equal(row.amantransOrderId,'11');assert.equal(row.amantransSyncedTrack,'REAL-TRACK');assert.equal(row.buyTotal,10000);assert.equal(row.qty,2);
- assert.equal(row.batch,'Китай 11.11.2026');assert.match(f.ctx.amanPurchaseTrackField([row]),/value="REAL-TRACK"/);assert.doesNotMatch(f.ctx.amanShipmentHtml('main',[row]),/<button|Привязать отправление/);
+ assert.equal(row.batch,'TEMP-ORDER');assert.match(f.ctx.amanPurchaseTrackField([row]),/value="REAL-TRACK"/);assert.match(f.ctx.amanShipmentHtml('main',[row]),/В филиале/);assert.doesNotMatch(f.ctx.amanShipmentHtml('main',[row]),/<button|Привязать отправление/);
  f.ctx.saveQuickPurchaseBatch('main');await new Promise(setImmediate);assert.equal(f.requests.filter(x=>x.url.endsWith('/purchases/register')).length,2);
 });
 test('server purchase identity restores a lost local link without track guessing or manual actions',async()=>{

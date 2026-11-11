@@ -53,6 +53,7 @@ pushWarehouseToServer=async function(){
       // Keep every edit that exists locally at conflict time. Merge it against
       // the last common snapshot and the newest server snapshot, then retry.
       const remoteData=await fetchWarehouseCloud();
+      window.setPurchaseShipmentNumbers?.(remoteData.state?.purchaseShipmentNumbers);
       const localNow=normalizeWarehouseSnapshot(warehouseSnapshot());
       const remoteSnap=normalizeWarehouseSnapshot(remoteData.state);
       const baseSnap=normalizeWarehouseSnapshot(warehouseLastCloudSnapshot||{});
@@ -81,6 +82,7 @@ pushWarehouseToServer=async function(){
       throw error;
     }
 
+    const shipmentNumbersChanged=window.setPurchaseShipmentNumbers?.(data.purchaseShipmentNumbers);
     warehouseRemoteRevision=Number(data.revision||warehouseRemoteRevision);
     warehouseRemoteUpdatedAt=Number(data.updatedAt||Date.now());
     warehouseLastCloudSnapshot=sentSnap;
@@ -94,6 +96,9 @@ pushWarehouseToServer=async function(){
     }else{
       markWarehouseDirty();
       scheduleWarehouseSave(100);
+    }
+    if(shipmentNumbersChanged&&document.getElementById('purchases')?.classList.contains('active')){
+      try{renderPurchases({listOnly:true});}catch(error){console.warn('Purchase shipment list refresh failed',error);}
     }
     return true;
   }catch(error){

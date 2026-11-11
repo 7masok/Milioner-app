@@ -1,3 +1,4 @@
+import {numberPurchaseShipments} from './warehouse-shipment-numbers.js';
 import {readWbSupplySnapshot,linkWbSupplyProduct,setWbSupplyAccounting,cancelWbSupplyReservation,startWbSupplyLoop} from './wb3-supply-sync.js';
 import {startBusinessReportProcess} from './business-report-process.js';
 import {amanRouter,startAmanLoop} from './amantrans.js';
@@ -177,7 +178,7 @@ app.post('/api/auth/webauthn/login-verify', requireTrustedOrigin, webauthnLoginV
 // Device tokens are scoped to the planner; warehouse routes keep their session gate.
 app.use('/api/ozon-planner', plannerRouter);
 app.use('/api', requireAppSession);
-if(config.infernoApiUrl&&config.infernoAdminToken&&config.storeProfile!=='WB3')app.use('/api/unified', requireTrustedOrigin, createUnifiedWarehouseRouter({mainOrigin:'http://127.0.0.1:'+config.port,infernoOrigin:config.infernoApiUrl,infernoSecret:config.infernoAdminToken}));
+if(config.infernoApiUrl&&config.infernoAdminToken&&config.storeProfile!=='WB3')app.use('/api/unified', requireTrustedOrigin, createUnifiedWarehouseRouter({mainOrigin:'http://127.0.0.1:'+config.port,infernoOrigin:config.infernoApiUrl,infernoSecret:config.infernoAdminToken,numberShipments:numberPurchaseShipments}));
 app.post('/api/inferno/session', requireTrustedOrigin, requireConfiguredSession, (req,res) => {
   if (!config.infernoApiUrl || !config.infernoAdminToken || config.storeProfile === 'WB3') return res.status(503).json({ok:false,error:'inferno-not-configured'});
   const token = String(req.headers.authorization || '').replace(/^Bearer\s+/i, '');
