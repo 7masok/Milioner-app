@@ -45,15 +45,23 @@ test('draft uses weighted history for current quantities and saved shipment comp
   context.openPurchaseShipment('saved');
   assert.match(shipment, /600 ₸ вместо ≈ 500 ₸ · <b>\+20%/);
   assert.match(shipment, /30 ₸ вместо ≈ 40 ₸ · <b>-25%/);
+  const changes = context.window.purchaseShipmentPriceChanges([paid]);
+  assert.match(changes.buy, /\(\+20%\)/);
+  assert.match(changes.delivery, /\(-25%\)/);
+  assert.doesNotMatch(changes.buy + changes.delivery, /₸|500|40/);
+  const partial = context.window.purchaseShipmentPriceChanges([paid, {...paid, productId: 'unknown'}]);
+  assert.match(partial.buy, /\(\+20% · 1 из 2 поз\.\)/);
 
   paid.status = 'to_forwarder';
   paid.delivery = 0;
   context.openPurchaseShipment('saved');
   assert.match(shipment, /Доставка · стоимость пока не указана/);
+  assert.equal(context.window.purchaseShipmentPriceChanges([paid]).delivery, '');
 
   paid.workflowStageId = 'cart';
   context.openPurchaseShipment('saved');
   assert.equal(shipment, '');
+  assert.equal(context.window.purchaseShipmentPriceChanges([paid]).buy, undefined);
 });
 
 test('editor updates percentages as goods and delivery are entered and skips unapplied totals', () => {
