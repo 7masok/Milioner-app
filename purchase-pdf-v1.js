@@ -79,6 +79,27 @@ function estimateLabel(cost,count){
  return '≈ '+fmt(cost.estimate)+(cost.count<count?' · по '+cost.count+' из '+count+' поз.':'');
 }
 
+function compareSavedShipment(rows){
+ const current=rows[0];
+ if(!current)return null;
+ const stage=purchaseWorkflowStage(current);
+ const unpaid=purchaseWorkflow().some(row=>row.id===stage&&(row.id==='cart'||normalizeName(row.name)==='корзина'));
+ return unpaid?null:summarize(rows,current,dateOf(current));
+}
+
+function percentageLabel(cost,count){
+ if(!cost.compared)return '';
+ const change=percent.format((cost.actual/cost.baseline-1)*100);
+ const coverage=cost.compared<count?' · '+cost.compared+' из '+count+' поз.':'';
+ return ' <span class="muted">('+change+'%'+coverage+')</span>';
+}
+
+window.purchaseShipmentPriceChanges=function(rows){
+ const costs=compareSavedShipment(rows);
+ if(!costs)return {};
+ return {buy:percentageLabel(costs.buy,rows.length),delivery:percentageLabel(costs.delivery,rows.length)};
+};
+
 function comparisonLabel(cost,count,pending){
  if(!cost.count)return 'нет данных по прошлым закупкам';
  if(!cost.compared)return pending+' · ориентир '+estimateLabel(cost,count);
@@ -136,16 +157,11 @@ if(typeof openPurchaseShipment==='function'){
  openPurchaseShipment=function(key){
   openShipment(key);
   const rows=purchaseShipmentRows(key);
-  const current=rows[0];
-  const sheet=document.getElementById('sheet');
-  if(!current||!sheet)return;
-  const workflow=purchaseWorkflow();
-  const stage=purchaseWorkflowStage(current);
-  const unpaid=workflow.some(row=>row.id===stage&&(row.id==='cart'||normalizeName(row.name)==='корзина'));
-  if(unpaid)return;
-  const button=sheet.querySelector('button[onclick^="exportPurchasePdf("]');
+  const button=document.getElementById('sheet')?.querySelector('button[onclick^="exportPurchasePdf("]');
   if(!button)return;
-  const {buy,delivery}=summarize(rows,current,dateOf(current));
+  const costs=compareSavedShipment(rows);
+  if(!costs)return;
+  const {buy,delivery}=costs;
   button.insertAdjacentHTML('beforebegin','<div class="link-note"><b>Сравнение с прошлыми закупками</b>'
    +'<div style="margin-top:6px">Товары · '+comparisonLabel(buy,rows.length,'цена пока не указана')+'</div>'
    +'<div>Доставка · '+comparisonLabel(delivery,rows.length,'стоимость пока не указана')+'</div></div>');
