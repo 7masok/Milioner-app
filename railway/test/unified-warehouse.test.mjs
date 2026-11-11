@@ -19,7 +19,7 @@ test('references across warehouse boundaries are rejected',()=>{
 test('combined revisions are monotonic for either database and remain safe integers',()=>{
  assert.ok(combinedRevision(10,3)>combinedRevision(10,2));assert.ok(combinedRevision(11,0)>combinedRevision(10,9999));assert.throws(()=>combinedRevision(10,100000000));
 });
-async function fixture(t){
+async function fixture(t,numberShipments){
  const db={main:{state:state('main'),revision:1,updatedAt:1},inferno:{state:state('child'),revision:2,updatedAt:2}},writes=[];let failChild=false;
  const upstream=async(url,opts)=>{
   const key=url.startsWith('http://child')?'inferno':'main',current=db[key],path=new URL(url).pathname;
@@ -36,7 +36,7 @@ async function fixture(t){
   if(path==='/api/wb-prices'){assert.equal(new URL(url).searchParams.get('market'),'WB');return Response.json({ok:true,market:'WB',products:[{productId:'same',nmId:'123'}]});}
   throw Error('unexpected '+url);
  };
- const app=express();app.use(express.json());app.use(createUnifiedWarehouseRouter({mainOrigin:'http://main',infernoOrigin:'http://child',infernoSecret:'fixture-secret',fetchImpl:upstream}));
+ const app=express();app.use(express.json());app.use(createUnifiedWarehouseRouter({mainOrigin:'http://main',infernoOrigin:'http://child',infernoSecret:'fixture-secret',fetchImpl:upstream,numberShipments}));
  const server=app.listen(0,'127.0.0.1');await new Promise(r=>server.on('listening',r));t.after(()=>{server.closeAllConnections();server.close();});
  const origin='http://127.0.0.1:'+server.address().port,headers={Authorization:'Bearer '+(Date.now()+3600000)+'.fixture.signature','Content-Type':'application/json'};
  return {db,writes,fail:v=>failChild=v,read:async path=>(await fetch(origin+(path||'/warehouse-state'),{headers})).json(),save:async data=>{const r=await fetch(origin+'/warehouse-state',{method:'PUT',headers,body:JSON.stringify(data)});return{status:r.status,body:await r.json()};}};
@@ -72,4 +72,26 @@ test('patches retain untouched entities and scope deletion keys correctly',()=>{
 test('WB3 report metadata retains its own market when prepared snapshots are federated',()=>{
  const result=scopeApiValue({market:'WB',ordersPartialMarkets:['WB'],summary:{missingMarkets:['WB']},storeStarts:JSON.stringify({WB:'2026-05-01'})});
  assert.equal(result.market,'WB3');assert.deepEqual(result.ordersPartialMarkets,['WB3']);assert.deepEqual(result.summary.missingMarkets,['WB3']);assert.equal(JSON.parse(result.storeStarts).WB3,'2026-05-01');
+});
+
+test('shipment numbers travel outside stored purchase rows and cover both warehouses',async t=>{
+ const calls=[];
+ const f=await fixture(t,async(rows,{allocate})=>{
+  calls.push({keys:rows.map(x=>x.shipmentId),allocate});
+  return Object.fromEntries(rows.map((x,i)=>[x.shipmentId,101+i]));
+ });
+ f.db.main.state.purchases=[{id:'line',shipmentId:'shipment',productId:'same'}];
+ f.db.inferno.state.purchases=[{id:'line',shipmentId:'shipment',productId:'same'}];
+ const snapshot=await f.read();
+ assert.deepEqual(snapshot.state.purchaseShipmentNumbers,{shipment:101,'inferno:shipment':102});
+ assert.deepEqual(calls[0],{keys:['shipment','inferno:shipment'],allocate:true});
+ await f.read('/warehouse-state?meta=1');
+ assert.equal(calls.length,1);
+ snapshot.state.purchases[0].batch='Новое название';
+ const saved=await f.save({baseRevision:snapshot.revision,state:snapshot.state});
+ assert.equal(saved.status,200);
+ assert.deepEqual(saved.body.purchaseShipmentNumbers,snapshot.state.purchaseShipmentNumbers);
+ assert.deepEqual(f.writes,['main']);
+ assert.equal(f.db.main.state.purchaseShipmentNumbers,undefined);
+ assert.equal(f.db.inferno.state.purchaseShipmentNumbers,undefined);
 });

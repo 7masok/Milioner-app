@@ -7,6 +7,7 @@ import {normalizedPurchase} from '../src/warehouse-purchases.js';
 const html=readFileSync(new URL('../../index.html',import.meta.url),'utf8'),lines=html.split('\n');
 const feature=html.slice(html.indexOf('let purchaseCartPickerDraft='),html.indexOf('function purchaseHistoricalUnitCosts('));
 const fn=name=>lines.find(line=>line.startsWith('function '+name+'('));
+const quickEdit=html.slice(html.indexOf('function quickEditPurchaseBatch('),html.indexOf('function saveQuickPurchaseBatch('));
 function fixture(){
   const products=[{id:'a',name:'Товар А',stock:5},{id:'b',name:'Товар Б',stock:8},{id:'c',name:'Новый товар В',stock:0}];
   const workflow=[{id:'cart',name:'Корзина',days:0},{id:'paid',name:'Оплачено',days:0},{id:'delivery_warehouse',name:'Китай',days:20},{id:'arrived',name:'Алматы',days:0}];
@@ -20,14 +21,18 @@ function fixture(){
     purchaseRecommendations:()=>[{productId:'c',qty:7,unitCost:150,product:products[2]}],
     productNameById:id=>products.find(p=>p.id===id)?.name||'—',esc:s=>String(s).replace(/</g,'&lt;'),
     alert:s=>alerts.push(s),id:()=>`new-${next++}`,localDateInputValue:()=> '2026-10-07',localDateStart:()=>100,
-    showSheet(s){screens.push(s);draft.splice(0);for(const key of ['editPorDate','editPorBatch','editPorBuyTotal','editPorDelivery']){const match=s.match(new RegExp('id="'+key+'"[^>]*value="([^"]*)"'));element(key).value=match?.[1]||'';}for(const key of ['editPorStage','quickPurchaseStage']){const select=s.match(new RegExp('<select id="'+key+'" data-current-stage="([^"]*)"'));element(key).value=select?.[1]||'';element(key).dataset.currentStage=select?.[1]||'';}element('editPurchaseItems').dataset={};},
+    showSheet(s){screens.push(s);draft.splice(0);for(const key of ['editPorDate','editPorBuyTotal','editPorDelivery']){const match=s.match(new RegExp('id="'+key+'"[^>]*value="([^"]*)"'));element(key).value=match?.[1]||'';}for(const key of ['editPorStage','quickPurchaseStage']){const select=s.match(new RegExp('<select id="'+key+'" data-current-stage="([^"]*)"'));element(key).value=select?.[1]||'';element(key).dataset.currentStage=select?.[1]||'';}element('editPurchaseItems').dataset={};},
     addEditPurchaseItem(productId,qty){draft.push({productId,qty:Number(qty),query:'',selectedName:products.find(p=>p.id===productId)?.name||''});},
     editPurchaseDraftRows:()=>draft,updateEditPurchaseCalculator(){},
+    purchaseShipmentNumber:()=> '101',purchaseShipmentHeading:()=> '№ 101 · 07.10.2026',
+    amanPurchaseTrackField:()=>'<label for="amanPurchaseTrackInput">Трек-код</label><input id="amanPurchaseTrackInput">',
+    amanReadPurchaseTrack:()=>element('amanPurchaseTrackInput').value,
+    amanPreparePurchase(rows,_stage,track){if(track)for(const row of rows)row.amantransTrack=track;},
     rememberPurchaseDeletes:ids=>deletes.push(...ids),save(){saves++;return true;},closeModal(){},render(){},renderPurchases(){},setTimeout(){},openReceivePurchaseShipment:key=>receipts.push(key),
     openCorrectReceivedPurchaseShipment(){throw Error('must not enter received correction');},
     openModal:type=>screens.push('open:'+type),purchasePage:1,
   };
-  vm.createContext(ctx);vm.runInContext([fn('purchaseStatus'),fn('isRealPurchase'),fn('purchaseShipmentStage'),fn('purchaseShipmentGroups'),fn('purchaseShipmentRows'),fn('purchaseShipmentTotals'),fn('purchaseDraftCosts'),feature,fn('purchaseWorkflowPhase'),fn('purchaseEditStageField'),fn('purchaseEditStagePlan'),fn('applyPurchaseEditStage'),fn('quickEditPurchaseBatch'),fn('saveQuickPurchaseBatch'),fn('openEditPurchaseShipment'),fn('savePurchaseShipmentEdit')].join('\n'),ctx);
+  vm.createContext(ctx);vm.runInContext([fn('purchaseStatus'),fn('isRealPurchase'),fn('purchaseShipmentStage'),fn('purchaseShipmentGroups'),fn('purchaseShipmentRows'),fn('purchaseShipmentTotals'),fn('purchaseDraftCosts'),feature,fn('purchaseWorkflowPhase'),fn('purchaseEditStageField'),fn('purchaseEditStagePlan'),fn('applyPurchaseEditStage'),quickEdit,fn('saveQuickPurchaseBatch'),fn('openEditPurchaseShipment'),fn('savePurchaseShipmentEdit')].join('\n'),ctx);
   return {ctx,state,products,elements,element,draft,alerts,screens,deletes,receipts,get saves(){return saves;},set ready(v){ready=v;}};
 }
 
@@ -89,28 +94,32 @@ test('an empty cart offers a new manual purchase and the selection button enable
 test('track and delivery stage save together in the quick editor without changing inventory or another shipment',()=>{
  const f=fixture(),stock=JSON.stringify(f.products),other=JSON.stringify(f.state.purchases.filter(x=>x.shipmentId!=='seller-one'));
  f.ctx.quickEditPurchaseBatch('seller-one');assert.match(f.screens.at(-1),/Статус поставки/);
- f.element('quickPurchaseBatch').value='NEW-TRACK';f.element('quickPurchaseStage').value='delivery_warehouse';f.ctx.saveQuickPurchaseBatch('seller-one');
- const rows=f.state.purchases.filter(x=>x.shipmentId==='seller-one');assert.ok(rows.every(x=>x.batch==='NEW-TRACK'&&x.status==='to_me'&&x.workflowStageId==='delivery_warehouse'&&x.forwarderReceivedAt>0&&x.remainingQty===0));
+ f.element('amanPurchaseTrackInput').value='NEW-TRACK';f.element('quickPurchaseStage').value='delivery_warehouse';f.ctx.saveQuickPurchaseBatch('seller-one');
+ const rows=f.state.purchases.filter(x=>x.shipmentId==='seller-one');assert.ok(rows.every(x=>x.amantransTrack==='NEW-TRACK'&&x.batch==='Продавец 1'&&x.status==='to_me'&&x.workflowStageId==='delivery_warehouse'&&x.forwarderReceivedAt>0&&x.remainingQty===0));
  assert.equal(f.saves,1);assert.equal(JSON.stringify(f.products),stock);assert.equal(JSON.stringify(f.state.purchases.filter(x=>x.shipmentId!=='seller-one')),other);assert.equal(f.state.movements.length,0);
 });
 test('the full editor saves a changed track and stage while retaining purchase IDs and amounts',()=>{
- const f=fixture();f.ctx.openEditPurchaseShipment('seller-one');f.element('editPorBatch').value='TRACK-2';f.element('editPorStage').value='paid';f.ctx.savePurchaseShipmentEdit('seller-one');
- const rows=f.state.purchases.filter(x=>x.shipmentId==='seller-one');assert.deepEqual(rows.map(x=>x.id).sort(),['old-a','old-b']);assert.ok(rows.every(x=>x.batch==='TRACK-2'&&x.workflowStageId==='paid'&&x.status==='to_forwarder'&&x.workflowStageAt>123));assert.equal(rows.reduce((n,x)=>n+x.buyTotal,0),900);assert.equal(f.saves,1);
+ const f=fixture();f.ctx.openEditPurchaseShipment('seller-one');
+ assert.match(f.screens.at(-1),/Дата заказа · № 101/);
+ assert.doesNotMatch(f.screens.at(-1),/Название поставки/);
+ assert.match(f.screens.at(-1),/id="amanPurchaseTrackInput"/);
+ f.element('amanPurchaseTrackInput').value='TRACK-2';f.element('editPorStage').value='paid';f.ctx.savePurchaseShipmentEdit('seller-one');
+ const rows=f.state.purchases.filter(x=>x.shipmentId==='seller-one');assert.deepEqual(rows.map(x=>x.id).sort(),['old-a','old-b']);assert.ok(rows.every(x=>x.amantransTrack==='TRACK-2'&&x.batch==='Продавец 1'&&x.workflowStageId==='paid'&&x.status==='to_forwarder'&&x.workflowStageAt>123));assert.equal(rows.reduce((n,x)=>n+x.buyTotal,0),900);assert.equal(f.saves,1);
 });
 test('invalid or stale stage selection cannot partially save a changed track',()=>{
  for(const stale of [false,true]){
-  const f=fixture();f.ctx.quickEditPurchaseBatch('seller-one');f.element('quickPurchaseBatch').value='UNSAVED';f.element('quickPurchaseStage').value=stale?'paid':'missing';
+  const f=fixture();f.ctx.quickEditPurchaseBatch('seller-one');f.element('amanPurchaseTrackInput').value='UNSAVED';f.element('quickPurchaseStage').value=stale?'paid':'missing';
   if(stale)f.state.purchases.find(x=>x.id==='old-a').workflowStageId='paid';const before=JSON.stringify(f.state);f.ctx.saveQuickPurchaseBatch('seller-one');assert.equal(JSON.stringify(f.state),before);assert.equal(f.saves,0);assert.ok(f.alerts.length);
  }
 });
 test('arrival selection saves the track then opens the existing receipt confirmation without posting inventory',()=>{
  const f=fixture();for(const x of f.state.purchases.filter(x=>x.shipmentId==='seller-one')){x.status='to_me';x.workflowStageId='delivery_warehouse';}
- f.ctx.quickEditPurchaseBatch('seller-one');f.element('quickPurchaseBatch').value='ARRIVAL-TRACK';f.element('quickPurchaseStage').value='arrived';f.ctx.saveQuickPurchaseBatch('seller-one');
- assert.deepEqual(f.receipts,['seller-one']);assert.equal(f.saves,1);assert.ok(f.state.purchases.filter(x=>x.shipmentId==='seller-one').every(x=>x.status==='to_me'&&x.batch==='ARRIVAL-TRACK'&&x.remainingQty===0));assert.equal(f.state.movements.length,0);
+ f.ctx.quickEditPurchaseBatch('seller-one');f.element('amanPurchaseTrackInput').value='ARRIVAL-TRACK';f.element('quickPurchaseStage').value='arrived';f.ctx.saveQuickPurchaseBatch('seller-one');
+ assert.deepEqual(f.receipts,['seller-one']);assert.equal(f.saves,1);assert.ok(f.state.purchases.filter(x=>x.shipmentId==='seller-one').every(x=>x.status==='to_me'&&x.amantransTrack==='ARRIVAL-TRACK'&&x.batch==='Продавец 1'&&x.remainingQty===0));assert.equal(f.state.movements.length,0);
 });
 test('the editor cannot skip the delivery phase or roll back a shipment already received into sale',()=>{
  for(const status of ['to_forwarder','received','at_warehouse']){
   const f=fixture();for(const x of f.state.purchases.filter(x=>x.shipmentId==='seller-one'))x.status=status;
-  f.ctx.quickEditPurchaseBatch('seller-one');f.element('quickPurchaseBatch').value='UNSAVED';f.element('quickPurchaseStage').dataset={};f.element('quickPurchaseStage').value=status==='to_forwarder'?'arrived':'paid';const before=JSON.stringify(f.state);f.ctx.saveQuickPurchaseBatch('seller-one');assert.equal(JSON.stringify(f.state),before);assert.equal(f.saves,0);assert.equal(f.receipts.length,0);
+  f.ctx.quickEditPurchaseBatch('seller-one');f.element('amanPurchaseTrackInput').value='UNSAVED';f.element('quickPurchaseStage').dataset={};f.element('quickPurchaseStage').value=status==='to_forwarder'?'arrived':'paid';const before=JSON.stringify(f.state);f.ctx.saveQuickPurchaseBatch('seller-one');assert.equal(JSON.stringify(f.state),before);assert.equal(f.saves,0);assert.equal(f.receipts.length,0);
  }
 });

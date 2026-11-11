@@ -131,7 +131,7 @@
  };
  window.amanPurchaseTrackHtml=function(items){
   const track=purchaseTrack(items);
-  return track&&track!==window.amanPurchaseTitle(items[0])
+  return track
    ?'<div class="muted" style="overflow-wrap:anywhere">'+(track.startsWith('TMP-')?'Временный трек':'Трек')+' · '+esc(track)+'</div>':'';
  };
  window.amanPurchaseTrackField=items=>'<div class="field"><label for="amanPurchaseTrackInput">Трек-код</label><input id="amanPurchaseTrackInput" value="'+esc(purchaseTrack(items))+'" autocomplete="off" placeholder="Можно добавить позже"></div>';

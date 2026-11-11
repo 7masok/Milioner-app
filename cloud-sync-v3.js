@@ -2,7 +2,7 @@
 'use strict';
 
 const sleep=ms=>new Promise(resolve=>setTimeout(resolve,ms));
-const SERVER_MANAGED_CACHE_KEYS=['kaspiOrderFeed','wbOrderFeed','ozonOrderFeed','kaspiOrders','marketOrderState','marketplaceLiveSince'];
+const SERVER_MANAGED_CACHE_KEYS=['kaspiOrderFeed','wbOrderFeed','ozonOrderFeed','kaspiOrders','marketOrderState','marketplaceLiveSince','purchaseShipmentNumbers'];
 const FAST_CACHE_KEY='milioner_server_snapshot_cache_v2';
 let reportPeriodUiPendingServerSave=false;
 let showingReadOnlyCache=false;
@@ -55,6 +55,7 @@ function setReadOnlyCache(on){
 warehouseSnapshot=function(){return serverSnapshot(state)};
 applyWarehouseSnapshot=function(remote){
   if(typeof invalidateProductRenderStats==='function')invalidateProductRenderStats();
+  window.setPurchaseShipmentNumbers?.(remote?.purchaseShipmentNumbers);
   // Marketplace order feeds live in their own PostgreSQL tables and are intentionally
   // absent from warehouse-state. Preserve the already loaded read-only feeds when a
   // newer warehouse snapshot replaces state, otherwise the 20s cloud watcher makes
