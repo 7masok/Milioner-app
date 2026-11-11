@@ -24,10 +24,10 @@
   if(snapshot.fetchedAt&&!snapshot.lastError&&Date.now()-snapshot.fetchedAt<=10*60000&&typeof purchaseWorkflow==='function'){
    const groups=new Map(),tracks=new Map(),used=new Set(),workflow=purchaseWorkflow(),paid=workflow.findIndex(x=>x.id==='paid'||x.amantransStatus==='NEW');
    for(const row of state.purchases||[]){const key=String(row.shipmentId||row.id||'');if(!groups.has(key))groups.set(key,[]);groups.get(key).push(row);if(row.amantransOrderId)used.add(String(row.amantransOrderId));}
-   for(const items of groups.values())for(const track of new Set(items.map(x=>String(x.batch||x.amantransTrack||'').trim()).filter(Boolean)))tracks.set(track,(tracks.get(track)||0)+1);
+   for(const items of groups.values())for(const track of new Set(items.map(x=>rowTrack(x)).filter(Boolean)))tracks.set(track,(tracks.get(track)||0)+1);
    for(const items of groups.values()){
     const track=purchaseTrack(items);
-    if(paid<0||!track||tracks.get(track)!==1||items.some(x=>x.amantransOrderId||x.amantransAutoRequestedAt||x.amantransPendingTrack||x.amantransAccountId&&String(x.amantransAccountId)!==snapshot.accountId||String(x.batch||x.amantransTrack||'').trim()!==track||!['to_forwarder','to_me'].includes(purchaseStatus(x))||workflow.findIndex(s=>s.id===purchaseWorkflowStage(x))<paid))continue;
+    if(paid<0||!track||tracks.get(track)!==1||items.some(x=>x.amantransOrderId||x.amantransAutoRequestedAt||x.amantransPendingTrack||x.amantransAccountId&&String(x.amantransAccountId)!==snapshot.accountId||rowTrack(x)!==track||!['to_forwarder','to_me'].includes(purchaseStatus(x))||workflow.findIndex(s=>s.id===purchaseWorkflowStage(x))<paid))continue;
     const matches=snapshot.orders.filter(x=>x.track===track);
     if(matches.length!==1||used.has(String(matches[0].id)))continue;
     const carrier=matches[0];used.add(String(carrier.id));
@@ -79,7 +79,7 @@
   for(const items of groups.values())for(const id of new Set(items.map(x=>String(x.amantransOrderId||'')).filter(Boolean)))used.set(id,(used.get(id)||0)+1);
   for(const items of groups.values()){
    const first=items[0],id=String(first.amantransOrderId||''),carrier=order(id);
-   if(!id||used.get(id)!==1||!carrier||carrier.track!==purchaseTrack(items)||items.some(x=>String(x.amantransOrderId||'')!==id||String(x.amantransAccountId||'')!==snapshot.accountId||!['to_forwarder','to_me'].includes(purchaseStatus(x))||workflow.findIndex(stage=>stage.id===purchaseWorkflowStage(x))<paid||String(x.batch||x.amantransTrack||'').trim()!==carrier.track))continue;
+   if(!id||used.get(id)!==1||!carrier||carrier.track!==purchaseTrack(items)||items.some(x=>String(x.amantransOrderId||'')!==id||String(x.amantransAccountId||'')!==snapshot.accountId||!['to_forwarder','to_me'].includes(purchaseStatus(x))||workflow.findIndex(stage=>stage.id===purchaseWorkflowStage(x))<paid||rowTrack(x)!==carrier.track))continue;
    if(carrier.totalKzt==null||!Number.isFinite(Number(carrier.totalKzt))||Number(carrier.totalKzt)<=0)continue;
    const total=Math.round(Number(carrier.totalKzt)*100)/100,current=items.reduce((n,x)=>n+Math.max(0,Number(x.delivery)||0),0),previous=first.amantransDeliveryTotal;
    // An entered amount is a manual override. Keep it, including a manual zero
@@ -112,14 +112,48 @@
    void load();return result;
   };
  }
- function purchaseTrack(items){const first=items[0]||{};return String(first.batch||first.amantransTrack||'').trim();}
- window.amanPurchaseTrackField=()=>'';
+ function temporaryPurchaseTrack(row){
+  return 'TMP-'+String(row?.shipmentId||row?.id||'').replace(/[^a-zA-Z0-9_-]/g,'-').slice(-90);
+ }
+ function rowTrack(row){
+  if(!row)return '';
+  if(Object.hasOwn(row,'amantransTrack'))return String(row.amantransTrack||'').trim();
+  const batch=String(row.batch||'').trim();
+  return /^Китай \d/.test(batch)?'':batch;
+ }
+ function purchaseTrack(items){return rowTrack(items[0]);}
+ window.amanPurchaseTrack=purchaseTrack;
+ window.amanPurchaseTitle=function(row){
+  const batch=String(row?.batch||'').trim();
+  if(batch&&batch!==temporaryPurchaseTrack(row))return batch;
+  const orderedAt=Number(row?.orderedAt||row?.date||row?.createdAt);
+  return orderedAt?'Китай '+new Date(orderedAt).toLocaleDateString('ru-RU',{timeZone:'Asia/Almaty'}):'Поставка';
+ };
+ window.amanPurchaseTrackHtml=function(items){
+  const track=purchaseTrack(items);
+  return track&&track!==window.amanPurchaseTitle(items[0])
+   ?'<div class="muted" style="overflow-wrap:anywhere">'+(track.startsWith('TMP-')?'Временный трек':'Трек')+' · '+esc(track)+'</div>':'';
+ };
+ window.amanPurchaseTrackField=items=>'<div class="field"><label for="amanPurchaseTrackInput">Трек-код</label><input id="amanPurchaseTrackInput" value="'+esc(purchaseTrack(items))+'" autocomplete="off" placeholder="Можно добавить позже"></div>';
+ window.amanReadPurchaseTrack=()=>document.getElementById('amanPurchaseTrackInput')?.value;
  window.amanPreparePurchase=function(items,previousStage,track,previousTrack){
-  if(track!==undefined)for(const row of items){row.amantransTrack=String(track).trim();row.batch=String(track).trim();}
-  if(!items.length)return;const current=purchaseWorkflowStage(items[0]),stage=typeof purchaseWorkflow==='function'?purchaseWorkflow().find(x=>x.id===current):null,paid=current==='paid'||stage?.amantransStatus==='NEW';
+  if(!items.length)return;
+  if(track!==undefined){
+   const keepTrack=items.some(row=>row.amantransOrderId||row.amantransAutoRequestedAt);
+   const desired=String(track).trim()||(keepTrack?String(previousTrack||purchaseTrack(items)).trim():'');
+   for(const row of items)row.amantransTrack=desired;
+  }
+  const current=purchaseWorkflowStage(items[0]),stage=typeof purchaseWorkflow==='function'?purchaseWorkflow().find(x=>x.id===current):null,paid=current==='paid'||stage?.amantransStatus==='NEW';
   const payment=paid&&previousStage!==current&&!items.some(x=>x.amantransOrderId);
-  if(payment){const temporary='TMP-'+String(items[0].shipmentId||items[0].id).replace(/[^a-zA-Z0-9_-]/g,'-').slice(-90);for(const row of items){row.amantransAutoRequestedAt=Date.now();if(!String(row.batch||row.amantransTrack||'').trim()||/^Китай \d/.test(row.batch||''))row.batch=temporary;}}
-  const desired=purchaseTrack(items),edited=track!==undefined||previousTrack!==undefined&&desired!==String(previousTrack).trim();if((payment||edited)&&items.some(x=>x.amantransAutoRequestedAt||x.amantransOrderId)&&items.some(x=>x.amantransPendingTrack!==desired)){const operationId=crypto.randomUUID();for(const row of items){row.amantransPendingTrack=desired;row.amantransTrackOperationId=operationId;}}
+  if(payment){
+   const desired=purchaseTrack(items)||temporaryPurchaseTrack(items[0]),at=Date.now();
+   for(const row of items){row.amantransAutoRequestedAt=at;row.amantransTrack=desired;}
+  }
+  const desired=purchaseTrack(items),edited=previousTrack===undefined?track!==undefined:desired!==String(previousTrack).trim();
+  if(desired&&(payment||edited)&&items.some(x=>x.amantransAutoRequestedAt||x.amantransOrderId)&&items.some(x=>x.amantransPendingTrack!==desired)){
+   const operationId=crypto.randomUUID();
+   for(const row of items){row.amantransPendingTrack=desired;row.amantransTrackOperationId=operationId;}
+  }
  };
  window.amanSubmitPurchase=async function(key){
   key=decodeURIComponent(String(key));const items=purchaseShipmentRows(enc(key));
@@ -128,7 +162,7 @@
   if(linked&&!items.some(x=>x.amantransPendingTrack))return;
   if(linked&&items.every(x=>x.amantransSyncedTrack===track))return;
   if(!requireWarehouseEditReady()){sendErrors.set(key,'Дождись загрузки склада и проверь отправку');paint();return;}
-  if(!track){sendErrors.set(key,'Укажи временный трек в названии закупки');paint();return;}
+  if(!track){sendErrors.set(key,'Укажи трек-код закупки');paint();return;}
   const operationId=firstRow.amantransTrackOperationId||crypto.randomUUID();if(!firstRow.amantransTrackOperationId){for(const row of items){row.amantransTrackOperationId=operationId;row.amantransPendingTrack=track;}save();}
   sending.add(key);sendErrors.delete(key);paint();let successful=false;
   try{

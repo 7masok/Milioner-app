@@ -4,6 +4,8 @@ import vm from 'node:vm';
 import {readFileSync} from 'node:fs';
 
 const script = readFileSync(new URL('../../purchase-pdf-v1.js', import.meta.url), 'utf8');
+const page = readFileSync(new URL('../../index.html', import.meta.url), 'utf8');
+const draftCosts = page.split('\n').find(line => line.startsWith('function purchaseDraftCosts('));
 
 test('draft uses weighted history for current quantities and saved shipment compares both costs', () => {
   const historical = [
@@ -33,7 +35,7 @@ test('draft uses weighted history for current quantities and saved shipment comp
     openPurchaseShipment() { shipment = ''; },
     fmt: value => `${value} ₸`,
   };
-  vm.runInNewContext(script, context);
+  vm.runInNewContext(draftCosts + '\n' + script, context);
   context.updatePurchaseOrderCalculator();
   assert.match(draft, /Товары · ≈ 500 ₸/);
   assert.match(draft, /Доставка · ≈ 40 ₸/);
@@ -52,4 +54,44 @@ test('draft uses weighted history for current quantities and saved shipment comp
   paid.workflowStageId = 'cart';
   context.openPurchaseShipment('saved');
   assert.equal(shipment, '');
+});
+
+test('editor updates percentages as goods and delivery are entered and skips unapplied totals', () => {
+  const old = {productId: 'a', qty: 90, buyTotal: 8012, delivery: 1357, status: 'received', orderedAt: 10};
+  const current = {...old, shipmentId: 'edited', orderedAt: 100};
+  const rows = [{productId: 'a', qty: 90, buy: 7256}];
+  let rendered = '';
+  const fields = {
+    editPurchaseCalc: {insertAdjacentHTML(_where, html) { rendered += html; }},
+    editPurchaseItems: {dataset: {shipmentKey: 'edited'}},
+    editPorDelivery: {value: '0'},
+    editPorBuyTotal: {dataset: {}},
+  };
+  const context = {
+    window: {}, state: {purchases: [old, current]},
+    document: {getElementById: id => fields[id]},
+    isRealPurchase: () => true,
+    purchaseStatus: row => row.status,
+    editPurchaseDraftRows: () => rows,
+    updateEditPurchaseCalculator() { rendered = ''; },
+    purchaseShipmentRows: () => [current],
+    localDateStart: () => 100,
+    fmt: value => Math.round(value) + ' ₸',
+  };
+  vm.runInNewContext(draftCosts + '\n' + script, context);
+  context.updateEditPurchaseCalculator();
+  assert.match(rendered, /7256 ₸ вместо ≈ 8012 ₸ · <b>-9,4%/);
+  assert.match(rendered, /Доставка · ≈ 1357 ₸ · сумма доставки пока не указана/);
+  assert.doesNotMatch(rendered, /-100%/);
+
+  fields.editPorDelivery.value = '1492.7';
+  rows[0].buy = 8813.2;
+  context.updateEditPurchaseCalculator();
+  assert.match(rendered, /8813 ₸ вместо ≈ 8012 ₸ · <b>\+10%/);
+  assert.match(rendered, /1493 ₸ вместо ≈ 1357 ₸ · <b>\+10%/);
+
+  fields.editPorBuyTotal.dataset.pendingTotal = '1';
+  context.updateEditPurchaseCalculator();
+  assert.match(rendered, /Товары · ≈ 8012 ₸/);
+  assert.doesNotMatch(rendered, /8813 ₸/);
 });
