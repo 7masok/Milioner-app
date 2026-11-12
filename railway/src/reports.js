@@ -13,6 +13,7 @@ import { wbOrderDay } from './wb-order-advertising.js';
 import { reconcileWbReportProducts } from './wb-report-reconciliation.js';
 import { config } from './config.js';
 import { credentialFor } from './connections.js';
+import { purchaseSaleResult } from './purchase-sale-results.js';
 
 export const reportsRouter = express.Router();
 registerProductOrderSeries(reportsRouter);
@@ -415,6 +416,66 @@ reportsRouter.get('/report-price-reconciliation',asyncRoute(async(req,res)=>{
  const orders=ids.length?(await pool.query(`SELECT market,order_id,qty,total_price,raw_json FROM marketplace_order_lines WHERE market=$1 AND COALESCE(NULLIF(raw_json::jsonb->'order'->>'rid',''),NULLIF(raw_json::jsonb->'order'->>'srid',''),NULLIF(raw_json::jsonb->>'srid',''))=ANY($2::text[]) LIMIT 30001`,[selected,ids])).rows:[];
  if(orders.length>30000)return res.status(422).json({ok:false,error:'Слишком много связанных заказов'});
  res.json({ok:true,...reconcileWbPrices(selected,finance,orders)});
+}));
+
+reportsRouter.get('/purchase-sale-results', asyncRoute(async (_req, res) => {
+  const { rows } = await pool.query(`SELECT s.id,s.qty,s.product_id,o.market,o.status,o.state,
+    COALESCE(NULLIF(o.raw_json::jsonb->'order'->>'rid',''),NULLIF(o.raw_json::jsonb->'order'->>'srid',''),
+      NULLIF(o.raw_json::jsonb->>'rid',''),NULLIF(o.raw_json::jsonb->>'srid',''),
+      NULLIF(o.raw_json::jsonb->'order'->>'orderUid',''),o.raw_json::jsonb->>'orderUid') AS srid
+    FROM warehouse_sales s JOIN marketplace_order_lines o
+      ON o.market=s.channel AND s.external_key=o.market||':'||o.order_id||':'||o.entry_id
+    WHERE s.payload->>'purchaseRealizationTracked'='true' AND s.channel=ANY($1::text[])`, [['Kaspi', 'WB', 'WB2']]);
+  const results = Object.fromEntries(rows.map(row => [row.id, purchaseSaleResult(row)]));
+  for (const selected of ['WB', 'WB2']) {
+    const orders = rows.filter(row => row.market === selected && row.srid);
+    if (!orders.length) continue;
+    const ids = [...new Set(orders.map(row => row.srid))];
+    const financeId = `COALESCE(NULLIF(raw_json::jsonb->>'srid',''),NULLIF(raw_json::jsonb->>'orderUid',''),raw_json::jsonb->>'order_uid')`;
+    const sticker = `COALESCE(NULLIF(raw_json::jsonb->>'shkId',''),NULLIF(raw_json::jsonb->>'shk_id',''))`;
+    const [finance, links, products, sync] = await Promise.all([
+      pool.query(`WITH stickers AS (
+          SELECT DISTINCT ${sticker} AS id FROM wb_finance_rows WHERE market=$1 AND ${financeId}=ANY($2::text[])
+        ) SELECT f.* FROM wb_finance_rows f WHERE market=$1 AND
+          (${financeId}=ANY($2::text[]) OR ${sticker} IN (SELECT id FROM stickers WHERE id IS NOT NULL AND id<>'0'))
+        ORDER BY rr_date,rrd_id LIMIT 50001`, [selected, ids]),
+      pool.query('SELECT market,sku,product_id AS "productId" FROM product_links WHERE market=$1', [selected]),
+      pool.query('SELECT id,name,payload FROM warehouse_products'),
+      pool.query('SELECT finance_ok,promotion_ok FROM wb_finance_sync_runs WHERE market=$1 ORDER BY id DESC LIMIT 1', [selected])
+    ]);
+    if (finance.rows.length > 50000 || !finance.rows.length) continue;
+    const inputs = await readWbOrderAdvertisingInputs(selected, finance.rows);
+    if (inputs.error) continue;
+    const audit = buildWbOperationAudit({
+      market: selected, rows: finance.rows, links: links.rows, products: products.rows,
+      adRows: inputs.allocationAdRows, allDates: true, ...inputs
+    });
+    const byOrder = new Map(audit.orders.map(row => [row.key, row]));
+    const byId = new Map(audit.operations.map(row => [row.rrdId, row]));
+    const byUnit = new Map(audit.units.map(row => [row.key, row]));
+    const ready = Number(sync.rows[0]?.finance_ok) === 1 && Number(sync.rows[0]?.promotion_ok) === 1;
+    for (const order of orders) {
+      const orderKey = 'order:' + JSON.stringify(['p:' + order.product_id, order.srid]);
+      const matched = (byOrder.get(orderKey)?.rows || []).map(id => byId.get(id));
+      const extra = matched.flatMap(row => {
+        const unit = byUnit.get(row.unitKey);
+        if (!unit) return [];
+        const peers = unit.rows.map(id => byId.get(id));
+        if (peers.some(peer => (peer.saleQty || peer.returnQty) && peer.srid !== order.srid)) {
+          row.adUnknown = true;
+          return [];
+        }
+        return peers.filter(peer => peer.kind === 'other' || peer.kind === 'logistics');
+      });
+      const cards = new Set(matched.map(row => row.nmId).filter(Boolean));
+      const lastOrderDay = matched.reduce((day, row) => row.orderDay > day ? row.orderDay : day, '');
+      const uncertainAds = audit.advertising.some(row =>
+        !row.productId && row.amount !== 0 && row.day <= lastOrderDay
+        && (!row.nmIds.length || row.nmIds.some(id => cards.has(id))));
+      results[order.id] = purchaseSaleResult(order, [...new Set([...matched, ...extra])], ready && !uncertainAds);
+    }
+  }
+  res.json({ ok: true, results });
 }));
 
 reportsRouter.get('/wb-operation-audit', asyncRoute(async (req, res) => {
