@@ -75,8 +75,25 @@ function reserveRestockAlerts(snapshot){
 }
 function reserveAlertRows(){try{if(!serverReady()||typeof homeOrdersSettled!=='undefined'&&!homeOrdersSettled)return [];return reserveRestockAlerts(state)}catch{return []}}
 function alertIdentity(x){return String(x.alertId||x.p.id)}
+function alertName(x){return x.name||x.p?.name||''}
+function realizedPurchaseAlerts(){
+ if(!serverReady()||typeof window.purchaseRealizationSummary!=='function')return [];
+ return [...window.purchaseRealizationSummary().values()].filter(x=>x.complete).map(x=>{
+  const number=window.purchaseShipmentNumber?.(x.key);
+  return {...x,kind:'purchase-realized',alertId:'purchase-realized:'+x.key,name:number?'Поставка № '+number:'Поставка'};
+ });
+}
+function realizedPurchaseCard(x){
+ const key=encodedAlertArg(x.key),id=encodedAlertArg(x.alertId);
+ return `<div class="item stock-alert-card" style="border-left-color:#17884d"><button type="button" class="stock-alert-dismiss" aria-label="Скрыть уведомление" onclick="hideReserveRestockAlert('${id}')">×</button><div class="row"><div class="grow"><b>${escText(x.name)} полностью продана</b><div class="muted">Продано ${x.total} из ${x.total} шт.</div><div class="muted">Закупка с доставкой · ${escText(fmt(x.cost))}</div><div>Прибыль <b>${escText(fmt(x.profit))}</b></div></div></div><button type="button" class="btn" style="margin-top:8px" onclick="openRealizedPurchaseAlert('${key}')">Открыть поставку</button></div>`;
+}
+window.openRealizedPurchaseAlert=function(key){
+ closeModal();
+ openPurchaseShipment(key);
+};
+
 function isHiddenRecord(value){return Boolean(value&&value.dismissed!==false)}
-function allAlerts(){const restocked=reserveAlertRows(),hidden=readHidden(),shown=new Set(restocked.filter(x=>!isHiddenRecord(hidden[alertIdentity(x)])).map(x=>String(x.p.id)));return [...restocked,...products().map(stockAlertFor).filter(x=>x&&!shown.has(String(x.p.id)))].sort((a,b)=>String(a.p.name).localeCompare(String(b.p.name),'ru'))}
+function allAlerts(){const restocked=reserveAlertRows(),hidden=readHidden(),shown=new Set(restocked.filter(x=>!isHiddenRecord(hidden[alertIdentity(x)])).map(x=>String(x.p.id)));return [...restocked,...products().map(stockAlertFor).filter(x=>x&&!shown.has(String(x.p.id))),...realizedPurchaseAlerts()].sort((a,b)=>String(alertName(a)).localeCompare(String(alertName(b)),'ru'))}
 function activeAlertsFrom(rows,hidden){return (Array.isArray(rows)?rows:[]).filter(x=>!isHiddenRecord(hidden?.[alertIdentity(x)]))}
 function unreadAlertsFrom(rows,seen){return (Array.isArray(rows)?rows:[]).filter(x=>!seen?.[alertIdentity(x)])}
 function activeAlerts(){return activeAlertsFrom(allAlerts(),readHidden())}
@@ -93,9 +110,9 @@ function ensureStyle(){if(document.getElementById('stockAlertStyle'))return;cons
 .stock-alert-dismiss{position:absolute;right:8px;top:8px;width:36px;height:36px;border:0;border-radius:50%;background:#eceef0;color:#555;font:500 26px/34px system-ui;z-index:3;padding:0;text-align:center}.stock-alert-dismiss:active{background:#dde0e3;transform:scale(.95)}
 .stock-alert-card>.row:first-of-type{padding-right:38px}`;document.head.appendChild(st)}
 function ensureBell(){ensureStyle();const head=document.querySelector('header .headrow');if(!head)return null;let btn=document.getElementById('stockAlertBell');if(btn)return btn;btn=document.createElement('button');btn.id='stockAlertBell';btn.type='button';btn.className='btn stock-alert-button';btn.innerHTML='<svg class="stock-alert-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9"></path><path d="M10 21h4"></path></svg><span id="stockAlertCount" class="stock-alert-count" hidden>0</span>';btn.title='Предупреждения по остаткам';btn.setAttribute('aria-label','Предупреждения по остаткам');btn.onclick=()=>window.openStockAlerts?.();const sync=head.querySelector('button[onclick*="syncNow"]')||head.querySelector('button:last-child');if(sync)head.insertBefore(btn,sync);else head.appendChild(btn);return btn}
-function paintBell(){const btn=ensureBell();if(!btn||!serverReady()||typeof homeOrdersSettled!=='undefined'&&!homeOrdersSettled)return;const active=activeAlerts();forgetResolvedAlerts(active);const unread=unreadAlerts(active),badge=document.getElementById('stockAlertCount'),label=active.length?`Предупреждения по остаткам: ${active.length}, новых: ${unread.length}. Нажмите, чтобы просмотреть.`:'Нет активных предупреждений по остаткам';if(badge){badge.textContent=String(unread.length);badge.hidden=!unread.length}btn.title=label;btn.setAttribute('aria-label',label);btn.style.display='inline-flex';const sig=unread.map(alertIdentity).join('|');if(sig!==lastSignature){const hadPrevious=lastSignature!==null;lastSignature=sig;if(hadPrevious&&unread.length)btn.animate?.([{transform:'scale(1)'},{transform:'scale(1.08)'},{transform:'scale(1)'}],{duration:260})}}
+function paintBell(){const btn=ensureBell();if(!btn||!serverReady()||typeof homeOrdersSettled!=='undefined'&&!homeOrdersSettled)return;const active=activeAlerts();forgetResolvedAlerts(active);const unread=unreadAlerts(active),badge=document.getElementById('stockAlertCount'),label=active.length?`Уведомления: ${active.length}, новых: ${unread.length}. Нажмите, чтобы просмотреть.`:'Нет активных уведомлений';if(badge){badge.textContent=String(unread.length);badge.hidden=!unread.length}btn.title=label;btn.setAttribute('aria-label',label);btn.style.display='inline-flex';const sig=unread.map(alertIdentity).join('|');if(sig!==lastSignature){const hadPrevious=lastSignature!==null;lastSignature=sig;if(hadPrevious&&unread.length)btn.animate?.([{transform:'scale(1)'},{transform:'scale(1.08)'},{transform:'scale(1)'}],{duration:260})}}
 function findProduct(pid){try{return prod(pid)}catch{return products().find(p=>String(p.id)===String(pid))||null}}
-function alertCard(x){if(x.kind==='reserve-restock')return reserveRestockCard(x);const pid=String(x.p.id).replace(/'/g,"\\'");return `<div class="item stock-alert-card" onclick="openStockAlertWarehouse('${pid}')"><button type="button" class="stock-alert-dismiss" aria-label="Скрыть" title="Скрыть на всех устройствах" onclick="event.stopPropagation();hideStockAlert('${pid}')">×</button><div class="row"><div class="grow"><div class="name">${escText(x.p.name)}</div><div class="muted">Товар закончился в продаже — выставьте остаток со склада</div></div><span class="badge bad">0 шт.</span></div><div class="stock-alert-grid"><div class="stock-alert-mini"><div class="label">В продаже свободно</div><b>${x.available} шт.</b></div><div class="stock-alert-mini"><div class="label">На складе поставки</div><b>${x.warehouse} шт.</b></div><div class="stock-alert-mini"><div class="label">По учёту</div><b>${x.book} шт.</b></div><div class="stock-alert-mini"><div class="label">В резерве</div><b>${x.reserve} шт.</b></div></div><div class="actions" onclick="event.stopPropagation()"><button class="btn dark" onclick="openStockAlertWarehouse('${pid}')">Выставить со склада</button><button class="btn" onclick="openStockAlertProduct('${pid}')">Пересчитать</button></div></div>`}
+function alertCard(x){if(x.kind==='purchase-realized')return realizedPurchaseCard(x);if(x.kind==='reserve-restock')return reserveRestockCard(x);const pid=String(x.p.id).replace(/'/g,"\\'");return `<div class="item stock-alert-card" onclick="openStockAlertWarehouse('${pid}')"><button type="button" class="stock-alert-dismiss" aria-label="Скрыть" title="Скрыть на всех устройствах" onclick="event.stopPropagation();hideStockAlert('${pid}')">×</button><div class="row"><div class="grow"><div class="name">${escText(x.p.name)}</div><div class="muted">Товар закончился в продаже — выставьте остаток со склада</div></div><span class="badge bad">0 шт.</span></div><div class="stock-alert-grid"><div class="stock-alert-mini"><div class="label">В продаже свободно</div><b>${x.available} шт.</b></div><div class="stock-alert-mini"><div class="label">На складе поставки</div><b>${x.warehouse} шт.</b></div><div class="stock-alert-mini"><div class="label">По учёту</div><b>${x.book} шт.</b></div><div class="stock-alert-mini"><div class="label">В резерве</div><b>${x.reserve} шт.</b></div></div><div class="actions" onclick="event.stopPropagation()"><button class="btn dark" onclick="openStockAlertWarehouse('${pid}')">Выставить со склада</button><button class="btn" onclick="openStockAlertProduct('${pid}')">Пересчитать</button></div></div>`}
 function encodedAlertArg(value){return encodeURIComponent(String(value)).replace(/'/g,'%27')}
 function reserveRestockCard(x){
  const encodedId=encodedAlertArg(alertIdentity(x)),pid=encodedAlertArg(String(x.p.id));
@@ -110,16 +127,16 @@ window.openRestockedReserveOrder=function(encodedMarket,encodedId,encodedCode){
 function hiddenAlertEntries(alerts=allAlerts()){
  const live=new Map(alerts.map(x=>[alertIdentity(x),x]));
  return Object.entries(readHidden()).filter(([,value])=>isHiddenRecord(value)).map(([id,value])=>{
-  const current=live.get(id);let productId=String(value?.productId||current?.p.id||id);
+  const current=live.get(id);let productId=String(value?.productId||current?.p?.id||id);
   if(!value?.productId&&!current&&id.startsWith('reserve-restock:'))try{productId=String(JSON.parse(id.slice('reserve-restock:'.length))[0])}catch{}
-  const p=current?.p||findProduct(productId);
-  return {id,productId,name:String(p?.name||value?.name||'Товар больше не в каталоге'),kind:current?.kind||value?.kind||(id.startsWith('reserve-restock:')?'reserve-restock':'warehouse-release'),current};
+  const p=current?.p||(!id.startsWith('purchase-realized:')&&findProduct(productId));
+  return {id,productId,name:String(current?.name||p?.name||value?.name||'Товар больше не в каталоге'),kind:current?.kind||value?.kind||(id.startsWith('reserve-restock:')?'reserve-restock':'warehouse-release'),current};
  }).sort((a,b)=>a.name.localeCompare(b.name,'ru'));
 }
 function hideAlert(id){
  if(typeof requireWarehouseEditReady==='function'&&!requireWarehouseEditReady())return;
  const row=allAlerts().find(x=>alertIdentity(x)===String(id));if(!row)return;
- const value={dismissed:true,at:Date.now(),productId:String(row.p.id),name:String(row.p.name||''),kind:row.kind||'warehouse-release'},hidden={...readSharedMap(SHARED_HIDDEN_KEY),[String(id)]:value};
+ const value={dismissed:true,at:Date.now(),productId:String(row.p?.id||''),name:String(alertName(row)),kind:row.kind||'warehouse-release'},hidden={...readSharedMap(SHARED_HIDDEN_KEY),[String(id)]:value};
  if(!writeSharedMap(SHARED_HIDDEN_KEY,hidden))writeLocalMap(LEGACY_HIDDEN_KEY,{...readLocalMap(LEGACY_HIDDEN_KEY),[String(id)]:value});
  paintBell();window.openStockAlerts();
 }
@@ -127,8 +144,8 @@ window.openStockAlerts=function(view='active'){
  const all=allAlerts(),alerts=activeAlertsFrom(all,readHidden()),hidden=hiddenAlertEntries(all),isHidden=view==='hidden';
  if(!isHidden)acknowledgeAlerts(alerts);paintBell();
  const tabs=`<div class="actions" style="margin-bottom:12px"><button type="button" class="btn ${isHidden?'':'dark'}" onclick="openStockAlerts()">Активные · ${alerts.length}</button><button type="button" class="btn ${isHidden?'dark':''}" onclick="openStockAlerts('hidden')">Скрытые · ${hidden.length}</button></div>`;
- const body=isHidden?hidden.map(x=>`<div class="item row" style="margin-top:8px"><div class="grow"><b>${escText(x.name)}</b><div class="muted">${x.kind==='reserve-restock'?'Товар поступил · есть заказы в резерве':'Выставить со склада'}${x.current?'':' · сейчас не требуется'}</div></div><button type="button" class="btn" onclick="restoreHiddenStockAlert('${encodedAlertArg(x.id)}')">Вернуть</button></div>`).join(''):alerts.map(alertCard).join('');
- showSheet('<h3>Предупреждения по остаткам</h3>'+tabs+(body||`<div class="empty">${isHidden?'Скрытых предупреждений нет.':'Сейчас нет активных предупреждений.'}</div>`));
+ const body=isHidden?hidden.map(x=>`<div class="item row" style="margin-top:8px"><div class="grow"><b>${escText(x.name)}</b><div class="muted">${x.kind==='purchase-realized'?'Поставка полностью продана':x.kind==='reserve-restock'?'Товар поступил · есть заказы в резерве':'Выставить со склада'}${x.current?'':' · сейчас не требуется'}</div></div><button type="button" class="btn" onclick="restoreHiddenStockAlert('${encodedAlertArg(x.id)}')">Вернуть</button></div>`).join(''):alerts.map(alertCard).join('');
+ showSheet('<h3>Уведомления</h3>'+tabs+(body||`<div class="empty">${isHidden?'Скрытых предупреждений нет.':'Сейчас нет активных предупреждений.'}</div>`));
 };
 window.hideStockAlert=function(pid){hideAlert(String(pid))};
 window.restoreHiddenStockAlert=function(encodedId){
