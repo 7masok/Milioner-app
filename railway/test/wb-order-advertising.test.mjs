@@ -19,9 +19,29 @@ test('repeated cached rows, finance deliveries and sale/return do not count an o
  const out=allocateWbOrderAdvertising({market:'WB',orders,advertising:[ad(5000)]});assert.equal(out.allocation[0].qty,2);assert.deepEqual(out.entries.map(x=>x.amount),[2500,2500]);
 });
 test('zero orders leave budget unallocated, zero budgets add no virtual operations, and currencies are not converted',()=>{
- const zero=allocateWbOrderAdvertising({market:'WB',orders:[order('other-day',{orderDay:'2026-10-11'})],advertising:[ad(5000)]});assert.equal(zero.entries.length,0);assert.equal(zero.allocation[0].unallocated,5000);assert.equal(zero.allocation[0].perUnit,null);
+ const zero=allocateWbOrderAdvertising({market:'WB',orders:[order('prior-day',{orderDay:'2026-10-09'})],advertising:[ad(5000)]});assert.equal(zero.entries.length,0);assert.equal(zero.allocation[0].unallocated,5000);assert.equal(zero.allocation[0].perUnit,null);
  const none=allocateWbOrderAdvertising({market:'WB',orders:[order('a')],advertising:[ad(0)]});assert.equal(none.entries.length,0);
  const currencies=allocateWbOrderAdvertising({market:'WB',orders:[order('a')],advertising:[ad(100),ad(200,{currency:'RUB'})]});assert.deepEqual(currencies.entries.map(x=>[x.currency,x.amount]),[['KZT',100],['RUB',200]]);
+});
+test('spend from four empty days and the order day is combined once, even across the displayed period boundary',()=>{
+ const orders=[
+  order('first',{orderDay:'2026-10-09'}),order('second',{orderDay:'2026-10-09',qty:3}),
+  order('before',{orderDay:'2026-10-04'}),order('after',{orderDay:'2026-10-10'}),
+  order('other',{productId:'b',orderDay:'2026-10-06'}),order('wb2',{market:'WB2',orderDay:'2026-10-07'})
+ ];
+ const advertising=[5,6,7,8,9].map(n=>ad(200,{day:'2026-10-0'+n}));
+ advertising.push(ad(120,{day:'2026-10-10'}),ad(70,{day:'2026-10-11'}),ad(300,{market:'WB2',day:'2026-10-05'}));
+ const out=allocateWbOrderAdvertising({market:'WB',orders,advertising,days:['2026-10-08','2026-10-09','2026-10-10','2026-10-11']});
+ assert.deepEqual(out.entries.map(x=>[x.srid,x.amount]),[['first',250],['second',750],['after',120]]);
+ assert.deepEqual(out.allocation.map(x=>[x.day,x.orderDay,x.reason,x.unallocated]),[
+  ['2026-10-08','2026-10-09','carried',0],['2026-10-09','2026-10-09','allocated',0],
+  ['2026-10-10','2026-10-10','allocated',0],['2026-10-11','','no_orders',70]
+ ]);
+ assert.deepEqual(out.entries[0].allocation,{day:'2026-10-09',firstSpendDay:'2026-10-05',lastSpendDay:'2026-10-09',budget:1000,dayQty:4,qty:1,source:'cached_orders',estimated:true});
+});
+test('a day with orders resets carry even if it had no advertising of its own',()=>{
+ const out=allocateWbOrderAdvertising({market:'WB',orders:[order('early',{orderDay:'2026-10-07'}),order('late')],advertising:[ad(100,{day:'2026-10-05'}),ad(150,{day:'2026-10-08'})]});
+ assert.deepEqual(out.entries.map(x=>[x.srid,x.amount]),[['early',100],['late',150]]);
 });
 test('penny allocation conserves total; real negative ad correction is retained',()=>{
  for(const budget of [1000,-1000]){

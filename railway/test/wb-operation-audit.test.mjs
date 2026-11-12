@@ -767,6 +767,24 @@ test('unit-history endpoint uses all cached orders for the denominator rather th
  assert.equal(out.status,200);assert.equal(out.result.operations.filter(r=>r.kind==='advertising').length,1);assert.equal(out.result.operations.find(r=>r.kind==='advertising').orderAdvertising,200);assert.ok(out.result.operations.every(r=>r.shkId==='58347387921'));assert.ok(out.calls.every(x=>/^SELECT /.test(x.sql)));assert.equal(out.calls.find(x=>x.sql.includes('FROM marketplace_order_lines o')).args[0],'WB');assert.ok(!out.calls.find(x=>x.sql.includes('FROM marketplace_order_lines o')).sql.includes("state='"));
  const ads=out.calls.find(x=>x.sql.includes('FROM wb_ad_costs'));assert.ok(ads.args[1].includes('2026-10-01'));assert.ok(out.result.range.since<=START);
 });
+test('history reads prior advertising and intervening orders, and shows transferred dates for the sticker',async()=>{
+ const options=orderAdExample(),earlier=[{day:'2026-09-28',nmIds:['100'],amount:900,currency:'KZT'},{day:'2026-09-30',nmIds:['100'],amount:500,currency:'KZT'}];
+ const earlierOrder={...options.orderRows[1],creation_date:START-2*DAY};
+ const out=await invokeHistory({market:'WB',shkId:'58347387921',nmId:'100',productId:'a'},(sql,args)=>{
+  if(sql.startsWith('SELECT *')||sql.startsWith('SELECT f.*'))return options.rows;
+  if(sql.includes('FROM wb_ad_costs'))return sql.includes('day <= $2')&&args[1]==='2026-10-01'?[...earlier,...options.allocationAdRows]:options.allocationAdRows;
+  if(sql.includes('FROM marketplace_order_lines o'))return args.length===3?[...options.orderRows,earlierOrder]:options.orderRows.filter(r=>r.order_id!==earlierOrder.order_id);
+  if(sql.includes('warehouse_products'))return base.products;
+  if(sql.includes('product_links'))return base.links;
+  return [];
+ });
+ assert.equal(out.status,200);
+ const advertising=out.result.operations.filter(r=>r.kind==='advertising');
+ assert.equal(advertising.length,1);assert.equal(advertising[0].orderAdvertising,229.17);
+ assert.equal(advertising[0].allocation.budget,5500);assert.equal(advertising[0].allocation.dayQty,24);
+ assert.equal(advertising[0].allocation.firstSpendDay,'2026-09-30');
+ assert.ok(uiFixture().context.window.fixture.historyHtml(out.result).includes('Даты расходов · 2026-09-30 — 2026-10-01'));
+});
 test('unknown ad currency and ambiguous physical sticker do not produce a guessed net profit',()=>{
  const options=orderAdExample(),unknown=buildWbOperationAudit({...options,allocationAdRows:[{day:'2026-10-01',nmIds:['100'],amount:5000,currency:'UNKNOWN'}],allDates:true});const unit=unknown.operations.filter(r=>r.shkId==='58347387921'),html=uiFixture().context.window.fixture.unitSummaryHtml(unit);assert.ok(html.includes('>—</b>'));assert.ok(html.includes('Валюты рекламы'));
  const other={...options.rows[0],rrd_id:'999',raw_json:JSON.stringify({...JSON.parse(options.rows[0].raw_json),shkId:'99999999'})},ambiguous=buildWbOperationAudit({...options,rows:[...options.rows,other],orderFinanceRows:[...options.rows,other],allDates:true});const piece=ambiguous.operations.filter(r=>r.shkId==='58347387921');assert.ok(piece.some(r=>r.adUnknown));assert.ok(uiFixture().context.window.fixture.unitSummaryHtml(piece).includes('Не хватает связи с заказом'));assert.equal(ambiguous.operations.find(r=>r.kind==='advertising'&&r.srid==='placed-0').shkId,'');

@@ -1,6 +1,15 @@
 // Management allocation only. These entries are never written to the WB/warehouse ledger.
 const num = value => Number.isFinite(Number(value)) ? Number(value) : 0;
 const key = (...parts) => JSON.stringify(parts);
+function firstOrderDay(days, day) {
+  let low = 0, high = days.length;
+  while (low < high) {
+    const middle = Math.floor((low + high) / 2);
+    if (days[middle] < day) low = middle + 1;
+    else high = middle;
+  }
+  return days[low] || '';
+}
 export function wbOrderDay(value) {
   const source = String(value ?? '').trim();
   if (!source || /^1970-/.test(source)) return '';
@@ -22,11 +31,21 @@ export function allocateWbOrderAdvertising({market,orders=[],finance=[],advertis
     else if (old.source !== 'order_cache') old.qty=Math.max(old.qty,order.qty);
   }
   for (const k of conflicts) placed.delete(k);
-  const totals = new Map(),budgets = new Map(),byDay = new Map();
+  const budgets = new Map(), byDay = new Map(), daysByProduct = new Map();
   for (const order of placed.values()) {
-    const k=key(order.productId,order.orderDay);totals.set(k,num(totals.get(k))+num(order.qty));
-    const list=byDay.get(k)||[];list.push(order);byDay.set(k,list);
+    const k = key(order.productId, order.orderDay);
+    if (!byDay.has(k)) {
+      byDay.set(k, { qty: 0, eligible: [] });
+      const productDays = daysByProduct.get(order.productId) || [];
+      productDays.push(order.orderDay);
+      daysByProduct.set(order.productId, productDays);
+    }
+    const group = byDay.get(k);
+    group.eligible.push(order);
+    group.qty += num(order.qty);
   }
+  for (const productDays of daysByProduct.values()) productDays.sort();
+  for (const { eligible } of byDay.values()) eligible.sort((a, b) => a.srid.localeCompare(b.srid));
   for (const ad of advertising) {
     if (!ad.productId || !ad.day || ad.market && ad.market!==market) continue;
     const k=key(ad.productId,ad.day,ad.currency),b=budgets.get(k)||{productId:ad.productId,day:ad.day,currency:ad.currency,amount:0};
@@ -37,18 +56,37 @@ export function allocateWbOrderAdvertising({market,orders=[],finance=[],advertis
     if (!row.productId || !row.srid || !row.shkId) continue;
     const k=key(row.productId,row.srid),map=identities.get(k)||new Map();map.set(key(row.shkId,row.nmId),row);identities.set(k,map);
   }
-  const entries=[],allocation=[];
+  const entries = [], allocation = [], orderBudgets = new Map();
+  const visibleDays = days && new Set(days);
   for (const b of budgets.values()) {
-    const qty=num(totals.get(key(b.productId,b.day))),eligible=b.amount!==0?byDay.get(key(b.productId,b.day))||[]:[];
-    let assigned=0,assignedQty=0;
-    for (let i=0;i<eligible.length;i++) {
-      const order=eligible[i],nextQty=assignedQty+num(order.qty),amount=(Math.round(b.amount*100*nextQty/qty)-Math.round(b.amount*100*assignedQty/qty))/100;assigned+=amount;assignedQty=nextQty;
+    const orderDay = firstOrderDay(daysByProduct.get(b.productId) || [], b.day);
+    const orderKey = key(b.productId, orderDay);
+    const { qty = 0, eligible } = byDay.get(orderKey) || {};
+    const cents = Math.round(b.amount * 100);
+    if (qty && cents) {
+      const budgetKey = key(orderKey, b.currency);
+      const budget = orderBudgets.get(budgetKey) || { orderDay, currency: b.currency, cents: 0, firstSpendDay: b.day, lastSpendDay: b.day, qty, eligible };
+      budget.cents += cents;
+      if (b.day < budget.firstSpendDay) budget.firstSpendDay = b.day;
+      if (b.day > budget.lastSpendDay) budget.lastSpendDay = b.day;
+      orderBudgets.set(budgetKey, budget);
+    }
+    if (!visibleDays || visibleDays.has(b.day)) allocation.push({ ...b, orderDay, qty, perUnit: qty ? b.amount / qty : null,
+      allocated: qty ? cents / 100 : 0, unallocated: qty ? 0 : b.amount,
+      reason: !qty ? 'no_orders' : orderDay === b.day ? 'allocated' : 'carried', estimated: true });
+  }
+  for (const budget of orderBudgets.values()) {
+    if (!budget.cents) continue;
+    const { orderDay, currency, cents, firstSpendDay, lastSpendDay, qty, eligible } = budget;
+    let assignedQty = 0;
+    for (const order of eligible) {
+      const nextQty = assignedQty + num(order.qty);
+      const amount = (Math.round(cents * nextQty / qty) - Math.round(cents * assignedQty / qty)) / 100;
+      assignedQty = nextQty;
       const peers=identities.get(key(order.productId,order.srid)),identity=peers?.size===1?[...peers.values()][0]:null;
       entries.push({...order,shkId:identity?.shkId||'',nmId:identity?.nmId||order.nmId||'',barcode:identity?.barcode||order.barcode||'',
-        currency:b.currency,amount,allocation:{day:b.day,budget:b.amount,dayQty:qty,qty:order.qty,source:'cached_orders',estimated:true}});
+        currency, amount, allocation: { day: orderDay, firstSpendDay, lastSpendDay, budget: cents / 100, dayQty: qty, qty: order.qty, source: 'cached_orders', estimated: true } });
     }
-    if (!days || days.includes(b.day)) allocation.push({...b,qty,perUnit:qty?b.amount/qty:null,allocated:assigned,unallocated:Math.abs(b.amount-assigned)<0.005?0:b.amount-assigned,
-      reason:qty?'allocated':'no_orders',estimated:true});
   }
   return {entries,allocation,orders:[...placed.values()],conflicts:[...conflicts]};
 }
