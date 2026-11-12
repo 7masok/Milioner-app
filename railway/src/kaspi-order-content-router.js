@@ -6,6 +6,7 @@ import {parseWarehousePayload,hydrateWarehouseMovements,persistWarehouseMovement
 import {hydrateWarehouseSales,replaceWarehouseSales} from './warehouse-sales.js';
 import {hydrateWarehouseReservations,replaceWarehouseReservations} from './warehouse-reservations.js';
 import {hydrateWarehouseProducts,persistWarehouseProducts} from './warehouse-products.js';
+import {hydrateWarehousePurchases,persistWarehousePurchases} from './warehouse-purchases.js';
 import {warehousePayloadForStorage} from './warehouse-document.js';
 import {pruneWarehouseBackups} from './warehouse-backups.js';
 import {correctKaspiContents,effectiveKaspiRow,kaspiContentSignature} from './kaspi-order-content.js';
@@ -26,11 +27,12 @@ kaspiOrderContentRouter.post('/kaspi/order-content/:orderId',requireTrustedOrigi
   if(Number(req.body?.revision)!==Number(stored.rows[0].revision))throw error('Склад обновился. Откройте заказ заново.');
   const rows=await kaspiContentRows(client,req.params.orderId,true);if(!rows.length)throw error('Заказ Kaspi не найден',404);
  if(rows.some(r=>r.entry_id==='__pending__'||!(Number(r.qty)>0)))throw error('Состав заказа Kaspi ещё загружается. Повторите после синхронизации.');
-  const state=await hydrateWarehouseProducts(client,await hydrateWarehouseReservations(client,await hydrateWarehouseSales(client,await hydrateWarehouseMovements(client,parseWarehousePayload(stored.rows[0].payload)))));
+  const state=await hydrateWarehousePurchases(client,await hydrateWarehouseProducts(client,await hydrateWarehouseReservations(client,await hydrateWarehouseSales(client,await hydrateWarehouseMovements(client,parseWarehousePayload(stored.rows[0].payload))))));
   const now=Date.now(),change=correctKaspiContents(state,rows,req.body||{},now);if(!change.changed)return {...change,revision:Number(stored.rows[0].revision)};
   const backup=await legacyCompatibleWarehousePayload(client,stored.rows[0].payload);
   await client.query('INSERT INTO warehouse_backups(label,payload,revision,created_at) VALUES($1,$2,$3,$4) RETURNING id',['before-kaspi-order-content',backup,stored.rows[0].revision,now]);await pruneWarehouseBackups(client);
   await persistWarehouseMovements(client,state.movements,now);await replaceWarehouseSales(client,state.sales,now);await replaceWarehouseReservations(client,state.reservations,now);await persistWarehouseProducts(client,state.products,now);
+  if(change.changedLots?.length){const ids=new Set(change.changedLots);await persistWarehousePurchases(client,state.purchases.filter(row=>ids.has(String(row.id))),now);}
   const raw=JSON.stringify(warehousePayloadForStorage(state)),revision=Number(stored.rows[0].revision)+1;
   await client.query('UPDATE warehouse_state SET payload=$1,revision=$2,updated_at=$3 WHERE id=1',[raw,revision,now]);
   await client.query('INSERT INTO warehouse_audit(revision,updated_at,payload_sha256,source) VALUES($1,$2,$3,$4)',[revision,now,crypto.createHash('sha256').update(raw).digest('hex').toUpperCase(),'kaspi-order-content']);

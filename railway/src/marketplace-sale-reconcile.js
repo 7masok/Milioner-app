@@ -15,6 +15,8 @@ import { hydrateWarehouseSales, replaceWarehouseSales } from './warehouse-sales.
 import { hydrateWarehouseReservations, replaceWarehouseReservations } from './warehouse-reservations.js';
 import { hydrateWarehouseProducts, persistWarehouseProducts } from './warehouse-products.js';
 import { warehousePayloadForStorage } from './warehouse-document.js';
+import { hydrateWarehousePurchases, persistWarehousePurchases } from './warehouse-purchases.js';
+import { consumeTrackedPurchaseLots, restoreTrackedPurchaseLots } from './purchase-sale-lots.js';
 
 // The server became authoritative for marketplace orders on 24 August 2026.
 // Never backfill older rows: some of them were already written by the former
@@ -49,15 +51,19 @@ function components(product) {
   return product.components.map(row => ({ productId: String(row?.productId || ''), qty: Math.max(1, Number(row?.qty) || 1) })).filter(row => row.productId);
 }
 
-function consumeProduct(state, products, product, qty, label, now, orderKey) {
+function consumeProduct(state, products, product, qty, label, now, orderKey, changedLots) {
   const targets = components(product).length
     ? components(product).map(row => ({ product: products.get(row.productId), qty: qty * row.qty, bundle: product.name }))
     : [{ product, qty, bundle: '' }];
   let totalCost = 0, shortage = 0;
+  const fifoLots = [];
   for (const target of targets) {
     if (!target.product) continue;
     const before = Math.max(0, Number(target.product.stock) || 0);
     const taken = Math.min(before, target.qty);
+    const used = target.bundle ? [] : consumeTrackedPurchaseLots(state.purchases, target.product.id, before, target.qty);
+    for (const part of used) changedLots.add(part.purchaseId);
+    fifoLots.push(...used);
     target.product.stock = Math.max(0, before - target.qty);
     totalCost += target.qty * Math.max(0, Number(target.product.cost) || 0);
     shortage += Math.max(0, target.qty - before);
@@ -68,13 +74,14 @@ function consumeProduct(state, products, product, qty, label, now, orderKey) {
       externalKey: orderKey,
       productId: String(target.product.id),
       qty: -taken,
+      ...(used.length ? { fifoLots: used } : {}),
       extra: `${label} · собрано на маркетплейсе${target.bundle ? ` · набор «${target.bundle}»` : ''}${target.qty > before ? ` · нехватка ${target.qty - before} шт.` : ''}`
     },target.product.stock));
   }
-  return { unitCost: qty ? totalCost / qty : 0, shortage };
+  return { unitCost: qty ? totalCost / qty : 0, shortage, fifoLots };
 }
 
-function restorePrematureWbSale(state, products, row, market) {
+function restorePrematureWbSale(state, products, row, market, changedLots) {
   if (market === 'Kaspi' || !wbOrderIsActive(row.status, row.state)) return 0;
   const key = externalKey(market, row);
   const matches = state.sales.filter(sale => sale?.serverReconciled === true && String(sale?.externalKey || '') === key);
@@ -99,7 +106,10 @@ function restorePrematureWbSale(state, products, row, market) {
       Number(other.updatedAt || other.date) >= Number(movement.date)
     );
     const restoredQty = product && !recounted && !manualReceipt ? taken : 0;
-    if (restoredQty) product.stock = Math.max(0, Number(product.stock) || 0) + restoredQty;
+    if (restoredQty) {
+      product.stock = Math.max(0, Number(product.stock) || 0) + restoredQty;
+      for (const lot of restoreTrackedPurchaseLots(state.purchases, movement.fifoLots || [])) changedLots.add(String(lot.id));
+    }
     movement.stockRestoredAt = now;
     state.movements.unshift(captureMovementBalance({
       id: uid('market-sale-restore', `${key}:${movement.id}`, now),
@@ -130,13 +140,14 @@ export async function reconcileMarketplaceSales(market) {
       LEFT JOIN product_links l ON l.market=o.market AND l.sku=o.sku
       WHERE o.market=$1 AND o.creation_date >= $2
       ORDER BY o.creation_date,o.order_id,o.entry_id`, [market, SERVER_SALE_CUTOVER]);
-    const state = await hydrateWarehouseProducts(client, await hydrateWarehouseReservations(client, await hydrateWarehouseSales(client, await hydrateWarehouseMovements(client, parseWarehousePayload(stored.rows[0].payload)))));
+    const state = await hydrateWarehousePurchases(client, await hydrateWarehouseProducts(client, await hydrateWarehouseReservations(client, await hydrateWarehouseSales(client, await hydrateWarehouseMovements(client, parseWarehousePayload(stored.rows[0].payload))))));
     state.products = Array.isArray(state.products) ? state.products : [];
     state.sales = Array.isArray(state.sales) ? state.sales : [];
     state.reservations = Array.isArray(state.reservations) ? state.reservations : [];
     const products = new Map(state.products.map(product => [String(product?.id || ''), product]));
+    const changedLots = new Set();
     let restored = 0;
-    for (const row of rows.rows) restored += restorePrematureWbSale(state, products, row, market);
+    for (const row of rows.rows) restored += restorePrematureWbSale(state, products, row, market, changedLots);
     const existing = new Set(state.sales.map(sale => String(sale?.externalKey || '')).filter(Boolean));
     let sold = 0, unlinked = 0;
     const now = Date.now();
@@ -149,14 +160,15 @@ export async function reconcileMarketplaceSales(market) {
       const qty = Math.max(0, Number(row.qty) || 0);
       if (!product || !qty) { unlinked++; continue; }
       const label = `${market} ${String(row.code || row.order_id)}`;
-      const consumed = consumeProduct(state, products, product, qty, label, now + sold, key);
+      const consumed = consumeProduct(state, products, product, qty, label, now + sold, key, changedLots);
       const fees = Math.max(0, Number(row.seller_delivery_cost) || 0) + Math.max(0, Number(row.marketplace_fee) || 0);
       state.sales.push({
         id: uid('market-sale', key, now), productId: String(product.id), qty,
         price: Math.max(0, Number(row.unit_price) || 0), cost: consumed.unitCost,
         fee: qty ? fees / qty : 0, feeSource: String(row.fee_source || ''),
         channel: market, date: Number(row.creation_date) || now, externalKey: key,
-        stockShortage: consumed.shortage, serverReconciled: true
+        stockShortage: consumed.shortage, serverReconciled: true,
+        ...(consumed.fifoLots.length ? { fifoLots: consumed.fifoLots, purchaseRealizationTracked: true, purchaseRealizationOrderId: String(row.order_id) } : {})
       });
       for (const reservation of state.reservations) {
         const reservationKey = String(reservation?.externalKey || '');
@@ -179,6 +191,7 @@ export async function reconcileMarketplaceSales(market) {
     await replaceWarehouseSales(client, state.sales, now);
     await replaceWarehouseReservations(client, state.reservations, now);
     await persistWarehouseProducts(client, state.products, now);
+    if (changedLots.size) await persistWarehousePurchases(client, state.purchases.filter(row => changedLots.has(String(row.id))), now);
     const raw = JSON.stringify(warehousePayloadForStorage(state)), revision = Number(stored.rows[0].revision || 0) + 1;
     await client.query('UPDATE warehouse_state SET payload=$1,revision=$2,updated_at=$3 WHERE id=1', [raw, revision, now]);
     const sha = crypto.createHash('sha256').update(raw).digest('hex').toUpperCase();

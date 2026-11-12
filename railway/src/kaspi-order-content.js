@@ -1,6 +1,7 @@
 import {captureMovementBalance} from './movement-stock-balance.js';
 import crypto from 'node:crypto';
 import {kaspiOrderIsActive,kaspiOrderIsCollected} from './kaspi-status.js';
+import {consumeTrackedPurchaseLots,restoreTrackedPurchaseLots} from './purchase-sale-lots.js';
 export const contentKey=(orderId,entryId)=>JSON.stringify([String(orderId),String(entryId)]);
 const fail=(message,status=409)=>{throw Object.assign(new Error(message),{status})};
 export function kaspiContentOverride(state,orderId,entryId){return state?.settings?.kaspiOrderContents?.[contentKey(orderId,entryId)]||null}
@@ -47,11 +48,13 @@ export function correctKaspiContents(state,rows,input,now=Date.now()){
  if(!changes.length)return {changed:false};
  // Work on copies: any validation failure leaves the caller's state untouched.
  const next=structuredClone(state),pmap=new Map(next.products.map(p=>[String(p.id),p]));
- next.movements||=[];next.sales||=[];next.reservations||=[];next.settings||={};next.settings.kaspiOrderContents||={};
+ next.movements||=[];next.sales||=[];next.reservations||=[];next.purchases||=[];next.settings||={};next.settings.kaspiOrderContents||={};
+ const changedLots = new Set();
  for(const change of changes){
   const {row,current,product,qty,old,key,sale,debits}=change,label=`Kaspi ${row.code||orderId}`,version=Number(old?.version||0)+1;
   for(const debit of debits){
    const p=pmap.get(String(debit.productId)),count=Math.max(0,-Number(debit.qty)||0);p.stock=Math.max(0,Number(p.stock)||0)+count;
+   for(const lot of restoreTrackedPurchaseLots(next.purchases,debit.fifoLots||[]))changedLots.add(String(lot.id));
    next.movements.find(m=>m.id===debit.id).stockRestoredAt=now;
    next.movements.unshift(captureMovementBalance({id:crypto.randomUUID(),date:now,type:'возврат',productId:p.id,qty:count,externalKey:key,reversesMovementId:debit.id,extra:label+' · исправление отправленного состава'},p.stock));
   }
@@ -63,11 +66,15 @@ export function correctKaspiContents(state,rows,input,now=Date.now()){
   const reserved=next.reservations.filter(r=>r.active).reduce((sum,r)=>{const rp=pmap.get(String(r.productId));return sum+(String(r.productId)===String(p.id)?Number(r.qty)||0:rp?.kind==='bundle'?(rp.components||[]).filter(c=>String(c.productId)===String(p.id)).reduce((n,c)=>n+(Number(c.qty)||1)*(Number(r.qty)||0),0):0)},0);
   if(Math.max(0,Number(p.stock)||0)-reserved<qty)fail('Недостаточно свободного остатка: '+p.name);
   if(collected){
+   const fifoLots=consumeTrackedPurchaseLots(next.purchases,p.id,Number(p.stock),qty);
+   for(const lot of fifoLots)changedLots.add(lot.purchaseId);
    p.stock=Number(p.stock)-qty;const cost=Math.max(0,Number(p.cost)||0),revenue=Math.max(0,Number(row.total_price)||Number(row.unit_price)*Number(row.qty)||0),fees=Math.max(0,Number(row.seller_delivery_cost)||0)+Math.max(0,Number(row.marketplace_fee)||0);
-   next.movements.unshift(captureMovementBalance({id:crypto.randomUUID(),date:now,type:'продажа',productId:p.id,qty:-qty,externalKey:key,extra:`Kaspi ${row.code||orderId} · фактически отправленный состав`},p.stock));
+   next.movements.unshift(captureMovementBalance({id:crypto.randomUUID(),date:now,type:'продажа',productId:p.id,qty:-qty,externalKey:key,...(fifoLots.length?{fifoLots}:{}),extra:`Kaspi ${row.code||orderId} · фактически отправленный состав`},p.stock));
    const updated={...(sale||{}),id:sale?.id||crypto.randomUUID(),productId:p.id,qty,price:revenue/qty,cost,fee:fees/qty,channel:'Kaspi',date:Number(row.creation_date)||now,externalKey:key,serverReconciled:true,stockShortage:0,contentCorrectedAt:now};
+   if(fifoLots.length)Object.assign(updated,{fifoLots,purchaseRealizationTracked:true,purchaseRealizationOrderId:String(orderId)});
+   else if(updated.purchaseRealizationTracked){delete updated.fifoLots;delete updated.purchaseRealizationTracked;delete updated.purchaseRealizationOrderId;}
    next.sales=next.sales.filter(s=>![key,key.slice(6)].includes(String(s.externalKey)));next.sales.push(updated);
   }else next.reservations.push({id:crypto.randomUUID(),productId:p.id,qty,active:true,source:'Kaspi',externalKey:key,stage:'new',date:Number(row.creation_date)||now,updatedAt:now});
  }
- Object.assign(state,next);return {changed:true,count:changes.length};
+ Object.assign(state,next);return {changed:true,count:changes.length,...(changedLots.size?{changedLots:[...changedLots]}:{})};
 }

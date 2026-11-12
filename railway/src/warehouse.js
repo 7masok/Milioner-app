@@ -1,5 +1,6 @@
 import {preserveReturnReceipts,returnReceiptViolation} from './warehouse-returns.js';
 import {preserveKaspiContents} from './kaspi-order-content.js';
+import {trackNewPurchaseLots} from './purchase-sale-lots.js';
 import crypto from 'node:crypto';
 import express from 'express';
 import { pool, transaction } from './db.js';
@@ -262,6 +263,7 @@ warehouseRouter.put('/warehouse-state', requireTrustedOrigin, requireWritesEnabl
       if (violation) return { conflict: true, revision: currentRevision, stockGuard: violation };
       preserveReturnReceipts(previous,state);
       preserveWbValidation(previous, state);
+      trackNewPurchaseLots(previousStored.purchases || [], (isPatch ? incomingState?.purchases : state.purchases) || []);
     } else {
       state.reservations = [];
       preserveKaspiContents({},state);
