@@ -104,6 +104,7 @@ const frontendFiles = Object.freeze([
   'kaspi-status-compat-v1.js',
   'kaspi-ads-v2-original.js',
   'reservation-compat-v1.js',
+  'purchase-realization-v1.js',
   'stock-alerts-rescue-v1.js',
   'ai-assistant-v1.js',
   'prices-v1.js',
