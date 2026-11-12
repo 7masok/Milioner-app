@@ -67,15 +67,32 @@ async function readWbOrderAdvertisingInputs(selected, financeRows, requestedDays
   if(cached.rows.length>50000)return {error:'Больше 50 000 заказов для распределения рекламы. Сократите период.'};
   for(const row of cached.rows){const day=wbOrderDay(row.creation_date);if(day)days.add(day)}
   if(!days.size)return {orderRows:cached.rows,orderFinanceRows:[],allocationAdRows:[]};
-  const prefixes=[...new Set([...days].flatMap(day=>[-1,0,1].map(shift=>new Date(Date.parse(day+'T12:00:00Z')+shift*86400000).toISOString().slice(0,10))))];
-  const [orders,ads]=await Promise.all([
+  const orderDays = [...days].sort(), lastDay = orderDays.at(-1);
+  const ads = await pool.query(`SELECT day,advert_id AS "advertId",campaign,amount,nm_ids AS "nmIds",raw_json
+    FROM wb_ad_costs WHERE market=$1 AND day <= $2 ORDER BY day,advert_id,upd_num LIMIT 50001`, [selected,lastDay]);
+  if (ads.rows.length > 50000) return {error:'Больше 50 000 строк истории рекламы для распределения.'};
+
+  // Include every intervening order day from the earliest saved spend. A day
+  // with orders resets the carry even if it had no advertising of its own.
+  const firstDay = [orderDays[0], ads.rows[0]?.day].filter(Boolean).sort()[0];
+  const carryStart = Date.parse(firstDay+'T00:00:00+03:00');
+  const carryEnd = Date.parse(lastDay+'T00:00:00+03:00')+86400000;
+  const prefixStart = new Date(carryStart).toISOString().slice(0,10);
+  const prefixEnd = new Date(carryEnd+86400000).toISOString().slice(0,10);
+  const [orders, carryOrders] = await Promise.all([
     pool.query(`SELECT f.* FROM wb_finance_rows f WHERE f.market=$1
-      AND substring(COALESCE(NULLIF(f.raw_json::jsonb->>'orderDt',''),NULLIF(f.raw_json::jsonb->>'order_dt',''),f.raw_json::jsonb->>'orderDate'),1,10)=ANY($2::text[])
-      ORDER BY f.rr_date,f.rrd_id LIMIT 50001`,[selected,prefixes]),
-    pool.query('SELECT day,advert_id AS "advertId",campaign,amount,nm_ids AS "nmIds",raw_json FROM wb_ad_costs WHERE market=$1 AND day=ANY($2::text[]) ORDER BY day,advert_id,upd_num LIMIT 50001',[selected,[...days].sort()])
+      AND substring(COALESCE(NULLIF(f.raw_json::jsonb->>'orderDt',''),NULLIF(f.raw_json::jsonb->>'order_dt',''),f.raw_json::jsonb->>'orderDate'),1,10)
+        BETWEEN $2 AND $3
+      ORDER BY f.rr_date,f.rrd_id LIMIT 50001`, [selected,prefixStart,prefixEnd]),
+    ads.rows.length && carryEnd-carryStart > orderDays.length*86400000
+      ? pool.query(`SELECT o.market,o.order_id,o.entry_id,o.creation_date,o.sku,o.qty,o.raw_json
+        FROM marketplace_order_lines o WHERE o.market=$1 AND o.creation_date >= $2 AND o.creation_date < $3
+        ORDER BY o.creation_date,o.order_id,o.entry_id LIMIT 50001`, [selected,carryStart,carryEnd])
+      : {rows:[]}
   ]);
-  if(orders.rows.length>50000||ads.rows.length>50000)return {error:'Слишком много строк для распределения рекламы. Сократите период.'};
-  return {orderRows:cached.rows,orderFinanceRows:orders.rows,allocationAdRows:ads.rows};
+  if(orders.rows.length>50000||carryOrders.rows.length>50000)return {error:'Слишком много строк истории для распределения рекламы.'};
+  const orderRows = new Map([...cached.rows,...carryOrders.rows].map(row=>[JSON.stringify([row.order_id,row.entry_id]),row]));
+  return {orderRows:[...orderRows.values()],orderFinanceRows:orders.rows,allocationAdRows:ads.rows,allocationThrough:lastDay};
 }
 
 function kaspiBounds(days, from, to) {

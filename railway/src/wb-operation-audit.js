@@ -185,7 +185,7 @@ function costResolver(index, purchaseRows, saleCosts, market) {
     row.afterCostBeforeAds = row.currency === 'KZT' && cost ? row.beforeAdsAndCost - row.costKzt : null;
   };
 }
-export function buildWbOperationAudit({ market, rows = [], links = [], products = [], adRows = [], purchaseRows = [], saleCosts = [], since = 0, until = Infinity, allDates = false, orderRows = [], orderFinanceRows = [], allocationAdRows = null, allocationDays = null }) {
+export function buildWbOperationAudit({ market, rows = [], links = [], products = [], adRows = [], purchaseRows = [], saleCosts = [], since = 0, until = Infinity, allDates = false, orderRows = [], orderFinanceRows = [], allocationAdRows = null, allocationDays = null, allocationThrough = '' }) {
   if (!['WB', 'WB2'].includes(market)) throw new Error('market must be WB or WB2');
   const index = indexes(links.filter(x => !x.market || x.market === market), products, market), unique = new Map();
   let duplicateRows = 0;
@@ -302,14 +302,17 @@ export function buildWbOperationAudit({ market, rows = [], links = [], products 
   const orderEvidence=r=>['sale','return','logistics'].includes(r.kind);
   const ordersForAds=[...cachedOrders,...financeOrders.filter(orderEvidence).map(r=>({...r,qty:Math.max(1,r.saleQty||r.returnQty),source:'finance_order_date'}))];
   const allocationAds=allocationAdRows===null?advertising:normalizeAds(allocationAdRows);
-  const allocation=allocateWbOrderAdvertising({market,orders:ordersForAds,finance:financeOrders,advertising:allocationAds,days:allocationDays});
+  const allocationOrders = allocationThrough ? ordersForAds.filter(r => r.orderDay <= allocationThrough) : ordersForAds;
+  const allocation=allocateWbOrderAdvertising({market,orders:allocationOrders,finance:financeOrders,advertising:allocationAds,days:allocationDays});
   const placedOrders=new Map(allocation.orders.map(r=>[JSON.stringify([r.productId,r.srid]),r])),datedOrders=new Set(placedOrders.keys()),advertisedProducts=new Set(allocationAds.filter(a=>a.amount!==0&&a.productId).map(a=>a.productId));
   const operationOrders=new Map(),conflictingOrders=new Set(allocation.conflicts);
   for(const r of operations){const k=JSON.stringify([r.productId,r.srid]),peers=operationOrders.get(k)||[];peers.push(r);operationOrders.set(k,peers);r.orderDay=placedOrders.get(k)?.orderDay||'';if(orderEvidence(r)&&advertisedProducts.has(r.productId)&&(!datedOrders.has(k)||conflictingOrders.has(k)))r.adUnknown=true;}
   for (const entry of allocation.entries) {
     const date=Date.parse(entry.orderDay+'T00:00:00+05:00');
     if (!allDates&&(date<since||date>=until)) continue;
-    if(!entry.shkId&&entry.amount!==0)for(const r of operationOrders.get(JSON.stringify([entry.productId,entry.srid]))||[])r.adUnknown=true;
+    const peers = operationOrders.get(JSON.stringify([entry.productId,entry.srid]));
+    if (allDates && allocationThrough && !peers?.length) continue;
+    if(!entry.shkId&&entry.amount!==0)for(const r of peers||[])r.adUnknown=true;
     const r={...entry,rrdId:'ad-order:'+JSON.stringify([entry.productId,entry.srid,entry.orderDay,entry.currency]),reportId:'',date,saleDate:0,
       operation:'Реклама заказа',kind:'advertising',docType:'',vendorCode:entry.vendorCode||'',size:'',saleQty:0,returnQty:0,orderAdvertising:entry.amount,
       ...Object.fromEntries(moneyFields.filter(k=>k!=='orderAdvertising').map(k=>[k,0])),adEstimated:true};
@@ -323,7 +326,7 @@ export function buildWbOperationAudit({ market, rows = [], links = [], products 
     return { currency, sourceSettlement: total.settlement, groupedSettlement: grouped, difference: total.settlement - grouped, balanced: Math.abs(total.settlement - grouped) < 0.005 };
   });
   return { market, range: { since, until, timezone: 'Asia/Almaty', businessTimezone: 'Europe/Moscow' }, rowCount: operations.length, duplicateRows, operations, products: productRows,
-    orders: [...orders.values()], units: [...units.values()].map(unit => ({ ...unit, srids: [...unit.srids] })), totals: sums(currencies), advertising, advertisingAllocation:allocation.allocation, reconciliation,
+    orders: [...orders.values()], units: [...units.values()].map(unit => ({ ...unit, srids: [...unit.srids] })), totals: sums(currencies), advertising, advertisingAllocation:allocation.allocation, allocationThrough, reconciliation,
     coverage: { linkedRows: operations.filter(x => x.productId).length, orderRows: operations.filter(x => x.srid).length, unitRows: operations.filter(x => x.shkId).length },
-    basis: 'WB Moscow event day (posting day for other charges); forPay already includes commission, VAT and acquiring; saved order costs or explicit KZT estimates; daily product advertising allocated once to placed orders by Moscow creation day; cached-order estimate' };
+    basis: 'WB Moscow event day (posting day for other charges); forPay already includes commission, VAT and acquiring; saved order costs or explicit KZT estimates; linked advertising allocated to the first Moscow day with placed orders on or after the spend day; cached-order estimate' };
 }
