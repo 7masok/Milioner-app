@@ -106,6 +106,9 @@ const editPurchaseShipment=openEditPurchaseShipment;
 openEditPurchaseShipment=function(key,...args){
   const result=editPurchaseShipment(key,...args);
   const sheet=document.getElementById('sheet');
+  const totalActions=sheet?.querySelector('#editPorBuyTotalActions, #correctPorBuyTotalActions');
+  const distribute=totalActions?.querySelector('button[onclick^="applyPurchaseGrandTotal("]');
+  if(distribute)totalActions.before(distribute);
   const remove=sheet?.querySelector('button[onclick^="deletePurchaseShipment("]');
   if(remove&&canReturnArrivalToWarehouse(purchaseShipmentRows(key))){
     const button=document.createElement('button');

@@ -4,6 +4,26 @@ import vm from 'node:vm';
 import {readFileSync} from 'node:fs';
 import {matchKaspiSettlements} from '../src/kaspi-purchase-settlements.js';
 
+test('shipment editor exposes distribution while the manual-total warning stays hidden',()=>{
+ const distribute={};
+ const actions={
+  hidden:true,
+  querySelector:selector=>selector==='button[onclick^="applyPurchaseGrandTotal("]'?distribute:null,
+  before(button){visibleButtons.push(button)}
+ };
+ const visibleButtons=[];
+ const sheet={querySelector:selector=>selector==='#editPorBuyTotalActions, #correctPorBuyTotalActions'?actions:null};
+ const context={
+  window:{addEventListener(){}},
+  document:{getElementById:id=>id==='sheet'?sheet:null,readyState:'loading',addEventListener(){}},
+  createArrival(){},openEditPurchaseShipment(){},purchaseSortChanged(){},sortPurchaseGroups(){}
+ };
+ vm.runInNewContext(readFileSync(new URL('../../purchase-arrival-sort-v1.js',import.meta.url),'utf8'),context);
+ context.openEditPurchaseShipment('354');
+ assert.deepEqual(visibleButtons,[distribute]);
+ assert.equal(actions.hidden,true);
+});
+
 test('direct receipt lands on the warehouse without changing sellable stock or FIFO',()=>{
  const product={id:'coffee',stock:4,cost:600},state={purchases:[],products:[product]};
  const fields={ar:{value:'2026-11-13'},ad:{value:'100'},ab:{value:'Ибр'}};
