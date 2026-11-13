@@ -20,6 +20,16 @@ test('unsafe photo addresses and invalid or incomplete purchase rows are rejecte
  for(const url of ['http://basket-01.wbbasket.ru/a','https://wbbasket.ru.evil.invalid/a','https://user:secret@basket-01.wbbasket.ru/a','https://127.0.0.1/a','https://basket-01.wbbasket.ru:8000/a'])assert.equal(purchasePhotoUrl(url),'');
  for(const items of [[],[null],[{productId:'missing',qty:1,buyTotal:0}],[{productId:'p1',qty:0,buyTotal:0}],[{productId:'p1',qty:1,buyTotal:null}],[{productId:'p1',qty:1,buyTotal:-1}],Array(201).fill(input.items[0])])assert.throws(()=>preparePurchasePdf({...input,items},products,cards));
 });
+test('unlinked letter E uses its own catalog photo or an unambiguous equivalent WB title',()=>{
+ const p={id:'e',name:'Буквы сердце E'},item={productId:'e',qty:20,buyTotal:2799.07};
+ const letter={nmId:'31',title:'Буква сердце Е',photo:cards[0].photo};
+ const other={nmId:'32',title:'Буква сердце Т',photo:cards[1].photo};
+ const row=(product,cards)=>preparePurchasePdf({items:[item]},[product],cards).rows[0];
+ assert.equal(row(p,[letter,other]).photo,letter.photo);
+ assert.equal(row(p,[other]).photo,'');
+ assert.equal(row(p,[letter,{...letter,nmId:'33'}]).photo,'');
+ assert.equal(row({...p,photo:letter.photo},[]).photo,letter.photo);
+});
 test('WebP photos are embedded as bounded JPEGs; failures retain placeholders and duplicate photos load once',async()=>{
  const webp=await sharp({create:{width:300,height:400,channels:3,background:'#f0a040'}}).webp().toBuffer();let calls=0;
  const rows=[...preparePurchasePdf(input,products,cards).rows];rows.push({...rows[0]});

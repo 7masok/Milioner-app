@@ -148,6 +148,16 @@ function decoratePurchasePlan(){
   const root=document.getElementById('purchasePlan');
   if(!root)return;
   addPlanRefresh(root);
+  const controls=root.querySelector('[data-purchase-plan-refresh-controls]');
+  if(controls&&typeof window.chooseKaspiPurchaseReport==='function'&&!controls.querySelector('[data-kaspi-purchase-report]')){
+    const button=document.createElement('button');
+    button.type='button';
+    button.className='btn';
+    button.dataset.kaspiPurchaseReport='1';
+    button.textContent='Отчёт Kaspi Pay';
+    button.onclick=window.chooseKaspiPurchaseReport;
+    controls.appendChild(button);
+  }
 
   const visible=window.__lastPurchaseRecommendations||lastVisibleRecommendations;
   // The existing Buy action contains the rendered row's exact product ID.
