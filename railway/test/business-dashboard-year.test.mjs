@@ -74,6 +74,27 @@ test('year loader reuses ready daily data without a year-sized order or finance 
  const out=await f.api.businessLoadYearMonth(bounds,false);assert.equal(out.month.summary.revenue,300);assert.equal(out.month.orders.amount,0);
 });
 
+test('server-managed year reads both sets of saved days before evicting either year',async()=>{
+ const f=fixture(),requests=[];
+ f.window.loadBusinessMarketplaceDaily=()=>assert.fail('saved reports require no direct marketplace reads');
+ f.ctx.MILLIONER_API='https://fixture.invalid';
+ f.ctx.fetch=async raw=>{
+  const url=new URL(raw);
+  if(url.pathname.endsWith('-cache'))return {ok:true,json:async()=>({ok:true,version:'calendar-v2',serverManaged:true})};
+  assert.ok(url.pathname.endsWith('-days'));
+  const from=Number(url.searchParams.get('from')),to=Number(url.searchParams.get('to')),days=[];
+  requests.push(from);
+  for(let start=from;start<to;start+=DAY)days.push({day:f.api.businessMakeDay(start,[],{revenue:10,qty:1,profit:2}),generatedAt:NOW});
+  return {ok:true,json:async()=>({ok:true,version:'calendar-v2',serverManaged:true,days})};
+ };
+ const model=await f.window.renderBusinessDashboard();
+ assert.deepEqual(requests.sort((a,b)=>a-b),[f.api.businessYearBounds(-1).start,f.api.businessYearBounds(0).start]);
+ assert.equal(model.knownMonths,10);assert.equal(model.yesterday.knownMonths,12);
+ assert.equal(model.yesterday.summary.revenue,3650);
+ assert.equal(model.yesterdayCompare.knownMonths,10);
+ assert.ok(f.api.businessDays.size<=400);
+});
+
 test('February 29 aligns to February 28 at the same Almaty time in the previous year',async()=>{
  const f=fixture();f.setNow(Date.parse('2024-02-29T13:13:00+05:00'));
  const bounds={start:Date.parse('2023-02-01T00:00:00+05:00'),end:Date.parse('2023-03-01T00:00:00+05:00')};

@@ -81,6 +81,15 @@ test('a recovered Ozon order invalidates the closed day and monthly projection o
  assert.equal(f.api.businessCalendarFromDays('month',-1),null,'monthly totals must not freeze the old incomplete day');
  assert.equal(f.api.businessClosedReady(day,old),false);assert.equal(f.api.businessOrdersClosedReady(day,old),false);
  assert.equal(f.api.businessClosedReady(day,NOW),true);assert.equal(f.api.businessOrdersClosedReady(day,NOW),true);
+ day.storeGeneratedAt={Ozon:NOW,Kaspi:old,WB:old,WB2:old};
+ assert.ok(f.api.businessCalendarFromDays('month',-1),'the repaired Ozon day is current even with older WB and Kaspi snapshots');
+ day.storeGeneratedAt.Ozon=old;
+ assert.equal(f.api.businessCalendarFromDays('month',-1),null);
+ day.ordersPartialMarkets=['Ozon'];
+ const partial=f.api.businessCalendarFromDays('month',-1);
+ assert.ok(partial,'an explicitly incomplete Ozon day keeps the other stores visible');
+ assert.deepEqual(Array.from(partial.ordersPartialMarkets),['Ozon']);
+ day.ordersPartialMarkets=[];
  f.selection.splice(f.selection.indexOf('Ozon'),1);f.api.businessSyncMarket();assert.equal(f.api.businessClosedReady(day,old),true,'an Ozon repair does not invalidate a WB-only source');
 });
 
