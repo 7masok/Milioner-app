@@ -87,7 +87,7 @@ window.openIgnoredPurchasePlanProducts=function(){
 function paintPlanRefresh(root){
   const controls=root?.querySelector('[data-purchase-plan-refresh-controls]');
   if(!controls)return;
-  const button=controls.querySelector('button');
+  const button=controls.querySelector('[data-purchase-plan-refresh]');
   button.disabled=refreshingPlan;
   button.textContent=refreshingPlan?'Обновляю…':'Обновить';
   controls.querySelector('[role="status"]').textContent=planRefreshMessage;
@@ -133,8 +133,8 @@ function addPlanRefresh(root){
   controls.className='row';
   controls.dataset.purchasePlanRefreshControls='1';
   controls.style.cssText='gap:8px;flex-wrap:wrap;margin-bottom:10px';
-  controls.innerHTML='<button type="button" class="btn">Обновить</button><span class="muted" role="status"></span>';
-  controls.querySelector('button').onclick=refreshPurchasePlan;
+  controls.innerHTML='<button type="button" class="btn" data-purchase-plan-refresh>Обновить</button><span class="muted" role="status"></span>';
+  controls.querySelector('[data-purchase-plan-refresh]').onclick=refreshPurchasePlan;
   const period=plan.previousElementSibling;
   if(period?.matches('button')){
     period.style.marginBottom='0';

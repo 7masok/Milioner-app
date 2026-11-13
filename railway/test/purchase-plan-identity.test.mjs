@@ -76,6 +76,36 @@ test('the purchase renderer puts the encoded product ID in the Buy action', () =
   assert.ok(page.includes("onclick=\"openRecommendedPurchase('${encodeURIComponent(key)}')\""));
 });
 
+test('refresh status changes only the refresh button beside the editable days of stock', () => {
+  const period = {textContent: 'Партия закупки: 30 дн. ⚙', style: {}, matches: s => s === 'button'};
+  const refresh = {textContent: 'Обновить'};
+  const status = {};
+  const controls = {
+    dataset: {}, style: {},
+    querySelector: s => s === '[data-purchase-plan-refresh]' ? refresh : s === '[role="status"]' ? status : period,
+    prepend(button) { this.period = button; },
+  };
+  const plan = {previousElementSibling: period};
+  const root = {
+    querySelector: s => s === '.purchase-plan' ? plan : s === '[data-purchase-plan-refresh-controls]' ? root.controls : null,
+    insertBefore(node, before) { assert.equal(before, period); this.controls = node; },
+    querySelectorAll: () => [],
+  };
+  const context = {
+    window: {}, state: {settings: {}}, purchaseRecommendations: () => [], renderPurchasePlan() {},
+    document: {getElementById: () => root, createElement: () => controls},
+    setTimeout() {},
+  };
+  vm.runInNewContext(hideScript, context);
+  context.renderPurchasePlan();
+  context.renderPurchasePlan();
+  assert.equal(controls.period, period);
+  assert.equal(period.textContent, 'Партия закупки: 30 дн. ⚙');
+  assert.equal(refresh.textContent, 'Обновить');
+  assert.equal(typeof refresh.onclick, 'function');
+  assert.equal((controls.innerHTML.match(/<button/g) || []).length, 1);
+});
+
 test('only empty historical rows are excluded from purchase recommendations', () => {
   const old = {id: 'old', variantGroupId: 'group', variantLegacyLink: {market: 'WB'}, stock: 0};
   const products = [
@@ -106,7 +136,7 @@ test('refresh reads the server, rerenders the plan, and labels partial failure',
   const status = {};
   const controls = {
     dataset: {}, style: {},
-    querySelector: selector => selector === 'button' ? button : status,
+    querySelector: selector => selector === '[data-purchase-plan-refresh]' ? button : status,
   };
   let inserted = false;
   const root = {
