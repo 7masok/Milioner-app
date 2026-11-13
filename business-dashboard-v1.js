@@ -28,7 +28,14 @@ function businessKaspiGap(bounds){return bounds&&businessIncludesMarket('Kaspi')
 
 // Job completion triggers a fresh read, not invalidation of other stores.
 // A composed day deliberately carries the oldest contributing store timestamp.
-function businessOrderRepairAt(bounds){return Math.max(bounds&&businessIncludesMarket('Ozon')&&typeof window.ozonFboOrderRepairAt==='function'?window.ozonFboOrderRepairAt(bounds):0,bounds&&businessIncludesMarket('Kaspi')?Math.max(0,...(businessKaspiHistory?.repairRevisions||[]).filter(r=>r.from<bounds.end&&r.to>bounds.start).map(r=>Number(r.at)||0)):0)}
+function businessOrderRepairAt(bounds,market=null){
+ const ozon=market!=='Kaspi'&&bounds&&businessIncludesMarket('Ozon')&&typeof window.ozonFboOrderRepairAt==='function'?window.ozonFboOrderRepairAt(bounds):0;
+ const kaspi=market!=='Ozon'&&bounds&&businessIncludesMarket('Kaspi')?Math.max(0,...(businessKaspiHistory?.repairRevisions||[]).filter(r=>r.from<bounds.end&&r.to>bounds.start).map(r=>Number(r.at)||0)):0;
+ return Math.max(ozon,kaspi);
+}
+function businessDayCoversRepairs(day,at){
+ return ['Ozon','Kaspi'].every(m=>day.ordersPartialMarkets?.includes(m)||Number(day.storeGeneratedAt?.[m]??at)>=businessOrderRepairAt(day.bounds,m));
+}
 function businessOrdersClosedReady(data,at,now=Date.now()){return Boolean(data&&Number(at)>=businessOrderRepairAt(data.bounds)&&!businessKaspiGap(data.bounds)&&data.ordersReady===true&&!data.ordersPartialMarkets?.length&&data.bounds.end+2*86400000<=now&&at>=data.bounds.end+2*86400000)}
 function businessClosedReady(data,at,now=Date.now()){return Boolean(data&&Number(at)>=businessOrderRepairAt(data.bounds)&&data.bounds.end+2*86400000<=now&&at>=data.bounds.end+2*86400000&&!businessKaspiGap(data.bounds)&&!data.pending&&!data.ordersPartialMarkets?.length&&!data.summary?.missingMarkets?.length&&!data.summary?.partialOzonHistory)}
 function businessAnnualFloor(){return businessDayBounds(0).start-364*86400000}
@@ -472,7 +479,7 @@ function businessDaysBounds(period,offset){const b=period==='month'?businessMont
 function businessOrderEvents(groups,unitMap){return groups.map(g=>{const x=businessEstimateOrders([g],[],unitMap);return[Number(g.creationDate),x.amount,x.qty,x.profit,x.orderCount,x.coveredAmount,x.coveredQty]})}
 function businessOrdersBefore(records,cutoff){const x={amount:0,qty:0,profit:0,orderCount:0,coveredAmount:0,coveredQty:0};for(const r of records)for(const e of r.events||[])if(e[0]<cutoff){x.amount+=e[1];x.qty+=e[2];x.profit+=e[3];x.orderCount+=e[4];x.coveredAmount+=e[5];x.coveredQty+=e[6]}return{...x,coverage:x.amount>0?x.coveredAmount/x.amount:1}}
 function businessRecords(bounds){const rows=[];for(let t=bounds.start;t<Math.min(bounds.end,businessDayBounds(0).end);t+=86400000){const row=businessDays.get(t)?.data;if(!row)return null;rows.push(row)}return rows}
-function businessCalendarFromDays(period,offset,daysOnly=false){const bounds=period==='week'?businessWeekBounds(offset):businessMonthBounds(offset),records=businessRecords(bounds);if(records?.some(r=>Number(businessDays.get(r.bounds.start)?.at)<businessOrderRepairAt(r.bounds)))return null;if(!records){if(period==='month'&&!daysOnly){businessHydrateMonths();const cached=businessMonthBases.get(bounds.start);return Number(cached?.at)>=businessOrderRepairAt(bounds)?cached?.data||null:null}return null}if(period==='month'&&!daysOnly&&records.some(r=>r.pending)){businessHydrateMonths();const cached=businessMonthBases.get(bounds.start)?.data;if(cached&&!cached.pending)return cached}const buckets=businessBuckets(period,bounds);for(const row of records){const bucket=buckets.find(b=>b.start===row.bounds.start);if(bucket){for(const field of ['orders','orderQty','orderProfit'])bucket[field]=row.buckets.reduce((n,h)=>n+(Number(h[field])||0),0);businessCopyBuyouts(bucket,row.buckets)}}const summary=businessCombineSummary(records.map(r=>r.summary)),orders=businessOrdersBefore(records,Infinity);return businessStamp({ordersPartialMarkets:[...new Set(records.flatMap(r=>r.ordersPartialMarkets||[]))],period,bounds,buckets,orders,summary,netProfit:summary.profit,hourly:{ozonHourlyComplete:records.every(r=>r.hourly?.ozonHourlyComplete!==false)},pending:records.some(r=>r.pending),ordersReady:records.every(r=>!r.pending||r.ordersReady===true)})}
+function businessCalendarFromDays(period,offset,daysOnly=false){const bounds=period==='week'?businessWeekBounds(offset):businessMonthBounds(offset),records=businessRecords(bounds);if(records?.some(r=>!businessDayCoversRepairs(r,businessDays.get(r.bounds.start)?.at)))return null;if(!records){if(period==='month'&&!daysOnly){businessHydrateMonths();const cached=businessMonthBases.get(bounds.start);return Number(cached?.at)>=businessOrderRepairAt(bounds)?cached?.data||null:null}return null}if(period==='month'&&!daysOnly&&records.some(r=>r.pending)){businessHydrateMonths();const cached=businessMonthBases.get(bounds.start)?.data;if(cached&&!cached.pending)return cached}const buckets=businessBuckets(period,bounds);for(const row of records){const bucket=buckets.find(b=>b.start===row.bounds.start);if(bucket){for(const field of ['orders','orderQty','orderProfit'])bucket[field]=row.buckets.reduce((n,h)=>n+(Number(h[field])||0),0);businessCopyBuyouts(bucket,row.buckets)}}const summary=businessCombineSummary(records.map(r=>r.summary)),orders=businessOrdersBefore(records,Infinity);return businessStamp({ordersPartialMarkets:[...new Set(records.flatMap(r=>r.ordersPartialMarkets||[]))],period,bounds,buckets,orders,summary,netProfit:summary.profit,hourly:{ozonHourlyComplete:records.every(r=>r.hourly?.ozonHourlyComplete!==false)},pending:records.some(r=>r.pending),ordersReady:records.every(r=>!r.pending||r.ordersReady===true)})}
 function businessPreviousPoint(previous,period,exactCutoff=null){const origin=period==='month'?businessMonthBounds(0).start:period==='week'?businessWeekBounds(0).start:businessDayBounds(0).start,cutoff=exactCutoff===null?Math.min(previous.bounds.end,previous.bounds.start+Math.max(0,Date.now()-origin)):Math.max(previous.bounds.start,Math.min(previous.bounds.end,exactCutoff)),records=businessRecords(previous.bounds);if(!records)return{...previous,unavailable:true};let revenue=0,qty=0,profit=0;for(const r of records)for(const h of r.buckets){const factor=Math.max(0,Math.min(1,(cutoff-h.start)/(h.end-h.start)));revenue+=(Number(h.buyouts)||0)*factor;qty+=(Number(h.buyoutQty)||0)*factor;profit+=(Number(h.buyoutProfit)||0)*factor}const known=previous.summary.profit!==null,summary={...previous.summary,revenue,qty:Math.round(qty),profit:known?profit:null};return{...previous,bounds:{...previous.bounds,end:cutoff},summary,orders:businessOrdersBefore(records,cutoff),netProfit:summary.profit,comparisonCutoff:cutoff}}
 function businessMissingComparison(period,offset){const bounds=businessBounds(period,offset);return{period,bounds,buckets:businessBuckets(period,bounds),orders:{amount:0,qty:0,profit:0,orderCount:0,coverage:0},summary:{revenue:0,qty:0,profit:null},unavailable:true,pending:false}}
 function businessModelFromDays(period,offset){if(businessBeforeOpening(businessBounds(period,offset))){const model=businessOpeningModel(period,offset),previous=businessOpeningModel(period,offset-1);return{...model,yesterday:previous,yesterdayCompare:previous}}if(period==='year')return businessCachedYear(offset);businessHydrateDays();let current,previous;if(period==='day'){current=businessDays.get(businessDayBounds(offset).start)?.data;previous=businessDays.get(businessDayBounds(offset-1).start)?.data;if(!current)return null}else{current=businessCalendarFromDays(period,offset);previous=businessCalendarFromDays(period,offset-1);if(!current)return null}previous=previous||businessMissingComparison(period,offset-1);return{...current,dayOffset:period==='day'?offset:undefined,weekOffset:period==='week'?offset:undefined,monthOffset:period==='month'?offset:undefined,yesterday:previous,yesterdayCompare:offset===0&&!previous.unavailable?businessPreviousPoint(previous,period):previous,pending:Boolean(current.pending)}}
@@ -708,7 +715,7 @@ async function businessReadOnlineMonths(offset){
 }
 async function businessResolveModel(force,period,offset,key){
  const scope=businessScope;
- if(businessServerManaged&&!force&&typeof fetch==='function'&&typeof window.loadBusinessMarketplaceDaily==='function'){
+ if(period!=='year'&&businessServerManaged&&!force&&typeof fetch==='function'&&typeof window.loadBusinessMarketplaceDaily==='function'){
   const selected=businessBounds(period,offset),bounds={start:selected.start,end:Math.min(selected.end,businessDayBounds(0).end)};
   try{
    await businessReadSavedDays(bounds,scope);
@@ -722,8 +729,25 @@ async function businessResolveModel(force,period,offset,key){
   }catch(error){if(error.businessCancelled)throw error}
  }
  if(businessBeforeOpening(businessBounds(period,offset))){const model=businessModelFromDays(period,offset),previous=businessModelFromDays(period,offset-1)||businessMissingComparison(period,offset-1);return {...model,yesterday:previous,yesterdayCompare:previous}}let online=null;
- try{online=await businessReadOnline(period,Number(key.split(':')[1]));if(period==='year')await businessReadOnlineMonths(offset);}catch(_){}
+ try{if(period!=='year'||!businessServerManaged)online=await businessReadOnline(period,Number(key.split(':')[1]));if(period==='year'&&!businessServerManaged)await businessReadOnlineMonths(offset);}catch(_){}
  if(scope!==businessScope||key!==businessModelKey())throw Object.assign(Error('Выбран другой период'),{businessCancelled:true});
+ if(period==='year'&&businessServerManaged&&typeof window.loadBusinessMarketplaceDaily==='function'){
+  const work={assert(){if(scope!==businessScope||key!==businessModelKey())throw Object.assign(Error('Выбран другой период'),{businessCancelled:true})}};
+  const yearRange=offset=>{const bounds=businessYearBounds(offset);return {...bounds,end:Math.min(bounds.end,businessDayBounds(0).end)}};
+  const current=yearRange(offset),previous=yearRange(offset-1);
+  const read=bounds=>businessBeforeOpening(bounds)?Promise.resolve():businessReadSavedDays(bounds,scope,work,false);
+  const comparison=read(previous).catch(()=>{});
+  await read(current).catch(()=>{});
+  work.assert();
+  const ready=businessCachedYear(offset);
+  if(ready)businessPaintCompleted(key,ready);
+  await comparison;
+  work.assert();
+  const model=businessCachedYear(offset);
+  businessCaptureMonths(previous);
+  businessSaveDays(current);
+  if(model){businessRememberModel(key,model);return model}
+ }
  const remote=online?.snapshot;if(remote&&businessScopeMatches(remote)&&businessSnapshotKey(remote)===key){const projection=typeof window.loadBusinessMarketplaceDaily==='function'?businessModelFromDays(period,offset):null,shared=period==='year'&&Number(projection?.knownMonths)<Number(remote.knownMonths)?null:projection,newer=Boolean(shared)||businessModels.get(key)&&Number(businessModelMeta.get(key)?.at)>Number(online.generatedAt),chosen=shared||(newer?businessModels.get(key):remote);if(!newer)businessRememberModel(key,remote,online.generatedAt);if(key===businessModelKey()&&document.getElementById('reports')?.classList.contains('active')){businessPaint(chosen);businessCacheStatus(key,online.stale||force?'updating':'ready')}if(!force&&(businessCanReuseModel(chosen,key)||!online.stale&&!shared))return chosen}
  if(!force&&typeof fetch==='function'&&typeof window.loadBusinessMarketplaceDaily==='function'){
   const selected=businessBounds(period,offset);
@@ -807,11 +831,11 @@ function businessPollLoadProgress(){
 }
 
 let businessAnnualJob=null,businessAnnualJobScope=-1,businessAnnualJobKey='',businessAnnualTimer=null;const businessAnnualRead=new Set();
-async function businessReadSavedDays(bounds,scope=businessScope,work=null){
+async function businessReadSavedDays(bounds,scope=businessScope,work=null,save=true){
  if(bounds.end<=bounds.start||typeof fetch!=='function')return;
  const market=businessMarket,response=await fetch(MILLIONER_API+'/api/business-dashboard-days?from='+bounds.start+'&to='+bounds.end+businessMarketQuery(),{cache:'no-store'});
  if(!response.ok)throw Error('Сохранённая дневная история недоступна');const data=await response.json();if(scope!==businessScope||market!==businessMarket||data.version!==BUSINESS_CACHE_VERSION)return;
- if(data.serverManaged)businessServerManaged=true;work?.assert();businessHydrateDays();for(const row of data.days||[])if(businessScopeMatches(row.day)&&row.day?.buckets?.length===24){const old=businessDays.get(row.day.bounds.start);if(!old||row.composed&&businessMarket==='all'||old.at<row.generatedAt)businessDays.set(row.day.bounds.start,{data:row.day,at:row.generatedAt,revision:data.sourceRevision})}businessSaveDays(bounds);
+ if(data.serverManaged)businessServerManaged=true;work?.assert();businessHydrateDays();for(const row of data.days||[])if(businessScopeMatches(row.day)&&row.day?.buckets?.length===24){const old=businessDays.get(row.day.bounds.start);if(!old||row.composed&&businessMarket==='all'||old.at<row.generatedAt)businessDays.set(row.day.bounds.start,{data:row.day,at:row.generatedAt,revision:data.sourceRevision})}if(save)businessSaveDays(bounds);
 }
 function businessStartAnnualWarm(){
  if(businessServerManaged)return;
