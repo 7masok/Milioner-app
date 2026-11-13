@@ -5,7 +5,7 @@ window.WB3_PROFILE_VERSION='2026-10-15';
 const unwanted=['Kaspi','WB2','Ozon'];
 const css=document.createElement('style');css.textContent=`
 [data-market="Kaspi"],[data-market="Ozon"],[data-wb-account="WB2"],[data-price-market="Kaspi"],[data-price-market="WB2"],[data-price-market="Ozon"],[data-report-market="Kaspi"],[data-report-market="WB2"],[data-report-market="Ozon"],[data-report-market="all"],#wbAccountTabs,#kaspiStatusRow,#wb2StatusRow,#ozonStatusRow,[onclick="openAddStore()"],.store-tab.add,#ozonSuppliesSection{display:none!important}
-.wb3-product-photo{width:42px;height:52px;object-fit:cover;border-radius:8px;flex:none;margin-right:9px;background:#f3f3f3}#productList .item.row{align-items:flex-start}#productList .name{white-space:normal;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical}
+#productList .item.row{align-items:flex-start}#productList .name{white-space:normal;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical}
 `;
 document.head.appendChild(css);
 let wb3Inventory={items:{},sizes:{},fetchedAt:0,error:''};let wb3StockReady=false,wb3StockTimer=null;
@@ -69,7 +69,7 @@ const originalProductCard=productCard;
 productCard=function(p,...args){let html=originalProductCard(p,...args);const fbo=fboQty(p);
  html=html.replace('В продаже:','У меня:');
  html=html.replace('<div class="product-stock-secondary">','<div class="product-stock-secondary"><span style="color:#6f42c1">FBO WB: '+(fbo===null?'не загружено':fbo+' шт.')+'</span>');
- if(/^https:\/\//i.test(String(p?.photo||'')))html=html.replace(/(<div class="item[^>]*>)/,'$1<img class="wb3-product-photo" src="'+esc(p.photo)+'" alt="" loading="lazy" referrerpolicy="no-referrer">');return html;};
+ return html;};
 const oldFboFilter=toggleProductFboFilter;toggleProductFboFilter=function(){if(!wb3StockReady)return alert(wb3Inventory.error||'Остатки WB ещё загружаются');return oldFboFilter();};
 const originalOpenProduct=openProduct;
 openProduct=function(pid,market='',days=null){return originalOpenProduct(pid,market&&unwanted.includes(market)?'WB':market,days);};

@@ -1,5 +1,63 @@
 (function(){
  'use strict';
+ const photoCatalogs=new Map();
+ const photoKey=value=>String(value??'').trim();
+ function photoIndex(cards,field){
+  const index=new Map();
+  for(const card of cards){
+   const key=photoKey(card[field]);
+   if(key)index.set(key,index.has(key)?null:card);
+  }
+  return index;
+ }
+ function loadProductPhotos(market){
+  let catalog=photoCatalogs.get(market);
+  if(!catalog){catalog={next:0,byNm:new Map(),byCode:new Map()};photoCatalogs.set(market,catalog);}
+  if(typeof appRuntimeStarted==='undefined'||!appRuntimeStarted||Date.now()<catalog.next)return catalog;
+  catalog.next=Infinity;
+  void (async()=>{
+   let changed=false;
+   try{
+    // The unified fetch wrapper routes WB3 to Inferno's own saved WB snapshot.
+    const response=await fetch(MILLIONER_API+'/api/market-prices/card-groups?market='+market,{cache:'no-store',signal:AbortSignal.timeout(12000)});
+    if(!response.ok)throw Error('WB catalog unavailable');
+    const data=await response.json();
+    if(!data.ok||!Array.isArray(data.cards)||!Number(data.fetchedAt))throw Error('WB catalog snapshot unavailable');
+    changed=catalog.byNm.size>0||data.cards.length>0;
+    catalog.byNm=photoIndex(data.cards,'nmId');
+    catalog.byCode=photoIndex(data.cards,'vendorCode');
+    catalog.next=Date.now()+10*60*1000;
+   }catch{
+    catalog.next=Date.now()+60000;
+   }
+   if(changed&&document.getElementById('products')?.classList.contains('active'))renderProducts(false);
+  })();
+  return catalog;
+ }
+ function productWbPhoto(product){
+  const unifiedInferno=String(product.id||'').startsWith('inferno:');
+  const inferno=unifiedInferno||window.WB3_ONLY;
+  const market=unifiedInferno?'WB3':'WB',field=unifiedInferno?'wb3':'wb';
+  const variant=product.wbVariant?.market===market?product.wbVariant:null;
+  const group=product.variantMarket===market;
+  const identity=product[field+'Identity'];
+  const codes=[product[field],identity?.vendorCode,variant?.vendorCode,group?product.variantVendorCode:'',...(Array.isArray(product[field+'Aliases'])?product[field+'Aliases']:[])].map(photoKey).filter(Boolean);
+  const nmId=photoKey(identity?.nmId||variant?.nmId||(group?product.variantNmId:''));
+  let card;
+  if(nmId||codes.length){
+   const catalog=loadProductPhotos(market);
+   card=nmId?catalog.byNm.get(nmId):codes.map(code=>catalog.byCode.get(code)).find(Boolean)||catalog.byNm.get(codes[0]);
+  }
+  const photo=photoKey(card?.photo||(inferno?product.photo:''));
+  return /^https:\/\//i.test(photo)?photo:'';
+ }
+ const productCardWithoutPhoto=productCard;
+ productCard=function(product,...args){
+  const html=productCardWithoutPhoto(product,...args),photo=productWbPhoto(product);
+  if(!photo)return html;
+  const image='<img class="thumb product-wb-photo" src="'+esc(photo)+'" alt="" width="38" height="48" loading="lazy" decoding="async" referrerpolicy="no-referrer" style="width:38px;height:48px;border-radius:6px;align-self:flex-start" onerror="this.hidden=true">';
+  return html.replace('<div class="grow"><div class="name">',image+'<div class="grow"><div class="name">');
+ };
  if(window.WB3_ONLY){window.toggleStoreSelection=()=>selectOrderMarket('WB');for(const b of document.querySelectorAll('[data-store-select]')){b.hidden=b.dataset.storeSelect!=='WB';if(!b.hidden)b.textContent='WB3';}document.querySelector('[data-price-market="WB3"]')?.setAttribute('hidden','');return;}
  if(!window.warehouseScope?.enabled){window.selectedStoreIds=()=>['Kaspi','WB','WB2','Ozon'];window.toggleStoreSelection=function(section,market){if(market==='WB3')return alert('WB3 ещё не подключён к этому адресу склада.');selectedOrderMarket=market==='WB'||market==='WB2'?'WB':market;selectedWbAccount=market;renderMarketplaceOrders();for(const b of document.querySelectorAll('[data-store-select]'))b.classList.toggle('active',b.dataset.storeSelect===market);};return;}
  window.unifiedWarehouseEnabled=true;
