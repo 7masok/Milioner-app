@@ -104,14 +104,77 @@
     if (!(state.sales || []).some(sale => sale.purchaseRealizationTracked)
       || Date.now() - refreshAt < 120000) return Promise.resolve(false);
     refreshAt = Date.now();
-    pendingRefresh = apiJson(MILLIONER_API + '/api/purchase-sale-results').then(payload => {
-      const next = payload.results || {};
+    const results = apiJson(MILLIONER_API + '/api/purchase-sale-results');
+    const hasKaspi = (state.sales || []).some(sale => sale.purchaseRealizationTracked && sale.channel === 'Kaspi');
+    const settlements = hasKaspi
+      ? apiJson(MILLIONER_API + '/api/purchases/kaspi-pay').catch(() => null)
+      : Promise.resolve(null);
+    pendingRefresh = Promise.all([results, settlements]).then(([payload, kaspi]) => {
+      const next = { ...payload.results, ...kaspi?.results };
       const changed = JSON.stringify(next) !== JSON.stringify(confirmed);
       confirmed = next;
       if (changed && document.querySelector('.view.active')?.id === 'purchases') renderPurchases({ listOnly: true });
       return changed;
     }).catch(() => false).finally(() => { pendingRefresh = null; });
     return pendingRefresh;
+  };
+
+  async function importKaspiSettlements(file) {
+    const xlsx = await loadXlsxLibrary();
+    const book = xlsx.read(await file.arrayBuffer(), { type: 'array', cellDates: true });
+    const lines = [];
+    for (const name of book.SheetNames) {
+      const grid = xlsx.utils.sheet_to_json(book.Sheets[name], { header: 1, defval: '' });
+      const header = grid.findIndex(row => {
+        const cells = row.map(adsColumn);
+        return cells.includes('номер заказа id rrn') && cells.includes('тип операции');
+      });
+      if (header < 0) continue;
+      const labels = grid[header].map(adsColumn);
+      const col = prefix => labels.findIndex(label => label.startsWith(prefix));
+      const ids = { orderId: col('номер заказа id rrn'), date: col('дата операции'), time: col('время'), operation: col('тип операции'),
+        detail: col('детали покупки'), amount: col('сумма операции'), commission: col('комиссия за операции т'),
+        cardCommission: col('комиссия за операции по карте'), paymentGuarantee: col('комиссия за обеспечение платежа'),
+        kaspiPay: col('комиссия kaspi pay'), kaspiTravel: col('комиссия kaspi travel'),
+        bonusProduct: col('бонусы на товар'), bonusReview: col('бонусы за отзыв'), delivery: col('стоимость услуги за kaspi доставку') };
+      if (['date','amount','commission','kaspiPay','delivery'].some(key => ids[key] < 0)) continue;
+      for (const row of grid.slice(header+1)) {
+        const get = key => row[ids[key]];
+        const operation = String(get('operation') || '').trim();
+        const orderId = String(get('orderId') || '').trim();
+        const date = kaspiAdsIsoDate(get('date'));
+        if (!orderId || !date || !/^(покупка|возврат)$/i.test(operation)) continue;
+        const line = { operation, orderId, date, time: String(get('time') || ''), detail: String(get('detail') || '') };
+        for (const key of ['amount','commission','cardCommission','paymentGuarantee','kaspiPay','kaspiTravel','bonusProduct','bonusReview','delivery']) {
+          const clean = String(get(key) ?? '').replace(/[\s₸]/g,'').replace(',','.').replace(/−/g,'-');
+          line[key] = clean === '' && key === 'amount' ? null : Number(clean);
+        }
+        if (Object.values(line).some(value => value === null || typeof value === 'number' && !Number.isFinite(value))) continue;
+        lines.push(line);
+      }
+    }
+    if (!lines.length) throw Error('В файле не найдены операции Kaspi Pay с комиссиями.');
+    const response = await fetch(MILLIONER_API + '/api/purchases/kaspi-pay', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ lines })
+    });
+    const result = await response.json();
+    if (!response.ok || !result.ok) throw Error(result.error || 'Не удалось сохранить отчёт.');
+    refreshAt = 0;
+    await window.refreshPurchaseRealization();
+    return result.count;
+  }
+
+  window.chooseKaspiPurchaseReport = function () {
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.accept = '.xlsx,.xls';
+    input.onchange = async () => {
+      const file = input.files?.[0];
+      if (!file) return;
+      try { alert('Принято операций Kaspi Pay · ' + await importKaspiSettlements(file)); }
+      catch(error) { alert(error.message); }
+    };
+    input.click();
   };
 
   window.purchaseRealizationLabel = function (row) {

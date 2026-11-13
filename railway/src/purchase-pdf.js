@@ -6,6 +6,7 @@ import {pool} from './db.js';
 import {asyncRoute,requireTrustedOrigin} from './http.js';
 import {hydrateWarehouseProducts} from './warehouse-products.js';
 import {wbCardGroupSnapshot} from './wb-card-groups.js';
+import {kaspiPurchaseSettlements} from './kaspi-purchase-settlements.js';
 
 const require=createRequire(import.meta.url);
 const FONT=require.resolve('dejavu-fonts-ttf/ttf/DejaVuSans.ttf');
@@ -14,6 +15,11 @@ const MAX_IMAGE=5*1024*1024;
 const text=v=>String(v??'').trim();
 const invalid=message=>Object.assign(new Error(message),{status:400});
 function money(value){return Number(value).toLocaleString('ru-RU',{maximumFractionDigits:2})+' ₸'}
+function purchaseCardTitle(value){
+ return text(value).normalize('NFKC').toLocaleLowerCase('ru-RU')
+  .replace(/[^\p{L}\p{N}]+/gu,' ').trim().split(' ')
+  .map(word=>word==='e'?'е':word==='буквы'?'буква':word).join(' ');
+}
 export function purchasePhotoUrl(value){
  try{const u=new URL(value);return u.protocol==='https:'&&!u.username&&!u.password&&(!u.port||u.port==='443')&&/^(?:[a-z0-9-]+\.)*(?:wbbasket\.ru|wbstatic\.net|wildberries\.ru|wb\.ru)$/i.test(u.hostname)?u.href:''}catch{return ''}
 }
@@ -28,7 +34,14 @@ export function preparePurchasePdf(input,products,cards,links=[]){
   const keys=[product.wb,...(Array.isArray(product.wbAliases)?product.wbAliases:[]),...links.filter(l=>String(l.productId)===String(product.id)).map(l=>l.sku)].map(text).filter(Boolean);
   let card=null;
   for(const key of [...new Set(keys)]){const found=cards.filter(c=>text(c.vendorCode)===key||text(c.nmId)===key);if(found.length===1){card=found[0];break;}}
-  return {productId:String(product.id),name:text(product.name).slice(0,300)||'Товар',sku:text(card?.vendorCode||product.wb),qty,buyTotal,photo:purchasePhotoUrl(card?.photo)};
+  let photo=purchasePhotoUrl(card?.photo)||purchasePhotoUrl(product.photo);
+  if(!photo&&!keys.length){
+   const title=purchaseCardTitle(product.name);
+   const matches=/^буква сердце [а-я]$/.test(title)
+    ?cards.filter(candidate=>[candidate.title,candidate.vendorCode].some(value=>purchaseCardTitle(value)===title)):[];
+   if(matches.length===1)photo=purchasePhotoUrl(matches[0].photo);
+  }
+  return {productId:String(product.id),name:text(product.name).slice(0,300)||'Товар',sku:text(card?.vendorCode||product.wb),qty,buyTotal,photo};
  });
  rows.sort((a,b)=>a.name.localeCompare(b.name,'ru',{numeric:true,sensitivity:'base'}));
  const delivery=Number(input.delivery??0);if(!Number.isFinite(delivery)||delivery<0||delivery>1e12)throw invalid('Проверьте сумму доставки');
@@ -97,6 +110,7 @@ export function createPurchasePdf(data,images=new Map()){
  });
 }
 export const purchasePdfRouter=express.Router();
+purchasePdfRouter.use(kaspiPurchaseSettlements);
 purchasePdfRouter.post('/purchases/pdf',requireTrustedOrigin,asyncRoute(async(req,res)=>{
  const input=req.body||{};
  if(!Array.isArray(input.items)||input.items.length>200)throw invalid('Проверьте состав закупки');
