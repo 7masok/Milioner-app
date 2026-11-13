@@ -4,17 +4,19 @@ import vm from 'node:vm';
 import {readFileSync} from 'node:fs';
 const code=readFileSync(new URL('../../store-selection-v1.js',import.meta.url),'utf8');
 const html=readFileSync(new URL('../../index.html',import.meta.url),'utf8');
-function fixture(saved=new Map()){
+function fixture(saved=new Map(),{photoCards,wb3Only=false}={}){
  const elements=new Map(),requests=[],calls={renders:0};
  const element={innerHTML:'',classList:{add(){},toggle(){}},setAttribute(){}};elements.set('orderStoreSelection',{...element});
  const ctx={URL,URLSearchParams,Response,AbortController,Date,Number,String,Math,Map,Set,JSON,
-  WAREHOUSE_SCOPE_CONFIG:{enabled:true},warehouseScope:{enabled:true},WB3_ONLY:false,
+  WAREHOUSE_SCOPE_CONFIG:{enabled:true},warehouseScope:{enabled:true},WB3_ONLY:wb3Only,AbortSignal,appRuntimeStarted:true,
   location:{href:'https://warehouse.test/',origin:'https://warehouse.test',pathname:'/',search:'',assign(){throw Error('must not navigate');}},
   localStorage:{getItem:k=>saved.get(k)||null,setItem:(k,v)=>saved.set(k,v)},sessionStorage:{getItem:()=>null},APP_FRESH_LOGIN_KEY:'fresh',
-  document:{getElementById:id=>elements.get(id)||null,querySelectorAll:()=>[]},
+  document:{getElementById:id=>elements.get(id)||null,querySelector:()=>null,querySelectorAll:()=>[]},
   state:{products:[{id:'main',wb:'MAIN',stock:6},{id:'inferno:child',wb3:'CHILD',stock:6,wbVariant:{nmId:'123',chrtId:456}}],settings:{},purchases:[],movements:[],wbOrderFeed:[]},
   MILLIONER_API:'https://warehouse.test',selectedOrderMarket:'all',selectedWbAccount:'all',orderPage:1,productPage:1,productFboOnly:false,
-  fetch:async(url,options)=>{requests.push({url,options});return Response.json({ok:true,fetchedAt:1,sizes:{'123:456':{quantity:12}},items:{}});},
+  fetch:async(url,options)=>{requests.push({url,options});const data={ok:true,fetchedAt:1,sizes:{'123:456':{quantity:12}},items:{}};if(url.includes('/card-groups'))data.cards=photoCards?.[new URL(url).searchParams.get('market')]||[];return Response.json(data);},
+  productCard:()=>'<div class="item row"><div class="grow"><div class="name">Товар</div></div></div>',
+  esc:value=>String(value).replaceAll('&','&amp;').replaceAll('"','&quot;'),
   normalizeWarehouseSnapshot:s=>({...s}),renderMarketplaceOrders(){calls.renders++;},renderIntegrationStatus(){},renderProducts(){},renderPurchases(){},renderPurchasePlan(){},renderMovement(){},
   purchaseShipmentGroups:()=>[],purchaseRecommendations:()=>[],productForm:()=>'<h3>Добавить товар</h3>',validateProductMarketplaceSkus:()=>true,
   startAppRuntime(){},applyWarehouseSnapshot:s=>{ctx.state=s;},save(){throw Error('selection must not save warehouse');},
@@ -37,6 +39,32 @@ test('five independent store buttons toggle without a navigation, parent WB cate
 test('identical vendor codes in WB1 and WB3 never merge the product catalogs',()=>{
  const f=fixture();for(const m of ['Kaspi','WB','WB2','Ozon'])f.ctx.toggleStoreSelection('products',m);f.ctx.toggleStoreSelection('products','WB3');
  assert.equal(f.ctx.productMatchesSelectedStores(f.ctx.state.products[0],'products'),false);assert.equal(f.ctx.productMatchesSelectedStores(f.ctx.state.products[1],'products'),true);
+});
+test('product photos use each warehouse catalog even when both shops use the same seller code',async()=>{
+ const wb1='https://basket-01.wbbasket.ru/wb1.webp',wb3='https://basket-03.wbbasket.ru/wb3.webp';
+ const {ctx,requests}=fixture(new Map(),{photoCards:{
+  WB:[{vendorCode:'SHARED',nmId:'12',photo:wb1}],
+  WB3:[{vendorCode:'SHARED',nmId:'34',photo:wb3}]
+ }});
+ const main={id:'main',wb:'SHARED'},inferno={id:'inferno:child',wb3:'SHARED'};
+ ctx.productCard(main);ctx.productCard(inferno);ctx.productCard(main);
+ await new Promise(resolve=>setImmediate(resolve));
+ assert.equal(requests.filter(r=>r.url.includes('/card-groups')).length,2);
+ assert.ok(requests.some(r=>r.url.endsWith('/api/unified/market-prices/card-groups?market=WB3')));
+ assert.ok(ctx.productCard(main).includes('src="'+wb1+'"'));
+ assert.ok(ctx.productCard(inferno).includes('src="'+wb3+'"'));
+ assert.ok(ctx.productCard({id:'group',variantMarket:'WB',variantNmId:'12'}).includes('src="'+wb1+'"'));
+ assert.doesNotMatch(ctx.productCard({id:'stale',wb:'SHARED',wbIdentity:{nmId:'99'}}),/<img/);
+ assert.doesNotMatch(ctx.productCard({id:'unlinked',wb2:'SHARED'}),/<img/);
+});
+test('standalone Inferno uses its local WB catalog and keeps existing imported photos while loading',async()=>{
+ const previous='https://basket-03.wbbasket.ru/previous.webp',photo='https://basket-03.wbbasket.ru/current.webp';
+ const {ctx,requests}=fixture(new Map(),{wb3Only:true,photoCards:{WB:[{vendorCode:'INFERNO',nmId:'90',photo}]}});
+ const product={id:'child',wb:'INFERNO',photo};
+ assert.ok(ctx.productCard({...product,photo:previous}).includes('src="'+previous+'"'));
+ await new Promise(resolve=>setImmediate(resolve));
+ assert.equal(requests[0].url,'https://warehouse.test/api/market-prices/card-groups?market=WB');
+ assert.ok(ctx.productCard({...product,photo:previous}).includes('src="'+photo+'"'));
 });
 test('the same main session is forwarded to the gateway and full-snapshot revisions stay composite',async()=>{
  const f=fixture(),headers={Authorization:'Bearer opaque-session'};

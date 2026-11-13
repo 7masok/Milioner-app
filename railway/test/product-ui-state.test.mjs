@@ -72,7 +72,7 @@ test('Marketplace SKU ownership is checked in create edit and relink paths',()=>
   assert.match(html,/marketplaceSkuOwner\(field,next,p\?\.id\)/);
 });
 
-test('Product list cards are compact text-only and Ozon zero is not shown before load',()=>{
+test('Base product list cards stay compact and Ozon zero is not shown before load',()=>{
   const card=html.split('\n').find(x=>x.startsWith('function productCard('))||'';
   assert.doesNotMatch(card,/p\.photo|class="thumb"|p\.category|Без категории/);
   assert.doesNotMatch(card,/<b>\$\{physical\} шт\.<\/b><div class="muted">в продаже<\/div>/);
