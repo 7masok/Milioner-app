@@ -68,6 +68,13 @@ function matchesOpening(day,payload,market){
  }catch{return false}
 }
 function dayQuality(day){return ((day.ordersReady===true||!day.pending)&&!day.ordersPartialMarkets?.length?2:0)+(!day.pending&&!partialSnapshot(day)&&!day.summary?.partialOzonHistory?1:0)}
+function missingBusinessStore(market,t,starts){
+ return {market,storeStarts:starts,period:'day',bounds:{start:t,end:t+DAY},
+  buckets:Array.from({length:24},(_,h)=>({start:t+h*3600000,end:t+(h+1)*3600000})),
+  orders:{amount:0,qty:0,profit:0,orderCount:0,coverage:0},events:[],
+  summary:{revenue:null,qty:null,profit:null,missingMarkets:[market],estimated:true},
+  pending:true,ordersReady:true,ordersPartialMarkets:[market]};
+}
 export function composeBusinessDays(rows,from,to,warehouse,revision,now=Date.now(),markets=MARKETS){
  const byKey=new Map(rows.filter(r=>r.version===BUSINESS_CACHE_VERSION).map(r=>[r.cache_key,r])),out=[];
  for(let t=from;t<to;t+=DAY){
@@ -76,13 +83,13 @@ export function composeBusinessDays(rows,from,to,warehouse,revision,now=Date.now
    const opening=reportStoreStartDate(warehouse,market),before=opening&&t+DAY<=Date.parse(opening+'T00:00:00+05:00');
    if(before){parts.push({market,beforeOpening:true});continue}
    const row=byKey.get(scopedKey('base:'+t,market)),day=row?.payload;
-   if(!row||!validBusinessDay(day)||!validScope(day,market)||day.bounds.start!==t||day.bounds.end!==t+DAY||!matchesOpening(day,warehouse,market)||!Number.isFinite(Number(row.generated_at))||Number(row.generated_at)<=0){missing=true;break}
+   if(!row||!validBusinessDay(day)||!validScope(day,market)||day.bounds.start!==t||day.bounds.end!==t+DAY||!matchesOpening(day,warehouse,market)||!Number.isFinite(Number(row.generated_at))||Number(row.generated_at)<=0){missing=true;parts.push(missingBusinessStore(market,t));continue}
    parts.push({...day,market});times.push(Number(row.generated_at));revisions.push(row.source_revision);
   }
   const old=byKey.get('base:'+t),oldDay=old?.payload,validOld=old&&validBusinessDay(oldDay)&&oldDay.bounds.start===t&&oldDay.bounds.end===t+DAY&&validScope(oldDay,'all')&&(!oldDay.storeStarts||matchesOpening(oldDay,warehouse,'all'));
   let chosen=validOld?old:null,composed=false;
-  if(!missing){
-   const active=parts.filter(p=>!p.beforeOpening),first=active[0],orders=Object.fromEntries(ORDER_FIELDS.map(f=>[f,0])),events=new Map();
+  if(!missing||times.length&&!chosen){
+   const active=parts.filter(p=>!p.beforeOpening),first=active.find(p=>!p.ordersPartialMarkets?.length)||active[0],orders=Object.fromEntries(ORDER_FIELDS.map(f=>[f,0])),events=new Map();
    for(const p of active){for(const f of ORDER_FIELDS)orders[f]+=Number(p.orders[f]??(f==='coveredAmount'?p.orders.amount*p.orders.coverage:f==='coveredQty'?p.orders.qty*p.orders.coverage:0))||0;
     for(const e of p.events||[]){const row=events.get(e[0])||[e[0],0,0,0,0,0,0];for(let i=1;i<7;i++)row[i]+=Number(e[i])||0;events.set(e[0],row)}
    }
@@ -105,7 +112,7 @@ export function composeBusinessSelection(parts,markets,from,to,now=Date.now()){
  for(let i=0;i<markets.length;i++)for(const r of parts[i]?.days||[]){try{Object.assign(starts,JSON.parse(r.day.storeStarts||'{}'))}catch{}}
  for(let t=from;t<to;t+=DAY)for(let i=0;i<markets.length;i++){
   const market=markets[i],record=parts[i]?.days?.find(r=>r.day.bounds.start===t);
-  const unknown={market,storeStarts:JSON.stringify(starts),period:'day',bounds:{start:t,end:t+DAY},buckets:Array.from({length:24},(_,h)=>({start:t+h*3600000,end:t+(h+1)*3600000,...Object.fromEntries(BUCKET_FIELDS.map(k=>[k,0]))})),orders:{...Object.fromEntries(ORDER_FIELDS.map(k=>[k,0])),coverage:0},events:[],summary:{revenue:null,qty:null,profit:null,missingMarkets:[market],estimated:true},pending:true,ordersReady:true,ordersPartialMarkets:[market]};
+  const unknown=missingBusinessStore(market,t,JSON.stringify(starts));
   rows.push({cache_key:'base:'+t+':'+market,version:BUSINESS_CACHE_VERSION,source_revision:record?.fresh?revision:null,payload:record?.day||unknown,generated_at:Number(record?.generatedAt)||now});
  }
  const days=composeBusinessDays(rows,from,to,{settings:{reportStoreStarts:starts}},revision,now,markets);

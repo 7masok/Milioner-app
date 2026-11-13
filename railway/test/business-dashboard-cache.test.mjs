@@ -114,16 +114,23 @@ test('All day route composes four persisted stores in one bounded read without w
  assert.equal(out.days.length,1);const row=out.days[0],d=row.day;assert.equal(row.composed,true);assert.equal(row.reusable,true);assert.equal(d.market,'all');assert.equal(d.orders.amount,100);assert.equal(d.orders.coverage,.5);assert.equal(d.orders.qty,4);assert.equal(d.orders.orderCount,4);assert.equal(d.summary.revenue,50);assert.equal(d.summary.profit,10);assert.equal(d.buckets[0].orders,100);assert.equal(d.events.length,1);assert.deepEqual(d.events[0],[begin+1000,100,4,20,4,50,2]);assert.equal(validBusinessDay(d),true);
  assert.equal(queries.find(q=>q.sql.startsWith('SELECT cache_key')).args[0].length,5);assert.ok(queries.every(q=>q.sql.startsWith('SELECT')));assert.ok(queries.every(q=>!q.sql.includes('FROM marketplace_order_lines')&&!q.sql.includes('FROM wb_finance_rows')));
 });
-test('missing store days and stale opening signatures never become zero; complete All fallback survives partial finance',async()=>{
+test('missing store days and stale opening signatures preserve other stores and keep complete fallback',async()=>{
  const {composeBusinessDays}=await import('../src/business-dashboard-cache.js'),begin=today-10*DAY,rows=markets.map((m,i)=>storeRow(m,begin,(i+1)*10));
- assert.equal(composeBusinessDays(rows.slice(1),begin,begin+DAY,{},revision()).length,0);
- const warehouse=JSON.stringify({settings:{reportStoreStarts:{WB:'2020-01-01'}}});assert.equal(composeBusinessDays(rows,begin,begin+DAY,warehouse,revision()).length,0);
+ const partial=composeBusinessDays(rows.slice(0,3),begin,begin+DAY,{},revision())[0];
+ assert.equal(partial.day.orders.amount,60);assert.deepEqual(partial.day.ordersPartialMarkets,['Ozon']);
+ assert.deepEqual(partial.day.summary.missingMarkets,['Ozon']);assert.equal(partial.day.summary.profit,null);
+ assert.equal(partial.fresh,false);assert.equal(partial.reusable,false);
+ assert.equal(composeBusinessDays([],begin,begin+DAY,{},revision()).length,0);
+ const warehouse=JSON.stringify({settings:{reportStoreStarts:{WB:'2020-01-01'}}}),stale=composeBusinessDays(rows,begin,begin+DAY,warehouse,revision())[0];
+ assert.equal(stale.day.orders.amount,80);assert.deepEqual(stale.day.ordersPartialMarkets,['WB']);
  rows[0].payload.pending=true;rows[0].payload.summary={revenue:null,qty:null,profit:null};let composed=composeBusinessDays(rows,begin,begin+DAY,{},revision())[0];assert.equal(composed.day.ordersReady,true);assert.equal(composed.day.pending,true);assert.equal(composed.day.summary.profit,null);assert.equal(composed.reusable,false);
  const ready={...storeRow('all',begin,999),cache_key:'base:'+begin};delete ready.payload.ordersReady;composed=composeBusinessDays([...rows,ready],begin,begin+DAY,{},revision())[0];assert.equal(composed.day.orders.amount,999);assert.equal(composed.day.pending,false);assert.equal(composed.composed,undefined);
 });
 test('confirmed pre-opening stores contribute zero from current TEXT settings without inventing a missing active store',async()=>{
  const {composeBusinessDays}=await import('../src/business-dashboard-cache.js'),begin=today-10*DAY,starts={Ozon:new Date(today-DAY+18000000).toISOString().slice(0,10)},warehouse=JSON.stringify({settings:{reportStoreStarts:starts}}),rows=markets.slice(0,3).map(m=>storeRow(m,begin,10,Date.now(),{}));
- const d=composeBusinessDays(rows,begin,begin+DAY,warehouse,revision())[0].day;assert.equal(d.orders.amount,30);assert.equal(d.summary.revenue,15);assert.equal(d.storeStarts,JSON.stringify(starts));assert.equal(d.ordersReady,true);assert.equal(d.pending,false);assert.equal(composeBusinessDays(rows.slice(1),begin,begin+DAY,warehouse,revision()).length,0);
+ const d=composeBusinessDays(rows,begin,begin+DAY,warehouse,revision())[0].day;assert.equal(d.orders.amount,30);assert.equal(d.summary.revenue,15);assert.equal(d.storeStarts,JSON.stringify(starts));assert.equal(d.ordersReady,true);assert.equal(d.pending,false);
+ const partial=composeBusinessDays(rows.slice(1),begin,begin+DAY,warehouse,revision())[0].day;
+ assert.deepEqual(partial.ordersPartialMarkets,['Kaspi']);
 });
 test('All preserves unknown profit, weighted coverage and oldest input time through stale revisions',async()=>{
  const {composeBusinessDays}=await import('../src/business-dashboard-cache.js'),begin=today-10*DAY,rows=markets.map((m,i)=>storeRow(m,begin,(i+1)*10));rows[0].payload.summary.profit=null;rows[1].payload.orders.coveredAmount=0;rows[1].payload.orders.coverage=0;rows[2].generated_at=begin+DAY-1;rows[2].source_revision='old';
