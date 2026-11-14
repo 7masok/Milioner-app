@@ -4,6 +4,6 @@ export function withFboPage(html){
   .replaceAll("'purchases','reports'","'purchases','fbo','reports'")
   .replace("}else if(activeView==='purchases'){","}else if(activeView==='fbo'){\n    renderFboDashboard();\n  }else if(activeView==='purchases'){")
   .replace(/(ozon-fbo-v1\.js\?v=)[^"']+/g,(_,prefix)=>prefix+'20261029-full-catalog')
-  .replace('</head>','<link rel="stylesheet" href="./fbo-dashboard.css?v=20261029-full-catalog">\n</head>')
-  .replace('<script>initOwnerAuth();</script>','<script src="./fbo-dashboard-model.js?v=20261029-full-catalog"></script>\n<script src="./fbo-dashboard-v1.js?v=20261029-full-catalog"></script>\n<script src="./fbo-warehouse-v1.js?v=20261029-full-catalog"></script>\n<script src="./wb3-supplies-v1.js?v=20261104"></script>\n<script>initOwnerAuth();</script>');
+  .replace('</head>','<link rel="stylesheet" href="./fbo-dashboard.css?v=20261114-product-plan">\n</head>')
+  .replace('<script>initOwnerAuth();</script>','<script src="./fbo-dashboard-model.js?v=20261114-product-plan"></script>\n<script src="./fbo-dashboard-v1.js?v=20261114-product-plan"></script>\n<script src="./fbo-warehouse-v1.js?v=20261029-full-catalog"></script>\n<script src="./wb3-supplies-v1.js?v=20261104"></script>\n<script>initOwnerAuth();</script>');
 }

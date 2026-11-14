@@ -81,3 +81,19 @@ test('cluster expands all products inline without changing mode or paginating it
  el('fboRoot').listeners.get('click')({target:{closest:()=>button}});assert.match(el('fboList').innerHTML,/Остальные товары каталога · 1/);assert.match(el('fboList').innerHTML,/Нет в аналитике/);
  c.window.fboMode('products');c.window.fboSelectCluster('id:10');c.window.fboSearch('Нет в аналитике');assert.match(el('fboList').innerHTML,/Нет в аналитике/);assert.match(el('fboList').innerHTML,/Отправить<\/span><b>— шт/);
 });
+test('Products lists each SKU once and opens directions, shipment deadlines and local shortage',async()=>{
+ const els=new Map(),el=id=>{if(!els.has(id))els.set(id,{dataset:{},innerHTML:'',textContent:'',value:'',checked:false,listeners:new Map(),addEventListener(type,fn){this.listeners.set(type,fn)},classList:{contains:()=>true}});return els.get(id)};
+ const data={ok:true,calculatedDay:today(),catalog:[{sku:'5',name:'Форма яблоко',warehouseAvailable:6},{sku:'6',name:'Форма малина'}],plans:[
+  {item:{sku:'5',cluster:'Казань',clusterId:'10',stock:4,daily:1},qty:8,lead:4,deadline:today()},
+  {item:{sku:'5',cluster:'Москва',clusterId:'20',stock:12,daily:1},qty:10,lead:2,deadline:addDay(1)}
+ ],shipments:[{id:'road',source:'Ozon API',sku:'5',cluster:'Казань',clusterId:'10',status:'in_transit',qty:5,eta:addDay(3)},
+ {id:'accept',source:'Ozon API',sku:'5',cluster:'Москва',clusterId:'20',status:'pending',category:'acceptance',qty:3}]};
+ const c={window:{FboDashboardModel:M},MILLIONER_API:'',document:{getElementById:el,activeElement:null},localStorage:{getItem:()=>null,setItem(){}},AbortController,AbortSignal,Date,Intl,setTimeout,clearTimeout,fetch:async()=>({ok:true,json:async()=>data})};
+ vm.runInNewContext(read('fbo-dashboard-v1.js'),c);await c.window.renderFboDashboard();c.window.fboMode('products');
+ const list=el('fboList');assert.equal((list.innerHTML.match(/data-fbo-product="5"/g)||[]).length,1);assert.match(list.innerHTML,/Форма малина/);
+ assert.match(list.innerHTML,/Отправить не позднее завтра · 18 шт. · У нас не хватает 12 шт./);assert.doesNotMatch(list.innerHTML,/Казань|Москва/);
+ const button={dataset:{fboProduct:'5'},hasAttribute:key=>key==='data-fbo-product'};
+ el('fboRoot').listeners.get('click')({target:{closest:()=>button}});
+ assert.match(list.innerHTML,/Казань/);assert.match(list.innerHTML,/Москва/);assert.match(list.innerHTML,/Прибытие: 5 шт/);assert.match(list.innerHTML,/На приёмке: 3 шт/);
+ c.window.fboSelectCluster('id:10');assert.match(list.innerHTML,/Отправить не позднее завтра · 8 шт. · У нас не хватает 2 шт./);
+});

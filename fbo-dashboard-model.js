@@ -27,5 +27,63 @@ function clusterCheck(data,clusterKey,cluster=null){
  const leads=c.products.map(p=>positive(p.lead)).filter(x=>x!==null),today=data.calculatedDay||new Intl.DateTimeFormat('sv-SE',{timeZone:'Asia/Almaty'}).format(new Date()),day=v=>/^\d{4}-\d{2}-\d{2}$/.test(String(v||''))?Date.parse(v+'T00:00:00Z')/86400000:null;
  return {...c,unavailableItems:missingCatalog(data,clusterKey,c.name),needUnknown:c.needUnknown+items.length-c.products.length,stockUnknown:c.stockUnknown+items.length-c.products.length,items:items.sort((a,b)=>(b.state==='urgent')-(a.state==='urgent')||(b.need??-1)-(a.need??-1)||a.name.localeCompare(b.name,'ru')),leadMin:leads.length?Math.min(...leads):null,leadMax:leads.length?Math.max(...leads):null,shipments:shipments.map(s=>({...s,remainingDays:day(s.eta)!==null&&day(today)!==null?day(s.eta)-day(today):null,plannedTravelDays:day(s.eta)!==null&&day(s.timeslotDay)!==null&&day(s.eta)>=day(s.timeslotDay)?day(s.eta)-day(s.timeslotDay):null})),transitUnknown:incoming(shipments).filter(s=>!known(s.qty)).length};
 }
-root.FboDashboardModel={known,key,same,incoming,products,clusters,supplies,clusterCheck,missingCatalog};
+function productIndex(data,directions=clusters(data),plans=products(data)){
+ const bySku=new Map(),names=new Map(directions.map(c=>[c.key,c.name]));
+ const add=(sku,name)=>{
+  sku=String(sku??'').trim();
+  if(!sku)return null;
+  if(!bySku.has(sku))bySku.set(sku,{sku,name:name||sku,targets:new Map()});
+  return bySku.get(sku);
+ };
+ for(const item of data.catalog||[]){
+  const group=add(item.sku,item.warehouseName||item.name);
+  if(group)Object.assign(group,{warehouseAvailable:positive(item.warehouseAvailable),ozonName:item.name,warehouseProductId:item.warehouseProductId});
+ }
+ for(const plan of plans){
+  const group=add(plan.item.sku,plan.name);
+  if(!group)continue;
+  if(plan.warehouseName||group.name===group.sku)group.name=plan.name;
+  if(known(plan.warehouseAvailable))group.warehouseAvailable=positive(plan.warehouseAvailable);
+  if(plan.warehouseProductId)group.warehouseProductId=plan.warehouseProductId;
+  group.targets.set(plan.clusterKey,plan);
+ }
+ const byTarget=new Map();
+ for(const shipment of supplies(data).flatMap(s=>s.rows)){
+  const group=add(shipment.sku,shipment.warehouseName||data.productNames?.[shipment.sku]||shipment.name);
+  if(!group)continue;
+  const clusterKey=key(shipment);
+  if(!names.has(clusterKey))names.set(clusterKey,shipment.cluster||'Кластер уточняется');
+  if(!byTarget.has(group.sku))byTarget.set(group.sku,new Map());
+  const targets=byTarget.get(group.sku);
+  if(!targets.has(clusterKey))targets.set(clusterKey,[]);
+  targets.get(clusterKey).push(shipment);
+ }
+ return {groups:[...bySku.values()],names,byTarget};
+}
+function productDirections(group,index,clusterKey='',includeUnknown=false){
+ const shipments=index.byTarget.get(group.sku)||new Map();
+ const keys=clusterKey?[clusterKey]:includeUnknown?[...index.names.keys()]:[...new Set([...group.targets.keys(),...shipments.keys()])];
+ return keys.map(k=>{
+  const plan=group.targets.get(k),supplyRows=shipments.get(k)||[],onRoad=incoming(supplyRows);
+  return {...(plan||{
+   catalogOnly:true,item:{sku:group.sku,cluster:index.names.get(k),ozonName:group.ozonName},clusterKey:k,name:group.name,
+   warehouseProductId:group.warehouseProductId,warehouseAvailable:group.warehouseAvailable,
+   stock:null,need:null,daily:null,cover:null,lead:null,state:'missing',missing:'Нет аналитики по товару в этом кластере'
+  }),shipments:onRoad,supplyRows,transit:supplyRows.length||plan?onRoad.reduce((sum,s)=>sum+(positive(s.qty)||0),0):null,
+  transitUnknown:onRoad.filter(s=>!known(s.qty)).length};
+ }).sort((a,b)=>(b.state==='urgent')-(a.state==='urgent')||(b.need??-1)-(a.need??-1)||String(a.item.cluster||'').localeCompare(String(b.item.cluster||''),'ru'));
+}
+function productTotals(rows){
+ const out={need:null,stock:null,transit:null,needUnknown:0,stockUnknown:0,transitUnknown:0,deadline:null,urgent:false};
+ for(const row of rows){
+  for(const field of ['need','stock','transit']){
+   if(known(row[field]))out[field]=(out[field]??0)+row[field];else out[field+'Unknown']++;
+  }
+  out.transitUnknown+=row.transitUnknown||0;
+  if(row.need>0&&row.deadline&&(!out.deadline||row.deadline<out.deadline))out.deadline=row.deadline;
+  if(row.state==='urgent')out.urgent=true;
+ }
+ return out;
+}
+root.FboDashboardModel={known,key,same,incoming,products,clusters,supplies,clusterCheck,missingCatalog,productIndex,productDirections,productTotals};
 })(typeof window==='object'?window:globalThis);

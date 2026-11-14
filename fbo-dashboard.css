@@ -26,3 +26,7 @@ body .app>.fab,body:has(#home.active) .app>.fab{bottom:calc(var(--warehouse-nav-
 body:has(#fbo.active) .app>.fab{display:none}
 
 #fbo .fbo-incoming-visible{margin:14px 0;padding:12px;border:1px solid #c7dce9;border-radius:12px;background:#f1f8fc}#fbo .fbo-incoming-visible h4{font-size:14px;margin:0 0 8px}#fbo .fbo-incoming-visible h4:not(:first-child){margin-top:15px}#fbo .fbo-calculation{margin-top:10px;border-top:1px solid #dde5ed;padding-top:8px}#fbo .fbo-calculation p{font-size:12px;color:#566575}
+
+#fbo .fbo-product-toggle{display:flex;justify-content:space-between;align-items:center;gap:10px;width:100%;padding:4px 0;border:0;background:none;color:inherit;text-align:left;font:inherit;cursor:pointer}
+#fbo .fbo-product-toggle strong,#fbo .fbo-product-toggle small{display:block}#fbo .fbo-product-toggle small{margin-top:3px;color:var(--fbo-muted);font-size:11px}
+#fbo .fbo-product-due{margin:8px 0 0;font-size:12px;font-weight:700;color:#875600}#fbo .fbo-product-targets{margin-top:12px;border-top:1px solid var(--line)}#fbo .fbo-product-targets>.fbo-card{padding:12px;background:#f8fafc}
