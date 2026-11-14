@@ -28,6 +28,38 @@ function seed(f){
  const day=f.api.businessModelFromDays('day',0);f.api.businessRememberModel(f.api.businessModelKey(),day);
  f.ctx.loadBusinessMarketplaceDaily=async()=>{throw Error('ready days must be reused')};return day;
 }
+test('combined May loads despite a missing day, marks the gap and still requests April',async()=>{
+ const f=fixture(),may=Date.parse('2026-05-01T00:00:00+05:00'),april=may-30*DAY,reads=[];
+ for(let i=0;i<6;i++)await f.ctx.shiftBusinessDashboardMonth(-1);
+ await f.ctx.setBusinessDashboardPeriod('month');
+ for(let i=0;i<6;i++)await f.ctx.shiftBusinessDashboardMonth(-1);
+ f.ctx.MILLIONER_API='https://fixture.invalid';
+ f.ctx.loadBusinessMarketplaceDaily=async()=>{throw Error('only read saved data')};
+ vm.runInContext('businessServerManaged=true',f.ctx);
+ f.ctx.fetch=async raw=>{
+  const url=new URL(raw),from=Number(url.searchParams.get('from')),to=Number(url.searchParams.get('to'));
+  if(url.pathname.endsWith('-progress'))return {ok:false};
+  assert.ok(url.pathname.endsWith('-days'));
+  reads.push(from);
+  const days=[];
+  for(let t=from;t<to;t+=DAY){
+   if(t===may+3*DAY)continue;
+   const day=f.api.businessMakeDay(t,[],{revenue:50,qty:1,profit:20});
+   day.events=[[t+1000,100,1,20,1,100,1]];
+   day.buckets[0].orders=100;
+   days.push({day,generatedAt:NOW});
+  }
+  return {ok:true,json:async()=>({days,version:'calendar-v2',serverManaged:true})};
+ };
+ const model=await f.ctx.renderBusinessDashboard(true);
+ assert.equal(model.bounds.start,may);
+ assert.equal(model.orders.amount,3000);
+ assert.equal(model.missingDays,1);
+ assert.equal(model.buckets[3].unavailable,true);
+ assert.match(f.el('businessValueMeta').textContent,/30 из 31 дн/);
+ assert.match(f.el('businessChart').innerHTML,/Нет полной истории/);
+ assert.ok(reads.includes(april));
+});
 test('combined October presents available buyout profit while a store is still preparing',async()=>{
  const f=fixture();await f.ctx.setBusinessDashboardPeriod('month');await f.ctx.shiftBusinessDashboardMonth(-1);
  const start=Date.parse('2026-10-01T00:00:00+05:00'),end=Date.parse('2026-11-01T00:00:00+05:00');
