@@ -82,6 +82,43 @@ function stagedFixture(){
  f.ctx.purchaseWorkflowStage=x=>x.workflowStageId;f.ctx.purchaseStatus=x=>x.status;f.ctx.purchaseWorkflowPhase=id=>{const i=f.ctx.purchaseWorkflow().findIndex(x=>x.id===id);return i>=f.ctx.purchaseWorkflow().findIndex(x=>x.id==='arrived')?'at_warehouse':i>=f.ctx.purchaseWorkflow().findIndex(x=>x.id==='delivery_warehouse')?'to_me':'to_forwarder'};
  Object.assign(f.ctx.state.purchases[0],{workflowStageId:'paid',workflowStageAt:50,status:'to_forwarder',amantransOrderId:'11',amantransAccountId:'7',remainingQty:0});f.view.fetchedAt=Date.now();f.view.orders[0].status='CHINA';return f;
 }
+test('saving a real track moves the whole paid shipment to departed and preserves the carrier update',()=>{
+ const f=stagedFixture(),row=f.ctx.state.purchases[0];
+ row.amantransTrack='TMP-main';
+ const second={...row,id:'p3',qty:3};
+ f.ctx.state.purchases.push(second);
+ f.ctx.amanPreparePurchase([row,second],'paid','  YT7653474579068  ','TMP-main');
+ for(const item of [row,second]){
+  assert.equal(item.workflowStageId,'departed');
+  assert.ok(item.workflowStageAt>50);
+  assert.equal(item.status,'to_forwarder');
+  assert.equal(item.amantransPendingTrack,'YT7653474579068');
+ }
+ assert.equal(f.requests.length,0);
+ assert.equal(f.calls.saved,0,'the normal editor saves both changes together');
+});
+test('existing tracked paid shipments advance once even without a working carrier snapshot',async()=>{
+ const f=stagedFixture(),row=f.ctx.state.purchases[0];
+ Object.assign(row,{amantransTrack:'79048207806771'});
+ f.view.connected=false;
+ for(const [id,status,stage,track] of [
+  ['tmp','to_forwarder','paid','TMP-po-123'],
+  ['blank','to_forwarder','paid',''],
+  ['name','to_forwarder','paid','Ибр'],
+  ['cart','to_forwarder','cart','773451908687866'],
+  ['later','to_me','delivery_warehouse','773451908687866'],
+  ['warehouse','at_warehouse','arrived','773451908687866'],
+  ['sold','received','arrived','773451908687866']
+ ])f.ctx.state.purchases.push({id,status,workflowStageId:stage,amantransTrack:track});
+ const untouched=JSON.stringify(f.ctx.state.purchases.slice(1));
+ await f.ctx.openAmanTrans('main');
+ assert.equal(row.workflowStageId,'departed');
+ assert.equal(f.calls.saved,1);
+ f.ctx.renderPurchases();
+ assert.equal(f.calls.saved,1);
+ assert.equal(JSON.stringify(f.ctx.state.purchases.slice(1)),untouched);
+ assert.ok(f.requests.every(r=>r.options.method==='GET'));
+});
 test('a saved stage binding advances the exact linked shipment and its filters without touching inventory, prices or carrier orders',async()=>{
  const f=stagedFixture(),row=f.ctx.state.purchases[0],other=structuredClone(f.ctx.state.purchases[1]);await f.ctx.openAmanTrans('main');
  assert.equal(row.workflowStageId,'delivery_warehouse');assert.equal(row.status,'to_me');assert.equal(row.workflowStageAt,f.view.fetchedAt);assert.equal(row.forwarderReceivedAt,undefined,'snapshot observation is not invented as the historical China arrival date');assert.equal(row.buyTotal,10000);assert.equal(row.delivery,500);assert.equal(row.qty,2);assert.equal(row.remainingQty,0);assert.deepEqual(f.ctx.state.purchases[1],other);assert.equal(f.calls.saved,1);

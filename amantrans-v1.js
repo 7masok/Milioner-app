@@ -11,7 +11,7 @@
   const response=await fetch(MILLIONER_API+'/api/amantrans'+path,{method,cache:'no-store',headers:{'Content-Type':'application/json'},...(body?{body:JSON.stringify(body)}:{})});
   const data=await response.json();if(!response.ok||data.ok===false)throw Error(data.error||'Не удалось получить Aman Trans');return data;
  }
- function accept(data){snapshot=data;loaded=true;checkedAt=Date.now();const linked=applyPurchaseLinks(),changed=amanApplyPurchaseStages(),delivery=amanApplyPurchaseDelivery();refreshDeliveryDraft();paint();if(linked||changed||delivery)renderPurchases({listOnly:true});}
+ function accept(data){snapshot=data;loaded=true;checkedAt=Date.now();const linked=applyPurchaseLinks(),changed=amanApplyPurchaseStages(),departed=advanceTrackedPurchases(),delivery=amanApplyPurchaseDelivery();refreshDeliveryDraft();paint();if(linked||changed||departed||delivery)renderPurchases({listOnly:true});}
  async function load(force=false){if(loading)return loading;if(!force&&loaded&&Date.now()-checkedAt<60000)return snapshot;loading=request('/state').then(data=>{accept(data);return data;}).catch(error=>{snapshot.lastError=error.message;paint();return snapshot;}).finally(()=>loading=null);return loading;}
  function rows(){return shipment?purchaseShipmentRows(enc(shipment)):[];}
  function order(id){return snapshot.orders.find(x=>x.id===String(id));}
@@ -122,6 +122,37 @@
   return /^Китай \d/.test(batch)?'':batch;
  }
  function purchaseTrack(items){return rowTrack(items[0]);}
+ function sellerDepartureStages(){
+  if(typeof purchaseWorkflow!=='function'||typeof purchaseWorkflowPhase!=='function')return null;
+  const workflow=purchaseWorkflow();
+  const paid=workflow.findIndex(stage=>stage.id==='paid'||stage.amantransStatus==='NEW'||/^оплачено$/i.test(stage.name||''));
+  const departed=workflow.findIndex(stage=>stage.id==='departed'||/^выехало от продавца$/i.test(stage.name||''));
+  return paid>=0&&departed>paid&&purchaseWorkflowPhase(workflow[departed].id)==='to_forwarder'
+   ?{paid:workflow[paid].id,departed:workflow[departed].id}:null;
+ }
+ function advanceTrackedShipment(items,stages){
+  if(!stages)return false;
+  const track=purchaseTrack(items);
+  if(!/^[a-z0-9][a-z0-9-]*$/i.test(track)||!/[0-9]/.test(track)||/^TMP-/i.test(track))return false;
+  if(items.some(row=>rowTrack(row)!==track||purchaseStatus(row)!=='to_forwarder'||purchaseWorkflowStage(row)!==stages.paid))return false;
+  const at=Date.now();
+  for(const row of items){row.workflowStageId=stages.departed;row.workflowStageAt=at;}
+  return true;
+ }
+ function advanceTrackedPurchases(){
+  if(typeof warehouseEditReady!=='function'||!warehouseEditReady())return false;
+  const stages=sellerDepartureStages();if(!stages)return false;
+  const groups=new Map();
+  for(const row of state.purchases||[]){
+   const key=String(row.shipmentId||row.id||'');if(!key)continue;
+   if(!groups.has(key))groups.set(key,[]);
+   groups.get(key).push(row);
+  }
+  let changed=false;
+  for(const items of groups.values())if(advanceTrackedShipment(items,stages))changed=true;
+  if(changed)save();
+  return changed;
+ }
  window.amanPurchaseTrack=purchaseTrack;
  window.amanPurchaseTitle=function(row){
   const batch=String(row?.batch||'').trim();
@@ -154,6 +185,7 @@
    const operationId=crypto.randomUUID();
    for(const row of items){row.amantransPendingTrack=desired;row.amantransTrackOperationId=operationId;}
   }
+  advanceTrackedShipment(items,sellerDepartureStages());
  };
  window.amanSubmitPurchase=async function(key){
   key=decodeURIComponent(String(key));const items=purchaseShipmentRows(enc(key));
@@ -215,7 +247,7 @@
   catch(error){const box=document.getElementById('amanError');if(box)box.textContent=error.message;}finally{button.disabled=false;}
  };
  window.amanHistory=async id=>{showSheet('<h3>История Aman Trans</h3><div id="amanHistory">Загружаю…</div><button class="btn full" onclick="amanBack()">Назад</button>');try{const data=await request('/orders/'+id+'/history'),box=document.getElementById('amanHistory');if(box){const seen=new Set();box.innerHTML=data.history.filter(x=>{const key=x.at+'|'+x.status;if(seen.has(key))return false;seen.add(key);return true;}).map(x=>'<div class="item"><b>'+esc(x.status)+'</b><div class="muted">'+when(x.at)+'</div></div>').join('')||'История пока отсутствует';}}catch(error){const box=document.getElementById('amanHistory');if(box)box.textContent=error.message;}};
- const render=renderPurchases;renderPurchases=function(...args){applyPurchaseLinks();amanApplyPurchaseStages();amanApplyPurchaseDelivery();refreshDeliveryDraft();const result=render(...args);void load();return result;};
+ const render=renderPurchases;renderPurchases=function(...args){applyPurchaseLinks();amanApplyPurchaseStages();advanceTrackedPurchases();amanApplyPurchaseDelivery();refreshDeliveryDraft();const result=render(...args);void load();return result;};
  const settings=renderStoreSettings;renderStoreSettings=function(...args){const result=settings(...args);paint();void load();return result;};
  function resumePending(){if(typeof warehouseEditReady==='function'&&!warehouseEditReady())return;const keys=new Set((state.purchases||[]).filter(x=>!x.amantransOrderId&&x.amantransAutoRequestedAt||x.amantransOrderId&&x.amantransPendingTrack).map(x=>String(x.shipmentId||x.id||'')));for(const key of keys)if(purchaseShipmentRows(enc(key)).some(x=>x.amantransSyncedTrack!==purchaseTrack(purchaseShipmentRows(enc(key)))))void amanSubmitPurchase(enc(key));}
  const start=startAppRuntime;startAppRuntime=function(...args){const result=start(...args);install();const timer=setInterval(()=>{if(document.querySelector('#purchases.view.active,#settings.view.active'))void load(true).then(resumePending);},60000);return result;};
