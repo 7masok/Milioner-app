@@ -12,7 +12,7 @@ function fixture(saved={period:'year'}){
  const el=id=>{if(!elements.has(id))elements.set(id,{id,innerHTML:'',textContent:'',dataset:{},classList:{contains:()=>true,toggle(){}},setAttribute(k,v){this[k]=v},addEventListener(){}});return elements.get(id)};
  for(const id of ['reports','businessDashboard','businessChart','businessPeriodTitle','businessPeriodSub','businessDayNav','businessDayDate','businessDayPrevious','businessDayNext','businessValueMetric','businessValueLabel','businessValue','businessValueMeta','businessYesterdayLabel','businessYesterdayValue','businessYesterdayMeta','businessYesterdayCompare'])el(id);
  const window={setTimeout:(cb,delay=0)=>delay?setTimeout(cb,delay).unref():cb(),clearTimeout};const ctx={window,Date:Clock,Intl,Map,Set,console:{warn(){}},state:{},localStorage:{getItem:k=>storage.get(k),setItem:(k,v)=>storage.set(k,v)},document:{readyState:'loading',getElementById:id=>elements.get(id)||null,querySelectorAll:()=>[],addEventListener(){}},fmt:n=>String(n)+' ₸'};
- vm.createContext(ctx);vm.runInContext(source.replace(/\}\)\(\);\s*$/, 'window.testApi={businessYearBounds,businessSelectedYearOffset,businessBuckets,businessBuildYearModel,businessYearFromMonths,businessPaint,businessPaintTabs,businessModelKey,businessLoadYearMonth,businessDays,businessMakeDay,businessRememberMonth,businessSaveDays,businessModelFromDays,businessServerRevisions};})();'),ctx);
+ vm.createContext(ctx);vm.runInContext(source.replace(/\}\)\(\);\s*$/, 'window.testApi={businessYearBounds,businessSelectedYearOffset,businessBuckets,businessBuildYearModel,businessYearFromMonths,businessPaint,businessPaintTabs,businessModelKey,businessLoadYearMonth,businessDays,businessMakeDay,businessRememberMonth,businessSaveDays,businessModelFromDays,businessServerRevisions,setServerManaged:()=>{businessServerManaged=true}};})();'),ctx);
  return{ctx,window,api:window.testApi,el,storage,setNow:t=>{now=t}};
 }
 function monthData(bucket,n=100){return{period:'month',bounds:{start:bucket.start,end:bucket.end},buckets:[{...bucket,orders:n,orderQty:2,orderProfit:20,buyouts:n/2,buyoutQty:1,buyoutProfit:10}],orders:{amount:n,qty:2,profit:20,orderCount:1,coverage:1},summary:{revenue:n/2,qty:1,profit:10}}}
@@ -93,6 +93,34 @@ test('server-managed year reads both sets of saved days before evicting either y
  assert.equal(model.yesterday.summary.revenue,3650);
  assert.equal(model.yesterdayCompare.knownMonths,10);
  assert.ok(f.api.businessDays.size<=400);
+});
+
+test('combined year includes the same available days as the monthly report',()=>{
+ const f=fixture(),now=Date.parse('2026-11-15T02:34:00+05:00');
+ f.setNow(now);
+ f.api.setServerManaged();
+ const bounds=f.api.businessYearBounds(0),end=Date.parse('2026-11-16T00:00:00+05:00');
+ const missingDays=new Set([2,3,4,5].map(month=>Date.parse(`2026-0${month}-03T00:00:00+05:00`)));
+ for(let t=bounds.start;t<end;t+=DAY){
+  if(missingDays.has(t))continue;
+  const day=f.api.businessMakeDay(t,[],{revenue:10,qty:1,profit:2});
+  day.events=[[t,100,1,20,1,100,1]];
+  day.buckets[0].orders=100;
+  f.api.businessDays.set(t,{data:day,at:now});
+ }
+ const year=f.api.businessModelFromDays('year',0);
+ const months=Array.from({length:11},(_,i)=>f.api.businessModelFromDays('month',i-10));
+ assert.deepEqual(Array.from(year.buckets.slice(0,11),b=>b.orders),months.map(m=>m.orders.amount));
+ assert.equal(year.orders.amount,months.reduce((sum,m)=>sum+m.orders.amount,0));
+ assert.equal(year.knownMonths,11);
+ assert.equal(year.partialMonths,4);
+ assert.equal(year.yearPartial,true);
+ assert.equal(year.buckets[11].future,true);
+ f.api.businessPaint(year);
+ assert.match(f.el('businessValue').textContent,/^≈ /);
+ assert.match(f.el('businessValueMeta').textContent,/месяцев с пропусками: 4/);
+ assert.doesNotMatch(f.el('businessYesterdayCompare').innerHTML,/%/);
+ assert.equal((f.el('businessChart').innerHTML.match(/class="business-bar /g)||[]).length,11);
 });
 
 test('February 29 aligns to February 28 at the same Almaty time in the previous year',async()=>{
