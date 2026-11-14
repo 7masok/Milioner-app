@@ -121,6 +121,54 @@ openEditPurchaseShipment=function(key,...args){
   return result;
 };
 
+if(typeof openCorrectReceivedPurchaseShipment==='function'){
+  const correctShipment=openCorrectReceivedPurchaseShipment;
+  openCorrectReceivedPurchaseShipment=function(key,...args){
+    const result=correctShipment(key,...args);
+    const sheet=document.getElementById('sheet');
+    if(!sheet?.querySelector('#correctPorBuyTotal'))return result;
+    groupPurchaseCorrectionRows(sheet,purchaseShipmentRows(key));
+    return result;
+  };
+}
+
+function groupPurchaseCorrectionRows(sheet,rows){
+  const byId=new Map(rows.map(row=>[String(row.id),row])),groups=new Map();
+  for(const element of sheet.querySelectorAll('.correct-purchase-row')){
+    const row=byId.get(element.dataset.id);
+    if(!row||!row.productId)continue;
+    const productId=String(row.productId);
+    if(!groups.has(productId))groups.set(productId,[]);
+    groups.get(productId).push({row,element});
+    const price=element.querySelector('.correct-purchase-unit');
+    if(price&&price.value!==''){
+      const unit=Number(price.value),rounded=Math.round(unit*100)/100;
+      if(Number.isFinite(unit)&&Math.abs(unit-rounded)<=1e-9)price.value=String(rounded);
+    }
+  }
+  for(const [productId,parts] of groups){
+    if(parts.length<2)continue;
+    const total=parts.reduce((sum,{row})=>sum+(Number(row.qty)||0),0);
+    const departed=parts.reduce((sum,{row})=>purchaseStatus(row)==='received'
+      ?sum+Math.max(0,(Number(row.qty)||0)-(Number(row.remainingQty)||0)):sum,0);
+    const warehouse=parts.reduce((sum,{row})=>sum+purchaseWarehouseQty(row),0);
+    const details=document.createElement('details'),summary=document.createElement('summary');
+    details.className='item';
+    details.style.marginBottom='9px';
+    summary.style.cursor='pointer';
+    const title=document.createElement('b');
+    title.textContent=productNameById(productId,'Товар')+' · '+total+' шт.';
+    const note=document.createElement('span');
+    note.className='muted';
+    note.style.display='block';
+    note.textContent=[departed?'Выбыло '+departed+' шт.':'',warehouse?'На складе '+warehouse+' шт.':'','Показать части партии ('+parts.length+')'].filter(Boolean).join(' · ');
+    summary.append(title,note);
+    details.append(summary);
+    parts[0].element.before(details);
+    for(const {element} of parts)details.append(element);
+  }
+}
+
 purchaseSortChanged=function(){
   const value=document.getElementById('purchaseSort')?.value;
   purchaseSortMode=['date','stage','arrival'].includes(value)?value:'date';
