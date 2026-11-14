@@ -494,7 +494,7 @@ function businessCalendarFromDays(period,offset,daysOnly=false,allowPartial=fals
   if(bucket.start>=end){if(allowPartial)bucket.future=true;continue}
   const entry=businessDays.get(bucket.start);
   if(entry&&businessDayCoversRepairs(entry.data,entry.at))records.push(entry.data);
-  else if(businessBeforeOpening(bucket))continue;
+  else if(allowPartial&&businessBeforeOpening(bucket))continue;
   else{missingDays++;if(allowPartial)bucket.unavailable=true}
  }
  const incomplete=missingDays>0;
