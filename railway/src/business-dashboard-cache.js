@@ -75,7 +75,7 @@ function missingBusinessStore(market,t,starts){
   summary:{revenue:null,qty:null,profit:null,missingMarkets:[market],estimated:true},
   pending:true,ordersReady:true,ordersPartialMarkets:[market]};
 }
-export function composeBusinessDays(rows,from,to,warehouse,revision,now=Date.now(),markets=MARKETS){
+export function composeBusinessDays(rows,from,to,warehouse,revision,now=Date.now(),markets=MARKETS,historyRepairs=null){
  const byKey=new Map(rows.filter(r=>r.version===BUSINESS_CACHE_VERSION).map(r=>[r.cache_key,r])),out=[];
  for(let t=from;t<to;t+=DAY){
   const parts=[],times=[],revisions=[],storeGeneratedAt={};let missing=false;
@@ -83,10 +83,10 @@ export function composeBusinessDays(rows,from,to,warehouse,revision,now=Date.now
    const opening=reportStoreStartDate(warehouse,market),before=opening&&t+DAY<=Date.parse(opening+'T00:00:00+05:00');
    if(before){parts.push({market,beforeOpening:true});continue}
    const row=byKey.get(scopedKey('base:'+t,market)),day=row?.payload;
-   if(!row||!validBusinessDay(day)||!validScope(day,market)||day.bounds.start!==t||day.bounds.end!==t+DAY||!matchesOpening(day,warehouse,market)||!Number.isFinite(Number(row.generated_at))||Number(row.generated_at)<=0){missing=true;parts.push(missingBusinessStore(market,t));continue}
+   if(!row||!validBusinessDay(day)||!validScope(day,market)||day.bounds.start!==t||day.bounds.end!==t+DAY||!matchesOpening(day,warehouse,market)||!Number.isFinite(Number(row.generated_at))||Number(row.generated_at)<=0||!checkedKaspiSnapshot(day,Number(row.generated_at),market,historyRepairs)){missing=true;parts.push(missingBusinessStore(market,t));continue}
    parts.push({...day,market});times.push(Number(row.generated_at));storeGeneratedAt[market]=Number(row.generated_at);revisions.push(row.source_revision);
   }
-  const old=byKey.get('base:'+t),oldDay=old?.payload,validOld=old&&validBusinessDay(oldDay)&&oldDay.bounds.start===t&&oldDay.bounds.end===t+DAY&&validScope(oldDay,'all')&&(!oldDay.storeStarts||matchesOpening(oldDay,warehouse,'all'));
+  const old=byKey.get('base:'+t),oldDay=old?.payload,validOld=old&&validBusinessDay(oldDay)&&oldDay.bounds.start===t&&oldDay.bounds.end===t+DAY&&validScope(oldDay,'all')&&(!oldDay.storeStarts||matchesOpening(oldDay,warehouse,'all'))&&checkedKaspiSnapshot(oldDay,Number(old.generated_at),'all',historyRepairs);
   let chosen=validOld?old:null,composed=false;
   if(!missing||times.length&&!chosen){
    const active=parts.filter(p=>!p.beforeOpening),first=active.find(p=>!p.ordersPartialMarkets?.length)||active[0],orders=Object.fromEntries(ORDER_FIELDS.map(f=>[f,0])),events=new Map();
@@ -97,6 +97,10 @@ export function composeBusinessDays(rows,from,to,warehouse,revision,now=Date.now
    const buckets=Array.from({length:24},(_,i)=>{const bucket={...(first?.buckets[i]||{}),start:t+i*3600000,end:t+(i+1)*3600000,label:first?.buckets[i]?.label||String(i)};for(const f of BUCKET_FIELDS)bucket[f]=active.reduce((n,p)=>n+(Number(p.buckets[i][f])||0),0);return bucket});
    const summary={estimated:active.some(p=>p.summary.estimated),missingMarkets:[...new Set(active.flatMap(p=>p.summary.missingMarkets||[]))],partialOzonHistory:active.some(p=>p.summary.partialOzonHistory),sources:Object.fromEntries(active.map(p=>[p.market,p.summary]))};
    for(const f of ['revenue','qty','profit'])summary[f]=f==='profit'&&active.some(p=>p.summary[f]===null||p.summary[f]===undefined)||active.every(p=>p.summary[f]===null||p.summary[f]===undefined)?null:active.reduce((n,p)=>n+(Number(p.summary[f])||0),0);
+   const knownProfits=active.map(p=>p.summary.profit).filter(Number.isFinite);
+   if(summary.profit===null&&knownProfits.length)summary.knownProfit=knownProfits.reduce((sum,profit)=>sum+profit,0);
+   for(const p of active)if(p.pending||p.summary.profit==null)summary.missingMarkets.push(p.market);
+   summary.missingMarkets=[...new Set(summary.missingMarkets)];
    summary.estimated=summary.estimated||summary.profit===null;
    const day={market:'all',storeStarts:openingSignature(warehouse,markets),period:'day',bounds:first?.bounds||{start:t,end:t+DAY},buckets,orders,events:[...events.values()].sort((a,b)=>a[0]-b[0]),local:null,summary,netProfit:summary.profit,hourly:{ozonHourlyComplete:active.every(p=>p.hourly?.ozonHourlyComplete!==false)},pending:active.some(p=>p.pending)||summary.revenue===null||summary.qty===null,ordersReady:active.every(p=>p.ordersReady===true||!p.pending),ordersPartialMarkets:[...new Set(active.flatMap(p=>p.ordersPartialMarkets||[]))],beforeOpening:active.length===0};
    const at=times.length?Math.min(...times):now;
@@ -149,8 +153,8 @@ export function registerBusinessDashboardCache(router){
   const from=Number(req.query.from),to=Number(req.query.to);if(!dailyBounds(from,to))return res.status(400).json({ok:false,error:'Некорректный дневной диапазон'});
   const historyRepairs=await readKaspiRepairs();await ensureCache();const keys=[];for(let t=from;t<to;t+=DAY){keys.push(scopedKey('base:'+t,market));if(market==='all')for(const m of MARKETS)keys.push(scopedKey('base:'+t,m))}
   const [revision,result,warehouse]=await Promise.all([sourceRevision(),pool.query('SELECT cache_key,version,source_revision,payload,generated_at FROM business_dashboard_cache WHERE cache_key=ANY($1::text[])',[keys]),market==='all'?pool.query('SELECT payload FROM warehouse_state WHERE id=1'):Promise.resolve({rows:[]})]);
-  const days=market==='all'?composeBusinessDays(result.rows,from,to,warehouse.rows[0]?.payload,revision):result.rows.filter(r=>r.version===BUSINESS_CACHE_VERSION&&validBusinessDay(r.payload)&&validScope(r.payload,market)).map(r=>({day:r.payload,generatedAt:Number(r.generated_at),reusable:reusableBusinessSnapshot(r.payload,Number(r.generated_at)),fresh:!partialSnapshot(r.payload)&&!r.payload.pending&&r.source_revision===revision&&Date.now()-Number(r.generated_at)<(r.payload.bounds.end>Date.now()?60000:15*60000)&&!(Number(r.generated_at)<r.payload.bounds.end&&r.payload.bounds.end<=Date.now())}));
-  const visible=days.filter(r=>checkedKaspiSnapshot(r.day,r.generatedAt,market,historyRepairs));
+  const days=market==='all'?composeBusinessDays(result.rows,from,to,warehouse.rows[0]?.payload,revision,Date.now(),MARKETS,historyRepairs):result.rows.filter(r=>r.version===BUSINESS_CACHE_VERSION&&validBusinessDay(r.payload)&&validScope(r.payload,market)).map(r=>({day:r.payload,generatedAt:Number(r.generated_at),reusable:reusableBusinessSnapshot(r.payload,Number(r.generated_at)),fresh:!partialSnapshot(r.payload)&&!r.payload.pending&&r.source_revision===revision&&Date.now()-Number(r.generated_at)<(r.payload.bounds.end>Date.now()?60000:15*60000)&&!(Number(r.generated_at)<r.payload.bounds.end&&r.payload.bounds.end<=Date.now())}));
+  const visible=market==='all'?days:days.filter(r=>checkedKaspiSnapshot(r.day,r.generatedAt,market,historyRepairs));
   if(visible.length<Math.ceil((to-from)/DAY)||visible.some(d=>!d.fresh&&!d.reusable))await queueBusinessReports(market,from,to);
   res.json({ok:true,serverManaged:true,version:BUSINESS_CACHE_VERSION,sourceRevision:revision,historyRepairs,days:visible});
  }));
