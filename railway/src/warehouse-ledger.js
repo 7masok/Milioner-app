@@ -33,6 +33,9 @@ export function stockLedgerViolation(previous, next, now = Date.now()) {
   }
 
   const movementDelta = new Map(), warehouseLots = new Map();
+  const oldPurchases = new Map(rows(oldState.purchases).map(row => [String(row.id || ''), row]));
+  const nextPurchases = new Map(rows(nextState.purchases).map(row => [String(row.id || ''), row]));
+  const countedLots = new Set();
   const ids = new Set([...oldMovements.keys(), ...nextMovements.keys()]);
   for (const id of ids) {
     const before = oldMovements.get(id), after = nextMovements.get(id), productId = String(after?.productId || before?.productId || '');
@@ -45,7 +48,19 @@ export function stockLedgerViolation(previous, next, now = Date.now()) {
         continue;
       }
       const qty = Number(after.qty), lots = rows(after.warehouseLots);
-      if (after.type !== 'списание' || !Number.isInteger(qty) || qty >= 0 || !lots.length) return { reason: 'invalid-warehouse-writeoff', movementId: id };
+      if (after.type === 'инвентаризация' && Number.isSafeInteger(qty) && qty > 0 && lots.length === 1) {
+        const entry = lots[0], purchaseId = String(entry.purchaseId || ''), lot = nextPurchases.get(purchaseId);
+        const cost = Number(entry.unitCost);
+        if (!purchaseId || !lot || oldPurchases.has(purchaseId) || countedLots.has(purchaseId)
+          || lot.status !== 'at_warehouse' || lot.inventoryAdjustment !== true || String(lot.adjustmentMovementId) !== id
+          || String(lot.productId) !== productId || Number(lot.qty) !== qty || Number(entry.qty) !== qty || Number(lot.remainingQty) !== 0
+          || !Number.isFinite(cost) || cost < 0 || Number(lot.unitCost) !== cost || Number(lot.landedUnitCost) !== cost) {
+          return { reason: 'invalid-warehouse-inventory', movementId: id };
+        }
+        countedLots.add(purchaseId);
+        continue;
+      }
+      if (!['списание','инвентаризация'].includes(after.type) || !Number.isSafeInteger(qty) || qty >= 0 || !lots.length) return { reason: 'invalid-warehouse-writeoff', movementId: id };
       let total = 0;
       for (const lot of lots) {
         const purchaseId = String(lot.purchaseId || ''), count = Number(lot.qty);
@@ -61,8 +76,6 @@ export function stockLedgerViolation(previous, next, now = Date.now()) {
     movementDelta.set(productId, (movementDelta.get(productId) || 0) + delta);
   }
 
-  const oldPurchases = new Map(rows(oldState.purchases).map(row => [String(row.id || ''), row]));
-  const nextPurchases = new Map(rows(nextState.purchases).map(row => [String(row.id || ''), row]));
   for (const purchaseId of new Set([...oldPurchases.keys(), ...nextPurchases.keys(), ...warehouseLots.keys()])) {
     const before = oldPurchases.get(purchaseId), after = nextPurchases.get(purchaseId);
     const oldCount = Number(before?.warehouseWrittenOffQty || 0), count = Number(after?.warehouseWrittenOffQty || 0), expected = warehouseLots.get(purchaseId);

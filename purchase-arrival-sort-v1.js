@@ -148,6 +148,125 @@ sortPurchaseGroups=function(groups){
   });
 };
 
+if(typeof inventoryForm==='function'){
+  const baseInventoryForm=inventoryForm,baseSizeForm=sizeInventoryForm,baseSync=syncInventoryFields,baseCount=applyInventoryCount,baseSave=doInventory;
+  const editableMovement=movementIsStockAdjustment;
+  let countScope='sale',loadedCount=null;
+  function warehouseCountLots(p){
+    return (state.purchases||[]).filter(lot=>String(lot.productId)===String(p.id)&&purchaseWarehouseQty(lot)>0)
+      .sort((a,b)=>Number(a.warehouseReceivedAt||a.date||0)-Number(b.warehouseReceivedAt||b.date||0));
+  }
+  function reservedWarehouseLots(){
+    const lots=new Map();
+    for(const r of state.reservations||[]){
+      if(r.active!==true||r.source!=='FBO')continue;
+      for(const entry of r.warehouseLots||[]){
+        const key=String(entry.purchaseId);
+        lots.set(key,(lots.get(key)||0)+(Number(entry.qty)||0));
+      }
+    }
+    return lots;
+  }
+  function warehouseCountFields(p){
+    const lots=warehouseCountLots(p),reservedLots=reservedWarehouseLots();
+    const total=lots.reduce((n,lot)=>n+purchaseWarehouseQty(lot),0);
+    const reserved=lots.reduce((n,lot)=>n+(reservedLots.get(String(lot.id))||0),0);
+    const cost=total?lots.reduce((n,lot)=>n+purchaseWarehouseQty(lot)*purchaseDisplayUnitCost(lot),0)/total:Number(p.cost)||0;
+    return {total,reserved,cost:Math.round(Math.max(0,cost)*100)/100};
+  }
+  function scopeField(){
+    return '<div class="field"><label for="inventoryCountScope">Где пересчитать</label><select id="inventoryCountScope" onchange="changeInventoryCountScope(this.value)"><option value="sale" '+(countScope==='sale'?'selected':'')+'>В продаже</option><option value="at_warehouse" '+(countScope==='at_warehouse'?'selected':'')+'>На складе</option></select></div>';
+  }
+  function warehouseCountSignature(p){
+    const lots=warehouseCountLots(p),reservedLots=reservedWarehouseLots();
+    return JSON.stringify(lots.map(lot=>[lot.id,purchaseWarehouseQty(lot),reservedLots.get(String(lot.id))||0,purchaseDisplayUnitCost(lot)]));
+  }
+  function applyWarehouseCount(p,actual,unit){
+    const {total,reserved}=warehouseCountFields(p),delta=actual-total;
+    if(!delta)return;
+    if(delta<0&&actual<reserved)throw Error('На складе зарезервировано для FBO '+reserved+' шт. Сначала освободите резерв для недостающего товара.');
+    if(!Number.isFinite(actual*unit))throw Error('Проверьте себестоимость.');
+    const used=[],now=Date.now();
+    if(delta<0){
+      let need=-delta;
+      const reservedLots=reservedWarehouseLots();
+      for(const lot of warehouseCountLots(p)){
+        const qty=Math.min(need,Math.max(0,purchaseWarehouseQty(lot)-(reservedLots.get(String(lot.id))||0)));
+        if(qty>0){used.push({lot,qty});need-=qty;}
+        if(!need)break;
+      }
+      if(need)throw Error('Складские партии изменились. Откройте инвентаризацию заново.');
+    }
+    const movement=log('инвентаризация',p.id,delta,'На складе · было '+total+', стало '+actual+' шт.');
+    movement.stockScope='at_warehouse';
+    if(delta>0){
+      const lot={id:id(),productId:p.id,status:'at_warehouse',qty:delta,remainingQty:0,
+        unitCost:unit,landedUnitCost:unit,buyTotal:unit*delta,delivery:0,date:now,warehouseReceivedAt:now,
+        batch:'Инвентаризация · на складе',inventoryAdjustment:true,adjustmentMovementId:movement.id};
+      state.purchases.unshift(lot);
+      movement.warehouseLots=[{purchaseId:String(lot.id),qty:delta,unitCost:unit}];
+    }else{
+      movement.warehouseLots=used.map(({lot,qty})=>{
+        lot.warehouseWrittenOffQty=(Number(lot.warehouseWrittenOffQty)||0)+qty;
+        return {purchaseId:String(lot.id),qty,unitCost:purchaseDisplayUnitCost(lot)};
+      });
+    }
+    captureMovementBalance(movement,actual,'at_warehouse');
+  }
+  movementIsStockAdjustment=function(m){return m?.stockScope!=='at_warehouse'&&editableMovement(m);};
+  applyInventoryCount=function(p,actual,unit){
+    if(document.getElementById('inventoryCountScope')?.value==='at_warehouse')return applyWarehouseCount(p,actual,unit);
+    return baseCount(p,actual,unit);
+  };
+  sizeInventoryForm=function(groupId){
+    const html=baseSizeForm(groupId).replace('</h3>','</h3>'+scopeField());
+    if(countScope!=='at_warehouse')return html;
+    const fields=sizeInventoryRows(groupId).map(warehouseCountFields);
+    let i=0;
+    return html.replace(/Учтено [\d.]+ · резерв [\d.]+/g,()=>{const f=fields[i++];return 'На складе '+f.total+' · резерв FBO '+f.reserved;})
+      .replace(/(id="sizeInventoryQty(\d+)"[^>]*?value=")\d+/g,(_m,head,i)=>head+fields[i].total)
+      .replace(/(id="sizeInventoryCost(\d+)"[^>]*?value=")[\d.]+/g,(_m,head,i)=>head+fields[i].cost)
+      .replace(/<div class="link-note">.*?<\/div>/,'<div class="link-note">Укажите фактическое количество на складе, включая резерв FBO.</div>');
+  };
+  inventoryForm=function(pid,scope){
+    const target=prod(pid),group=target?.kind==='variant-group'?target:prod(target?.variantGroupId);
+    const selected=target&&!isBundleProduct(target)?target:stockProducts()[0];
+    const rows=group?sizeInventoryRows(group.id):[selected].filter(Boolean);
+    countScope=scope||((rows.some(p=>purchaseAtWarehouseQty(p.id)>0)&&rows.every(p=>!Number(p.stock)))?'at_warehouse':'sale');
+    if(group)return sizeInventoryForm(group.id);
+    const html=baseInventoryForm(pid).replace('</h3>','</h3>'+scopeField());
+    if(countScope!=='at_warehouse'||!rows.length)return html;
+    const p=rows[0],f=warehouseCountFields(p);
+    loadedCount={productId:p.id,signature:warehouseCountSignature(p)};
+    return html.replace(/(id="iq"[^>]*?value=")\d+/,(_m,head)=>head+f.total)
+      .replace(/(id="icost"[^>]*?value=")[\d.]+/,(_m,head)=>head+f.cost)
+      .replace(/<div id="inventoryReserveNote"[\s\S]*?<button/,'<div id="inventoryReserveNote" class="link-note">На складе учтено '+f.total+' шт. · резерв FBO '+f.reserved+' шт.</div><div class="link-note">Себестоимость применяется к новым складским единицам.</div><button');
+  };
+  window.changeInventoryCountScope=function(scope){
+    if(document.getElementById('sizeInventoryStatus')&&(sizeInventorySession?.applied||sizeInventorySession?.busy)){
+      const input=document.getElementById('inventoryCountScope');
+      if(input)input.value=countScope;
+      return;
+    }
+    const pid=document.getElementById('ip')?.value||sizeInventorySession?.groupId;
+    if(pid)showSheet(inventoryForm(pid,scope));
+  };
+  syncInventoryFields=function(){
+    if(document.getElementById('inventoryCountScope')?.value==='at_warehouse')return window.changeInventoryCountScope('at_warehouse');
+    return baseSync();
+  };
+  doInventory=function(){
+    if(document.getElementById('inventoryCountScope')?.value!=='at_warehouse')return baseSave();
+    if(!requireWarehouseEditReady())return;
+    const p=prod(document.getElementById('ip')?.value);
+    const qty=document.getElementById('iq')?.value,cost=document.getElementById('icost')?.value,actual=Number(qty),unit=Number(cost);
+    if(!p||isBundleProduct(p)||!String(qty??'').trim()||!Number.isSafeInteger(actual)||actual<0||!String(cost??'').trim()||!Number.isFinite(unit)||unit<0||!Number.isFinite(actual*unit))return alert('Укажите целое количество от 0 и себестоимость от 0.');
+    if(loadedCount?.productId!==p.id||loadedCount.signature!==warehouseCountSignature(p))return alert('Склад изменился. Откройте инвентаризацию заново.');
+    try{applyWarehouseCount(p,actual,unit);}catch(error){return alert(error.message);}
+    save();closeModal();render();
+  };
+}
+
 if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',installPurchaseArrivalSort,{once:true});
 else installPurchaseArrivalSort();
 window.addEventListener('load',installPurchaseArrivalSort,{once:true});
