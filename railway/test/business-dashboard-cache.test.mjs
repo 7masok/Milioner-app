@@ -41,9 +41,9 @@ test('dashboard order-history reads both date bounds with parameters and exposes
 });
 
 let savedDays=[];
-async function dailyInvoke(method,body=null,query={from:start,to:start+2*DAY}){
+async function dailyInvoke(method,body=null,query={from:start,to:start+2*DAY},history=null){
  const route=reportsRouter.stack.find(x=>x.route?.path==='/business-dashboard-days'&&x.route.methods[method]).route,old=pool.query,queries=[];let status=200,out;
- pool.query=async(sql,args)=>{queries.push({sql,args});if(sql.includes(' AS warehouse,'))return{rows:[marker]};if(sql.startsWith('SELECT cache_key'))return{rows:savedDays.filter(r=>args[0].includes(r.cache_key))};if(sql.startsWith('INSERT INTO business_dashboard_cache'))savedDays=JSON.parse(args[0]).map(r=>({cache_key:r.key,version:args[1],source_revision:args[2],payload:r.payload,generated_at:args[3]}));return{rows:[]}};
+ pool.query=async(sql,args)=>{queries.push({sql,args});if(sql.startsWith('SELECT payload FROM kaspi_order_history_state'))return{rows:history?[{payload:history}]:[]};if(sql.includes(' AS warehouse,'))return{rows:[marker]};if(sql.startsWith('SELECT cache_key'))return{rows:savedDays.filter(r=>args[0].includes(r.cache_key))};if(sql.startsWith('INSERT INTO business_dashboard_cache'))savedDays=JSON.parse(args[0]).map(r=>({cache_key:r.key,version:args[1],source_revision:args[2],payload:r.payload,generated_at:args[3]}));return{rows:[]}};
  try{await route.stack.at(-1).handle({query,body},{status(n){status=n;return this},json(x){out=x}},e=>{throw e})}finally{pool.query=old}return{status,out,queries,route};
 }
 test('shared days use one bounded aggregate batch and reuse it for any contained range',async()=>{
@@ -125,6 +125,18 @@ test('missing store days and stale opening signatures preserve other stores and 
  assert.equal(stale.day.orders.amount,80);assert.deepEqual(stale.day.ordersPartialMarkets,['WB']);
  rows[0].payload.pending=true;rows[0].payload.summary={revenue:null,qty:null,profit:null};let composed=composeBusinessDays(rows,begin,begin+DAY,{},revision())[0];assert.equal(composed.day.ordersReady,true);assert.equal(composed.day.pending,true);assert.equal(composed.day.summary.profit,null);assert.equal(composed.reusable,false);
  const ready={...storeRow('all',begin,999),cache_key:'base:'+begin};delete ready.payload.ordersReady;composed=composeBusinessDays([...rows,ready],begin,begin+DAY,{},revision())[0];assert.equal(composed.day.orders.amount,999);assert.equal(composed.day.pending,false);assert.equal(composed.composed,undefined);
+});
+test('Kaspi repair validates its own timestamp and never drops the other stores from the day',async()=>{
+ const begin=today-10*DAY,at=Date.now(),query={from:begin,to:begin+DAY};
+ const history={coveredFrom:1,anchor:at,goal:1,complete:true,repairRevisions:[{from:begin,to:begin+DAY,at}]};
+ savedDays=markets.map((market,index)=>storeRow(market,begin,(index+1)*10,index===0?at:at-100));
+ const ready=(await dailyInvoke('get',null,query,history)).out.days[0].day;
+ assert.equal(ready.orders.amount,100);assert.equal(ready.summary.profit,10);
+ savedDays[0].generated_at=at-1;
+ const partial=(await dailyInvoke('get',null,query,history)).out.days[0].day;
+ assert.equal(partial.orders.amount,90);assert.equal(partial.summary.profit,null);assert.equal(partial.summary.knownProfit,9);
+ assert.deepEqual(partial.ordersPartialMarkets,['Kaspi']);
+ assert.deepEqual(partial.summary.missingMarkets,['Kaspi']);
 });
 test('confirmed pre-opening stores contribute zero from current TEXT settings without inventing a missing active store',async()=>{
  const {composeBusinessDays}=await import('../src/business-dashboard-cache.js'),begin=today-10*DAY,starts={Ozon:new Date(today-DAY+18000000).toISOString().slice(0,10)},warehouse=JSON.stringify({settings:{reportStoreStarts:starts}}),rows=markets.slice(0,3).map(m=>storeRow(m,begin,10,Date.now(),{}));

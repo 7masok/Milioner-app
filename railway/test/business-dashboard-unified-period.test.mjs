@@ -28,6 +28,22 @@ function seed(f){
  const day=f.api.businessModelFromDays('day',0);f.api.businessRememberModel(f.api.businessModelKey(),day);
  f.ctx.loadBusinessMarketplaceDaily=async()=>{throw Error('ready days must be reused')};return day;
 }
+test('combined October presents available buyout profit while a store is still preparing',async()=>{
+ const f=fixture();await f.ctx.setBusinessDashboardPeriod('month');await f.ctx.shiftBusinessDashboardMonth(-1);
+ const start=Date.parse('2026-10-01T00:00:00+05:00'),end=Date.parse('2026-11-01T00:00:00+05:00');
+ for(let t=start;t<end;t+=DAY){
+  const summary=t===start?{revenue:100,qty:2,profit:null,knownProfit:40,missingMarkets:['Ozon']}:{revenue:100,qty:2,profit:40};
+  const day=f.api.businessMakeDay(t,[],summary);
+  day.pending=t===start;day.ordersReady=true;
+  f.api.businessDays.set(t,{data:day,at:NOW});
+ }
+ const model=f.api.businessModelFromDays('month',-1);
+ assert.equal(model.summary.profit,null);assert.equal(model.summary.knownProfit,1240);
+ await f.ctx.setBusinessDashboardMetric('buyoutProfit');
+ f.api.businessPaint(model);
+ assert.equal(f.el('businessValue').textContent,'≈ 1240 ₸');
+ assert.match(f.el('businessValueMeta').textContent,/неполные данные: Ozon/);
+});
 test('unified reports replace a year chart with Today immediately, including a warm daily basis',async()=>{
  const f=fixture(),day=seed(f);
  const year=f.api.businessStamp({...f.api.businessMissingComparison('year',0),unavailable:false,yesterday:f.api.businessMissingComparison('year',-1),yesterdayCompare:f.api.businessMissingComparison('year',-1)});
