@@ -47,6 +47,7 @@ import { configuredWbConnectionIds, connectionsRouter } from './connections.js';
 import { wbVariantsRouter } from './wb-variants.js';
 import { wbReturnsRouter } from './wb-returns.js';
 import { wbAdsRouter, startWbAdsLimitLoop } from './wb-ads.js';
+import { kaspiMarketingRouter, startKaspiMarketingLoop } from './kaspi-marketing.js';
 import { aiAssistantRouter } from './ai-assistant.js';
 import { pricesRouter, startWbPriceSyncLoop } from './prices.js';
 import { wbPromotionsRouter, startWbPromotionLoop } from './wb-promotions.js';
@@ -360,6 +361,7 @@ app.use('/api', ozonRouter);
 app.use('/api', ozonPerformanceRouter);
 app.use('/api', connectionsRouter);
 if(config.storeProfile!=='WB3')app.use('/api/amantrans',amanRouter);
+if(config.storeProfile!=='WB3')app.use('/api/kaspi-marketing',kaspiMarketingRouter);
 app.use('/api', wbVariantsRouter);
 app.use('/api', wbReturnsRouter);
 app.use('/api', wbAdsRouter);
@@ -457,6 +459,7 @@ const server = app.listen(config.port, '::', () => {
   startBusinessReportProcess();
   if(config.storeProfile!=='WB3') {
   startAmanLoop();
+  startKaspiMarketingLoop();
   startOzonSyncLoop();
   resumeOzonPerformanceRetries().catch(()=>console.warn('Ozon Performance: не удалось восстановить очередь повторов'));
   startPlannerLoop();
