@@ -442,7 +442,7 @@ function marketplaceToBuyerSnapshot(){
   const market=String(order.market||'');
   if(!marketplaceOrderInTransitToBuyer(market,order.status,order.state))continue;
   for(const line of order.lines||[]){
-   if(isPendingMarketplaceLine(line))continue;
+   if(isPendingMarketplaceLine(line)||line.buyerTransitClosed===true)continue;
    const productId=String(line?.productId||''),qty=Math.max(0,Number(line?.qty)||0);
    stockUnits+=marketplaceLineStockUnits(line);
    orderUnits+=qty;
@@ -476,7 +476,9 @@ function marketplaceToBuyerProfitSummary(periodStats,snapshot){
  const rows=marketplaceToBuyerProfitRows(periodStats,snapshot);
  const knownUnits=rows.reduce((sum,row)=>sum+row.transitQty,0);
  const missingUnits=Math.max(0,snapshot.orderUnits-knownUnits);
- return {rows,knownUnits,missingUnits,total:knownUnits||!missingUnits?rows.reduce((sum,row)=>sum+row.projected,0):null};
+ const positive=rows.reduce((sum,row)=>sum+Math.max(0,row.projected),0);
+ const negative=rows.reduce((sum,row)=>sum+Math.min(0,row.projected),0);
+ return {rows,knownUnits,missingUnits,positive,negative,total:knownUnits||!missingUnits?positive+negative:null};
 }
 async function openToBuyerProfitBreakdown(){
  const title='Прибыль в пути до покупателя',spec=productRankSpec();
@@ -489,7 +491,7 @@ async function openToBuyerProfitBreakdown(){
    periodStats=currentProductPeriodStats(spec);
   }
   if(!(periodStats instanceof Map))return showSheet('<h3>'+title+'</h3><div class="empty">Нет данных о прибыли за '+esc(spec.label)+'.</div>');
-  const {rows,total,knownUnits,missingUnits}=marketplaceToBuyerProfitSummary(periodStats,marketplaceToBuyerSnapshot());
+  const {rows,total,knownUnits,missingUnits,positive,negative}=marketplaceToBuyerProfitSummary(periodStats,marketplaceToBuyerSnapshot());
   const body=rows.map(row=>'<div class="item row" style="margin-top:8px"><div class="grow"><b>'+
    esc(row.product?.name||'Товар')+' · '+esc(reserveSourceLabel(row.market))+'</b><div class="muted">'+
    row.transitQty.toLocaleString('ru-RU')+' шт. в пути × '+fmt(row.unitProfit)+' средняя прибыль / шт.</div>'+
@@ -497,9 +499,10 @@ async function openToBuyerProfitBreakdown(){
    '</div></div><b>'+fmt(row.projected)+'</b></div>').join('');
   const coverage=knownUnits.toLocaleString('ru-RU')+' шт. с прогнозом'+
    (missingUnits?' · '+missingUnits.toLocaleString('ru-RU')+' шт. без расчёта':'');
+  const parts=negative<0?'<div class="muted">Плюс '+fmt(positive)+' · убыток '+fmt(-negative)+'</div>':'';
   showSheet('<h3>'+title+'</h3><div class="link-note">Для каждого товара беру среднюю чистую прибыль за '+
    esc(spec.label)+' в том магазине, из которого идёт заказ.</div><div class="item row"><div class="grow"><b>Итого прогноз</b>'+
-   '<div class="muted">'+esc(coverage)+'</div></div><div class="num" style="margin:0">'+(total===null?'—':fmt(total))+
+   '<div class="muted">'+esc(coverage)+'</div>'+parts+'</div><div class="num" style="margin:0">'+(total===null?'—':fmt(total))+
    '</div></div>'+body);
  }catch(error){
   showSheet('<h3>'+title+'</h3><div class="empty">Не удалось построить расчёт: '+esc(String(error.message||error))+'</div>');
@@ -1609,8 +1612,9 @@ function renderProductSummary(stats,periodStats,periodReady,cardProfitStats,card
   set('productToBuyerProfit',forecast?.total==null?'—':fmt(forecast.total));
   const coverage=document.getElementById('productToBuyerProfitCoverage');
   if(coverage){
-   coverage.hidden=!forecast?.missingUnits;
-   coverage.textContent=forecast?.missingUnits?forecast.missingUnits.toLocaleString('ru-RU')+' шт. без расчёта':'';
+   coverage.hidden=!forecast||!buyer.orderUnits;
+   coverage.textContent=forecast&&buyer.orderUnits?
+    'Расчёт для '+forecast.knownUnits.toLocaleString('ru-RU')+' из '+buyer.orderUnits.toLocaleString('ru-RU')+' шт.':'';
   }
   set('productStockCost',stats.stockCostReady?fmt(stats.stockCost):'—');
   set('productStockProfit',cardProfitReady?fmt(warehouseProjectedProfit(cardProfitStats,productValuationStockMap(stats))):'—');

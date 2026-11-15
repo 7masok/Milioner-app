@@ -49,6 +49,27 @@ export async function calculateBusinessReportJob(job,{client,readApi=readBusines
  }
  return days;
 }
+export async function logWbBuyerTransitAudit(){
+ if(config.storeProfile==='WB3')return;
+ const now=Date.now(),client=await pool.connect(),market='WB2',days=7;
+ try{
+  await client.query('BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY');
+  await client.query("SET LOCAL statement_timeout='25s'");
+  const audit=await withDatabaseReadClient(client,async()=>{
+   const state=await loadBusinessReportState(client);
+   const data=await readBusinessReportApi('/api/orders?market='+market+'&after='+(now-45*REPORT_DAY)+'&limit=15000');
+   if(data.orders.length>=15000)throw Error('Order sample incomplete');
+   const runtime=createBusinessReportRuntime({state,market,readApi:readBusinessReportApi,now});
+   return runtime.auditBuyerTransit(data.orders,days);
+  });
+  await client.query('COMMIT');
+  console.info('WB_BUYER_TRANSIT_CHECK',JSON.stringify({market,days,...audit}));
+ }catch(error){
+  await client.query('ROLLBACK').catch(()=>{});
+  console.warn('WB_BUYER_TRANSIT_CHECK_FAILED',String(error?.message||error).slice(0,180));
+ }finally{client.release()}
+}
+
 let lastSeed=0;
 export async function runBusinessReportWorker({clientPool=pool,now=Date.now(),calculate=calculateBusinessReportJob}={}){
  await ensureCache();await ensureBusinessReportJobs();

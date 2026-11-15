@@ -86,3 +86,20 @@ test('the report worker starts for both the main warehouse and the WB3 service',
  const source=readFileSync(new URL('../src/server.js',import.meta.url),'utf8'),startup=source.slice(source.indexOf("const server = app.listen"));
  assert.ok(startup.indexOf('startBusinessReportProcess();')>=0);assert.ok(startup.indexOf('startBusinessReportProcess();')<startup.indexOf("if(config.storeProfile!=='WB3')"));
 });
+
+test('the WB2 transit audit separates terminal evidence, missing margin and forecast',async()=>{
+ const product={productId:'p',qty:2,saleQty:2,netBeforeCost:700,realizedCostKzt:200,realizedCostEstimated:false};
+ const runtime=createBusinessReportRuntime({state:state(),market:'WB2',now:FROM+DAY,readApi:async path=>
+  path.includes('summary')?{financeAvailable:true,financeRowCount:1,forPay:800}:{products:[product]}});
+ const base={market:'WB2',state:'READY_FOR_PICKUP',status:'CONFIRM',qty:1,creationDate:FROM,productId:'p'};
+ const result=await runtime.auditBuyerTransit([
+  {...base,orderId:'a',entryId:'a'},
+  {...base,orderId:'b',entryId:'b',buyerTransitClosed:true},
+  {...base,orderId:'c',entryId:'c',productId:null},
+ ],7);
+ assert.equal(result.outstanding,2);
+ assert.equal(result.priced,1);
+ assert.equal(result.unpriced,1);
+ assert.equal(result.deliveredByStatistics,1);
+ assert.equal(result.net,250);
+});

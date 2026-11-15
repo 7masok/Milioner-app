@@ -17,6 +17,36 @@ function market(value) {
   return normalized;
 }
 
+const WB_TRANSIT_STATES=['SORTED','ACCEPTED_BY_CARRIER','SENT_TO_CARRIER','READY_FOR_PICKUP'];
+
+function wbTransitRid(raw){
+  let item=raw;
+  try{if(typeof raw==='string')item=JSON.parse(raw)}catch{return ''}
+  return String(item?.order?.rid||item?.order?.srid||item?.rid||item?.srid||'').trim();
+}
+
+export async function confirmClosedWbTransit(rows,db=pool){
+  const groups=new Map();
+  for(const row of rows){
+    if(!['WB','WB2'].includes(row.market)||!WB_TRANSIT_STATES.includes(String(row.state||'').toUpperCase()))continue;
+    const rid=wbTransitRid(row.transitRaw);
+    if(!rid)continue;
+    if(!groups.has(row.market))groups.set(row.market,new Map());
+    const byRid=groups.get(row.market);
+    if(!byRid.has(rid))byRid.set(rid,[]);
+    byRid.get(rid).push(row);
+  }
+  await Promise.all([...groups].map(async ([market,byRid])=>{
+    const {rows:sales}=await db.query(`SELECT srid,MAX(sale_date) AS "saleDate" FROM wb_sales_live_rows
+      WHERE market=$1 AND srid=ANY($2::text[]) GROUP BY srid`,[market,[...byRid.keys()]]);
+    for(const sale of sales)for(const order of byRid.get(sale.srid)||[]){
+      if(Number(sale.saleDate)>=Number(order.creationDate)&&Number(sale.saleDate)>0)order.buyerTransitClosed=true;
+    }
+  }));
+  for(const row of rows)delete row.transitRaw;
+  return rows;
+}
+
 ordersRouter.get('/orders', asyncRoute(async (req, res) => {
   const selected = market(req.query.market);
   const limit = Math.max(1, Math.min(15000, Number(req.query.limit || 1000) || 1000));
@@ -32,7 +62,7 @@ ordersRouter.get('/orders', asyncRoute(async (req, res) => {
   const rows = await pool.query(`SELECT o.market,o.order_id AS "orderId",o.code,o.entry_id AS "entryId",o.status,o.state,
       o.creation_date AS "creationDate",o.sku,o.product_name AS "productName",o.qty,o.unit_price AS "unitPrice",
       o.total_price AS "totalPrice",o.seller_delivery_cost AS "sellerDeliveryCost",o.marketplace_fee AS "marketplaceFee",
-      o.fee_source AS "feeSource",o.updated_at AS "updatedAt",resolved.product_id AS "productId",resolved.link_source AS "linkSource"
+      o.fee_source AS "feeSource",o.updated_at AS "updatedAt",resolved.product_id AS "productId",resolved.link_source AS "linkSource"${before?'':`,CASE WHEN o.market IN ('WB','WB2') AND upper(o.state) IN ('SORTED','ACCEPTED_BY_CARRIER','SENT_TO_CARRIER','READY_FOR_PICKUP') THEN o.raw_json END AS "transitRaw"`}
       FROM marketplace_order_lines o
       LEFT JOIN LATERAL (
         SELECT pl.product_id,'sku-exact' AS link_source
@@ -54,6 +84,7 @@ ordersRouter.get('/orders', asyncRoute(async (req, res) => {
   const history=before&&after&&req.query.history==='1'?await readWbOrderHistory(pool,after,before,selected,limit):null;
   const kaspiHistory=history?await readKaspiHistory(pool,after,before,selected,limit):null;
   const reportingRows=history?mergeReportingOrders(rows.rows,[...history.rows,...kaspiHistory.rows],limit):rows.rows;
+  if(!before)await confirmClosedWbTransit(reportingRows);
   const out = reportingRows.map(row => {
     if (row.productId && visibleLinks.get(`${row.market}\u0000${String(row.sku || '').trim()}`) === String(row.productId)) return row;
     return row.productId ? { ...row, productId: null, linkSource: null } : row;

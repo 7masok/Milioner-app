@@ -193,6 +193,8 @@ test('buyer-transit profit is additive across stores with different margins for 
   assert.equal(kaspi.total,500);
   assert.equal(wb.total,-74);
   assert.equal(combined.total,kaspi.total+wb.total);
+  assert.equal(combined.positive,500);
+  assert.equal(combined.negative,-74);
   assert.equal(combined.knownUnits,15);
   assert.equal(combined.missingUnits,2);
   assert.equal(report([['b',[['WB',2]]]],2).total,null);
