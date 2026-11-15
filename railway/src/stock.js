@@ -201,6 +201,10 @@ stockRouter.get('/kaspi-catalog',requireTrustedOrigin,asyncRoute(async (_req,res
   for(const offer of KASPI_RECOVERY_OFFERS)add(offer.sku,offer.model,offer.price,'recovery');
   res.json({ok:true,products:[...catalog.values()].sort((a,b)=>a.name.localeCompare(b.name,'ru'))});
 }));
+stockRouter.get('/ozon-product-catalog-snapshot',requireTrustedOrigin,asyncRoute(async (_req,res)=>{
+  const result=await pool.query("SELECT DISTINCT offer_id AS sku FROM ozon_protection_catalog WHERE offer_id<>''");
+  res.json({ok:true,cards:result.rows});
+}));
 stockRouter.put('/kaspi-price-template',requireTrustedOrigin,asyncRoute(async (req,res)=>{
   const existing=await liveTemplate(),hasXml=typeof req.body?.xml==='string';let rawXml=hasXml?String(req.body.xml||'').trim():String(existing?.rawXml||'');
   if(!rawXml){const error=new Error('Выберите полный XML-прайс Kaspi.');error.status=400;throw error}
