@@ -300,6 +300,8 @@ export function createKaspiMarketingService({
       ok: true, connected: Boolean(data?.account), shop: data?.account?.name || '',
       time: data?.time || '09:00', lastDay: data?.lastDay || '',
       lastSuccessAt: data?.lastSuccessAt || 0, lastError: data?.lastError || '', reconnect: Boolean(data?.reconnect),
+      defaultFrom: localDay(now() - 4 * DAY), yesterday: localDay(now() - DAY),
+      backfill: data?.backfill || null,
     };
   }
 
@@ -308,20 +310,20 @@ export function createKaspiMarketingService({
     return value;
   }
 
-  async function sync(data, force = false) {
-    if (!data?.account) {
-      if (force) throw fail('Подключите Kaspi Маркетинг', 409);
-      return view(data);
+  function backfillRange(input) {
+    const from = String(input?.from || ''), to = String(input?.to || '');
+    const valid = day => {
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(day)) return false;
+      const iso = Date.parse(day + 'T00:00:00Z');
+      return Number.isFinite(iso) && new Date(iso).toISOString().slice(0, 10) === day;
+    };
+    if (!valid(from) || !valid(to) || from > to || to >= localDay(now())) {
+      throw fail('Укажите диапазон завершённых дней, до вчера включительно', 400);
     }
-    const timestamp = now(), yesterday = localDay(timestamp - DAY);
-    if (data.reconnect) {
-      if (force) throw fail('Подключите кабинет Kaspi Маркетинг повторно', 409);
-      return view(data);
-    }
-    if (data.nextAttemptAt > timestamp && force && data.lastError) return view(data);
-    if (!force && (clock.format(timestamp) < data.time || data.lastDay >= yesterday ||
-        data.nextAttemptAt > timestamp)) return view(data);
-    const date = data.lastDay && data.lastDay < yesterday ? dayAfter(data.lastDay) : yesterday;
+    return { from, to };
+  }
+
+  async function importDay(data, date, backfill) {
     try {
       let report;
       try {
@@ -332,13 +334,43 @@ export function createKaspiMarketingService({
         report = await loadDay(data, date);
       }
       await persist(report.batches, date, report.sourcesByName);
-      Object.assign(data, { lastDay: date, lastSuccessAt: now(), lastError: '', nextAttemptAt: now() + 60_000, reconnect: false });
+      if (backfill) {
+        backfill.next = date === backfill.to ? '' : dayAfter(date);
+        backfill.error = '';
+        backfill.retryAt = 0;
+      } else {
+        Object.assign(data, { lastDay: date, lastSuccessAt: now(), lastError: '', nextAttemptAt: 0 });
+      }
+      Object.assign(data, { nextRunAt: now() + 60_000, reconnect: false });
     } catch (error) {
-      data.lastError = error.status ? error.message : 'Не удалось сохранить отчёт Kaspi';
-      data.nextAttemptAt = Math.max(now() + RETRY, Number(error.retryAt) || 0);
+      const message = error.status ? error.message : 'Не удалось сохранить отчёт Kaspi';
+      const retryAt = Math.max(now() + RETRY, Number(error.retryAt) || 0);
+      if (backfill) Object.assign(backfill, { error: message, retryAt });
+      else Object.assign(data, { lastError: message, nextAttemptAt: retryAt });
+      if (error.status === 429) data.providerRetryAt = retryAt;
+      else data.nextRunAt = now() + 60_000;
       data.reconnect = [401, 403].includes(error.status);
     }
     await write(data);
+    return view(data);
+  }
+
+  async function sync(data, force = false) {
+    if (!data?.account || data.reconnect) {
+      if (force) throw fail('Подключите Kaspi Маркетинг', 409);
+      return view(data);
+    }
+    const timestamp = now(), yesterday = localDay(timestamp - DAY);
+    if (data.providerRetryAt > timestamp || (!force && data.nextRunAt > timestamp)) return view(data);
+    const dailyDue = !(data.nextAttemptAt > timestamp) &&
+      (force || (clock.format(timestamp) >= data.time && !(data.lastDay >= yesterday)));
+    if (dailyDue) {
+      const date = data.lastDay && data.lastDay < yesterday ? dayAfter(data.lastDay) : yesterday;
+      return importDay(data, date);
+    }
+    if (!force && data.backfill?.next && !(data.backfill.retryAt > timestamp)) {
+      return importDay(data, data.backfill.next, data.backfill);
+    }
     return view(data);
   }
 
@@ -372,6 +404,26 @@ export function createKaspiMarketingService({
       await write({ time: data?.time });
       return view(null);
     }),
+    queueBackfill: input => locked(async () => {
+      const data = await read();
+      if (!data?.account || data.reconnect) throw fail('Подключите Kaspi Маркетинг', 409);
+      const range = backfillRange(input);
+      if (data.backfill?.next) {
+        if (data.backfill.from === range.from && data.backfill.to === range.to) return view(data);
+        throw fail('Догрузка другого периода уже идёт', 409);
+      }
+      data.backfill = { ...range, next: range.from, error: '' };
+      await write(data);
+      return view(data);
+    }),
+    stopBackfill: () => locked(async () => {
+      const data = await read();
+      if (data?.backfill?.next) {
+        delete data.backfill;
+        await write(data);
+      }
+      return view(data);
+    }),
     sync: () => locked(async () => sync(await read(), true)),
     syncIfDue: () => locked(async () => sync(await read())),
   };
@@ -385,6 +437,9 @@ kaspiMarketingRouter.post('/connect', requireWritesEnabled, asyncRoute(async (re
 kaspiMarketingRouter.post('/schedule', requireWritesEnabled, asyncRoute(async (req, res) => res.json(await service.saveTime(req.body))));
 kaspiMarketingRouter.post('/disconnect', requireWritesEnabled, asyncRoute(async (_req, res) => res.json(await service.disconnect())));
 kaspiMarketingRouter.post('/sync', requireWritesEnabled, asyncRoute(async (_req, res) => res.json(await service.sync())));
+kaspiMarketingRouter.post('/backfill', requireWritesEnabled, asyncRoute(async (req, res) => res.json(await service.queueBackfill(req.body))));
+kaspiMarketingRouter.post('/stop-backfill', requireWritesEnabled, asyncRoute(async (_req, res) => res.json(await service.stopBackfill())));
+
 
 export function startKaspiMarketingLoop() {
   if (!config.writesEnabled || config.storeProfile === 'WB3') return;

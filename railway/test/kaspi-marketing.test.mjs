@@ -93,3 +93,27 @@ test('same-name Kaspi campaigns connect and import separately by ID without coll
   await f.service.sync();
   assert.deepEqual(f.persisted[1].batches.map(batch => batch.id), batches.map(batch => batch.id));
 });
+
+test('dated backfill persists a day at a time and keeps the automated daily cursor separate', async () => {
+  const f = fixture();
+  await f.service.connect({ phone: '77000000000', password: 'mock-password', time: '09:00' });
+  await assert.rejects(f.service.queueBackfill({ from: '2026-11-12', to: '2026-11-15' }), /завершённых/);
+  await assert.rejects(f.service.queueBackfill({ from: '2026-02-30', to: '2026-03-01' }), /завершённых/);
+  const input = { from: '2026-11-11', to: '2026-11-13' };
+  assert.equal((await f.service.queueBackfill(input)).backfill.next, '2026-11-11');
+  assert.deepEqual(f.persisted, []);
+  assert.equal((await f.service.syncIfDue()).backfill.next, '2026-11-12');
+  assert.equal((await f.service.queueBackfill(input)).backfill.next, '2026-11-12');
+  await assert.rejects(f.service.queueBackfill({ from: '2026-11-12', to: '2026-11-13' }), /другого периода/);
+  f.setTime('2026-11-15T04:00:00Z');
+  assert.equal((await f.service.syncIfDue()).lastDay, '2026-11-14');
+  f.setTime('2026-11-15T04:01:00Z');
+  assert.equal((await f.service.syncIfDue()).backfill.next, '2026-11-13');
+  f.setTime('2026-11-15T04:02:00Z');
+  const done = await f.service.syncIfDue();
+  assert.equal(done.backfill.next, '');
+  assert.equal(done.lastDay, '2026-11-14');
+  assert.deepEqual(f.persisted.map(result => result.day), ['2026-11-11', '2026-11-14', '2026-11-12', '2026-11-13']);
+  await f.service.queueBackfill({ from: '2026-11-10', to: '2026-11-10' });
+  assert.equal((await f.service.stopBackfill()).backfill, null);
+});
