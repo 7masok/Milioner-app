@@ -526,6 +526,26 @@ async function openKaspiMarketing(){
  try{const data=await adsApi('/api/kaspi-marketing/state');if(loading.isConnected)paintKaspiMarketing(data)}
  catch(error){if(loading.isConnected)loading.textContent=error.message}
 }
+function kaspiBackfillStatus(job){
+ if(!job)return '';
+ const date=value=>String(value).split('-').reverse().join('.');
+ const period=date(job.from)+' — '+date(job.to);
+ return '<div class="muted">'+(job.next?'Догрузка '+period+' · следующий день '+date(job.next):'Загружено '+period)+'</div>'+
+  (job.error?'<div class="ad-warning" role="alert">'+esc(job.error)+'</div>':'');
+}
+function watchKaspiBackfill(node){
+ if(!node?.isConnected)return;
+ setTimeout(async()=>{
+  if(!node.isConnected)return;
+  try{
+   const data=await adsApi('/api/kaspi-marketing/state');
+   if(!node.isConnected)return;
+   node.innerHTML=kaspiBackfillStatus(data.backfill);
+   if(data.backfill?.next&&!data.reconnect)watchKaspiBackfill(node);
+   else if(document.getElementById('kmMessage')?.textContent==='')paintKaspiMarketing(data);
+  }catch{watchKaspiBackfill(node)}
+ },10000);
+}
 function paintKaspiMarketing(connection){
  const time='<div class="field"><label for="kmTime">Ежедневная загрузка, время Алматы</label><input id="kmTime" type="time" value="'+esc(connection.time||'09:00')+'" required></div>';
  const status=connection.lastDay?'<div class="muted">Последний загруженный день '+esc(connection.lastDay)+'</div>':'';
@@ -536,11 +556,18 @@ function paintKaspiMarketing(connection){
   '<div class="field"><label for="kmShop">Магазин, если их несколько</label><input id="kmShop" type="text" maxlength="120" autocomplete="off" placeholder="LUXAR"></div>'+
   time+'<p class="muted">Склад хранит данные входа зашифрованными и читает рекламные отчёты.</p>'+
   '<button type="submit" class="btn dark">Подключить</button></form>';
- const settings='<div class="muted">'+esc(connection.shop)+' · подключён</div>'+status+error+time+
+ const history='<div class="field"><b>Загрузить за период</b></div><div class="two">'+
+  '<div class="field"><label for="kmFrom">С даты</label><input id="kmFrom" type="date" value="'+esc(connection.backfill?.from||connection.defaultFrom||'')+'" max="'+esc(connection.yesterday||'')+'"></div>'+
+  '<div class="field"><label for="kmTo">По дату</label><input id="kmTo" type="date" value="'+esc(connection.backfill?.to||connection.yesterday||'')+'" max="'+esc(connection.yesterday||'')+'"></div></div>'+
+  (connection.backfill?.next?'<button type="button" class="btn" onclick="updateKaspiMarketing(\'stop-backfill\',this)">Остановить догрузку</button>':
+    '<button type="button" class="btn dark" onclick="updateKaspiMarketing(\'backfill\',this)">Загрузить период</button>')+
+  '<div id="kmBackfillStatus" role="status">'+kaspiBackfillStatus(connection.backfill)+'</div>';
+ const settings='<div class="muted">'+esc(connection.shop)+' · подключён</div>'+status+error+history+time+
   '<div class="ad-actions"><button type="button" class="btn" onclick="updateKaspiMarketing(\'schedule\',this)">Сохранить время</button>'+
   '<button type="button" class="btn dark" onclick="updateKaspiMarketing(\'sync\',this)">Загрузить сейчас</button></div>'+
   '<button type="button" class="btn" onclick="updateKaspiMarketing(\'disconnect\',this)">Отключить</button>';
  showSheet('<h3>Kaspi Маркетинг</h3>'+(connection.connected&&!connection.reconnect?settings:error+form)+'<p id="kmMessage" class="muted" role="status"></p>');
+ if(connection.backfill?.next&&!connection.reconnect)watchKaspiBackfill(document.getElementById('kmBackfillStatus'));
 }
 async function updateKaspiMarketing(action,button){
  if(action==='disconnect'&&!confirm('Отключить автозагрузку Kaspi Маркетинг? Расходы из загруженных отчётов сохранятся.'))return;
@@ -553,6 +580,7 @@ async function updateKaspiMarketing(action,button){
  const body={
   ...(action==='connect'?{phone:get('kmPhone'),password:get('kmPassword'),shop:get('kmShop')} : {}),
   ...(['connect','schedule'].includes(action)?{time:get('kmTime')} : {}),
+  ...(action==='backfill'?{from:get('kmFrom'),to:get('kmTo')}:{}),
  };
  try{
   const data=await adsApi('/api/kaspi-marketing/'+action,{method:'POST',body:JSON.stringify(body)});
