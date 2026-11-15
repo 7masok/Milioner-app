@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import test from 'node:test';
+import vm from 'node:vm';
 
 const html = readFileSync(new URL('../../index.html', import.meta.url), 'utf8');
 const passport = readFileSync(new URL('../../docs/SITE-PASSPORT.md', import.meta.url), 'utf8');
@@ -36,4 +37,45 @@ test('Passport defines the standard but explicitly forbids opportunistic mass al
   assert.match(passport, /текущая задача распространяет его только на «Рекламу»/);
   assert.match(passport, /Массовое выравнивание остальных экранов требует отдельного согласования/);
   assert.match(agents, /Единый UI-стандарт — цель для новых и затрагиваемых элементов, а не разрешение/);
+});
+
+test('Kaspi has its own advertising tab and selects only the marketing connection endpoint', async () => {
+  const markup = html.slice(html.indexOf('<section id="ads"'), html.indexOf('<section id="settings"'));
+  assert.match(markup, /data-ads-market="Kaspi"[^>]*>Kaspi<\/button>/);
+  const kaspi = markup.slice(markup.indexOf('id="adsKaspiPanel"'), markup.indexOf('id="adsWbPanel"'));
+  assert.match(kaspi, /id="kaspiMarketingButton"[^>]*openKaspiMarketing/);
+  assert.match(kaspi, /showKaspiAdsHistory/);
+  assert.doesNotMatch(markup.slice(0, markup.indexOf('id="adsKaspiPanel"')), /openKaspiMarketing/);
+
+  const requests = [];
+  const ctx = vm.createContext({
+    adsMarket: 'Kaspi', adsRenderInFlight: false,
+    document: { getElementById: () => ({}), activeElement: null },
+    startAdsSnapshotWatcher() {}, supportedAdsMarket: market => market,
+    syncAdsMarketView() {}, paintKaspiAdsPanel: data => { ctx.result = data; },
+    adsApi: async path => { requests.push(path); return { connected: true, shop: 'LUXAR' }; },
+  });
+  const start = html.indexOf('async function renderAds(){');
+  const end = html.indexOf('async function saveAdsLimit(', start);
+  vm.runInContext(html.slice(start, end), ctx);
+  await ctx.renderAds();
+  assert.deepEqual(requests, ['/api/kaspi-marketing/state']);
+  assert.equal(ctx.result.shop, 'LUXAR');
+});
+
+test('Kaspi audit stays usable without any Wildberries advertising data', async () => {
+  const ctx = vm.createContext({
+    window: { kaspiAdsLinkAudit: () => ({ total: 120 }) },
+    adsAuditPeriodSpec: () => ({ days: 180 }),
+    showSheet() {},
+    document: { getElementById: () => ({ isConnected: true }) },
+    apiJson: async () => assert.fail('Kaspi audit should not request WB'),
+    paintAdsLinkAudit() {},
+  });
+  const start = html.indexOf('async function openAdsLinkAudit(period,');
+  const end = html.indexOf('\n}', start) + 2;
+  vm.runInContext(html.slice(start, end), ctx);
+  await ctx.openAdsLinkAudit(undefined, 'Kaspi');
+  assert.equal(ctx.window.__adsAuditMarket, 'Kaspi');
+  assert.equal(ctx.window.__adsAuditView.kaspi.total, 120);
 });
