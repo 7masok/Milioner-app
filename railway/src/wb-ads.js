@@ -725,7 +725,7 @@ async function enforce(marketName, snapshot, { allowSchedule = true, allowStarts
   const snapshotIsToday = snapshot?.day === day;
   const overLimit = rule => {
     const row = byId.get(Number(rule.campaignId));
-    return snapshotIsToday && rule.enabled && Number(rule.dailyLimit) > 0 && active(row)
+    return snapshotIsToday && rule.enabled && Number(rule.dailyLimit) > 0 && Boolean(row)
       && Math.max(Number(row?.todaySpend) || 0, Number(row?.maxTodaySpend) || 0) >= Number(rule.dailyLimit);
   };
   // Spend protection runs before starts, even when a later campaign cannot start.
@@ -769,7 +769,7 @@ async function enforce(marketName, snapshot, { allowSchedule = true, allowStarts
 
     // Rotation owns automatic starts; stock/manual/budget stops retain priority.
     if (testManaged.has(Number(row.id))) {
-      if (overLimit(rule)) {
+      if (active(row) && overLimit(rule)) {
         try {await request(ADVERT_API+'/adv/v0/pause?id='+encodeURIComponent(row.id),token);await setStoredCampaignStatus(marketName,row.id,11);await pool.query("UPDATE wb_ad_limits SET auto_paused=TRUE,auto_paused_day=$3,last_action_type='auto_pause',last_action_at=$4 WHERE market=$1 AND campaign_id=$2",[marketName,row.id,day,Date.now()]);}
         catch(error){await pool.query('UPDATE wb_ad_limits SET last_action_error=$3 WHERE market=$1 AND campaign_id=$2',[marketName,row.id,actionErrorText(error)]);}
       }
@@ -833,8 +833,8 @@ async function enforce(marketName, snapshot, { allowSchedule = true, allowStarts
       }
     }
 
+    if (!active(row) || !overLimit(rule)) continue;
     const enforcementSpend = Math.max(Number(row.todaySpend) || 0, Number(row.maxTodaySpend) || 0);
-    if (!snapshotIsToday || !rule.enabled || Number(rule.dailyLimit) <= 0 || !active(row) || enforcementSpend < Number(rule.dailyLimit)) continue;
     try {
       await request(ADVERT_API + '/adv/v0/pause?id=' + encodeURIComponent(row.id), token);
       await pool.query(

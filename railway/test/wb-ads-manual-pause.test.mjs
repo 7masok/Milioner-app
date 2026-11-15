@@ -18,9 +18,24 @@ test('automation cannot resume a manually paused campaign', () => {
 });
 
 test('advertising UI exposes a pause-resume toggle', () => {
-  assert.match(ui, /Временно остановить<\/button>/);
-  assert.match(ui, /Возобновить и разрешить автозапуск<\/button>/);
-  assert.match(ui, /Запретить автозапуск<\/button>/);
+  assert.match(ui, /Временно остановить/);
+  assert.match(ui, /aria-label="Возобновить и разрешить автозапуск"/);
+  assert.match(ui, /Запретить автозапуск/);
+});
+
+test('a paused campaign shows its actual automatic launch rule', () => {
+  const start = ui.indexOf('function adsAutoStartLabel(');
+  const end = ui.indexOf('function adsFilter(', start);
+  const context = {};
+  vm.runInNewContext(ui.slice(start, end), context);
+  const day = '2026-11-15';
+  const label = (rule, managed = false) => context.adsAutoStartLabel({ rule }, day, managed);
+  assert.match(label({ enabled: true, dailyLimit: 250 }), /Без расписания/);
+  assert.match(label({ scheduleEnabled: true, startTime: '08:30' }), /08:30/);
+  assert.match(label({ scheduleEnabled: true, manualPaused: true }), /выключен вручную/);
+  assert.match(label({ autoPaused: true, autoPausedDay: day }), /Лимит на сегодня/);
+  assert.match(label({}, true), /плану теста/);
+  assert.match(label({ stockPaused: true }), /по запасу/);
 });
 
 test('advertising money formatting is isolated and selected WB cabinet persists', () => {
