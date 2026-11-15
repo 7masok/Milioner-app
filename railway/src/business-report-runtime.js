@@ -47,14 +47,23 @@ export function createBusinessReportRuntime({state,market,readApi,now=Date.now()
  // No network or business write capability is available in this context.
  ctx.save=()=>{throw Error('Report calculations cannot save warehouse data')};ctx.fetch=()=>{throw Error('Report calculations cannot access the network')};
  return {
-  async forecast(){
-   const end=Math.floor((now+18000000)/86400000)*86400000-18000000+86400000,range={from:new Date(end-30*86400000+18000000).toISOString().slice(0,10),to:new Date(end-1+18000000).toISOString().slice(0,10)},rows=[],incompleteSources=[];
+  async forecast(days=30){
+   const end=Math.floor((now+18000000)/86400000)*86400000-18000000+86400000,range={from:new Date(end-days*86400000+18000000).toISOString().slice(0,10),to:new Date(end-1+18000000).toISOString().slice(0,10)},rows=[],incompleteSources=[];
    for(const source of forecastMarkets){try{
     if(source==='Kaspi'){const model=ctx.buildModel(await ctx.loadKaspiOrders(0,{range}),0,range);for(const x of model.rows)if(x.productId)rows.push([String(x.productId),Number(x.qty)||0,Number(x.profit)||0,source]);}
     else if(source==='Ozon'){const model=ctx.ozonSummaryFrom(await ctx.loadOzonProfitData(),0,null,range);for(const x of model.products||[])if(x.productId)rows.push([String(x.productId),Math.max(0,Number(x.qty)||0),Number(x.profit)||0,source]);}
     else {const model=await ctx.loadWbModel(source,0,{range});for(const x of model.products||[]){const pid=ctx.wbLiveProductId(source,x);if(pid)rows.push([pid,Math.max(0,Number(x.saleQty??x.qty)||0),(Number(x.netBeforeCost)||0)-ctx.wbReportProductCost(x,pid,source,0,range).cost,source]);}}
    }catch{incompleteSources.push(source)}}
    const totals=new Map();for(const [pid,qty,profit,source]of rows){const x=totals.get(pid)||{qty:0,profit:0,sources:{}};x.qty+=qty;x.profit+=profit;const part=x.sources[source]||{qty:0,profit:0};part.qty+=qty;part.profit+=profit;x.sources[source]=part;totals.set(pid,x)}const result=new Map([...totals].map(([pid,x])=>[pid,{...x,unitProfit:x.qty?x.profit/x.qty:0}]));result.incompleteSources=incompleteSources;return result;
+  },
+  async auditBuyerTransit(orders,days){
+   state.wbOrderFeed=orders;
+   const stats=await this.forecast(days),snapshot=ctx.marketplaceToBuyerSnapshot();
+   const forecast=ctx.marketplaceToBuyerProfitSummary(stats,snapshot);
+   return {outstanding:snapshot.orderUnits,priced:forecast.knownUnits,unpriced:forecast.missingUnits,
+    deliveredByStatistics:orders.filter(order=>order.buyerTransitClosed===true).reduce((sum,order)=>sum+(Number(order.qty)||0),0),
+    positive:Math.round(forecast.positive),negative:Math.round(forecast.negative),net:forecast.total===null?null:Math.round(forecast.total),
+    financeReady:!stats.incompleteSources.length};
   },
   async calculate({from,to,orders,ozonFeed=[],unitProfit=new Map(),partialMarkets=[]}){
    state.settings||={};state.settings.reportMarket=market;state.ozonOrderFeed=ozonFeed;
