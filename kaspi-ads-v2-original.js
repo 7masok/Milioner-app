@@ -672,7 +672,7 @@
     return { activeAmount, replacedAmount, activeRows, replacedRows, legacy: false };
   }
 
-  window.showKaspiAdsHistory = function () {
+  function paintKaspiAdsHistory() {
     const batches = [...(state.kaspiAdExpenses || [])]
       .sort((a, b) => (Number(b.importedAt) || 0) - (Number(a.importedAt) || 0));
 
@@ -700,11 +700,22 @@
       : '<div class="empty">Импортов рекламы пока нет</div>';
 
     showSheet(
-      `<h3>Реклама Kaspi · история</h3>` +
+      `<h3 id="kaspiAdsHistoryTitle">Реклама Kaspi · история</h3>` +
       `<div class="link-note">Новые импорты одной кампании имеют приоритет на пересекающихся датах. Удаление нового импорта автоматически вернёт предыдущие данные этих дат.</div>` +
       body +
       `<button class="btn dark full" onclick="openKaspiAdsImport()">Импортировать ещё</button>`
     );
+  };
+
+  window.showKaspiAdsHistory = function () {
+    paintKaspiAdsHistory();
+    const title = document.getElementById('kaspiAdsHistoryTitle');
+    const previous = state.kaspiAdExpenses;
+    if (typeof pullWarehouseFromServer === 'function') {
+      void pullWarehouseFromServer().then(() => {
+        if (title?.isConnected && previous !== state.kaspiAdExpenses) paintKaspiAdsHistory();
+      });
+    }
   };
 
   window.showKaspiAdsBreakdown = function (days = reportPeriod) {
