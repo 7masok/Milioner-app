@@ -145,7 +145,7 @@ function cookieHeader(cookies, path, now) {
     .map(cookie => cookie.name + '=' + cookie.value).join('; ');
 }
 
-async function storeExpenses(batches, date, knownSources) {
+async function storeExpenses(batches, date, sourcesByName) {
   return transaction(async client => {
     const warehouse = await client.query('SELECT revision FROM warehouse_state WHERE id=1 FOR UPDATE');
     if (!warehouse.rowCount) throw fail('Сначала откройте основной склад', 409);
@@ -154,11 +154,23 @@ async function storeExpenses(batches, date, knownSources) {
        WHERE payload->>'fromDate' <= $1 AND payload->>'toDate' >= $1`, [date],
     );
     const existing = overlaps.rows.map(row => row.payload);
-    if (existing.some(row => row.source !== 'Kaspi Marketing auto' && !knownSources.has(labelKey(row.sourceKey || row.campaignName)))) {
-      throw fail('За эту дату есть ручной импорт с другим названием кампании. Требуется сверка расходов.', 409);
+    const existingSources = new Set();
+    const existingIds = new Set();
+    for (const row of existing) {
+      if (row.source === 'Kaspi Marketing auto') {
+        existingIds.add(row.id);
+        continue;
+      }
+      const name = labelKey(row.sourceKey || row.campaignName);
+      const count = sourcesByName.get(name);
+      if (count !== 1) {
+        throw fail('За ' + date + ' есть ручной импорт «' + (row.campaignName || name) +
+          '». Перед автозагрузкой нужно сверить его с кампаниями Kaspi.', 409);
+      }
+      existingSources.add(name);
     }
-    const existingSources = new Set(existing.map(row => labelKey(row.sourceKey || row.campaignName)));
-    const changed = batches.filter(batch => batch.amount > 0 || existingSources.has(batch.sourceKey));
+    const changed = batches.filter(batch => batch.amount > 0 ||
+      existingIds.has(batch.id) || existingSources.has(batch.sourceKey));
     if (!changed.length) return;
     const now = Date.now();
     await persistKaspiAdExpenses(client, changed, now);
@@ -242,18 +254,25 @@ export function createKaspiMarketingService({
       !/^\d+$/.test(String(row?.id || '')) || !labelKey(row?.name) ||
       (row.cost !== null && (!['number', 'string'].includes(typeof row.cost) || !Number.isFinite(Number(row.cost)) || Number(row.cost) < 0)),
     )) throw fail('Не удалось подтвердить список рекламных кампаний Kaspi');
+    if (new Set(result.map(row => String(row.id))).size !== result.length) {
+      throw fail('Kaspi вернул повторяющийся ID рекламной кампании');
+    }
     return result;
   }
 
   async function loadDay(data, date, probe = false) {
     const list = await campaigns(data, date);
-    const names = new Set();
+    const sourcesByName = new Map();
     const batches = [];
     const importedAt = now();
     for (const campaign of list) {
-      const sourceKey = labelKey(campaign.name);
-      if (names.has(sourceKey)) throw fail('В Kaspi есть кампании с одинаковым названием. Нужна сверка перед импортом.', 409);
-      names.add(sourceKey);
+      const key = labelKey(campaign.name);
+      sourcesByName.set(key, (sourcesByName.get(key) || 0) + 1);
+    }
+    for (const campaign of list) {
+      const nameKey = labelKey(campaign.name);
+      const repeatedName = sourcesByName.get(nameKey) > 1;
+      const sourceKey = repeatedName ? 'kaspi campaign ' + data.account.id + ' ' + campaign.id : nameKey;
       if (campaign.cost === null) continue;
       const cost = Number(campaign.cost);
       let lines = [];
@@ -267,12 +286,13 @@ export function createKaspiMarketingService({
       if (probe && cost > 0) break;
       batches.push({
         id: ['kaspi-auto', data.account.id, campaign.id, date].join('-'),
-        market: 'Kaspi', source: 'Kaspi Marketing auto', sourceKey, campaignName: campaign.name,
+        market: 'Kaspi', source: 'Kaspi Marketing auto', sourceKey,
+        campaignName: repeatedName ? campaign.name + ' · № ' + campaign.id : campaign.name,
         accountingVersion: 'ads-snapshot-v3', replacementPolicy: 'campaign-date-snapshot',
         fromDate: date, toDate: date, amount, rowsCount: lines.length, lines, importedAt,
       });
     }
-    return { batches, names };
+    return { batches, sourcesByName };
   }
 
   function view(data) {
@@ -311,7 +331,7 @@ export function createKaspiMarketingService({
         Object.assign(data, await login(data));
         report = await loadDay(data, date);
       }
-      await persist(report.batches, date, report.names);
+      await persist(report.batches, date, report.sourcesByName);
       Object.assign(data, { lastDay: date, lastSuccessAt: now(), lastError: '', nextAttemptAt: now() + 60_000, reconnect: false });
     } catch (error) {
       data.lastError = error.status ? error.message : 'Не удалось сохранить отчёт Kaspi';

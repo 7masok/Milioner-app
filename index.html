@@ -556,9 +556,10 @@ async function updateKaspiMarketing(action,button){
  };
  try{
   const data=await adsApi('/api/kaspi-marketing/'+action,{method:'POST',body:JSON.stringify(body)});
+  if(password)password.value='';
   if(message.isConnected)paintKaspiMarketing(data);
  }catch(error){if(message.isConnected)message.textContent=error.message}
- finally{if(password)password.value='';button.disabled=false}
+ finally{button.disabled=false}
 }
 function adsStatusLabel(status){return status===9?'Активна':status===11?'На паузе':status===4?'Готова к запуску':status===7?'Завершена':status===8?'Отменена':'Статус '+(status||'—')}
 function adsProductLine(row){const titles=Array.isArray(row.productTitles)?row.productTitles.filter(Boolean):[],codes=Array.isArray(row.vendorCodes)?row.vendorCodes.filter(Boolean):[];if(titles.length)return 'Товары: '+titles.slice(0,3).map(esc).join(' · ')+(titles.length>3?' · ещё '+(titles.length-3):'');if(codes.length)return 'Артикулы: '+codes.slice(0,3).map(esc).join(' · ')+(codes.length>3?' · ещё '+(codes.length-3):'');return 'Товары кампании пока загружаются'}

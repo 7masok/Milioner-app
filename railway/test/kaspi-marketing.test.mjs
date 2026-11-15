@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createKaspiMarketingService, kaspiProductExpenses } from '../src/kaspi-marketing.js';
 
-function fixture() {
+function fixture(campaigns = [{ id: 456, name: 'Campaign 1', cost: 120.5 }]) {
   let saved, tick = Date.parse('2026-11-15T03:59:00Z'), requests = 0, logins = 0, expired = false;
   const persisted = [];
   const ok = (data, options) => Response.json({ result: 'Ok', data }, options);
@@ -21,10 +21,10 @@ function fixture() {
       return ok({ shop: { merchants: [{ id: 123, merchantName: 'LUXAR' }] } });
     }
     if (pathname.endsWith('/Campaigns')) {
-      return expired ? new Response(null, { status: 401 }) : ok([{ id: 456, name: 'Campaign 1', cost: 120.5 }]);
+      return expired ? new Response(null, { status: 401 }) : ok(campaigns);
     }
     assert.ok(pathname.endsWith('/reports/products/csv'));
-    assert.equal(searchParams.get('campaignId'), '456');
+    assert.ok(campaigns.some(campaign => String(campaign.id) === searchParams.get('campaignId')));
     assert.equal(searchParams.get('startDate'), searchParams.get('endDate'));
     requests++;
     return new Response('Артикул;Название товара;Расходы на рекламу;\n123;"Товар; новый";120,50;\n');
@@ -32,7 +32,7 @@ function fixture() {
   const service = createKaspiMarketingService({
     read: async () => saved ? structuredClone(saved) : null,
     write: async data => { saved = structuredClone(data); },
-    persist: async (batches, day) => { persisted.push({ batches, day }); },
+    persist: async (batches, day, sourcesByName) => { persisted.push({ batches, day, sourcesByName }); },
     now: () => tick,
     fetchImpl,
   });
@@ -74,4 +74,22 @@ test('server-side login verifies the report, renews the session, and imports one
   assert.equal((await f.service.state()).connected, false);
   await f.service.syncIfDue();
   assert.equal(f.persisted.length, 2);
+});
+
+test('same-name Kaspi campaigns connect and import separately by ID without collapsing either cost', async () => {
+  const f = fixture([
+    { id: 456, name: 'Campaign 1', cost: 120.5 },
+    { id: 457, name: ' Campaign 1 ', cost: 120.5 },
+  ]);
+  const connected = await f.service.connect({ phone: '77000000000', password: 'mock-password', time: '09:00' });
+  assert.equal(connected.connected, true);
+  f.setTime('2026-11-15T04:00:00Z');
+  const loaded = await f.service.syncIfDue();
+  assert.equal(loaded.lastDay, '2026-11-14');
+  const { batches, sourcesByName } = f.persisted[0];
+  assert.equal(sourcesByName.get('campaign 1'), 2);
+  assert.deepEqual(batches.map(batch => batch.sourceKey), ['kaspi campaign 123 456', 'kaspi campaign 123 457']);
+  assert.equal(batches.reduce((sum, batch) => sum + batch.amount, 0), 241);
+  await f.service.sync();
+  assert.deepEqual(f.persisted[1].batches.map(batch => batch.id), batches.map(batch => batch.id));
 });
