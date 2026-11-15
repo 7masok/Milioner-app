@@ -22,8 +22,7 @@ test('Advertising period is persistent analysis state while the daily budget rem
   assert.match(html, /localStorage\.getItem\('adsSelectedPeriod'\)/);
   assert.match(html, /function adsMetricsForRow\(row\)/);
   assert.match(html, /todaySpend=Number\(row\.todaySpend\)\|\|0/);
-  assert.match(html, /wbAdsMoneyText\(todaySpend\).*за сегодня/);
-  assert.match(html, /дневной лимит и защита кампаний всегда работают по сегодняшним данным/);
+  assert.match(html, /data\.day===day\?wbAdsMoneyText\(todaySpend\)/);
 });
 
 test('Server fills a 30-day cache in the existing advertising snapshot', () => {

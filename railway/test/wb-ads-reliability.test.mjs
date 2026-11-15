@@ -33,6 +33,12 @@ test('over-limit pause precedes a failing scheduled start and later starts still
   assert.ok(h.queries.some(q => q.args?.some(arg => String(arg).includes('no budget'))));
 });
 
+test('a scheduled campaign already paused by WB stays paused after exhausting today’s limit', async () => {
+  const h = harness([limit(1, { scheduleEnabled: true, startTime: '00:00' })]);
+  await h.api.enforce('WB', { day: h.api.localDate(), campaigns: [campaign(1, 11, 500)] });
+  assert.deepEqual(h.calls, []);
+});
+
 test('yesterday totals never pause active campaigns', async () => {
   const h = harness([limit(1)]);
   await h.api.enforce('WB', { day: '2000-01-01', campaigns: [campaign(1)] }, { allowStarts: false });
