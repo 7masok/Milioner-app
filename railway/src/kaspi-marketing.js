@@ -3,7 +3,7 @@ import { config } from './config.js';
 import { requireConfiguredSession } from './auth.js';
 import { asyncRoute, noStore, requireTrustedOrigin, requireWritesEnabled } from './http.js';
 import { readKaspiMarketingAccess, saveKaspiMarketingAccess } from './connections.js';
-import { transaction } from './db.js';
+import { pool, transaction } from './db.js';
 import { persistKaspiAdExpenses } from './warehouse-kaspi-ads.js';
 
 const ORIGIN = 'https://marketing.kaspi.kz';
@@ -12,6 +12,8 @@ const ADS_API = '/advertising/products/api/';
 const TIME_ZONE = 'Asia/Almaty';
 const DAY = 86_400_000;
 const RETRY = 15 * 60_000;
+const COVERAGE_START = '2026-11-09';
+const COVERAGE_SCAN = 5 * 60_000;
 const EXPENSE_HEADER = /^(?:расход|рекламн[а-я]* расход|затрат|стоимост|cost|spend)/u;
 const clock = new Intl.DateTimeFormat('en-GB', {
   timeZone: TIME_ZONE, hourCycle: 'h23', hour: '2-digit', minute: '2-digit',
@@ -171,18 +173,25 @@ async function storeExpenses(batches, date, sourcesByName) {
     }
     const changed = batches.filter(batch => batch.amount > 0 ||
       existingIds.has(batch.id) || existingSources.has(batch.sourceKey));
-    if (!changed.length) return;
+    if (!changed.length) return [];
     const now = Date.now();
     await persistKaspiAdExpenses(client, changed, now);
     await client.query('UPDATE warehouse_state SET revision=revision+1,updated_at=$1 WHERE id=1', [now]);
+    return changed.map(batch => batch.id);
   });
+}
+
+async function readSavedExpenseIds(ids) {
+  const { rows } = await pool.query('SELECT id FROM warehouse_kaspi_ad_expenses WHERE id=ANY($1::text[])', [ids]);
+  return new Set(rows.map(row => row.id));
 }
 
 export function createKaspiMarketingService({
   read = readKaspiMarketingAccess, write = saveKaspiMarketingAccess, persist = storeExpenses,
-  fetchImpl = fetch, now = Date.now,
+  fetchImpl = fetch, now = Date.now, findSavedIds = readSavedExpenseIds, coverageStart = COVERAGE_START,
 } = {}) {
   let tail = Promise.resolve();
+  let lastCoverageScanAt = 0;
   const locked = fn => {
     const pending = tail.then(fn);
     tail = pending.catch(() => {});
@@ -262,6 +271,9 @@ export function createKaspiMarketingService({
 
   async function loadDay(data, date, probe = false) {
     const list = await campaigns(data, date);
+    if (list.length && list.every(campaign => campaign.cost === null)) {
+      throw fail('Kaspi пока не подтвердил расходы за ' + date);
+    }
     const sourcesByName = new Map();
     const batches = [];
     const importedAt = now();
@@ -295,13 +307,46 @@ export function createKaspiMarketingService({
     return { batches, sourcesByName };
   }
 
+  function eligibleThrough(data, timestamp) {
+    return localDay(timestamp - (clock.format(timestamp) >= (data?.time || '09:00') ? DAY : 2 * DAY));
+  }
+
+  function coverageSummary(data, timestamp) {
+    const to = eligibleThrough(data, timestamp);
+    let confirmed = 0, total = 0, zero = 0, firstMissing = '';
+    for (let day = coverageStart; day <= to; day = dayAfter(day)) {
+      total++;
+      const record = data?.confirmedDays?.[day];
+      if (record) {
+        confirmed++;
+        if (!record.amount) zero++;
+      } else if (!firstMissing) firstMissing = day;
+    }
+    return { from: coverageStart, to, confirmed, total, zero, firstMissing, error: data?.gapError || '' };
+  }
+
+  async function verifySavedCoverage(data, timestamp) {
+    if (timestamp - lastCoverageScanAt < COVERAGE_SCAN) return;
+    const days = Object.entries(data.confirmedDays || {});
+    const ids = days.flatMap(([, record]) => record.ids);
+    if (ids.length) {
+      const saved = await findSavedIds(ids);
+      const removed = days.filter(([, record]) => record.ids.some(id => !saved.has(id)));
+      if (removed.length) {
+        for (const [date] of removed) delete data.confirmedDays[date];
+        await write(data);
+      }
+    }
+    lastCoverageScanAt = timestamp;
+  }
+
   function view(data) {
     return {
       ok: true, connected: Boolean(data?.account), shop: data?.account?.name || '',
       time: data?.time || '09:00', lastDay: data?.lastDay || '',
       lastSuccessAt: data?.lastSuccessAt || 0, lastError: data?.lastError || '', reconnect: Boolean(data?.reconnect),
       defaultFrom: localDay(now() - 4 * DAY), yesterday: localDay(now() - DAY),
-      backfill: data?.backfill || null,
+      backfill: data?.backfill || null, coverage: coverageSummary(data, now()),
     };
   }
 
@@ -323,7 +368,9 @@ export function createKaspiMarketingService({
     return { from, to };
   }
 
-  async function importDay(data, date, backfill) {
+  async function importDay(data, date, kind) {
+    const backfill = kind === 'backfill' ? data.backfill : null;
+    let result;
     try {
       let report;
       try {
@@ -333,25 +380,41 @@ export function createKaspiMarketingService({
         Object.assign(data, await login(data));
         report = await loadDay(data, date);
       }
-      await persist(report.batches, date, report.sourcesByName);
+      const ids = await persist(report.batches, date, report.sourcesByName);
+      const amount = report.batches.reduce((total, batch) => total + batch.amount, 0);
+      if (date >= coverageStart) {
+        data.confirmedDays ||= {};
+        data.confirmedDays[date] = { ids, amount };
+        if (data.gapRetry) delete data.gapRetry[date];
+        if (data.gapError?.date === date) delete data.gapError;
+      }
       if (backfill) {
         backfill.next = date === backfill.to ? '' : dayAfter(date);
         backfill.error = '';
         backfill.retryAt = 0;
-      } else {
+      }
+      if (kind === 'daily' || (date === localDay(now() - DAY) && date > (data.lastDay || ''))) {
         Object.assign(data, { lastDay: date, lastSuccessAt: now(), lastError: '', nextAttemptAt: 0 });
       }
       Object.assign(data, { nextRunAt: now() + 60_000, reconnect: false });
+      result = amount > 0 ? 'expenses' : 'zero';
     } catch (error) {
       const message = error.status ? error.message : 'Не удалось сохранить отчёт Kaspi';
       const retryAt = Math.max(now() + RETRY, Number(error.retryAt) || 0);
       if (backfill) Object.assign(backfill, { error: message, retryAt });
-      else Object.assign(data, { lastError: message, nextAttemptAt: retryAt });
+      else if (kind === 'daily') Object.assign(data, { lastError: message, nextAttemptAt: retryAt });
+      if (date >= coverageStart) {
+        data.gapRetry ||= {};
+        data.gapRetry[date] = retryAt;
+        data.gapError = { date, message, retryAt };
+      }
       if (error.status === 429) data.providerRetryAt = retryAt;
       else data.nextRunAt = now() + 60_000;
       data.reconnect = [401, 403].includes(error.status);
+      result = 'retry HTTP ' + (error.status || 502);
     }
     await write(data);
+    console.info('Kaspi Marketing day', date, kind, result);
     return view(data);
   }
 
@@ -362,14 +425,20 @@ export function createKaspiMarketingService({
     }
     const timestamp = now(), yesterday = localDay(timestamp - DAY);
     if (data.providerRetryAt > timestamp || (!force && data.nextRunAt > timestamp)) return view(data);
-    const dailyDue = !(data.nextAttemptAt > timestamp) &&
-      (force || (clock.format(timestamp) >= data.time && !(data.lastDay >= yesterday)));
-    if (dailyDue) {
-      const date = data.lastDay && data.lastDay < yesterday ? dayAfter(data.lastDay) : yesterday;
-      return importDay(data, date);
-    }
+    if (!force) await verifySavedCoverage(data, timestamp);
+    const dailyDue = !(data.nextAttemptAt > timestamp) && (force ||
+      (clock.format(timestamp) >= data.time && !(data.lastDay >= yesterday) && !data.confirmedDays?.[yesterday]));
+    if (dailyDue) return importDay(data, yesterday, 'daily');
     if (!force && data.backfill?.next && !(data.backfill.retryAt > timestamp)) {
-      return importDay(data, data.backfill.next, data.backfill);
+      return importDay(data, data.backfill.next, 'backfill');
+    }
+    if (!force) {
+      const through = eligibleThrough(data, timestamp);
+      for (let day = coverageStart; day <= through; day = dayAfter(day)) {
+        if (!data.confirmedDays?.[day] && !(data.gapRetry?.[day] > timestamp)) {
+          return importDay(data, day, 'gap');
+        }
+      }
     }
     return view(data);
   }

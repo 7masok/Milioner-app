@@ -2,9 +2,9 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createKaspiMarketingService, kaspiProductExpenses } from '../src/kaspi-marketing.js';
 
-function fixture(campaigns = [{ id: 456, name: 'Campaign 1', cost: 120.5 }]) {
+function fixture(campaigns = [{ id: 456, name: 'Campaign 1', cost: 120.5 }], fixtureOptions = {}) {
   let saved, tick = Date.parse('2026-11-15T03:59:00Z'), requests = 0, logins = 0, expired = false;
-  const persisted = [];
+  const persisted = [], savedIds = new Set();
   const ok = (data, options) => Response.json({ result: 'Ok', data }, options);
   const fetchImpl = async (url, options) => {
     const { origin, pathname, searchParams } = new URL(url);
@@ -21,7 +21,10 @@ function fixture(campaigns = [{ id: 456, name: 'Campaign 1', cost: 120.5 }]) {
       return ok({ shop: { merchants: [{ id: 123, merchantName: 'LUXAR' }] } });
     }
     if (pathname.endsWith('/Campaigns')) {
-      return expired ? new Response(null, { status: 401 }) : ok(campaigns);
+      const day = searchParams.get('StartDate');
+      const result = fixtureOptions.campaignsForDay ? fixtureOptions.campaignsForDay(day) : campaigns;
+      if (result === null) return new Response(null, { status: 502 });
+      return expired ? new Response(null, { status: 401 }) : ok(result);
     }
     assert.ok(pathname.endsWith('/reports/products/csv'));
     assert.ok(campaigns.some(campaign => String(campaign.id) === searchParams.get('campaignId')));
@@ -32,12 +35,19 @@ function fixture(campaigns = [{ id: 456, name: 'Campaign 1', cost: 120.5 }]) {
   const service = createKaspiMarketingService({
     read: async () => saved ? structuredClone(saved) : null,
     write: async data => { saved = structuredClone(data); },
-    persist: async (batches, day, sourcesByName) => { persisted.push({ batches, day, sourcesByName }); },
+    persist: async (batches, day, sourcesByName) => {
+      persisted.push({ batches, day, sourcesByName });
+      const ids = batches.filter(batch => batch.amount > 0).map(batch => batch.id);
+      for (const id of ids) savedIds.add(id);
+      return ids;
+    },
+    findSavedIds: async () => savedIds,
+    coverageStart: fixtureOptions.coverageStart || '2026-11-14',
     now: () => tick,
     fetchImpl,
   });
   return {
-    service, persisted, logins: () => logins, requests: () => requests,
+    service, persisted, savedIds, logins: () => logins, requests: () => requests,
     setTime: value => { tick = Date.parse(value); }, expireSession: () => { expired = true; },
   };
 }
@@ -116,4 +126,32 @@ test('dated backfill persists a day at a time and keeps the automated daily curs
   assert.deepEqual(f.persisted.map(result => result.day), ['2026-11-11', '2026-11-14', '2026-11-12', '2026-11-13']);
   await f.service.queueBackfill({ from: '2026-11-10', to: '2026-11-10' });
   assert.equal((await f.service.stopBackfill()).backfill, null);
+});
+
+test('repairs missing days from Nov 9, retries one failed day without blocking later dates, and confirms explicit zero', async () => {
+  let unavailable = true;
+  const campaign = { id: 456, name: 'Campaign 1', cost: 120.5 };
+  const f = fixture([campaign], {
+    coverageStart: '2026-11-09',
+    campaignsForDay: day => day === '2026-11-09' && unavailable ? null :
+      day === '2026-11-10' ? [{ ...campaign, cost: 0 }] : [campaign],
+  });
+  await f.service.connect({ phone: '77000000000', password: 'mock-password', time: '22:00' });
+  const failed = await f.service.syncIfDue();
+  assert.equal(failed.coverage.error.date, '2026-11-09');
+  f.setTime('2026-11-15T04:01:00Z');
+  assert.equal((await f.service.syncIfDue()).coverage.zero, 1);
+  f.setTime('2026-11-15T04:02:00Z');
+  await f.service.syncIfDue();
+  unavailable = false;
+  f.setTime('2026-11-15T04:16:00Z');
+  assert.equal((await f.service.syncIfDue()).coverage.firstMissing, '2026-11-12');
+  assert.deepEqual(f.persisted.map(result => result.day), ['2026-11-10', '2026-11-11', '2026-11-09']);
+  const savedId = f.persisted[2].batches[0].id;
+  f.savedIds.delete(savedId);
+  f.setTime('2026-11-15T04:22:00Z');
+  await f.service.syncIfDue();
+  assert.equal(f.persisted.at(-1).day, '2026-11-09');
+  assert.equal(f.persisted.at(-1).batches[0].id, savedId);
+  assert.equal((await f.service.state()).coverage.zero, 1);
 });

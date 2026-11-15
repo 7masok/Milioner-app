@@ -533,6 +533,15 @@ function kaspiBackfillStatus(job){
  return '<div class="muted">'+(job.next?'Догрузка '+period+' · следующий день '+date(job.next):'Загружено '+period)+'</div>'+
   (job.error?'<div class="ad-warning" role="alert">'+esc(job.error)+'</div>':'');
 }
+function kaspiCoverageStatus(coverage){
+ if(!coverage?.total)return '';
+ const date=value=>String(value).split('-').reverse().join('.');
+ const count='Сверка с '+date(coverage.from)+' · '+coverage.confirmed+' из '+coverage.total+' дн.';
+ const zero=coverage.zero?' · без расходов '+coverage.zero+' дн.':'';
+ const gap=coverage.firstMissing?' · к загрузке '+date(coverage.firstMissing):'';
+ const error=coverage.error?.message?'<div class="ad-warning">'+esc(date(coverage.error.date)+' · '+coverage.error.message)+'</div>':'';
+ return '<div class="muted">'+esc(count+zero+gap)+'</div>'+error;
+}
 function watchKaspiBackfill(node){
  if(!node?.isConnected)return;
  setTimeout(async()=>{
@@ -541,8 +550,11 @@ function watchKaspiBackfill(node){
    const data=await adsApi('/api/kaspi-marketing/state');
    if(!node.isConnected)return;
    node.innerHTML=kaspiBackfillStatus(data.backfill);
-   if(data.backfill?.next&&!data.reconnect)watchKaspiBackfill(node);
-   else if(document.getElementById('kmMessage')?.textContent==='')paintKaspiMarketing(data);
+   const coverage=document.getElementById('kmCoverageStatus');
+   if(coverage)coverage.innerHTML=kaspiCoverageStatus(data.coverage);
+   const stop=document.getElementById('kmStopBackfill');
+   if((data.reconnect||stop&&!data.backfill?.next)&&document.getElementById('kmMessage')?.textContent==='')paintKaspiMarketing(data);
+   else if(!data.reconnect&&(data.backfill?.next||data.coverage?.firstMissing))watchKaspiBackfill(node);
   }catch{watchKaspiBackfill(node)}
  },10000);
 }
@@ -559,15 +571,16 @@ function paintKaspiMarketing(connection){
  const history='<div class="field"><b>Загрузить за период</b></div><div class="two">'+
   '<div class="field"><label for="kmFrom">С даты</label><input id="kmFrom" type="date" value="'+esc(connection.backfill?.from||connection.defaultFrom||'')+'" max="'+esc(connection.yesterday||'')+'"></div>'+
   '<div class="field"><label for="kmTo">По дату</label><input id="kmTo" type="date" value="'+esc(connection.backfill?.to||connection.yesterday||'')+'" max="'+esc(connection.yesterday||'')+'"></div></div>'+
-  (connection.backfill?.next?'<button type="button" class="btn" onclick="updateKaspiMarketing(\'stop-backfill\',this)">Остановить догрузку</button>':
+  (connection.backfill?.next?'<button id="kmStopBackfill" type="button" class="btn" onclick="updateKaspiMarketing(\'stop-backfill\',this)">Остановить догрузку</button>':
     '<button type="button" class="btn dark" onclick="updateKaspiMarketing(\'backfill\',this)">Загрузить период</button>')+
   '<div id="kmBackfillStatus" role="status">'+kaspiBackfillStatus(connection.backfill)+'</div>';
- const settings='<div class="muted">'+esc(connection.shop)+' · подключён</div>'+status+error+history+time+
+ const settings='<div class="muted">'+esc(connection.shop)+' · подключён</div>'+status+error+
+  '<div id="kmCoverageStatus" role="status">'+kaspiCoverageStatus(connection.coverage)+'</div>'+history+time+
   '<div class="ad-actions"><button type="button" class="btn" onclick="updateKaspiMarketing(\'schedule\',this)">Сохранить время</button>'+
   '<button type="button" class="btn dark" onclick="updateKaspiMarketing(\'sync\',this)">Загрузить сейчас</button></div>'+
   '<button type="button" class="btn" onclick="updateKaspiMarketing(\'disconnect\',this)">Отключить</button>';
  showSheet('<h3>Kaspi Маркетинг</h3>'+(connection.connected&&!connection.reconnect?settings:error+form)+'<p id="kmMessage" class="muted" role="status"></p>');
- if(connection.backfill?.next&&!connection.reconnect)watchKaspiBackfill(document.getElementById('kmBackfillStatus'));
+ if(!connection.reconnect&&(connection.backfill?.next||connection.coverage?.firstMissing))watchKaspiBackfill(document.getElementById('kmBackfillStatus'));
 }
 async function updateKaspiMarketing(action,button){
  if(action==='disconnect'&&!confirm('Отключить автозагрузку Kaspi Маркетинг? Расходы из загруженных отчётов сохранятся.'))return;
@@ -2288,7 +2301,7 @@ function enhanceArrivalProductSearch(){}
 <script src="./purchase-delete-v1.js?v=20261019-full-shipment-delete"></script>
 <script src="./purchase-plan-ignore-v1.js?v=20260923-plan-compact"></script>
 <script src="./kaspi-status-compat-v1.js?v=20261031-movement-balances"></script>
-<script src="./kaspi-ads-v2-original.js?v=20260911-utf8-fix"></script>
+<script src="./kaspi-ads-v2-original.js?v=20261115-marketing-history-refresh"></script>
 <script src="./reservation-compat-v1.js?v=20260820-2324"></script>
 <script src="./kaspi-ads-v2.js?v=20260924-home-lazy"></script>
 <script src="./ai-assistant-v1.js?v=20260924-stable-header"></script>
