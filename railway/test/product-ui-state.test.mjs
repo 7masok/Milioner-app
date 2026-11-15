@@ -165,8 +165,8 @@ test('Products show current buyer-delivery stock and selected-period projected p
   assert.match(html,/marketProductQtyMap=new Map\(\)/);
   assert.match(html,/function marketplaceToBuyerProfitRows\(periodStats,snapshot=marketplaceToBuyerSnapshot\(\)\)/);
   assert.match(html,/projected=transitQty\*unitProfit/);
-  assert.match(html,/function marketplaceToBuyerProfit\(periodStats,snapshot=marketplaceToBuyerSnapshot\(\)\)/);
-  assert.match(html,/buyer&&cardProfitReady\?fmt\(marketplaceToBuyerProfit\(cardProfitStats,buyer\)\):'—'/);
+  assert.match(html,/function marketplaceToBuyerProfitSummary\(periodStats,snapshot\)/);
+  assert.match(html,/buyer&&cardProfitReady\?marketplaceToBuyerProfitSummary\(cardProfitStats,buyer\):null/);
   assert.match(html,/const title='Прибыль в пути до покупателя',spec=productRankSpec\(\)/);
   assert.match(html,/SORTED','ACCEPTED_BY_CARRIER','SENT_TO_CARRIER','READY_FOR_PICKUP/);
   assert.match(html,/KASPI_DELIVERY_TRANSIT/);

@@ -1,4 +1,5 @@
 import test from 'node:test';
+import vm from 'node:vm';
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
 
@@ -51,8 +52,8 @@ test('buyer-transit profit uses the same selected-period average and opens a det
   assert.match(html,/const title='Прибыль в пути до покупателя',spec=productRankSpec\(\)/);
   assert.match(html,/let periodStats=currentProductPeriodStats\(spec\)/);
   assert.match(html,/await ensureProductRankStats\(\)/);
-  assert.match(html,/количество в пути до покупателя × средняя чистая прибыль на 1 проданную штуку за '\+esc\(spec\.label\)/);
-  assert.match(html,/Продано · '\+esc\(spec\.label\).*средняя прибыль \/ шт\./);
+  assert.match(html,/в том магазине, из которого идёт заказ/);
+  assert.match(html,/средняя прибыль \/ шт\./);
 });
 
 test('stock valuation uses sale plus covered reserve plus warehouse stock',()=>{
@@ -172,4 +173,28 @@ test('Ozon SKU advertising uses the same selected period and reconciles to finan
   assert.match(report,/sameRange=range\?Number\(reportPeriod\)===0/);
   assert.match(report,/if\(Number\(days\)===0&&!range&&reportCustomFrom&&reportCustomTo\)range=\{from:String\(reportCustomFrom\),to:String\(reportCustomTo\)\}/);
   assert.match(report,/Реклама по SKU:/);
+});
+
+test('buyer-transit profit is additive across stores with different margins for the same product', () => {
+  const start=html.indexOf('function marketplaceToBuyerProfitRows(');
+  const end=html.indexOf('async function openToBuyerProfitBreakdown(',start);
+  const context=vm.createContext({Map,prod:id=>({id})});
+  vm.runInContext(html.slice(start,end), context);
+  const period=new Map([
+    ['a',{qty:110,unitProfit:260/110,sources:{Kaspi:{qty:10,profit:1000},WB:{qty:100,profit:-740}}}],
+    ['b',{qty:3,unitProfit:50,sources:{Kaspi:{qty:3,profit:150}}}],
+  ]);
+  const report=(pairs,orderUnits)=>context.marketplaceToBuyerProfitSummary(period,{
+    orderUnits,marketProductQtyMap:new Map(pairs.map(([id,markets])=>[id,new Map(markets)])),
+  });
+  const kaspi=report([['a',[['Kaspi',5]]]],5);
+  const wb=report([['a',[['WB',10]]],['b',[['WB',2]]]],12);
+  const combined=report([['a',[['Kaspi',5],['WB',10]]],['b',[['WB',2]]]],17);
+  assert.equal(kaspi.total,500);
+  assert.equal(wb.total,-74);
+  assert.equal(combined.total,kaspi.total+wb.total);
+  assert.equal(combined.knownUnits,15);
+  assert.equal(combined.missingUnits,2);
+  assert.equal(report([['b',[['WB',2]]]],2).total,null);
+  assert.equal(report([],0).total,0);
 });
