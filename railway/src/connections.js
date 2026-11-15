@@ -44,6 +44,23 @@ export async function saveAmanAccess(value) {
 }
 export async function readAmanAccess(){const text=await credentialFor('DELIVERY_AMANTRANS');return text?JSON.parse(text):null;}
 
+export async function readKaspiMarketingAccess() {
+  // This state is read by the scheduler as well as the owner routes. Read it
+  // directly so a schedule edit or disconnect is visible without a token cache.
+  const result = await pool.query("SELECT encrypted_token FROM marketplace_credentials WHERE id='KASPI_MARKETING'");
+  const encrypted = result.rows[0]?.encrypted_token;
+  return encrypted ? JSON.parse(decryptToken(encrypted)) : null;
+}
+
+export async function saveKaspiMarketingAccess(value) {
+  const now = Date.now();
+  await pool.query(`INSERT INTO marketplace_credentials(id,provider,label,encrypted_token,enabled,created_at,updated_at,last_test_ok,last_error)
+    VALUES('KASPI_MARKETING','KASPI_MARKETING','Kaspi Маркетинг',$1,1,$2,$2,1,'')
+    ON CONFLICT(id) DO UPDATE SET encrypted_token=EXCLUDED.encrypted_token,updated_at=EXCLUDED.updated_at`,
+    [encryptToken(JSON.stringify(value)), now]);
+}
+
+
 export async function credentialFor(id, fallback = '') {
   if(config.storeProfile==='WB3'&&id!=='WB')return '';
   const slot = BUILTIN_CONNECTIONS[id];
@@ -139,7 +156,7 @@ connectionsRouter.get('/connections', asyncRoute(async (_req, res) => {
     };
   });
   for (const row of result.rows) {
-    if (BUILTIN_CONNECTIONS[row.id]||row.provider==='AMANTRANS'||config.storeProfile==='WB3') continue;
+    if (BUILTIN_CONNECTIONS[row.id]||['AMANTRANS','KASPI_MARKETING'].includes(row.provider)||config.storeProfile==='WB3') continue;
     connections.push({
       id:String(row.id), provider:String(row.provider), label:String(row.label), builtin:false,
       enabled:Boolean(Number(row.enabled)), configured:Boolean(row.encrypted_token), managedInSite:Boolean(row.encrypted_token),
