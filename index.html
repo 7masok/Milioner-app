@@ -743,6 +743,7 @@ function adsAdvice(row){
  const inv=row.inventory||{},metric=adsMetricsForRow(row),s=metric.spend,r=metric.revenue,orders=metric.orders,clicks=metric.clicks;
  if(row.rule?.manualPaused)return {key:'paused',title:Number(row.status)===9?'Пауза ожидает подтверждения WB':'Вы остановили вручную',text:'Настройки сохранены. Автозапуск заблокирован до вашего возобновления.'};
  if(inv.status==='empty')return {key:'risk',title:'Нет товара — реклама на паузу',text:'Пополните свободный остаток. Запуск заблокирован.'};
+ if(inv.fboUnconfirmed)return {key:'wait',title:'Ждём подтверждения остатков FBO WB',text:'На своём складе нет свободного остатка.'};
  if(inv.status==='unknown')return {key:'risk',title:'Проверьте привязку к складу',text:'Остаток не определён. Запуск заблокирован; отсутствие данных не считается нулём.'};
  if(inv.status==='low')return {key:'risk',title:'Запас заканчивается',text:inv.allRisky?'Меньше 5 дней без достаточной своевременной поставки. Снизьте расход или поставьте на паузу.':'В кампании есть дефицитные товары. Проверьте состав: вся кампания автоматически не останавливается.'};
  if(row.rule?.stockPaused)return {key:'paused',title:'Остановлена защитой склада',text:'Проверьте запас и возобновите вручную. Настройки сохранены.'};
@@ -793,7 +794,7 @@ function drawAdsDashboard(){
    const inbound=p.inbound?' · В пути '+adsNumber(p.inbound)+' шт.'+(p.arrivalDays==null?'':p.arrivalDays===0?' (на приёмке)':' (≈ '+adsNumber(p.arrivalDays)+' дн.)'):'';
    return `<div class="ad-stock-row"><b>${esc(p.name)}</b><span>${adsNumber(p.available)} шт.${p.days==null?'':' · '+adsNumber(p.days)+' дн.'}${inbound}</span></div>`;
   }).join('');
-  const currentDetails=[budget?'Сегодня '+budget:'', inv.known&&inv.available!=null?'Запас '+adsNumber(inv.available)+' шт.':''].filter(Boolean).join(' · ');
+  const currentDetails=[budget?'Сегодня '+budget:'', inv.known&&inv.available!=null?'Запас '+adsNumber(inv.available)+' шт.':'', inv.fboAvailable>0?'FBO '+adsNumber(inv.fboAvailable)+' шт.':''].filter(Boolean).join(' · ');
   return [id, `<article id="adsCard_${id}" class="ad-card ad-${advice.key}${expanded?'':' collapsed'}">
    <div class="ad-card-head" role="button" tabindex="0" onclick="adsToggleCard(${id})" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();adsToggleCard(${id})}" ontouchstart="adsSwipeBegin(event,${id})" ontouchend="adsSwipeEnd(event,${id})">
     <h3>${esc(row.name||('Кампания '+id))}</h3><div class="ad-head-status">${adsStatusBadge(status)}<span class="ad-chevron">${expanded?'⌃':'⌄'}</span></div>

@@ -1,4 +1,5 @@
 const DAY = 86400000;
+const FBO_MAX_AGE = 60 * 60_000;
 const list = value => Array.isArray(value) ? value : [];
 const num = value => Math.max(0, Number(value) || 0);
 const parts = p => p?.kind === 'bundle' ? list(p.components) : [];
@@ -22,11 +23,20 @@ export function arrivalDays(row, settings = {}, now = Date.now()) {
   return due < now ? null : (due-now)/DAY;
 }
 
-export function campaignInventory(state, orders, market, campaigns, now = Date.now()) {
+export function campaignInventory(state, orders, market, campaigns, now = Date.now(), fbo = null) {
   const products = list(state.products).filter(p=>p.kind!=='variant-group');
   const byId = new Map(products.map(p=>[String(p.id),p]));
   const demand = new Map(), reserved = new Map();
   const field = market==='WB2'?'wb2':'wb';
+  const identity = p => ({...p[field+'Identity'], ...(p.wbVariant?.market===market?p.wbVariant:{})});
+  const article = p => String(identity(p).nmId || (p.variantMarket===market?p.variantNmId:'') || '');
+  const fboFresh = Number(fbo?.fetchedAt)>now-FBO_MAX_AGE && Number(fbo.fetchedAt)<=now && fbo.items;
+  function fboQuantity(nm) {
+    if(!fboFresh)return null;
+    const item=fbo.items[nm];
+    if(!item)return fbo.fullCatalog?0:null;
+    return Number.isSafeInteger(item.quantity)&&item.quantity>=0?item.quantity:null;
+  }
   function add(target, id, qty, seen = new Set()) {
     id=String(id); if(seen.has(id))return;
     const p=byId.get(id);if(!p)return;
@@ -66,8 +76,8 @@ export function campaignInventory(state, orders, market, campaigns, now = Date.n
     const next=new Set(seen);next.add(String(p.id));
     return Math.max(0,...parts(p).map(x=>dailyRate(byId.get(String(x.productId)),next)/Math.max(1,num(x.qty))));
   }
-  function productRisk(p) {
-    const stock=available(p.id),daily=dailyRate(p);
+  function productRisk(p, fboUnits = 0) {
+    const ownAvailable=available(p.id),stock=ownAvailable+fboUnits,daily=dailyRate(p);
     const days=daily>0?stock/daily:null;
     const inbound=list(state.purchases).filter(x=>String(x.productId)===String(p.id)&&num(x.qty)>0&&['to_forwarder','to_me','at_warehouse'].includes(x.status)).map(x=>({qty:num(x.qty),days:arrivalDays(x,state.settings,now)})).sort((a,b)=>(a.days??Infinity)-(b.days??Infinity));
     // Simulate arrivals through day 5. Late or insufficient lots cannot hide a gap.
@@ -80,24 +90,45 @@ export function campaignInventory(state, orders, market, campaigns, now = Date.n
       balance-=daily*(5-time);
     }
     const covered=daily>0&&!gap&&balance>=0;
-    return {productId:String(p.id),name:String(p.name||''),available:stock,daily,days,inbound:inbound.reduce((s,x)=>s+x.qty,0),arrivalDays:inbound.find(x=>x.days!==null)?.days??null,overdue:inbound.some(x=>x.days===null),status:stock<=0?'empty':days!==null&&days<5&&!covered?'low':days!==null&&days<5&&covered?'inbound':daily>0?'ok':'no_demand'};
+    return {productId:String(p.id),name:String(p.name||''),available:stock,ownAvailable,fboAvailable:fboUnits,daily,days,inbound:inbound.reduce((s,x)=>s+x.qty,0),arrivalDays:inbound.find(x=>x.days!==null)?.days??null,overdue:inbound.some(x=>x.days===null),status:stock<=0?'empty':days!==null&&days<5&&!covered?'low':days!==null&&days<5&&covered?'inbound':daily>0?'ok':'no_demand'};
   }
   const risks=new Map(products.map(p=>[String(p.id),productRisk(p)]));
   return new Map(campaigns.map(c=>{
-    const codesWanted=list(c.vendorCodes).map(String).filter(Boolean), nms=list(c.nmIds).map(String).filter(Boolean);
-    const matches=products.filter(p=>codes(p,field).some(x=>codesWanted.includes(x)) || (String(p.wbVariant?.market||'')===market&&nms.includes(String(p.wbVariant?.nmId))));
+    const codesWanted=list(c.vendorCodes).map(String).filter(Boolean);
+    const nms=[...new Set(list(c.nmIds).map(String).filter(nm=>/^[1-9]\d*$/.test(nm)))];
+    const matches=products.filter(p=>nms.includes(article(p)) || ((!article(p)||!nms.length)&&codes(p,field).some(x=>codesWanted.includes(x))));
     const completeCodes=codesWanted.length>0&&codesWanted.every(code=>matches.some(p=>codes(p,field).includes(code)));
-    const completeNms=nms.length>0&&nms.every(nm=>matches.some(p=>String(p.wbVariant?.market||'')===market&&String(p.wbVariant?.nmId)===nm));
-    const known=products.length>0&&((completeCodes&&nms.length<=codesWanted.length)||completeNms)&&matches.every(p=>stockKnown(p));
-    const items=matches.map(p=>risks.get(String(p.id)));
-    const allEmpty=known&&items.length>0&&items.every(p=>p.status==='empty');
-    const allRisky=known&&items.length>0&&items.every(p=>['empty','low'].includes(p.status));
-    const status=!known?'unknown':allEmpty?'empty':items.some(p=>['low','empty'].includes(p.status))?'low':items.some(p=>p.status==='inbound')?'inbound':items.every(p=>p.status==='no_demand')?'no_demand':'ok';
-    return [Number(c.id),{known,status,allEmpty,allRisky,products:items,periodDays:25,thresholdDays:5,available:known?items.reduce((s,p)=>s+p.available,0):null,checkedAt:now}];
+    const completeNms=nms.length>0&&nms.every(nm=>matches.some(p=>article(p)===nm));
+    const localKnown=products.length>0&&((completeCodes&&nms.length<=codesWanted.length)||completeNms)&&matches.every(p=>stockKnown(p));
+    const fboByNm=new Map(nms.map(nm=>[nm,fboQuantity(nm)]));
+    const fboKnown=nms.length>0&&[...fboByNm.values()].every(qty=>qty!==null);
+    const fboAvailable=[...fboByNm.values()].reduce((sum,qty)=>sum+(qty??0),0);
+    const items=matches.map(p=>{
+      const nm=article(p)||(nms.length===1&&matches.length===1?nms[0]:'');
+      const cardQty=fboByNm.get(nm)||0;
+      if(!cardQty)return risks.get(String(p.id));
+      const peers=matches.filter(other=>article(other)===nm),chrt=String(identity(p).chrtId||'');
+      const sizeQty=fbo.sizes?.[nm+':'+chrt]?.quantity;
+      const qty=chrt
+        ? peers.filter(other=>String(identity(other).chrtId||'')===chrt).length<=1&&Number.isSafeInteger(sizeQty)&&sizeQty>0?Math.min(sizeQty,cardQty):0
+        : p.kind!=='variant'&&peers.length<=1?cardQty:0;
+      return qty?productRisk(p,qty):risks.get(String(p.id));
+    });
+    const ownAvailable=items.reduce((sum,p)=>sum+p.ownAvailable,0);
+    const unallocatedFbo=fboAvailable>items.reduce((sum,p)=>sum+p.fboAvailable,0);
+    const available=ownAvailable+fboAvailable;
+    const known=localKnown&&(available>0||!fbo||fboKnown);
+    const allEmpty=known&&available===0;
+    const allRisky=known&&!unallocatedFbo&&(!fbo||fboKnown)&&items.every(p=>['empty','low'].includes(p.status));
+    const status=!known?'unknown':allEmpty?'empty':!unallocatedFbo&&items.some(p=>['low','empty'].includes(p.status))?'low':items.some(p=>p.status==='inbound')?'inbound':items.every(p=>p.daily===0)?'no_demand':'ok';
+    return [Number(c.id),{known,status,allEmpty,allRisky,products:items,periodDays:25,thresholdDays:5,
+      available:known?available:null,fboAvailable:fboKnown||fboAvailable>0?fboAvailable:null,
+      fboUnconfirmed:localKnown&&!known&&Boolean(fbo),checkedAt:now}];
   }));
 }
 
 export function stockBlock(inventory, rule = {}) {
+  if(inventory?.fboUnconfirmed)return 'Нет свободного остатка на своём складе. Ждём подтверждения остатков FBO WB';
   if(!inventory?.known)return 'Не удалось проверить остаток: проверьте привязку товаров к складу';
   if(inventory.allEmpty)return 'Нет свободного остатка. Сначала оприходуйте товар';
   if(rule.lowStockMode==='pause'&&inventory.allRisky)return 'Запас меньше 5 дней, поставка не перекрывает нехватку';
