@@ -45,6 +45,7 @@ test('Kaspi has its own advertising tab and selects only the marketing connectio
   const kaspi = markup.slice(markup.indexOf('id="adsKaspiPanel"'), markup.indexOf('id="adsWbPanel"'));
   assert.match(kaspi, /id="kaspiMarketingButton"[^>]*openKaspiMarketing/);
   assert.match(kaspi, /showKaspiAdsHistory/);
+  assert.doesNotMatch(kaspi, /Аудит привязки|openAdsLinkAudit/);
   assert.doesNotMatch(markup.slice(0, markup.indexOf('id="adsKaspiPanel"')), /openKaspiMarketing/);
 
   const requests = [];
@@ -63,19 +64,39 @@ test('Kaspi has its own advertising tab and selects only the marketing connectio
   assert.equal(ctx.result.shop, 'LUXAR');
 });
 
-test('Kaspi audit stays usable without any Wildberries advertising data', async () => {
+test('link audit reads only WB1 and WB2', async () => {
+  const requests = [];
   const ctx = vm.createContext({
-    window: { kaspiAdsLinkAudit: () => ({ total: 120 }) },
+    window: {},
     adsAuditPeriodSpec: () => ({ days: 180 }),
+    adsAuditWbUrl: market => market,
     showSheet() {},
     document: { getElementById: () => ({ isConnected: true }) },
-    apiJson: async () => assert.fail('Kaspi audit should not request WB'),
+    apiJson: async market => { requests.push(market); return { market }; },
     paintAdsLinkAudit() {},
   });
-  const start = html.indexOf('async function openAdsLinkAudit(period,');
+  const start = html.indexOf('async function openAdsLinkAudit(period)');
   const end = html.indexOf('\n}', start) + 2;
   vm.runInContext(html.slice(start, end), ctx);
-  await ctx.openAdsLinkAudit(undefined, 'Kaspi');
-  assert.equal(ctx.window.__adsAuditMarket, 'Kaspi');
-  assert.equal(ctx.window.__adsAuditView.kaspi.total, 120);
+  await ctx.openAdsLinkAudit();
+  assert.deepEqual(requests, ['WB', 'WB2']);
+  assert.deepEqual(Object.keys(ctx.window.__adsAuditView), ['wb1', 'wb2']);
+});
+
+test('Kaspi advertising report keeps its total and skips the audit action', async () => {
+  const source=readFileSync(new URL('../../kaspi-report-v2.js', import.meta.url), 'utf8');
+  const ctx=vm.createContext({
+    window:{}, reportPeriod:7, marketplaceReportContext:null,
+    reportAdsPeriodLabel:()=> '7 дней',
+    warmKaspi:()=>({ads:120}), reportAdsLooseKaspi:()=>20,
+    warmWb:()=>({ads:80,financeAvailable:true}),
+    esc:String, fmt:value=>value+' ₸', showSheet:markup=>{ctx.markup=markup},
+  });
+  vm.runInContext(source.split('\n').find(line=>line.startsWith('window.openReportAdsPanel=')),ctx);
+  await ctx.window.openReportAdsPanel('Kaspi');
+  assert.match(ctx.markup,/120 ₸/);
+  assert.match(ctx.markup,/20 ₸/);
+  assert.doesNotMatch(ctx.markup,/Разобрать/);
+  await ctx.window.openReportAdsPanel('WB');
+  assert.match(ctx.markup,/Разобрать/);
 });

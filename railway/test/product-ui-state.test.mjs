@@ -92,19 +92,15 @@ test('Product details show progress before waiting on combined finance',()=>{
 });
 
 
-test('Advertising page exposes a six-month link audit for Kaspi, WB1 and WB2',()=>{
+test('Advertising page exposes a six-month link audit for WB1 and WB2',()=>{
   assert.match(html,/onclick="openAdsLinkAudit\(\)">Аудит привязки<\/button>/);
-  assert.match(html,/async function openAdsLinkAudit\(period,scope='all'\)/);
-  assert.match(html,/window\.kaspiAdsRepairLinksStrict/);
-  assert.match(html,/kaspiAdsLinkAudit\(Number\(spec\.days\)===0\?0:spec\.days,range\)/);
+  assert.match(html,/async function openAdsLinkAudit\(period\)/);
   assert.match(html,/function openReportAdsLinkAudit\(\)/);
   assert.match(report,/openReportAdsLinkAudit\(\)/);
   assert.match(html,/\/api\/wb-ad-link-audit\?market=/);
-  assert.match(html,/kaspiOnly\?'Kaspi':'Kaspi, WB1 и WB2'/);
   assert.match(html,/'6 месяцев'/);
   assert.match(html,/Суммы кампаний по нескольким разным товарам не делятся наугад/);
   assert.match(html,/function setAdsAuditMarket\(market\)/);
-  assert.match(html,/chip\('Kaspi','Kaspi'\)/);
   assert.match(html,/chip\('WB1','WB 1'\)/);
   assert.match(html,/chip\('WB2','WB 2'\)/);
   assert.match(html,/market==='all'\|\|x\.market===market/);
