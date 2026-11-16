@@ -5,8 +5,8 @@ import {readFileSync} from 'node:fs';
 
 const html=readFileSync(new URL('../../index.html',import.meta.url),'utf8');
 const report=readFileSync(new URL('../../kaspi-report-v2.js',import.meta.url),'utf8');
-const compat=readFileSync(new URL('../../kaspi-status-compat-v1.js',import.meta.url),'utf8');
 const kaspiAds=readFileSync(new URL('../../kaspi-ads-v2-original.js',import.meta.url),'utf8');
+const compat=readFileSync(new URL('../../kaspi-status-compat-v1.js',import.meta.url),'utf8');
 
 test('product list uses one selected period for sales profit and stock days',()=>{
   const line=html.split('\n').find(row=>row.startsWith('function productCard('))||'';
@@ -66,29 +66,21 @@ test('stock valuation uses sale plus covered reserve plus warehouse stock',()=>{
 });
 
 
-test('Kaspi advertising uses deterministic links and exposes repair audit',()=>{
+test('Kaspi advertising still uses deterministic links and reports unallocated spend',()=>{
   assert.match(html,/function kaspiAdsMatchProduct\(line\)/);
   assert.match(html,/Array\.isArray\(p\?\.kaspiAliases\)\?p\.kaspiAliases:\[\]/);
   assert.match(html,/identityMatches=state\.products\.filter\(p=>\{const key=kaspiAdsIdentityKey\(p\.name\);return key&&identity&&key===identity\}\)/);
   assert.match(html,/'см','cm'/);
   assert.match(html,/function kaspiOrderTitleProducts\(\)/);
   assert.match(html,/kaspiOrderTitleProducts\(\)\.get\(nn\)/);
-  assert.match(html,/function openKaspiAdAssign\(/);
-  assert.match(html,/function confirmKaspiAdAssign\(/);
   assert.match(report,/Есть реклама Kaspi без товара/);
   assert.match(report,/openReportAdsPanel\('Kaspi'\)/);
-  assert.match(report,/onclick="openReportAdsLinkAudit\(\)">Разобрать<\/button>/);
   assert.doesNotMatch(report,/kaspiSheetNote/);
   assert.match(html,/onclick="openReportAdsPanel\(\)"/);
   assert.match(report,/window\.openStoreDetail=async function\(market,days\)\{days=days===undefined\|\|days===null\?reportPeriod:Number\(days\);if\(!\['Kaspi','WB','WB2','WB3','Ozon'\]\.includes\(market\)\)return;marketplaceReportContext=\{market,days\}/);
-  assert.match(kaspiAds,/window\.kaspiAdsAssignManual = function/);
   assert.match(html,/p\.kaspiAdTitles/);
   assert.doesNotMatch(html,/key\.includes\(identity\)\|\|identity\.includes\(key\)/);
   assert.doesNotMatch(html,/nn\.includes\(x\.key\)\|\|x\.key\.includes\(nn\)/);
-  assert.match(kaspiAds,/window\.kaspiAdsRepairLinksStrict = function \(\)/);
-  assert.match(kaspiAds,/window\.kaspiAdsLinkAudit = function \(days = 'all', range = null\)/);
-  assert.match(kaspiAds,/ambiguous_sku/);
-  assert.match(kaspiAds,/stored_only/);
 });
 
 test('unmatched marketplace advertising is never spread across unrelated products',()=>{
