@@ -454,14 +454,20 @@ async function fetchCampaigns(marketName, previous) {
 }
 
 async function inventoryFor(marketName, campaigns) {
-  const [warehouse, orders] = await Promise.all([
+  const now=Date.now();
+  const [warehouse, orders, stock] = await Promise.all([
     pool.query('SELECT payload FROM warehouse_state WHERE id=1'),
     pool.query(`SELECT market,sku,status,state,SUM(qty) AS qty FROM marketplace_order_lines
       WHERE creation_date >= $1 AND creation_date <= $2 GROUP BY market,sku,status,state`,
-      [Date.now()-25*86400000, Date.now()]),
+      [now-25*86400000, now]),
+    pool.query('SELECT payload, fetched_at FROM wb_stock_snapshots WHERE market=$1',[marketName]),
   ]);
   const state = await hydrateWarehouseProducts(pool, await hydrateWarehouseReservations(pool, await hydrateWarehousePurchases(pool, parseAdWarehouse(warehouse.rows[0]?.payload))));
-  return campaignInventory(state, orders.rows, marketName, campaigns);
+  const fbo=stock.rows[0];
+  return campaignInventory(state, orders.rows, marketName, campaigns, now, {
+    items:fbo?.payload?.items, sizes:fbo?.payload?.sizes, fetchedAt:Number(fbo?.fetched_at),
+    fullCatalog:config.storeProfile==='WB3'&&Boolean(fbo?.payload?.sizes),
+  });
 }
 
 

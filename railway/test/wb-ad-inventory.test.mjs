@@ -50,3 +50,49 @@ test('string aliases match the warehouse link format without duplicating demand'
  assert.equal(r.products[0].daily,2);
  assert.equal(r.status,'low');
 });
+
+const withFbo=(products,ids,stock,{market='WB',orders=[]}={})=>campaignInventory(
+ {products},orders,market,[{id:1,nmIds:ids,vendorCodes:products.map(p=>p[market==='WB2'?'wb2':'wb'])}],now,stock
+).get(1);
+
+test('available FBO permits a campaign with zero local stock and excludes units in delivery and returns',()=>{
+ const r=withFbo([product('pink',0)],[123,123],{
+  fetchedAt:now-1000,items:{123:{quantity:14,inWayToClient:20,inWayFromClient:5},456:{quantity:100}}
+ },{orders:[order('pink',50)]});
+ assert.equal(r.available,14);
+ assert.equal(r.fboAvailable,14);
+ assert.equal(r.products[0].days,7);
+ assert.equal(stockBlock(r,{lowStockMode:'pause'}),'');
+});
+
+test('FBO is counted once for shared articles and assigned to exact sizes when possible',()=>{
+ const products=[product('s',2,{kind:'variant',wbVariant:{market:'WB',nmId:123,chrtId:11}}),
+  product('m',0,{kind:'variant',wbVariant:{market:'WB',nmId:123,chrtId:12}})];
+ const r=withFbo(products,[123],{fetchedAt:now,items:{123:{quantity:9}},sizes:{'123:11':{quantity:3},'123:12':{quantity:6}}});
+ assert.equal(r.available,11);
+ assert.deepEqual(r.products.map(p=>p.available),[5,6]);
+ const aggregate=withFbo(products,[123],{fetchedAt:now,items:{123:{quantity:9}}});
+ assert.equal(aggregate.available,11);
+ assert.deepEqual(aggregate.products.map(p=>p.available),[2,0]);
+ assert.equal(aggregate.allRisky,false);
+});
+
+test('stale or partial FBO cannot turn a zero local balance into a confirmed zero',()=>{
+ const products=[product('pink',0,{wb2:'pink',wb2Identity:{nmId:123}})];
+ for(const stock of [{fetchedAt:now-3600001,items:{123:{quantity:5}}},{fetchedAt:now,items:{456:{quantity:5}}}]){
+  const r=withFbo(products,[123],stock,{market:'WB2'});
+  assert.equal(r.known,false);
+  assert.equal(r.allEmpty,false);
+  assert.match(stockBlock(r),/Ждём подтверждения остатков FBO/);
+ }
+ const r=withFbo(products,[123],{fetchedAt:now,items:{},fullCatalog:true},{market:'WB2'});
+ assert.equal(r.available,0);
+ assert.equal(r.allEmpty,true);
+});
+
+test('an exact different WB article cannot pick up FBO through a conflicting seller code',()=>{
+ const r=withFbo([product('pink',0,{wbIdentity:{nmId:456}})],[123],{fetchedAt:now,items:{123:{quantity:14}}});
+ assert.equal(r.known,false);
+ assert.equal(r.products.length,0);
+ assert.ok(stockBlock(r));
+});
