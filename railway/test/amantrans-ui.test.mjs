@@ -134,6 +134,21 @@ test('server purchase identity restores a lost local link without track guessing
  const f=fixture(),row=f.ctx.state.purchases[0];row.batch='TEMP-ORDER';row.amantransAutoRequestedAt=100;f.ctx.warehouseEditReady=()=>true;f.view.purchaseLinks={main:{id:'12',track:'TEMP-ORDER'},'inferno:child':{id:'11',track:'OTHER'}};
  await f.ctx.openAmanTrans('main');assert.equal(row.amantransOrderId,'12');assert.equal(row.amantransSyncedTrack,'TEMP-ORDER');assert.equal(row.amantransAccountId,'7');assert.equal(f.ctx.state.purchases[1].amantransOrderId,undefined);assert.equal(f.requests.length,1);assert.equal(f.requests[0].options.method,'GET');
 });
+test('a verified legacy duplicate is replaced only on the active shipment with the same exact track',async()=>{
+ const f=stagedFixture(),row=f.ctx.state.purchases[0];
+ Object.assign(row,{amantransAutoRequestedAt:100,batch:'DUPLICATE'});
+ f.view.purchaseLinks={main:{id:'12',track:'DUPLICATE',replacesId:'11'}};
+ await f.ctx.openAmanTrans('main');
+ assert.equal(row.amantransOrderId,'12');assert.equal(row.amantransSyncedTrack,'DUPLICATE');
+ assert.equal(f.requests.filter(x=>x.options.method==='POST').length,0);
+ for(const changed of [{batch:'ANOTHER-TRACK'},{status:'in_stock'},{amantransOrderId:'wrong-id'}]){
+  const g=stagedFixture(),item=g.ctx.state.purchases[0];
+  Object.assign(item,{amantransAutoRequestedAt:100,batch:'DUPLICATE'},changed);
+  g.view.purchaseLinks=f.view.purchaseLinks;
+  await g.ctx.openAmanTrans('main');
+  assert.notEqual(item.amantransOrderId,'12');
+ }
+});
 test('a track edited while creation is in flight is sent to the newly created ID after the first response',async()=>{
  const f=fixture(),row=f.ctx.state.purchases[0];row.batch='TEMP-ORDER';row.workflowStageId='paid';f.ctx.purchaseWorkflowStage=x=>x.workflowStageId;f.ctx.amanPreparePurchase([row],'cart');f.view.createdOrderId='11';
  let release;const gate=new Promise(resolve=>release=resolve),original=f.ctx.fetch;let first=true;f.ctx.fetch=async(...args)=>{if(first){first=false;await gate;}return original(...args);};

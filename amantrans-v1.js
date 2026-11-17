@@ -17,7 +17,9 @@
  function order(id){return snapshot.orders.find(x=>x.id===String(id));}
  function applyPurchaseLinks(){
   if(!snapshot.connected||typeof warehouseEditReady!=='function'||!warehouseEditReady())return false;let changed=false;
-  for(const row of state.purchases||[]){const key=String(row.shipmentId||row.id||''),link=snapshot.purchaseLinks?.[key];if(!link||!row.amantransAutoRequestedAt||row.amantransAccountId&&String(row.amantransAccountId)!==snapshot.accountId||row.amantransOrderId&&String(row.amantransOrderId)!==String(link.id))continue;
+  for(const row of state.purchases||[]){const key=String(row.shipmentId||row.id||''),link=snapshot.purchaseLinks?.[key];if(!link||!row.amantransAutoRequestedAt||row.amantransAccountId&&String(row.amantransAccountId)!==snapshot.accountId)continue;
+   const currentId=String(row.amantransOrderId||'');
+   if(currentId&&currentId!==String(link.id)&&(currentId!==String(link.replacesId||'')||rowTrack(row)!==link.track||!['to_forwarder','to_me'].includes(purchaseStatus(row))))continue;
    if(String(row.amantransOrderId||'')!==String(link.id)||row.amantransAccountId!==snapshot.accountId||row.amantransSyncedTrack!==link.track){row.amantransOrderId=String(link.id);row.amantransAccountId=snapshot.accountId;row.amantransSyncedTrack=link.track;changed=true;}}
   // Older paid shipments predate carrier IDs. Recover only an unambiguous,
   // exact track from a fresh snapshot; never create an external order here.

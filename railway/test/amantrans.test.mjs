@@ -14,7 +14,9 @@ function fixture(){
    if(mode==='offline')throw Error('offline');
    if(mode==='foreign')return Response.json({content:[{...raw(99),customer:{id:8}}],totalPages:1});
    if(mode==='partial'&&u.searchParams.get('page')==='1')throw Error('offline');
-   const search=u.searchParams.get('forSearch')||'';return Response.json({content:source.filter(x=>!search||x.track_code.includes(search)||x.name.includes(search)),totalPages:mode==='partial'?2:1});
+   const search=u.searchParams.get('forSearch')||'',matches=source.filter(x=>!search||x.track_code.includes(search)||x.name.includes(search));
+   if(mode==='paged'&&search){const page=Number(u.searchParams.get('page'));return Response.json({content:matches.slice(page,page+1),totalPages:matches.length});}
+   return Response.json({content:matches,totalPages:mode==='partial'?2:1});
   }
   if(u.pathname==='/amantrans/orders/create'){
    if(mode==='write-timeout')throw Error('lost response');const id=nextId++;source.push({...raw(id),...body});if(mode==='create-applied-timeout')throw Error('response lost after create');return Response.json(mode==='no-id'?{ok:true}:{id});
@@ -103,11 +105,57 @@ test('paying registers a purchase with the same numeric total and a durable ship
  assert.equal(f.calls.filter(x=>x.url.pathname==='/amantrans/orders/create').length,1);
  assert.doesNotMatch(JSON.stringify(await f.service.get()),/purchaseKey|NEW-TRACK.*beforeIds|fixture-only/);
 });
-test('a purchase owns a new exact record even with duplicate temporary tracks and never repeats an uncertain create',async()=>{
- const f=fixture();await f.connect();const body={purchaseKey:'inferno:po-paid-fixture',fields:{name:'Первый товар',track:'SAME-TRACK',priceUsd:10000,amount:2,shippingMethod:'Avto'}};
- const result=await f.service.registerPurchase(body);assert.equal(result.createdOrderId,'15');assert.equal(f.source.find(x=>x.id===11).amount,1);assert.equal(f.source.find(x=>x.id===12).name,'Ошибочная запись');assert.equal(f.calls.filter(x=>x.url.pathname==='/amantrans/orders/create').length,1);body.purchaseKey='another-purchase';
- body.fields.track='NEW-TRACK';f.mode='write-timeout';await assert.rejects(f.service.registerPurchase(body));
- await assert.rejects(f.service.registerPurchase(body),/повторно не отправляется/);assert.equal(f.calls.filter(x=>x.url.pathname==='/amantrans/orders/create').length,2);
+test('paying searches every page and links the sole exact free track without changing the carrier record',async()=>{
+ const f=fixture(),track='EXISTING-TRACK';
+ f.source.push({...raw(21),track_code:'PREFIX-'+track},{...raw(22),track_code:track});
+ await f.connect();f.mode='paged';
+ const body={purchaseKey:'paid-existing',fields:{name:'Складское название',track,priceUsd:10000,amount:2,shippingMethod:'Avto'}};
+ const result=await f.service.registerPurchase(body);
+ assert.equal(result.createdOrderId,'22');assert.equal(result.purchaseLinks[body.purchaseKey].track,track);
+ assert.equal(f.source.find(row=>row.id===22).name,'Кошелёк');assert.equal(f.source.find(row=>row.id===22).amount,1);
+ await assert.rejects(f.service.registerPurchase({...body,purchaseKey:'other-purchase'}),/уже связано с другой закупкой/);
+ assert.equal(f.calls.filter(x=>x.options.method==='PUT'||x.url.pathname.endsWith('/create')).length,0);
+});
+
+test('ambiguous tracking and incomplete lookups never create a carrier record',async()=>{
+ const f=fixture();await f.connect();
+ const body={purchaseKey:'paid-ambiguous',fields:{name:'Первый товар',track:'SAME-TRACK',priceUsd:10000,amount:2,shippingMethod:'Avto'}};
+ await assert.rejects(f.service.registerPurchase(body),/несколько отправлений/);
+ f.mode='partial';await assert.rejects(f.service.registerPurchase(body));
+ assert.equal(f.calls.filter(x=>x.url.pathname.endsWith('/create')).length,0);
+ f.mode='write-timeout';const next={...body,fields:{...body.fields,track:'NEW-TRACK'}};
+ await assert.rejects(f.service.registerPurchase(next));
+ await assert.rejects(f.service.registerPurchase(next),/повторно не отправляется/);
+ assert.equal(f.calls.filter(x=>x.url.pathname.endsWith('/create')).length,1);
+});
+
+test('a real track that already exists replaces the temporary purchase link without a carrier write',async()=>{
+ const f=fixture(),track='EXISTING-REAL';
+ f.source.push({...raw(22,'Поставка перевозчика'),track_code:track});
+ await f.connect();
+ const body={purchaseKey:'paid-temp-existing',fields:{name:'Первый товар',track:'TMP-WAREHOUSE',priceUsd:7480,amount:140,shippingMethod:'Avto'}};
+ await f.service.registerPurchase(body);
+ const edit={...body,orderId:'15',accountId:'7',previousTrack:'TMP-WAREHOUSE',editOperationId:'existing-track-fixture-0001',fields:{...body.fields,track}};
+ const result=await f.service.registerPurchase(edit);
+ assert.deepEqual(result.purchaseLinks[body.purchaseKey],{id:'22',track,replacesId:'15'});
+ assert.equal((await f.service.registerPurchase(edit)).createdOrderId,'22');
+ assert.equal(f.source.find(row=>row.id===15).track_code,'TMP-WAREHOUSE');
+ assert.equal(f.calls.filter(x=>x.url.pathname.endsWith('/create')).length,1);
+ assert.equal(f.calls.filter(x=>x.options.method==='PUT').length,0);
+});
+
+test('old auto-created duplicates are repaired only when the receipt identifies a unique pre-existing record',async()=>{
+ const f=fixture(),track='OLD-DUPLICATE',rawTrack={track_code:track};
+ f.source.push({...raw(21,'Исходное отправление'),...rawTrack},{...raw(22,'Дубль'),...rawTrack});
+ await f.connect();
+ const receipt={purchaseKey:'legacy',orderId:'22',state:'done',beforeIds:['21'],fields:rawTrack};
+ f.stored.operations={old:receipt};
+ f.source.push({...raw(23),...rawTrack});
+ assert.equal((await f.service.sync()).purchaseLinks.legacy.id,'22','ambiguous carrier records are left alone');
+ f.source.pop();
+ assert.deepEqual((await f.service.sync()).purchaseLinks.legacy,{id:'21',track,replacesId:'22'});
+ assert.equal(f.source.filter(row=>row.track_code===track).length,2);
+ assert.equal(f.calls.filter(x=>x.options.method==='PUT'||x.url.pathname.endsWith('/create')).length,0);
 });
 
 test('temporary to real tracking updates the same carrier ID and preserves live quantity, value and name',async()=>{

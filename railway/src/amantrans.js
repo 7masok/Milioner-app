@@ -61,10 +61,38 @@ export function createAmanService({read=readAmanAccess,write=saveAmanAccess,fetc
   }
   throw fail('Список Aman Trans превышает 5000 отправлений. Уточните поиск',502);
  }
- function view(data){return {ok:true,connected:Boolean(data?.phone&&data?.password),accountId:data?.accountId||'',phoneHint:data?.phone?'•••'+data.phone.slice(-4):'',fetchedAt:data?.fetchedAt||0,lastError:data?.lastError||'',nextAttemptAt:data?.nextAttemptAt||0,orders:(data?.orders||[]).map(row=>({...row,hidden:Boolean(data.hidden?.[row.id])})),purchaseLinks:Object.fromEntries(Object.values(data?.operations||{}).filter(x=>x.purchaseKey&&x.orderId&&x.state==='done'&&!x.trackEdit).map(x=>[x.purchaseKey,{id:x.orderId,track:x.lastTrack||x.fields?.track_code||''}])),deleteSupported:false};}
+ function view(data){return {ok:true,connected:Boolean(data?.phone&&data?.password),accountId:data?.accountId||'',phoneHint:data?.phone?'•••'+data.phone.slice(-4):'',fetchedAt:data?.fetchedAt||0,lastError:data?.lastError||'',nextAttemptAt:data?.nextAttemptAt||0,orders:(data?.orders||[]).map(row=>({...row,hidden:Boolean(data.hidden?.[row.id])})),purchaseLinks:Object.fromEntries(Object.values(data?.operations||{}).filter(x=>x.purchaseKey&&x.orderId&&x.state==='done'&&!x.trackEdit).map(x=>[x.purchaseKey,{id:x.orderId,track:x.lastTrack||x.fields?.track_code||'',...(x.replacesId?{replacesId:x.replacesId}:{})}])),deleteSupported:false};}
  async function freshOrder(data,id){const old=data.orders?.find(x=>x.id===id);if(!old)throw fail('Сначала обновите список и выберите отправление',404);const rows=await list(data,old.track);const current=rows.find(x=>x.id===id);if(!current)throw fail('Отправление изменилось или больше недоступно. Обновите список',409);return current;}
- async function refresh(data,persistFailure=true){try{await session(data);const orders=await list(data);data.orders=orders;data.fetchedAt=now();data.nextAttemptAt=now()+TTL;data.lastError='';await write(data);}catch(error){if(data&&persistFailure){data.lastError=error.message;data.nextAttemptAt=Math.max(now()+TTL,Number(error.retryAt)||0);await write(data);}throw error;}return view(data);}
- async function sendOrder(id,body,purchaseKey=''){
+ function trackMatches(orders,track){return orders.filter(order=>order.track===track);}
+ function isOrderClaimed(data,key,id){
+  return Object.values(data.operations||{}).some(entry=>entry.purchaseKey&&entry.purchaseKey!==key&&entry.orderId===id&&!entry.trackEdit);
+ }
+ function checkOrderOwner(data,key,id){
+  if(isOrderClaimed(data,key,id))throw fail('Отправление Aman Trans уже связано с другой закупкой',409);
+ }
+ function linkedReceipt(key,current,replacesId=''){
+  return {purchaseKey:key,orderId:current.id,state:'done',at:now(),fields:{name:current.name,track_code:current.track,price:current.priceUsd,amount:current.amount,shipping_method:current.shippingMethod},lastTrack:current.track,...(replacesId?{replacesId}:{})};
+ }
+ async function linkExisting(data,op,key,current,replacesId=''){
+  checkOrderOwner(data,key,current.id);
+  data.operations[op]=linkedReceipt(key,current,replacesId);
+  data.orders=[...(data.orders||[]).filter(order=>order.id!==current.id),current];
+  await write(data);
+  return {...view(data),sent:true,createdOrderId:current.id,syncedTrack:current.track};
+ }
+ function repairLegacyDuplicates(data,orders){
+  for(const [op,entry] of Object.entries(data.operations||{})){
+   const track=entry.fields?.track_code;
+   if(!entry.purchaseKey||entry.state!=='done'||entry.trackEdit||!entry.orderId||!track||entry.lastTrack&&entry.lastTrack!==track||!entry.beforeIds?.length)continue;
+   const matches=trackMatches(orders,track);
+   if(matches.length!==2||!matches.some(order=>order.id===entry.orderId))continue;
+   const original=matches.find(order=>order.id!==entry.orderId);
+   if(!entry.beforeIds.includes(original.id)||isOrderClaimed(data,entry.purchaseKey,original.id))continue;
+   data.operations[op]=linkedReceipt(entry.purchaseKey,original,entry.orderId);
+  }
+ }
+ async function refresh(data,persistFailure=true){try{await session(data);const orders=await list(data);repairLegacyDuplicates(data,orders);data.orders=orders;data.fetchedAt=now();data.nextAttemptAt=now()+TTL;data.lastError='';await write(data);}catch(error){if(data&&persistFailure){data.lastError=error.message;data.nextAttemptAt=Math.max(now()+TTL,Number(error.retryAt)||0);await write(data);}throw error;}return view(data);}
+ async function sendOrder(id,body,purchaseKey='',before=[]){
    const fields=amanEdit(body?.fields,!id),op=purchaseKey?'paid_'+crypto.createHash('sha256').update(purchaseKey).digest('hex'):text(body?.operationId,80);if(!/^[a-zA-Z0-9_-]{12,80}$/.test(op))throw fail('Откройте форму отправки заново');
    const data=await session(await read());data.operations||={};
    const digest=crypto.createHash('sha256').update(JSON.stringify({id,fields})).digest('hex'),receipt=data.operations[op];
@@ -75,7 +103,6 @@ export function createAmanService({read=readAmanAccess,write=saveAmanAccess,fetc
    }
    if(receipt){if(receipt.digest!==digest)throw fail('Эта закупка уже отправлялась с другими данными. Откройте её доставку для проверки и изменения.',409);if(receipt.state==='done'){await resolveCreated(receipt).catch(()=>{});return {...view(data),sent:true,createdOrderId:receipt.orderId||null,refreshNeeded:!data.fetchedAt};}throw fail('Результат предыдущей отправки требует проверки. Обновите список Aman Trans; автоматически запрос не повторён.',409);}
    let current;if(id){current=await freshOrder(data,id);if(current.fingerprint!==body.fingerprint)throw fail('Запись Aman Trans изменилась. Обновите и проверьте форму',409);}
-   const before=purchaseKey?await list(data,fields.track_code):[];
    const ops=Object.entries(data.operations);if(ops.length>=200){for(const [key,value]of ops)if(!value.purchaseKey&&value.state==='done'&&now()-value.at>30*86400000)delete data.operations[key];if(Object.keys(data.operations).length>=200)throw fail('Очередь отправок заполнена. Неотправленные запросы требуют проверки',409);}
    data.operations[op]={digest,state:'pending',at:now(),...(purchaseKey?{purchaseKey,fields,beforeIds:before.map(x=>x.id)}:{})};await write(data);
    let sent;try{sent=await call(id?'/amantrans/orders/update':'/amantrans/orders/create',{token:data.token,method:id?'PUT':'POST',body:id?{id:Number(id),...fields}:{...fields,customer_id:Number(data.accountId)}});}
@@ -91,24 +118,34 @@ export function createAmanService({read=readAmanAccess,write=saveAmanAccess,fetc
   if(!receipt&&body.orderId){
    const id=String(body.orderId),current=await freshOrder(data,id);
    if(!body.accountId||String(body.accountId)!==data.accountId)throw fail('Проверьте аккаунт закупки',409);
-   receipt=data.operations[op]={purchaseKey:key,orderId:id,state:'done',at:now(),fields:{name:current.name,track_code:current.track,price:current.priceUsd,amount:current.amount,shipping_method:current.shippingMethod},lastTrack:current.track};await write(data);
+   checkOrderOwner(data,key,id);receipt=data.operations[op]=linkedReceipt(key,current);await write(data);
   }
-  if(!receipt)return sendOrder(null,{fields:body.fields},key);
+  if(!receipt){
+   const before=await list(data,fields.track_code),matches=trackMatches(before,fields.track_code);
+   if(matches.length>1)throw fail('В Aman Trans уже несколько отправлений с этим треком. Выберите нужное в закупке.',409);
+   if(matches.length===1)return linkExisting(data,op,key,matches[0]);
+   return sendOrder(null,{fields:body.fields},key,before);
+  }
   if(!receipt.orderId){
    const candidates=await list(data,receipt.fields.track_code),matches=candidates.filter(row=>!(receipt.beforeIds||[]).includes(row.id)&&row.track===receipt.fields.track_code&&row.name===receipt.fields.name&&row.amount===receipt.fields.amount&&row.priceUsd===receipt.fields.price);
    if(matches.length!==1)throw fail('Проверяем результат создания в Aman Trans. Новая запись повторно не отправляется.',409);
    receipt.orderId=matches[0].id;receipt.state='done';const ids=new Set(candidates.map(x=>x.id));data.orders=[...(data.orders||[]).filter(x=>!ids.has(x.id)),...candidates];await write(data);
   }
-  const id=receipt.orderId;if(body.orderId&&String(body.orderId)!==id)throw fail('ID отправления закупки изменился. Обновите склад',409);
+  const id=receipt.orderId;if(body.orderId&&String(body.orderId)!==id&&String(body.orderId)!==receipt.replacesId)throw fail('ID отправления закупки изменился. Обновите склад',409);
   const lastTrack=receipt.lastTrack||receipt.fields.track_code;
   if(fields.track_code===lastTrack)return {...view(data),sent:true,createdOrderId:id,syncedTrack:lastTrack};
   const edit=text(body.editOperationId,80);if(!/^[a-zA-Z0-9_-]{12,80}$/.test(edit))throw fail('Сохраните изменение трека ещё раз',409);
   const editKey='track_'+crypto.createHash('sha256').update(key+'|'+edit).digest('hex'),previous=data.operations[editKey];
   if(previous&&(previous.orderId!==id||previous.track!==fields.track_code))throw fail('Изменение трека уже сохранено с другими данными',409);
+  const target=trackMatches(await list(data,fields.track_code),fields.track_code);
   let current=(await list(data,lastTrack)).find(x=>x.id===id);
-  if(!current)current=(await list(data,fields.track_code)).find(x=>x.id===id);
+  if(!current)current=target.find(x=>x.id===id);
   if(!current)throw fail('Отправление Aman Trans временно не найдено. Изменение трека сохранено в складе.',409);
   if(current.track!==fields.track_code){
+   if(target.some(order=>order.id!==id)){
+    if(!previous&&target.length===1&&current.track===lastTrack&&lastTrack.startsWith('TMP-')&&receipt.fields.track_code===lastTrack&&(!body.previousTrack||body.previousTrack===lastTrack))return linkExisting(data,op,key,target[0],id);
+    throw fail('В Aman Trans уже есть отправление с таким треком. Выберите нужное в закупке.',409);
+   }
    if(previous)throw fail('Результат смены трека проверяется. Запрос повторно не отправляется.',409);
    if(body.previousTrack&&current.track!==String(body.previousTrack))throw fail('Трек изменился в Aman Trans. Обновите данные перед исправлением.',409);
    if(current.track!==lastTrack)throw fail('Трек изменился в Aman Trans. Автоматическая перезапись остановлена.',409);
