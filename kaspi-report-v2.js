@@ -180,24 +180,6 @@ window.loadBusinessMarketplaceDaily=async function(range,{force=false,work=null,
   out.push({day,summary:{...businessDailyTotal(sources),missingMarkets:[...new Set(dayMissing)],partialOzonHistory:included('Ozon')&&!(opening('Ozon')&&start<opening('Ozon'))&&!o?.covered,generatedAt:Date.now()}});
  }return out;
 };
-window.loadComparisonProductBuyouts=async function(market,days){
- const counts=new Map();
- const add=(id,value)=>{if(id&&Number(value)>0)counts.set(String(id),(counts.get(String(id))||0)+Number(value))};
- if(market==='Kaspi'){
-  const snapshot=await loadKaspiOrders(days), model=buildModel(snapshot,days);
-  for(const row of model.rows)add(row.productId,row.qty);
-  return {counts,complete:!snapshot.historyIncomplete&&!model.pendingOrders};
- }
- if(market==='Ozon'){
-  const model=await loadOzonSummary(days);
-  for(const row of model?.products||[])add(row.productId,row.qty);
-  return {counts,complete:Boolean(model&&!model.missing)};
- }
- if(!['WB','WB2','WB3'].includes(market))return null;
- const model=await loadWbModel(market,days);
- for(const row of model.products||[])add(wbLiveProductId(model.market,row),row.saleQty??row.qty);
- return {counts,complete:Boolean(model.financeAvailable&&model.complete)};
-};
 const productPeriodStatsCache=new Map(),productPeriodStatsJobs=new Map();
 window.refreshProductPeriodStats=function(spec={days:30,key:'30'},{force=false}={}){
  const days=Number(spec?.days)===-1?-1:Math.max(0,Number(spec?.days)||0),range=spec?.range||null,key=String(spec?.key||periodCacheKey(days,range));
