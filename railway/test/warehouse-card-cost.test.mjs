@@ -48,7 +48,7 @@ test('opened lollipop card shows cost from the five accepted warehouse units bef
  vm.runInContext(fs.readFileSync(new URL('../../packaging-v1.js',import.meta.url),'utf8'),f.context);
  f.context.packagingProductBlock=p=>f.context.window.packagingProductBlock(p);
  const start=html.indexOf('async function openProduct(');
- vm.runInContext(html.slice(start,html.indexOf('\nfunction ',start)),f.context);
+ vm.runInContext(extract('productMarketplaceLinkDetails')+'\n'+html.slice(start,html.indexOf('\nfunction ',start)),f.context);
  await f.context.openProduct('red');
  assert.match(sheet,/Средняя себестоимость 1 шт\. · все поставки<\/div><b>62 ₸<\/b>/);
  assert.match(sheet,/Из склада в продажу · 5 шт\./);

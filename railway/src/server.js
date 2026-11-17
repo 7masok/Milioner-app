@@ -79,7 +79,6 @@ const frontendFiles = Object.freeze([
   'ozon-supplies-v1.js',
   'warehouse-insights.js',
   'product-sales-trend-v1.js',
-  'product-store-comparison-v1.js',
   'growth-analytics-model.js',
   'growth-analytics-v1.js',
   'growth-analytics.css',
