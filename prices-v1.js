@@ -394,6 +394,31 @@ async function priceFetch(market,force=false){
   try{return await task}finally{if(priceFetchInFlight.get(key)===task)priceFetchInFlight.delete(key)}
 }
 
+window.kaspiAdvertisingPrices={
+  async load(){
+    const cached=priceCache.get('Kaspi');
+    if(priceSnapshotFresh(cached))return cached;
+    const loaded=await priceFetch('Kaspi');
+    if(loaded.epoch!==priceEpochValue('Kaspi'))throw new Error('Цена изменилась во время загрузки. Повторите.');
+    priceCache.set('Kaspi',loaded.data);
+    return loaded.data;
+  },
+  async save(productId,price){
+    if(typeof requireWarehouseEditReady!=='function'||!requireWarehouseEditReady())throw new Error('Склад пока доступен только для просмотра.');
+    if(!Number.isFinite(price)||price<=0)throw new Error('Укажите цену больше нуля.');
+    const product=(state.products||[]).find(item=>String(item.id)===String(productId));
+    if(!product||![product.kaspi,...(Array.isArray(product.kaspiAliases)?product.kaspiAliases:[])].some(sku=>String(sku||'').trim()))throw new Error('Товар не привязан к Kaspi.');
+    const oldValue=product.kaspiPrice;
+    const previous=Number(oldValue)>0?Number(oldValue):Number(priceCache.get('Kaspi')?.rows?.find(row=>String(row.productId)===String(productId))?.price)||null;
+    product.kaspiPrice=price;
+    if(save()===false){product.kaspiPrice=oldValue;throw new Error('Склад пока доступен только для просмотра.');}
+    bumpPriceEpoch('Kaspi');
+    priceCache.delete('Kaspi');
+    if(typeof pushWarehouseToServer!=='function'||(await pushWarehouseToServer())!==true)throw new Error('Цена сохранена локально. Сервер ещё синхронизируется.');
+    return {price,previous};
+  },
+};
+
 window.renderPrices=async function(force=false){
   const view=document.getElementById('prices');if(!view||!view.classList.contains('active'))return;
   if(priceIsWbMarket())void loadPriceDelivery(priceUi.market,force);

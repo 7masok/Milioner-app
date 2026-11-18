@@ -13,6 +13,7 @@ function mount(batches, tests = {}, orders = [], connection = {}, extra = {}) {
   const panel = {innerHTML:'',closest:()=>null,contains:node=>!!node,querySelectorAll:()=>[],
     addEventListener(type,handler){handlers[type]=handler},
     click(dataset){handlers.click({preventDefault(){},target:{closest:()=>({dataset})}})},
+    submit(form){return handlers.submit({preventDefault(){},target:form})},
     expand(dataset) {
       const body = {innerHTML:'',hasAttribute:()=>false,setAttribute(){}};
       handlers.toggle({target:{open:true,dataset,querySelector:()=>body}});
@@ -51,6 +52,41 @@ test('live campaign metrics fill orders and bid by SKU and the selected dates wh
   assert.match(html,/<small>Клики<\/small><b>3<\/b>/);
   panel.click({kaFilter:'price'});
   assert.equal(calls,1);
+});
+
+test('review names remain readable, unlinked ad titles stay in details, and a price edit opens a prefilled test',async()=>{
+  const item={...product,kaspiPrice:1200};
+  let saved=0;
+  const panel=mount([batch(19,1,[
+    {date:'2026-11-17',sku:'A',name:'Market title',amount:40,views:1000,clicks:2},
+    {date:'2026-11-17',sku:'unmatched',name:'Long external marketplace title',amount:10},
+  ])],{},[],{},{
+    prod:id=>id===item.id?item:null,
+    window:{kaspiAdvertisingPrices:{
+      load:async()=>({rows:[{productId:'p',price:1200}]}),
+      save:async(id,price)=>{saved++;assert.equal(id,'p');item.kaspiPrice=price;return {previous:1200,price}},
+    }},
+    FormData:class {constructor(form){this.values=form.values}get(key){return this.values[key]}},
+  });
+  await new Promise(resolve=>setImmediate(resolve));
+  const html=panel.expand({kaCampaign:'42:19'});
+  assert.match(html,/class="kaw-name kaw-review"><b>Брелок/);
+  assert.doesNotMatch(html,/Проверить карточку|Long external marketplace title/);
+  assert.match(html,/Нет привязки · unmatched/);
+  const unlinked=panel.expand({kaProduct:JSON.stringify(['42:19','unmatched','','Нет привязки · unmatched'])});
+  assert.match(unlinked,/Long external marketplace title/);
+  assert.doesNotMatch(unlinked,/data-ka-price=/);
+  const key=JSON.stringify(['42:19','A','p',item.name]);
+  panel.click({kaPrice:key});
+  assert.match(panel.innerHTML,/name="price".*value="1200"/);
+  const status={textContent:''};
+  const form={dataset:{kaPriceForm:key},values:{price:'1100'},querySelector:()=>status,querySelectorAll:()=>[]};
+  await panel.submit(form);
+  assert.equal(saved,1);
+  assert.match(panel.innerHTML,/data-ka-test="p"/);
+  assert.match(panel.innerHTML,/name="before".*value="1200"/);
+  assert.match(panel.innerHTML,/name="after".*value="1100"/);
+  assert.match(panel.innerHTML,/Начни тест после обновления цены в магазине/);
 });
 
 function batch(campaign, importedAt, lines, date = '2026-11-17') {
@@ -132,7 +168,7 @@ test('past campaigns and Kaspi products without ads are reachable without prepar
   panel.click({kaHistory:'history'});
   assert.match(panel.innerHTML,/data-ka-campaign="42:18"/);
   assert.doesNotMatch(panel.innerHTML,/data-ka-campaign="42:19"/);
-  assert.doesNotMatch(panel.expand({kaCampaign:'42:18'}), /class="kaw-cell kaw-bid"/);
+  assert.doesNotMatch(panel.expand({kaCampaign:'42:18'}), /data-ka-bid=/);
   panel.click({kaMode:'catalog'});
   assert.match(panel.innerHTML,/<b>Без рекламы<\/b>/);
   assert.doesNotMatch(panel.innerHTML,/<b>Брелок<\/b>/);

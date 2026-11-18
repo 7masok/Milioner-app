@@ -96,7 +96,7 @@
         const productKey = sku ? 'sku:' + sku : productId || 'name:' + (line.name || 'Неизвестный товар');
         let row = campaign.products.get(productKey);
         if (!row) {
-          row = { productId, sku, name: product?.name || line.name || sku || 'Товар Kaspi', lines: [], last: null };
+          row = { productId, sku, name: product?.name || 'Нет привязки · '+(sku || 'без артикула'), sourceName:line.name || '', lines: [], last: null };
           campaign.products.set(productKey, row);
         }
         if (day >= from && day <= to) {
@@ -198,7 +198,7 @@
     .kaw-caret { flex:none; color:var(--ka-muted); }
     .kaw details[open] > summary .kaw-caret { transform:rotate(180deg); }
     .kaw-product { border-top:1px solid var(--ka-border); margin-left:9px; }
-    .kaw-product-summary.has-stats,.kaw-campaign-summary { display:grid; grid-template-columns:minmax(0,1.5fr) repeat(5,minmax(0,1fr)) 8px; gap:4px; height:46px; min-height:46px; box-sizing:border-box; }
+    .kaw-product-summary.has-stats,.kaw-campaign-summary { display:grid; grid-template-columns:minmax(0,1.5fr) repeat(6,minmax(0,1fr)) 8px; gap:4px; height:46px; min-height:46px; box-sizing:border-box; }
     .kaw-campaign-summary { height:auto; margin-left:9px; }
     .kaw-campaign-summary .kaw-name { display:flex; flex-direction:column; gap:2px; font-size:11px; }
     .kaw-campaign-summary .kaw-name small { font-size:9px; color:var(--ka-muted); overflow:hidden; text-overflow:ellipsis; }
@@ -206,7 +206,8 @@
     .kaw-sort[aria-pressed="true"] { background:#eee8ff; border-color:#d9caff; color:#4b2ca2; font-weight:700; }
     .kaw-product-summary.has-stats .kaw-name { max-height:30px; }
     .kaw-product-summary.has-stats .kaw-name > b { display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden; overflow-wrap:anywhere; white-space:normal; line-height:1.16; }
-    .kaw-product-summary.has-stats .kaw-name:has(.kaw-progress,.kaw-tag) > b { -webkit-line-clamp:1; }
+    .kaw-product-summary .kaw-name.kaw-review > b { color:#a12639; }
+    .kaw-product-summary.has-stats .kaw-name:has(.kaw-progress) > b { -webkit-line-clamp:1; }
     .kaw-product-summary.has-stats .kaw-cell { min-width:0; width:100%; padding-inline:3px; }
     .kaw-product-summary.has-stats .kaw-cell > b { max-width:100%; overflow:hidden; text-overflow:ellipsis; }
     .kaw-product-summary .kaw-tag { display:inline-block; max-width:100%; overflow:hidden; text-overflow:ellipsis; vertical-align:middle; }
@@ -214,6 +215,7 @@
     .kaw-cell > small { color:var(--ka-muted); font-size:9px; }
     .kaw-cell > b { font-size:11px; }
     .kaw-cell.kaw-bid { color:#4b2ca2; background:#eee8ff; border:1px solid #d9caff; font:inherit; cursor:pointer; min-width:40px; }
+    .kaw-cell.kaw-bid:disabled { opacity:.6; cursor:default; }
     .kaw-cell.kaw-bid small { color:inherit; }
     .kaw-panel { padding:0 9px 8px; }
     .kaw-metrics { display:flex; gap:9px 13px; flex-wrap:wrap; margin:4px 0 7px; font-size:11px; color:var(--ka-muted); }
@@ -227,17 +229,30 @@
 
   let days = 30, filter = 'all', mode = 'campaigns', rendered = false, history = false;
   let sortKey = 'spend', sortDirection = 'desc';
-  const sortLabels = {spend:'Расход',clicks:'Клики',orders:'Заказы',bid:'Ставка',profit:'Прибыль'};
+  const sortLabels = {spend:'Расход',clicks:'Клики',orders:'Заказы',bid:'Ставка',price:'Цена',profit:'Прибыль'};
   let data = null, pending = '', failure = false;
   let reportCache = null, search = '', catalogLimit = 50, paint = null;
   let confirmedAdDays = new Set();
   const expanded = new Set(), productExpanded = new Set(), forms = new Set(), detailBodies = new Map();
   const bidRows = new Map(), bidValues = new Map(), bidForms = new Set();
+  const priceRows = new Map(), priceForms = new Set(), priceChanges = new Map();
+  let priceSnapshot = new Map(), priceRequest = null, priceReadAt = 0, priceError = '';
   const productStats = new Map();
   let statsVersion = 0;
   const emptyTests = {};
   const tests = () => state.settings.kaspiPriceTests || emptyTests;
   const root = () => document.getElementById('kaspiCampaignWorkbench');
+
+  function readPrices() {
+    if (!window.kaspiAdvertisingPrices || priceRequest || Date.now()-priceReadAt<2*60000) return;
+    priceReadAt=Date.now();
+    priceRequest=window.kaspiAdvertisingPrices.load().then(snapshot=>{
+      if (!Array.isArray(snapshot.rows)) throw Error('Не удалось загрузить цены Kaspi.');
+      priceSnapshot=new Map(snapshot.rows.map(row=>[String(row.productId),number(row.price)]));
+      priceError='';
+    }).catch(error=>{priceError=error.message || 'Не удалось загрузить цены Kaspi.';})
+      .finally(()=>{priceRequest=null;statsVersion++;draw(false);});
+  }
 
   const statsKey = (campaign,from,to) => JSON.stringify([campaign.key,from,to]);
   function readProductStats(campaigns,from,to) {
@@ -372,19 +387,21 @@
         + ' · все заказы Kaspi, предварительно</div><div class="kaw-note">'+(outcome
           ? 'Прибыль после рекламы в день · '+cash(outcome.before)+' → '+cash(outcome.after)+' (полные дни)'
           : 'Сравнение прибыли появится после сверки полных дней, расходов и выкупов.')+'</div>' : '';
+    const change=priceChanges.get(row.productId);
     const form = item && forms.has(row.productId) && !running ? '<form class="kaw-form" data-ka-test="'+esc(row.productId)+'">'
-      + '<label>Было, ₸<input required type="number" name="before" min="1" step="0.01"></label>'
-      + '<label>Стало, ₸<input required type="number" name="after" min="1" step="0.01"></label>'
+      + '<label>Было, ₸<input required type="number" name="before" min="1" step="0.01" value="'+(change?.before ?? m.price ?? '')+'"></label>'
+      + '<label>Стало, ₸<input required type="number" name="after" min="1" step="0.01" value="'+(change?.after ?? '')+'"></label>'
       + '<label>Дней<input required type="number" name="days" min="1" max="60" value="14"></label>'
-      + '<button class="btn dark" type="submit">Начать</button></form><div class="kaw-note">Введи фактическую цену после изменения в Kaspi.</div>' : '';
+      + '<button class="btn dark" type="submit">Начать</button></form><div class="kaw-note">Цена передаётся через прайс Kaspi. Начни тест после обновления цены в магазине.</div>' : '';
     const controls = item ? '<div class="kaw-toolbar"><button type="button" data-ka-'+(running ? 'finish' : 'open-test')+'="'+esc(row.productId)+'">'+(running ? 'Завершить тест' : 'Тест цены')+'</button></div>' : '';
-    return (row.lines.length ? '<div class="kaw-metrics">'+metrics.map(([label, x])=>'<span>'+label+' <b>'+x+'</b></span>').join('')
+    const identity = row.lines.length ? '<div class="kaw-note">Артикул Kaspi · '+esc(row.sku || 'не указан')+'</div>'
+      +(!item?'<div class="kaw-note">Нет совпадения со складским товаром. Название в выгрузке · '+esc(row.sourceName || 'не указано')+'</div>':'') : '';
+    return identity+(row.lines.length ? '<div class="kaw-metrics">'+metrics.map(([label, x])=>'<span>'+label+' <b>'+x+'</b></span>').join('')
       + '</div>' : '')+(Object.keys(m.partial || {}).length ? '<div class="kaw-note">* Сумма по дням с доступными данными.</div>' : '')
       +(reason?'<div class="kaw-note">'+esc(reason)+'</div>':'')+testInfo+controls+form;
   }
 
   function productCells(row, campaign, m, key) {
-    if (!row.lines.length) return '';
     const cell = (label, description, metric, partial = false) =>
       '<span class="kaw-cell '+(label==='Прибыль'?tone(metric):'')+'" title="'+esc(description+' · '+value(metric)+(partial?' (доступные дни)':''))+'">'
       +'<small>'+label+'</small><b>'+compact(metric)+(partial?'*':'')+'</b></span>';
@@ -397,10 +414,20 @@
         +' aria-label="'+esc('Изменить ставку за клик · '+row.name)+'">'
         +'<small>Ставка ✎</small><b>'+value(currentBid)+'</b></button>'
       : cell('Ставка','Ставка за клик, ₸',m.bid);
+    const priceLocked=active(tests()[row.productId],Date.now());
+    const warehousePrice=number(prod(row.productId)?.kaspiPrice);
+    m.price=number(m.price) ?? (warehousePrice>0?warehousePrice:priceSnapshot.get(row.productId)) ?? null;
+    if (row.productId) priceRows.set(key,{productId:row.productId,price:m.price,sku:kaspiSkus(prod(row.productId) || {}).find(sku=>String(sku || '').trim()) || ''});
+    const price = row.productId
+      ? '<button type="button" class="kaw-cell kaw-bid" data-ka-price="'+esc(key)+'"'+(priceLocked?' disabled':'')
+        +' title="'+(priceLocked?'Идёт тест цены':'Изменить цену в прайсе Kaspi')+'" aria-label="'+esc('Изменить цену · '+row.name)+'">'
+        +'<small>Цена ✎</small><b>'+compact(m.price)+'</b></button>'
+      : cell('Цена','Цена прайса Kaspi, ₸',null);
+    if (!row.lines.length) return price;
     return cell('Расход','Расход, ₸',row.spend)
       + cell('Клики','Клики',count('clicks'),m.clicks == null && count('clicks') != null)
       + cell('Заказы','Рекламные заказы',count('orders'),m.orders == null && count('orders') != null)
-      + bid+cell('Прибыль',m.profit == null ? 'Прибыль после рекламы не рассчитана. Нужны связанные выкупы и себестоимость' : 'Прибыль после рекламы, ₸',m.profit);
+      + bid+price+cell('Прибыль',m.profit == null ? 'Прибыль после рекламы не рассчитана. Нужны связанные выкупы и себестоимость' : 'Прибыль после рекламы, ₸',m.profit);
   }
 
   function renderProduct(row, campaign, m, kind, t, at) {
@@ -415,11 +442,16 @@
       +'<label>Ставка за клик, ₸<input name="bid" type="number" min="3" step="0.01" required value="'+(bidInput.bid ?? '')+'"></label>'
       +'<button class="btn dark" type="submit">Применить</button><button class="btn" type="button" data-ka-bid-cancel="'+esc(key)+'">Отмена</button>'
       +'<span class="kaw-note" role="status"></span></form>' : '';
-    const tag = text?'<span class="kaw-tag" data-kind="'+kind+'">'+text+'</span>':'';
-    return '<details class="kaw-product" data-ka-product="'+esc(key)+'"'+(open?' open':'')+'><summary class="kaw-row kaw-product-summary'+(cells?' has-stats':'')+'" title="'+esc(row.name)+'">'
-      + '<span class="kaw-name"><b>'+esc(row.name)+'</b>'+(running?'<span class="kaw-progress">'+esc(experimentLabel(t,at))+'</span>':'')+(cells?tag:'')+'</span>'
+    const priceInput=priceRows.get(key);
+    const priceEditor=priceForms.has(key) && priceInput ? '<form class="kaw-form" data-ka-price-form="'+esc(key)+'">'
+      +'<label>Цена Kaspi, ₸<input name="price" type="number" min="1" step="0.01" required value="'+(priceInput.price ?? '')+'"></label>'
+      +'<button class="btn dark" type="submit">Сохранить</button><button class="btn" type="button" data-ka-price-cancel="'+esc(key)+'">Отмена</button>'
+      +'<span class="kaw-note" role="status"></span></form><div class="kaw-note">Прайс Kaspi · '+esc(priceInput.sku)+'. Изменение передаётся через прайс.</div>' : '';
+    const tag = text && kind!=='card'?'<span class="kaw-tag" data-kind="'+kind+'">'+text+'</span>':'';
+    return '<details class="kaw-product" data-ka-product="'+esc(key)+'"'+(open?' open':'')+'><summary class="kaw-row kaw-product-summary'+(row.lines.length?' has-stats':'')+'" title="'+esc(row.name)+'">'
+      + '<span class="kaw-name'+(kind==='card'?' kaw-review':'')+'"><b>'+esc(row.name)+'</b>'+(running?'<span class="kaw-progress">'+text+' · '+esc(experimentLabel(t,at))+'</span>':'')+'</span>'
       + cells + (cells?'':tag)+'<span class="kaw-caret" aria-hidden="true">⌄</span></summary>'
-      + '<div class="kaw-panel" data-ka-body'+(open?' data-ka-filled':'')+'>'+(open?body():'')+'</div></details>'+editor;
+      + '<div class="kaw-panel" data-ka-body'+(open?' data-ka-filled':'')+'>'+(open?body():'')+'</div></details>'+editor+priceEditor;
   }
 
   const tone = profit => profit < 0 ? 'kaw-negative' : profit > 0 ? 'kaw-positive' : '';
@@ -494,6 +526,8 @@
       report.prepared = report.rows.map(campaign => {
         const products = [...campaign.products.values()].map(row => {
           const m = campaignMetrics(row,finance,report.claims), t = list[row.productId];
+          const ownPrice=number(prod(row.productId)?.kaspiPrice);
+          m.price=ownPrice>0?ownPrice:priceSnapshot.get(row.productId) ?? null;
           const current=productStats.get(statsKey(campaign,from,to))?.items?.get(row.sku);
           if (current) {
             if (number(current.orders)!==null && current.orders!==m.orders || number(current.spend)!==null && Math.abs(current.spend-row.spend)>.01) {
@@ -566,6 +600,7 @@
       return heading+(!history && group.length ? '<div class="kaw-note">Кампании с активностью в последней выгрузке</div>' : '')
         +(stats.some(record=>record?.pending)?'<div class="kaw-note" role="status">Обновляю заказы и ставки Kaspi…</div>':'')
         +(stats.some(record=>record?.error)?'<div class="kaw-note" role="status">Заказы и ставки не обновлены. '+esc(stats.find(record=>record?.error).error)+'</div>':'')
+        +(priceError?'<div class="kaw-note" role="status">'+esc(priceError)+'</div>':'')
         +(attributionMissing ? '<div class="kaw-note">Для расчёта прибыли нужны номера рекламных заказов, выкупы и себестоимость.</div>' : '')
         +(content || empty(message));
     };
@@ -583,6 +618,7 @@
       + '<div data-ka-content>'+paint()+'</div>';
     [...panel.querySelectorAll('.kaw-toolbar')].slice(0,2).forEach((x,i)=>{x.scrollLeft=scroll[i]||0});
     if (refresh && mode==='campaigns') readProductStats(report.rows.filter(c=>history?!c.latest:c.latest),from,to);
+    if (refresh) readPrices();
   }
 
   function mount(connection) {
@@ -613,6 +649,15 @@
         const b = event.target.closest('button');
         if (!b) return;
         const k = b.dataset;
+        if (k.kaPrice || k.kaPriceCancel) {
+          event.preventDefault();
+          const key=k.kaPrice || k.kaPriceCancel;
+          if (k.kaPriceCancel) priceForms.delete(key);
+          else if (priceRows.has(key)) {priceForms.add(key);bidForms.delete(key);}
+          document.activeElement?.blur();
+          draw(false);
+          return;
+        }
         if (k.kaSort && Object.hasOwn(sortLabels,k.kaSort)) {
           event.preventDefault();
           if (sortKey===k.kaSort) sortDirection=sortDirection==='desc'?'asc':'desc';
@@ -624,7 +669,7 @@
           event.preventDefault();
           const key = k.kaBid || k.kaBidCancel;
           if (k.kaBidCancel) bidForms.delete(key);
-          else if (bidRows.has(key)) bidForms.add(key);
+          else if (bidRows.has(key)) {bidForms.add(key);priceForms.delete(key);}
           document.activeElement?.blur();
           draw(false);
           return;
@@ -648,6 +693,32 @@
         draw(refresh);
       });
       panel.addEventListener('submit', async event => {
+        const priceKey=event.target.dataset.kaPriceForm;
+        if (priceKey) {
+          event.preventDefault();
+          const form=event.target, row=priceRows.get(priceKey);
+          if (!row || form.dataset.saving || !requireWarehouseEditReady()) return;
+          const price=number(new FormData(form).get('price')), status=form.querySelector('[role="status"]');
+          if (!(price>0)) return;
+          if (active(tests()[row.productId],Date.now())) {status.textContent='Сначала заверши текущий тест цены.';return;}
+          const buttons=[...form.querySelectorAll('button,input')];
+          form.dataset.saving='1';
+          buttons.forEach(button=>button.disabled=true);
+          status.textContent='Сохраняю цену…';
+          try {
+            const result=await window.kaspiAdvertisingPrices.save(row.productId,price);
+            priceChanges.set(row.productId,{before:result.previous,after:result.price});
+            priceSnapshot.set(row.productId,result.price);
+            priceForms.delete(priceKey);
+            productExpanded.add(priceKey);
+            forms.add(row.productId);
+            statsVersion++;
+            document.activeElement?.blur();
+            draw(false);
+          } catch (error) {status.textContent=error.message || 'Цена не подтверждена сервером.';}
+          finally {delete form.dataset.saving;buttons.forEach(button=>button.disabled=false);}
+          return;
+        }
         const bidKey = event.target.dataset.kaBidForm;
         if (bidKey) {
           event.preventDefault();
