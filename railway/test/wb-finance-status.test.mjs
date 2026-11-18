@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
 import { wbFinancePeriodSql } from '../src/wb-finance-period.js';
+import { advertisingWithoutProvisionalDuplicates } from '../src/wb-operation-audit.js';
 
 const ui = readFileSync(new URL('../../kaspi-report-v2.js', import.meta.url), 'utf8');
 const api = readFileSync(new URL('../src/reports.js', import.meta.url), 'utf8');
@@ -57,7 +58,11 @@ test('summary endpoint reads finance history and retry metadata without calling 
   const source = api.slice(start, api.indexOf('\nfunction wbAdNmIds', start));
   let handler, payload;
   const queries = [];
-  const context = { wbFinancePeriodSql,
+  const adRows = [0, 123456789].map(updNum => ({
+    day: '2026-10-12', advert_id: '321', amount: 137, payment_type: 'Счет', nm_ids: ['456'],
+    raw_json: JSON.stringify({ updNum, updTime: '2026-10-12T23:59:59+03:00', updSum: 137, paymentType: 'Счет', currency: 'KZT' })
+  }));
+  const context = { wbFinancePeriodSql, advertisingWithoutProvisionalDuplicates,
     reportsRouter: { get: (_path, fn) => { handler = fn; } }, asyncRoute: fn => fn,
     market: x => x, requestPeriodBounds: () => ({ since: now - 86400000, until: now }), dateKey: () => '2026-10-12',
     pool: { async query(sql, params) {
@@ -65,6 +70,7 @@ test('summary endpoint reads finance history and retry metadata without calling 
       if (sql.includes('MAX(rr_date)')) return { rows: [{ lastOperationAt: String(latest) }] };
       if (sql.includes('retry_at')) return { rows: [{ financeOk: 0, retryAt: String(retry) }] };
       if (sql.includes('lastSuccessAt')) return { rows: [{ lastSuccessAt: String(now - 3600000) }] };
+      if (sql.includes('FROM wb_ad_costs')) return { rows: adRows };
       return { rows: [{ financeRowCount: '0', acquiring: '0', delivery: '0', storage: '0', acceptance: '0', deduction: '0',
         penalty: '0', rebill: '0', forPay: '0', additionalPayment: '0', accountAdvertising: '0' }] };
     } }
@@ -74,6 +80,9 @@ test('summary endpoint reads finance history and retry metadata without calling 
   assert.equal(payload.history.lastOperationAt, String(latest));
   assert.equal(payload.sync.retryAt, String(retry));
   assert.equal(payload.financeAvailable, false);
+  assert.equal(payload.advertising, 137);
+  assert.equal(payload.accountAdvertising, 137);
+  assert.equal(payload.netBeforeCost, -137);
   assert.equal(queries.length, 5);
   assert.ok(queries.every(x => /^SELECT/.test(x.sql)));
   assert.ok(queries.every(x => x.params[0] === 'WB2'));

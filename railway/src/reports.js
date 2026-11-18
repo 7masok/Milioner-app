@@ -7,7 +7,7 @@ import { registerProductOrderSeries } from './product-sales-series.js';
 import express from 'express';
 import { pool } from './db.js';
 import { asyncRoute,requireTrustedOrigin } from './http.js';
-import { buildWbOperationAudit } from './wb-operation-audit.js';
+import { advertisingWithoutProvisionalDuplicates, buildWbOperationAudit } from './wb-operation-audit.js';
 import { wbFinancePeriodSql } from './wb-finance-period.js';
 import { wbOrderDay } from './wb-order-advertising.js';
 import { reconcileWbReportProducts } from './wb-report-reconciliation.js';
@@ -305,10 +305,15 @@ reportsRouter.get('/wb-finance-summary', asyncRoute(async (req, res) => {
     pool.query('SELECT MAX(rr_date) AS "lastOperationAt" FROM wb_finance_rows WHERE market=$1',[selected])]);
   const daysList = [];
   for (let time = since; time < until; time += 86_400_000) daysList.push(dateKey(time));
-  const ads = daysList.length ? await pool.query(`SELECT COALESCE(SUM(amount),0) AS advertising,
-    COALESCE(SUM(CASE WHEN lower(payment_type) LIKE '%счет%' OR lower(payment_type) LIKE '%account%' THEN amount ELSE 0 END),0) AS "accountAdvertising"
-    FROM wb_ad_costs WHERE market=$1 AND day = ANY($2::text[])`, [selected, daysList]) : { rows: [{}] };
-  const row = { ...finance.rows[0], ...ads.rows[0] };
+  const ads = daysList.length ? await pool.query(`SELECT day,advert_id,upd_num,amount,payment_type,nm_ids,raw_json
+    FROM wb_ad_costs WHERE market=$1 AND day = ANY($2::text[])`, [selected, daysList]) : { rows: [] };
+  let advertising = 0, accountAdvertising = 0;
+  for (const charge of advertisingWithoutProvisionalDuplicates(ads.rows)) {
+    const amount = Number(charge.amount) || 0;
+    advertising += amount;
+    if (/счет|account/i.test(charge.payment_type)) accountAdvertising += amount;
+  }
+  const row = { ...finance.rows[0], advertising, accountAdvertising };
   const wbCharges = Number(row.delivery) + Number(row.storage) + Number(row.acceptance) + Number(row.deduction) + Number(row.penalty) + Number(row.rebill);
   res.json({ ok: true, market: selected, days, range: { since, until, timezone: 'Asia/Almaty', businessTimezone: 'Europe/Moscow' }, sync: sync.rows[0] || null,
     lastSuccess: lastSuccess.rows[0] || null, history: history.rows[0] || null, financeAvailable: Number(row.financeRowCount || 0) > 0, ...row,
@@ -324,7 +329,7 @@ function wbAdNmIds(value) {
 }
 
 async function resolveWbAdvertising(selected, adRows = []) {
-  const entries = (Array.isArray(adRows) ? adRows : []).map(row => ({
+  const entries = advertisingWithoutProvisionalDuplicates(adRows).map(row => ({
     day: String(row.day || ''), advertId: String(row.advertId || ''), campaign: String(row.campaign || ''),
     paymentType: String(row.paymentType || ''), amount: Math.max(0, Number(row.amount) || 0),
     nmIds: wbAdNmIds(row.nmIds)
@@ -641,7 +646,7 @@ reportsRouter.get('/wb-finance-products', asyncRoute(async (req, res) => {
     WHERE f.market=$1 AND (${wbFinancePeriodSql("f")}) >= $2 AND (${wbFinancePeriodSql("f")}) < $3
     GROUP BY ${daily?daySql+',':''}f.vendor_code,f.nm_id,l.product_id ORDER BY SUM(f.for_pay) DESC`, [selected, since, until]),
     daysList.length
-      ? pool.query('SELECT day,advert_id AS "advertId",campaign,payment_type AS "paymentType",amount,nm_ids AS "nmIds" FROM wb_ad_costs WHERE market=$1 AND day=ANY($2::text[])', [selected, daysList])
+      ? pool.query('SELECT day,advert_id AS "advertId",campaign,payment_type AS "paymentType",amount,nm_ids AS "nmIds",upd_num,raw_json FROM wb_ad_costs WHERE market=$1 AND day=ANY($2::text[])', [selected, daysList])
       : Promise.resolve({ rows: [] })]);
   const attribution = await resolveWbAdvertising(selected, adResult.rows);
   const rows = [...result.rows];
@@ -698,7 +703,7 @@ reportsRouter.get('/wb-ad-link-audit', asyncRoute(async (req, res) => {
   const daysList = [];
   for (let time = since; time < until; time += 86_400_000) daysList.push(dateKey(time));
   const adResult = daysList.length
-    ? await pool.query('SELECT day,advert_id AS "advertId",campaign,payment_type AS "paymentType",amount,nm_ids AS "nmIds" FROM wb_ad_costs WHERE market=$1 AND day=ANY($2::text[]) ORDER BY day DESC,advert_id', [selected, daysList])
+    ? await pool.query('SELECT day,advert_id AS "advertId",campaign,payment_type AS "paymentType",amount,nm_ids AS "nmIds",upd_num,raw_json FROM wb_ad_costs WHERE market=$1 AND day=ANY($2::text[]) ORDER BY day DESC,advert_id', [selected, daysList])
     : { rows: [] };
   const attribution = await resolveWbAdvertising(selected, adResult.rows);
   res.json({ ok: true, market: selected, days, range: { since, until, timezone: 'Asia/Almaty' },

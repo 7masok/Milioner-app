@@ -120,7 +120,7 @@ function adNmIds(value) { const values = Array.isArray(value) ? value : (() => {
 // A provisional updNum=0 can remain in the cache after the same billing entry
 // receives its document number. Suppress only an exact, uniquely confirmed match
 // in this read-only calculation; never merge distinct numbered charges.
-function advertisingWithoutProvisionalDuplicates(rows) {
+export function advertisingWithoutProvisionalDuplicates(rows) {
   const identified = rows.map(row => {
     const raw = object(row.raw_json), document = text(field(raw, ['updNum', 'upd_num'], row.upd_num));
     const time = text(field(raw, ['updTime', 'upd_time'], ''));
