@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
+import vm from 'node:vm';
 
 const html=readFileSync(new URL('../../index.html',import.meta.url),'utf8');
 const cloud=readFileSync(new URL('../../cloud-sync-v3.js',import.meta.url),'utf8');
@@ -16,14 +17,49 @@ test('Home header has final geometry in static HTML',()=>{
   const start=html.indexOf('<header>');
   const end=html.indexOf('</header>',start);
   const header=html.slice(start,end);
-  for(const id of ['aiAssistantButton','stockAlertBell','syncNowButton','kaspiStatusRow','wb1StatusRow','wb2StatusRow','ozonStatusRow','cloudStatus']){
+  for(const id of ['stockAlertBell','syncNowButton','kaspiStatusRow','wb1StatusRow','wb2StatusRow','ozonStatusRow','cloudStatus']){
     assert.match(header,new RegExp('id="'+id+'"'));
   }
   assert.match(header,/class="sync sync-compact" data-compact-built="1"/);
   assert.match(header,/class="head-actions"/);
-  assert.match(html,/#stockAlertBell\.stock-alert-button\{[^}]*flex:0 0 44px/);
-  assert.match(html,/\.compact-cloud\{[^}]*width:132px;min-width:132px;flex:0 0 132px/);
+  assert.doesNotMatch(header,/aiAssistantButton|GPT/);
+  const ai=readFileSync(new URL('../../ai-assistant-v1.js',import.meta.url),'utf8');
+  assert.doesNotMatch(ai,/installButton|aiAssistantButton|insertBefore/);
+  assert.match(html,/#stockAlertBell\.stock-alert-button,#syncNowButton\{[^}]*flex:0 0 32px/);
+  assert.match(html,/\.compact-cloud\{[^}]*width:76px;min-width:76px;flex:0 0 76px/);
   assert.match(html,/#cloudStatus\{[^}]*width:76px;min-width:76px/);
+  assert.match(html,/\.compact-market-stack\{[^}]*flex-direction:row/);
+  assert.match(html,/@media\(prefers-reduced-motion:reduce\)\{header\{transition:none/);
+});
+
+test('header hides on down scroll, returns on up scroll, and ignores bounce and tiny jitter',()=>{
+  const script=html.match(/<script id="warehouse-header-scroll">([\s\S]*?)<\/script>/)?.[1];
+  assert.ok(script);
+  const listeners={},frames=[],classes=new Set();
+  let keyboardFocus=false;
+  const header={offsetHeight:80,querySelector:()=>keyboardFocus?{}:null,
+    classList:{remove:name=>classes.delete(name),toggle:(name,on)=>on?classes.add(name):classes.delete(name)},
+    addEventListener:(name,fn)=>{listeners['header:'+name]=fn}};
+  const window={scrollY:0,innerHeight:600,requestAnimationFrame:fn=>frames.push(fn),
+    addEventListener:(name,fn,options)=>{listeners[name]=fn;if(name==='scroll')assert.equal(options.passive,true)}};
+  const document={documentElement:{scrollHeight:2000},querySelector:()=>header};
+  vm.runInNewContext(script,{window,document});
+  const scroll=y=>{window.scrollY=y;listeners.scroll();frames.splice(0).forEach(fn=>fn());return classes.has('header-away')};
+  assert.equal(scroll(50),false);
+  assert.equal(scroll(160),true);
+  assert.equal(scroll(157),true,'small touch jitter does not reveal the header');
+  assert.equal(scroll(145),false);
+  assert.equal(scroll(300),true);
+  listeners['header:focusin']();assert.equal(classes.has('header-away'),false);
+  keyboardFocus=true;assert.equal(scroll(400),false);
+  keyboardFocus=false;assert.equal(scroll(500),true);
+  assert.equal(scroll(1400),true);
+  assert.equal(scroll(1450),true,'bottom overscroll clamps to page bounds');
+  assert.equal(scroll(1400),true,'return from bottom bounce does not reveal');
+  assert.equal(scroll(1380),false);
+  assert.equal(scroll(-20),false);
+  assert.equal(scroll(300),true);
+  listeners.pageshow();assert.equal(classes.has('header-away'),false);
 });
 
 test('Home paints cached orders and market status before network refresh',()=>{
