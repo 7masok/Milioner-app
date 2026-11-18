@@ -60,6 +60,15 @@ test('Marketing CSV handles quotes, decimal commas and rejects unexpected format
   assert.throws(() => kaspiProductExpenses('SKU;Расход\n1;"broken', '2026-11-14'), /неполный/);
 });
 
+test('campaign diagnostics retain explicit zero clicks and recognize order references only in the advertising order field', () => {
+  const rows = kaspiProductExpenses('SKU;Расход;Показы;Клики;Заказы;Номера заказов по рекламе;Оценка конверсии;Ставка за клик\nA;240;800;33;2;101, 102;6,5;8\nB;0;0;0;0;;—;8\nC;20;—;—;—;неизвестно;—;—', '2026-11-14');
+  assert.deepEqual(rows[0], {date:'2026-11-14',sku:'A',name:'',amount:240,views:800,clicks:33,orders:2,score:6.5,bid:8,orderCodes:['101','102']});
+  assert.deepEqual(rows[1].orderCodes, []);
+  assert.equal(rows[1].clicks, 0);
+  assert.equal(rows[2].clicks, undefined);
+  assert.equal(rows[2].orderCodes, undefined);
+});
+
 test('server-side login verifies the report, renews the session, and imports one closed day after the configured local time', async () => {
   const f = fixture();
   const info = await f.service.connect({ phone: '+7 (700) 000-00-00', password: 'mock-password', shop: 'LUXAR', time: '09:00' });

@@ -1,0 +1,440 @@
+(function () {
+  'use strict';
+
+  const DAY = 86400000;
+  const OFFSET = 5 * 3600000;
+  const LIMIT = 15000;
+  const countKeys = ['views', 'clicks', 'carts', 'orders'];
+  const actions = {
+    lower: 'Снизить ставку', raise: 'Можно поднять', price: 'Тест цены',
+    keep: 'Оставить', unknown: 'Мало данных', test: 'В тесте', card: 'Проверить карточку',
+  };
+  const iso = at => new Date(at + OFFSET).toISOString().slice(0, 10);
+  const dayStart = day => Date.parse(day + 'T00:00:00+05:00');
+  const number = x => x != null && x !== '' && Number.isFinite(Number(x)) ? Number(x) : null;
+  const sum = (rows, key) => rows.every(row => number(row[key]) !== null)
+    ? rows.reduce((total, row) => total + Number(row[key]), 0) : null;
+  const format = new Intl.NumberFormat('ru-RU', { maximumFractionDigits: 2 });
+  const value = (x, suffix = '') => x == null ? '—' : format.format(x) + suffix;
+  const cash = x => value(x, ' ₸');
+  const testEnd = t => Math.min(t.startedAt + t.days * DAY, t.stoppedAt || Infinity);
+  const active = (t, at) => !!t && at >= t.startedAt && at < testEnd(t);
+  const baselineStart = t => t.startedAt - Math.ceil(t.days / 7) * 7 * DAY;
+
+  function coverageIncludes(data, from, to) {
+    const c = data?.historyCoverage?.find(row => row.market === 'Kaspi');
+    return !!c && Number(c.from) > 0 && c.from <= from && c.to >= to
+      && ![...(c.gaps || []), ...(c.repairs || [])].some(g => g.from < to && g.to > from);
+  }
+
+  function experiment(t, snapshot, at) {
+    const end = Math.min(testEnd(t), at);
+    const baseline = baselineStart(t);
+    const baselineEnd = baseline + end - t.startedAt;
+    const before = new Set(), after = new Set();
+    for (const row of snapshot?.orders || []) {
+      if (row.market !== 'Kaspi' || String(row.orderedProductId || row.productId || '') !== t.productId) continue;
+      const when = Number(row.creationDate);
+      const key = String(row.orderId || row.code || '');
+      if (!key) continue;
+      if (when >= baseline && when < baselineEnd) before.add(key);
+      if (when >= t.startedAt && when < end) after.add(key);
+    }
+    const compare = snapshot?.orders?.length < LIMIT
+      && coverageIncludes(snapshot, baseline, baselineEnd);
+    const complete = compare && coverageIncludes(snapshot, t.startedAt, end);
+    return {
+      before: compare ? before.size : null,
+      after: complete || compare && after.size > 0 ? after.size : null,
+      observedAfter: after.size || null,
+      percent: compare && (complete || after.size > 0) && before.size > 0 ? Math.round((after.size / before.size - 1) * 100) : null,
+      day: Math.max(1, Math.min(t.days, Math.floor((Math.max(t.startedAt, end - 1) - t.startedAt) / DAY) + 1)),
+    };
+  }
+
+  function campaignRows(batches, from, to, match, tests) {
+    const campaigns = new Map(), snapshots = new Set(), nativeBySource = new Map();
+    const ordered = [...batches].sort((a, b) => Number(b.importedAt) - Number(a.importedAt));
+    for (const batch of ordered) {
+      const match = /^kaspi-auto-(\d+)-(\d+)-\d{4}-\d{2}-\d{2}$/.exec(String(batch.id));
+      if (!match || !batch.sourceKey) continue;
+      const native = nativeBySource.get(batch.sourceKey) || new Set();
+      native.add(match[1] + ':' + match[2]);
+      nativeBySource.set(batch.sourceKey, native);
+    }
+    for (const batch of ordered) {
+      const [, account, nativeId] = /^kaspi-auto-(\d+)-(\d+)-\d{4}-\d{2}-\d{2}$/.exec(String(batch.id)) || [];
+      const campaignId = batch.campaignId || nativeId;
+      const manual = !campaignId;
+      const mapped = nativeBySource.get(batch.sourceKey);
+      const key = manual ? (mapped?.size === 1 ? [...mapped][0] : 'manual:' + (batch.sourceKey || batch.campaignName || batch.fileName || batch.id))
+        : String(batch.accountId || account || '') + ':' + campaignId;
+      if (!campaigns.has(key)) campaigns.set(key, {
+        key, manual, name: batch.campaignName || batch.fileName || 'Кампания Kaspi', products: new Map(), spend: 0, hasDay: false,
+      });
+      const campaign = campaigns.get(key);
+      const covered = new Set();
+      for (const line of batch.lines || []) {
+        const day = line.date || batch.fromDate;
+        const sku = String(line.sku || '').trim();
+        const product = match(line);
+        const productId = product ? String(product.id) : '';
+        if (!(day >= from && day <= to) && !tests[productId]) continue;
+        const productKey = sku ? 'sku:' + sku : productId || 'name:' + (line.name || 'Неизвестный товар');
+        const id = JSON.stringify([key, day]);
+        if (snapshots.has(id)) continue;
+        let row = campaign.products.get(productKey);
+        if (!row) {
+          row = { productId, sku, name: product?.name || line.name || sku || 'Товар Kaspi', lines: [], last: null };
+          campaign.products.set(productKey, row);
+        }
+        if (day >= from && day <= to) {
+          const dated = {...line, day};
+          row.lines.push(dated);
+          row.spend = (row.spend || 0) + (Number(line.amount) || 0);
+          campaign.spend += Number(line.amount) || 0;
+          campaign.hasDay = true;
+          if (!row.last || day > row.last.day) row.last = dated;
+        }
+        covered.add(id);
+      }
+      if (batch.lines?.length || !manual) {
+        const start = Math.max(dayStart(from), dayStart(batch.fromDate));
+        const end = Math.min(dayStart(to), dayStart(batch.toDate || batch.fromDate));
+        for (let d = start; d <= end; d += DAY) covered.add(JSON.stringify([key,iso(d)]));
+      }
+      if (!batch.lines?.length && batch.fromDate >= from && (batch.toDate || batch.fromDate) <= to && batch.fromDate) {
+        const id = JSON.stringify([key, batch.fromDate, batch.toDate || batch.fromDate, 'total']);
+        const hasOverlap = [...covered].some(day => snapshots.has(day));
+        if (!hasOverlap && !snapshots.has(id)) {
+          snapshots.add(id);
+          campaign.spend += Number(batch.amount) || 0;
+          campaign.hasDay = true;
+          if (Number(batch.amount) > 0) campaign.hasUnallocated = true;
+        }
+      }
+      for (const id of covered) snapshots.add(id);
+    }
+    return [...campaigns.values()].sort((a, b) => b.spend - a.spend || a.name.localeCompare(b.name, 'ru'));
+  }
+
+  function campaignMetrics(row, finance, claims) {
+    if (!row.lines.length) return {};
+    const out = Object.fromEntries(countKeys.map(k => [k, sum(row.lines, k)]));
+    out.cpc = out.clicks > 0 ? row.spend / out.clicks : null;
+    out.score = number(row.last?.score);
+    out.bid = number(row.last?.bid);
+    out.averageBid = number(row.last?.averageBid);
+    const withRefs = row.lines.every(line => Number.isSafeInteger(line.orders)
+      && Array.isArray(line.orderCodes) && line.orders === line.orderCodes.length);
+    const codes = [...new Set(row.lines.flatMap(line => line.orderCodes || []))];
+    if (!withRefs || !row.productId || !finance || codes.some(code => claims.get(code + '|' + row.productId) !== 1)) return out;
+
+    let margin = 0, buyouts = 0;
+    for (const code of codes) {
+      if (finance.returned.has(code)) return out;
+      const order = finance.byCode.get(code);
+      if (!order) return out;
+      const lines = order.lines.filter(line => String(line.productId) === row.productId);
+      if (!lines.length || lines.some(line => line.unknownCost)) return out;
+      margin += lines.reduce((total, line) => total + line.profit, 0);
+      buyouts++;
+    }
+    out.buyouts = buyouts;
+    out.profit = margin - row.spend;
+    if (buyouts > 0 && out.clicks > 0) out.maxCpc = Math.max(0, margin / out.clicks);
+    return out;
+  }
+
+  function advice(m, item, test, at) {
+    if (active(test, at)) return 'test';
+    if (m.clicks >= 30 && m.profit < 0 && m.profit != null) return 'lower';
+    if (m.clicks >= 30 && m.orders != null && m.orders / m.clicks < 0.02 && m.score != null && m.score < 7) return 'price';
+    if (m.views >= 500 && m.clicks != null && m.clicks / m.views < 0.01) return 'card';
+    if (m.buyouts >= 5 && m.profit > 0 && m.maxCpc > m.cpc * 1.25 && m.bid != null
+      && m.averageBid > m.bid && m.views != null && m.views < 500 && item && productAvailableStock(item) > 0) return 'raise';
+    return m.clicks >= 30 && m.profit != null ? 'keep' : 'unknown';
+  }
+
+  const css = document.createElement('style');
+  css.textContent = `
+    .kaw { --ka-ink:#171826; --ka-muted:#5e6176; --ka-border:#e5e6ef; --ka-violet:#6743cf; color:var(--ka-ink); }
+    .kaw-toolbar { display:flex; gap:7px; overflow-x:auto; padding:2px 0 7px; align-items:center; scrollbar-width:thin; }
+    .kaw-toolbar > * { flex:none; white-space:nowrap; }
+    .kaw-toolbar button { border:1px solid var(--ka-border); border-radius:9px; min-height:36px; padding:4px 11px; background:white; color:var(--ka-ink); font:inherit; font-size:12px; }
+    .kaw-toolbar button[aria-pressed="true"] { background:#eee8ff; color:#4b2ca2; border-color:#d9caff; font-weight:700; }
+    .kaw-overview { display:flex; justify-content:space-between; align-items:center; gap:8px; padding:9px 10px; margin:3px 0 7px; background:#f3efff; border-radius:10px; font-size:12px; }
+    .kaw-note { color:var(--ka-muted); font-size:11px; margin:5px 0; }
+    .kaw-campaign { background:white; border:1px solid var(--ka-border); border-radius:10px; margin:5px 0; }
+    .kaw summary { list-style:none; cursor:pointer; }
+    .kaw summary::-webkit-details-marker { display:none; }
+    .kaw-row { display:flex; gap:8px; align-items:center; padding:8px 9px; min-height:39px; font-size:12px; }
+    .kaw-name { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+    .kaw-progress { display:block; overflow:hidden; text-overflow:ellipsis; font-size:10px; color:var(--ka-muted); }
+    .kaw-money, .kaw-tag { flex:none; white-space:nowrap; }
+    .kaw-tag { color:#4b2ca2; background:#f2edff; border-radius:6px; padding:3px 5px; font-size:10px; }
+    .kaw-tag[data-kind="lower"],.kaw-negative { color:#a12639; }
+    .kaw-tag[data-kind="raise"],.kaw-positive { color:#166744; }
+    .kaw-tag[data-kind="unknown"] { color:var(--ka-muted); background:#f2f2f6; }
+    .kaw-caret { flex:none; color:var(--ka-muted); }
+    .kaw details[open] > summary .kaw-caret { transform:rotate(180deg); }
+    .kaw-product { border-top:1px solid var(--ka-border); margin-left:9px; }
+    .kaw-panel { padding:0 9px 8px; }
+    .kaw-metrics { display:flex; gap:9px 13px; flex-wrap:wrap; margin:4px 0 7px; font-size:11px; color:var(--ka-muted); }
+    .kaw-metrics b { color:var(--ka-ink); }
+    .kaw-form { display:flex; align-items:end; gap:6px; margin:7px 0; overflow:auto; padding-bottom:4px; }
+    .kaw-form label { flex:none; font-size:11px; color:var(--ka-muted); }
+    .kaw-form input,.kaw-form select { display:block; width:76px; margin-top:3px; height:37px; border:1px solid var(--ka-border); border-radius:8px; padding:4px 5px; font-size:13px; background:white; }
+    .kaw-form button { flex:none; white-space:nowrap; }
+  `;
+  document.head.append(css);
+
+  let days = 30, filter = 'all', mode = 'campaigns', rendered = false;
+  let data = null, pending = '', failure = false;
+  let confirmedAdDays = new Set();
+  const expanded = new Set(), productExpanded = new Set(), forms = new Set();
+  const tests = () => state.settings.kaspiPriceTests || {};
+  const root = () => document.getElementById('kaspiCampaignWorkbench');
+
+  function readAnalytics(from, to, list, at) {
+    const activeOrRecent = Object.values(list).filter(t => t?.startedAt > 0 && at - t.startedAt < 90 * DAY);
+    const earliest = Math.min(dayStart(from), ...activeOrRecent.map(baselineStart));
+    const financeFrom = iso(earliest);
+    const key = JSON.stringify([from, to, earliest, Math.floor(at / 60000)]);
+    if (pending === key || data?.key === key) return;
+    pending = key;
+    const query = new URLSearchParams({ market: 'Kaspi', after: Math.floor(earliest), before: Math.floor(at), limit: LIMIT, history: 1 });
+    const analytics = state.kaspiAdExpenses?.some(batch => batch.lines?.some(line => line.date >= from && line.date <= to && line.orderCodes?.length));
+    const requests = [
+      activeOrRecent.length ? apiJson(MILLIONER_API + '/api/orders?' + query) : Promise.resolve(null),
+      (analytics || activeOrRecent.length) && typeof window.loadKaspiCampaignFinance === 'function'
+        ? window.loadKaspiCampaignFinance({from:financeFrom,to:iso(at)}) : Promise.resolve(null),
+    ];
+    Promise.allSettled(requests).then(([orders, snapshot]) => {
+      if (pending !== key) return;
+      const snap = snapshot.status === 'fulfilled' ? snapshot.value : null;
+      let finance = null;
+      if (snap && !snap.historyIncomplete) {
+        try {
+          const byCode = new Map();
+          for (const order of snap.buyouts || []) {
+            for (const code of [order.code, order.id].filter(Boolean)) byCode.set(String(code), order);
+          }
+          const returned = new Set((snap.returns || []).flatMap(x => [x.code,x.id,x.orderCode,x.orderId].filter(Boolean)).map(String));
+          if (!(snap.returns || []).some(x => !x.code && !x.id && !x.orderCode && !x.orderId)) finance = {byCode,returned};
+        } catch {}
+      }
+      data = {key, from, to, orders:orders.status === 'fulfilled' ? orders.value : null, finance};
+      failure = orders.status === 'rejected' || snapshot.status === 'rejected';
+      pending = '';
+      draw(false);
+    });
+  }
+
+  function experimentLabel(t, at) {
+    const result = experiment(t, data?.orders, at);
+    if (result.after == null) return result.observedAfter == null ? 'Ждём данные заказов' : result.observedAfter + ' заказов видно';
+    const delta = result.percent == null ? result.before + ' → ' + result.after
+      : (result.percent > 0 ? '+' : '') + result.percent + '%';
+    return result.after + ' заказов · ' + delta;
+  }
+
+  function testProfit(t, at) {
+    if (!data?.finance || !data.orders || data.orders.orders.length >= LIMIT) return null;
+    const testStart = Math.ceil((t.startedAt + OFFSET) / DAY) * DAY - OFFSET;
+    const end = dayStart(iso(Math.min(testEnd(t), at)));
+    if (end <= testStart) return null;
+    const beforeStart = testStart - (t.startedAt - baselineStart(t));
+    const beforeEnd = beforeStart + end - testStart;
+    function profit(from, until) {
+      if (!coverageIncludes(data.orders, from, until)) return null;
+      for (let d=from; d<until; d+=DAY) if (!confirmedAdDays.has(iso(d))) return null;
+      const rows = data.orders.orders.filter(row => row.market==='Kaspi' && Number(row.creationDate)>=from
+        && Number(row.creationDate)<until && String(row.orderedProductId || row.productId || '')===t.productId);
+      const counted = new Set();
+      let margin = 0;
+      for (const row of rows) {
+        const code = String(row.code || row.orderId || '');
+        if (!code || data.finance.returned.has(code) || data.finance.returned.has(String(row.orderId))) return null;
+        if (counted.has(code)) continue;
+        counted.add(code);
+        if (String(row.status).toUpperCase()==='CANCELLED') continue;
+        const buyout = data.finance.byCode.get(code) || data.finance.byCode.get(String(row.orderId));
+        const lines = buyout?.lines.filter(line=>String(line.productId)===t.productId);
+        if (!lines?.length || lines.some(line=>line.unknownCost)) return null;
+        margin += lines.reduce((total,line)=>total+line.profit,0);
+      }
+      const campaigns = campaignRows(state.kaspiAdExpenses || [], iso(from), iso(until - 1), kaspiAdsMatchProduct, {});
+      if (campaigns.some(c=>c.hasUnallocated || [...c.products.values()].some(x=>x.spend > 0 && !x.productId))) return null;
+      for (const c of campaigns) for (const row of c.products.values()) if (row.productId === t.productId) margin -= row.spend || 0;
+      return margin / ((until - from) / DAY);
+    }
+    const before = profit(beforeStart,beforeEnd), after = profit(testStart,end);
+    return before == null || after == null ? null : {before,after};
+  }
+
+  function renderProduct(row, campaign, m, kind, t, at) {
+    const item = prod(row.productId);
+    const key = JSON.stringify([campaign.key, row.sku, row.productId, row.name]);
+    const running = active(t, at);
+    const token = productExpanded.has(key) ? ' open' : '';
+    const text = running ? 'День ' + experiment(t, data?.orders, at).day + '/' + t.days : actions[kind];
+    const metrics = [
+      ['Расход', cash(row.lines.length ? row.spend : null)], ['Показы', value(m.views)],
+      ['Клики', value(m.clicks)], ['Корзины', value(m.carts)], ['Рекл. заказы', value(m.orders)],
+      ['В выкупе', value(m.buyouts)], ['Цена клика', cash(m.cpc)], ['Окупается до', cash(m.maxCpc)], ['Оценка Kaspi', value(m.score)],
+    ];
+    if (m.bid != null) metrics.push(['Ставка', cash(m.bid)]);
+    const suggested = kind === 'lower' && m.maxCpc != null ? Math.floor(m.maxCpc * .85)
+      : kind === 'raise' ? Math.floor(Math.min(m.bid * 1.1, m.maxCpc * .85)) : null;
+    const reason = {
+      lower: suggested >= 3 ? 'Попробуй ставку до ' + cash(suggested) + '. Оставили запас до порога окупаемости.'
+        : 'Расход выше прибыли по выкупам. Проверь ставку и окупаемость перед продолжением.',
+      raise: suggested > m.bid ? 'Можно попробовать ' + cash(suggested) + '. Товар окупается, а ставка ниже средней по категории.'
+        : 'Показы редкие, а ставка ниже средней по категории. Проверь доступность и дневной бюджет.',
+      price: 'По товару кликают, но редко заказывают. Проверь цену в выдаче перед тестом.',
+      card: 'Товар часто видят, но редко открывают. Проверь главное фото и цену в выдаче.',
+    }[kind];
+    const outcome = t ? testProfit(t,at) : null;
+    const testInfo = t
+      ? '<div class="kaw-note"><b>'+ (running ? 'Тест цены' : 'Тест завершён') + ' · '+ cash(t.before) + ' → ' + cash(t.after) + '</b> · ' + esc(experimentLabel(t, at))
+        + ' · все заказы Kaspi, предварительно</div><div class="kaw-note">'+(outcome
+          ? 'Прибыль после рекламы в день · '+cash(outcome.before)+' → '+cash(outcome.after)+' (полные дни)'
+          : 'Сравнение прибыли появится после сверки полных дней, расходов и выкупов.')+'</div>' : '';
+    const form = item && forms.has(row.productId) && !running ? '<form class="kaw-form" data-ka-test="'+esc(row.productId)+'">'
+      + '<label>Было, ₸<input required type="number" name="before" min="1" step="0.01"></label>'
+      + '<label>Стало, ₸<input required type="number" name="after" min="1" step="0.01"></label>'
+      + '<label>Дней<input required type="number" name="days" min="1" max="60" value="14"></label>'
+      + '<button class="btn dark" type="submit">Начать</button></form><div class="kaw-note">Введи фактическую цену после изменения в Kaspi.</div>' : '';
+    const controls = item ? '<div class="kaw-toolbar"><button type="button" data-ka-'+(running ? 'finish' : 'open-test')+'="'+esc(row.productId)+'">'+(running ? 'Завершить тест' : 'Тест цены')+'</button></div>' : '';
+    return '<details class="kaw-product" data-ka-product="'+esc(key)+'"'+token+'><summary class="kaw-row" title="'+esc(row.name)+'">'
+      + '<span class="kaw-name"><b>'+esc(row.name)+'</b>'+(running?'<span class="kaw-progress">'+esc(experimentLabel(t,at))+'</span>':'')+'</span>'
+      + '<b class="kaw-money '+tone(m.profit)+'">'+cash(m.profit)+'</b>'
+      + '<span class="kaw-tag" data-kind="'+kind+'">'+text+'</span><span class="kaw-caret" aria-hidden="true">⌄</span></summary>'
+      + '<div class="kaw-panel"><div class="kaw-metrics">'+metrics.map(([label, x])=>'<span>'+label+' <b>'+x+'</b></span>').join('')
+      + '</div>'+(reason?'<div class="kaw-note">'+esc(reason)+'</div>':'')+testInfo+controls+form+'</div></details>';
+  }
+
+  const tone = profit => profit < 0 ? 'kaw-negative' : profit > 0 ? 'kaw-positive' : '';
+  function button(attr, id, label, chosen) {
+    return '<button type="button" data-ka-'+attr+'="'+id+'" aria-pressed="'+(chosen === id)+'">'+label+'</button>';
+  }
+
+  function draw(refresh = true) {
+    const panel = root();
+    if (!panel || panel.closest('[hidden]')) return;
+    if (panel.contains(document.activeElement) && document.activeElement.closest('form')) return;
+    const at = Date.now(), from = iso(at - days * DAY), to = iso(at - DAY), list = tests();
+    const rows = campaignRows(state.kaspiAdExpenses || [], from, to, kaspiAdsMatchProduct, list);
+    if (refresh) readAnalytics(from, to, list, at);
+    const claims = new Map();
+    for (const campaign of rows) for (const row of campaign.products.values()) {
+      for (const code of new Set(row.lines.flatMap(line => line.orderCodes || []))) {
+        const k = code + '|' + row.productId;
+        claims.set(k, (claims.get(k) || 0) + 1);
+      }
+    }
+    const totalSpend = rows.reduce((a,x)=>a+x.spend,0);
+    const hasClickData = rows.some(campaign => [...campaign.products.values()].some(row =>
+      row.lines.some(line => number(line.clicks) !== null)));
+    const prepared = rows.map(campaign => {
+      const products = [...campaign.products.values()].map(row => {
+        const m = campaignMetrics(row, data?.from === from && data?.to === to ? data.finance : null, claims), t = list[row.productId];
+        return {row,m,t,kind:advice(m,prod(row.productId),t,at)};
+      }).sort((a,b)=>(a.m.profit ?? Infinity)-(b.m.profit ?? Infinity) || (b.row.spend||0)-(a.row.spend||0));
+      const inPeriod = products.filter(x=>x.row.lines.length);
+      const profit = campaign.hasDay && !campaign.hasUnallocated && inPeriod.length ? sum(inPeriod.map(x=>x.m),'profit') : null;
+      return {campaign,products,profit};
+    }).sort((a,b)=>(a.profit??Infinity)-(b.profit??Infinity) || b.campaign.spend-a.campaign.spend);
+    const renderRow = (x,c) => renderProduct(x.row,c,x.m,x.kind,x.t,at);
+    const filters = {all:'Все', lower:'Снизить', raise:'Поднять', price:'Тест цены', card:'Карточка', keep:'Оставить', unknown:'Мало данных', test:'В тесте'};
+    let content;
+    if (mode === 'tests') {
+      content = Object.values(list).filter(t=>filter !== 'test' || active(t,at)).map(t=>({
+        row:{productId:t.productId,sku:'',name:prod(t.productId)?.name||t.name,lines:[]},m:{},t,
+        kind:active(t,at)?'test':'unknown',campaign:{key:'tests'},
+      })).map(x=>renderRow(x,x.campaign)).join('');
+    } else {
+      content = prepared.map(({campaign,products,profit})=>{
+        const visible = products.filter(x => filter === 'all' || x.kind === filter);
+        if (filter !== 'all' && !visible.length) return '';
+        const hint = ['test','lower','price','raise','card','keep','unknown'].find(k=>visible.some(x=>x.kind===k));
+        return '<details class="kaw-campaign" data-ka-campaign="'+esc(campaign.key)+'"'+(expanded.has(campaign.key)?' open':'')
+          + '><summary class="kaw-row" title="'+esc(campaign.name)+'"><b class="kaw-name">'+esc(campaign.name)+'</b>'
+          + '<span class="kaw-money" title="Расход">'+cash(campaign.hasDay?campaign.spend:null)+'</span>'
+          + '<b class="kaw-money '+tone(profit)+'" title="Прибыль после рекламы">'+cash(profit)+'</b>'
+          + (hint?'<span class="kaw-tag" data-kind="'+hint+'">'+actions[hint]+'</span>':'')
+          + '<span class="kaw-caret" aria-hidden="true">⌄</span></summary>'
+          + (campaign.manual?'<div class="kaw-panel kaw-note">Старый импорт</div>':'')
+          + (visible.length?visible.map(x=>renderRow(x,campaign)).join(''):'<div class="kaw-panel kaw-note">Нет разбивки по товарам за период.</div>')+'</details>';
+      }).join('');
+    }
+    const scroll = [...panel.querySelectorAll('.kaw-toolbar')].slice(0,2).map(x=>x.scrollLeft);
+    panel.innerHTML = '<div class="kaw-toolbar" aria-label="Период и вид">'
+      + [7,14,30].map(d=>button('days',String(d),d+' дней',String(days))).join('')
+      + button('mode','campaigns','Кампании',mode)+button('mode','tests','Тесты',mode)+'</div>'
+      + '<div class="kaw-toolbar" aria-label="Рекомендации">'+Object.entries(filters).map(([key,label])=>button('filter',key,label,filter)).join('')+'</div>'
+      + '<div class="kaw-overview"><span>'+from.slice(5).split('-').reverse().join('.')+' – '+to.slice(5).split('-').reverse().join('.')+'</span>'
+      + '<b>Расход '+cash(rows.some(x=>x.hasDay)?totalSpend:null)+'</b><span>Прибыль после рекламы</span></div>'
+      + (rows.some(x=>x.hasDay) && !hasClickData ? '<div class="kaw-note">За этот период пока есть только расходы. Клики и подсказки появятся, когда Kaspi передаст статистику.</div>' : '')
+      + (failure ? '<div class="kaw-note" role="status">Не удалось обновить часть статистики.</div>' : '')
+      + (content || '<div class="empty">Нет подходящих данных за период</div>');
+    [...panel.querySelectorAll('.kaw-toolbar')].slice(0,2).forEach((x,i)=>{x.scrollLeft=scroll[i]||0});
+  }
+
+  function mount(connection) {
+    const panel = root();
+    if (!panel) return;
+    if (connection?.confirmedDays) confirmedAdDays = new Set(connection.confirmedDays);
+    if (!rendered) {
+      rendered = true;
+      panel.addEventListener('toggle', event => {
+        const {kaCampaign,kaProduct} = event.target.dataset || {};
+        const target = kaCampaign ? expanded : productExpanded, key = kaCampaign || kaProduct;
+        if (key) event.target.open ? target.add(key) : target.delete(key);
+      }, true);
+      panel.addEventListener('click', event => {
+        const b = event.target.closest('button');
+        if (!b) return;
+        const k = b.dataset;
+        if (k.kaDays) days = Number(k.kaDays);
+        else if (k.kaMode) { mode = k.kaMode; filter = 'all'; }
+        else if (k.kaFilter) { filter = k.kaFilter; mode = filter === 'test' ? 'tests' : 'campaigns'; }
+        else if (k.kaOpenTest) forms.has(k.kaOpenTest) ? forms.delete(k.kaOpenTest) : forms.add(k.kaOpenTest);
+        else if (k.kaFinish) {
+          if (!requireWarehouseEditReady()) return;
+          const t = tests()[k.kaFinish];
+          if (active(t,Date.now())) { t.stoppedAt = Date.now(); save(); }
+        } else return;
+        draw();
+      });
+      panel.addEventListener('submit', event => {
+        const productId = event.target.dataset.kaTest;
+        if (!productId) return;
+        event.preventDefault();
+        if (!requireWarehouseEditReady()) return;
+        const item = prod(productId), at = Date.now();
+        if (!item || active(tests()[productId],at)) return;
+        const input = new FormData(event.target), before = number(input.get('before')), after = number(input.get('after'));
+        const length = Number(input.get('days'));
+        if (!(before > 0 && after > 0) || before === after || !Number.isInteger(length) || length < 1 || length > 60) {
+          const field = event.target.elements.after;
+          field.setCustomValidity('Укажи новую цену, отличную от прежней.');
+          field.addEventListener('input',()=>field.setCustomValidity(''),{once:true});
+          field.reportValidity();
+          return;
+        }
+        state.settings.kaspiPriceTests ||= {};
+        state.settings.kaspiPriceTests[productId] = {productId,name:item.name,before,after,days:length,startedAt:at};
+        forms.delete(productId);
+        data = null;
+        document.activeElement?.blur();
+        save();
+        draw();
+      });
+    }
+    draw();
+  }
+
+  window.renderKaspiCampaignWorkbench = mount;
+})();
