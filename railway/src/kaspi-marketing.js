@@ -215,6 +215,7 @@ export function createKaspiMarketingService({
 } = {}) {
   let tail = Promise.resolve();
   let lastCoverageScanAt = 0;
+  const productStatsCache = new Map();
   const locked = fn => {
     const pending = tail.then(fn);
     tail = pending.catch(() => {});
@@ -480,6 +481,57 @@ export function createKaspiMarketingService({
 
   return {
     state: async () => view(await read()),
+    products: input => locked(async () => {
+      const accountId=String(input?.accountId || ''), campaignId=String(input?.campaignId || '');
+      const from=String(input?.from || ''), to=String(input?.to || '');
+      const dates=[from,to].map(day=>Date.parse(day+'T00:00:00Z'));
+      if (!/^\d+$/.test(accountId) || !/^\d+$/.test(campaignId)
+        || [from,to].some((day,i)=>!/^\d{4}-\d{2}-\d{2}$/.test(day) || !Number.isFinite(dates[i]) || new Date(dates[i]).toISOString().slice(0,10)!==day)
+        || from>to || to>localDay(now()) || dates[1]-dates[0]>30*DAY) throw fail('Проверьте магазин, кампанию и период до 31 дня',400);
+      const data=await read();
+      if (!data?.account || data.reconnect) throw fail('Подключите Kaspi Маркетинг',409);
+      if (String(data.account.id)!==accountId) throw fail('Подключён другой магазин Kaspi',409);
+      const key=JSON.stringify([accountId,data.account.profileId,campaignId,from,to]);
+      const cached=productStatsCache.get(key);
+      if (cached && now()-cached.updatedAt<5*60_000) return cached;
+      if (data.providerRetryAt>now()) throw fail('Дождитесь окончания ограничения Kaspi',429,{retryAt:data.providerRetryAt});
+      const query=new URLSearchParams({StartDate:from,EndDate:to});
+      const path=ADS_API+'v5/merchant/'+accountId+'/campaign/'+campaignId+'/products?'+query;
+      let result;
+      try {
+        try { result=await request(path,data.cookies); }
+        catch (error) {
+          if (error.status!==401) throw error;
+          Object.assign(data,await login(data));
+          result=await request(path,data.cookies);
+        }
+      } catch (error) {
+        if (error.status===429) {
+          data.providerRetryAt=Math.max(now()+RETRY,Number(error.retryAt)||0);
+          await write(data);
+        }
+        throw error;
+      }
+      if (!Array.isArray(result) || result.length>15000 || result.some(row=>row?.sku==null || !String(row.sku).trim())
+        || new Set(result.map(row=>String(row.sku))).size!==result.length) throw fail('Kaspi вернул неподтверждённую статистику товаров',502);
+      const fields={views:'views',clicks:'clicks',carts:'carts',orders:'transactions',bid:'bid',cpc:'avgCpc',score:'score',spend:'cost'};
+      const products=result.map(row=>{
+        const item={sku:String(row.sku)};
+        for (const [target,source] of Object.entries(fields)) {
+          const raw=row[source], value=Number(raw);
+          if (!['number','string'].includes(typeof raw) || String(raw).trim()==='' || !Number.isFinite(value) || value<0) continue;
+          if (['views','clicks','carts','orders'].includes(target) && !Number.isSafeInteger(value)) continue;
+          if (target==='score' && (value<1 || value>10)) continue;
+          item[target]=value;
+        }
+        return item;
+      });
+      const snapshot={ok:true,accountId,campaignId,from,to,updatedAt:now(),products};
+      await write(data);
+      for (const [id,entry] of productStatsCache) if (now()-entry.updatedAt>=5*60_000) productStatsCache.delete(id);
+      productStatsCache.set(key,snapshot);
+      return snapshot;
+    }),
     setBid: input => locked(async () => {
       const accountId = String(input?.accountId || ''), campaignId = String(input?.campaignId || '');
       const sku = String(input?.sku || '').trim(), bid = Number(input?.bid);
@@ -505,6 +557,7 @@ export function createKaspiMarketingService({
       await write(data);
       const product = Array.isArray(result) ? result.find(row => String(row?.sku) === sku) : null;
       if (!product || Number(product.bid) !== bid) throw fail('Kaspi не подтвердил новую ставку. Проверьте её в кабинете перед повтором.', 502);
+      productStatsCache.clear();
       return {ok:true,accountId,campaignId,sku,bid};
     }),
     connect: input => locked(async () => {
@@ -564,6 +617,7 @@ const service = createKaspiMarketingService();
 export const kaspiMarketingRouter = express.Router();
 kaspiMarketingRouter.use(noStore, requireConfiguredSession, requireTrustedOrigin);
 kaspiMarketingRouter.get('/state', asyncRoute(async (_req, res) => res.json(await service.state())));
+kaspiMarketingRouter.get('/products', asyncRoute(async (req,res)=>res.json(await service.products(req.query))));
 kaspiMarketingRouter.put('/bid', requireWritesEnabled, asyncRoute(async (req, res) => res.json(await service.setBid(req.body))));
 kaspiMarketingRouter.post('/connect', requireWritesEnabled, asyncRoute(async (req, res) => res.json(await service.connect(req.body))));
 kaspiMarketingRouter.post('/schedule', requireWritesEnabled, asyncRoute(async (req, res) => res.json(await service.saveTime(req.body))));

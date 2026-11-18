@@ -2,6 +2,39 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createKaspiMarketingService, kaspiProductExpenses } from '../src/kaspi-marketing.js';
 
+test('product statistics read campaign totals and current bid separately from the expense CSV and cache exact dates', async () => {
+  let calls=0, tick=Date.parse('2026-11-19T00:00:00+05:00');
+  const service=createKaspiMarketingService({
+    read:async()=>({account:{id:123},cookies:[]}),write:async()=>{},now:()=>tick,
+    fetchImpl:async (url,options)=>{
+      calls++;
+      const path=new URL(url);
+      assert.equal(path.pathname,'/advertising/products/api/v5/merchant/123/campaign/456/products');
+      assert.equal(path.searchParams.get('StartDate'),'2026-10-20');
+      assert.equal(path.searchParams.get('EndDate'),'2026-11-18');
+      assert.equal(options.method,'GET');
+      return Response.json({result:'Ok',data:[
+        {sku:'A',transactions:12,orders:999,bid:16,clicks:40,cost:500,avgCpc:12.5},
+        {sku:'B',transactions:0,bid:3,clicks:0},
+        {sku:'C',transactions:null,bid:null,clicks:false},
+      ]});
+    },
+  });
+  const query={accountId:'123',campaignId:'456',from:'2026-10-20',to:'2026-11-18'};
+  const snapshot=await service.products(query);
+  assert.deepEqual(snapshot.products[0],{sku:'A',orders:12,bid:16,clicks:40,cpc:12.5,spend:500});
+  assert.deepEqual(snapshot.products[1],{sku:'B',orders:0,bid:3,clicks:0});
+  assert.deepEqual(snapshot.products[2],{sku:'C'});
+  assert.deepEqual(await service.products(query),snapshot);
+  assert.equal(calls,1);
+  await assert.rejects(service.products({...query,accountId:'999'}),/другой магазин/);
+  await assert.rejects(service.products({...query,to:'2026-11-20'}),/период/);
+  assert.equal(calls,1);
+  tick+=5*60_000;
+  await service.products(query);
+  assert.equal(calls,2);
+});
+
 test('single-product bid changes use the connected account and require the echoed SKU and bid', async () => {
   let calls=0, confirmed=true;
   const data={account:{id:123},cookies:[]};
