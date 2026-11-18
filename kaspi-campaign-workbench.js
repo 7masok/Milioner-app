@@ -7,7 +7,7 @@
   const countKeys = ['views', 'clicks', 'carts', 'orders'];
   const actions = {
     lower: 'Снизить ставку', raise: 'Можно поднять', price: 'Тест цены',
-    keep: 'Оставить', unknown: 'Мало данных', test: 'В тесте', card: 'Проверить карточку',
+    keep: 'Оставить', unknown: '', test: 'В тесте', card: 'Проверить карточку', unadvertised: '',
   };
   const iso = at => new Date(at + OFFSET).toISOString().slice(0, 10);
   const dayStart = day => Date.parse(day + 'T00:00:00+05:00');
@@ -17,6 +17,8 @@
   const format = new Intl.NumberFormat('ru-RU', { maximumFractionDigits: 2 });
   const value = (x, suffix = '') => x == null ? '—' : format.format(x) + suffix;
   const cash = x => value(x, ' ₸');
+  const hasActivity = line => Number(line.amount) > 0 || countKeys.some(key => Number(line[key]) > 0);
+  const kaspiSkus = item => [item.kaspi,...(Array.isArray(item.kaspiAliases)?item.kaspiAliases:[])];
   const testEnd = t => Math.min(t.startedAt + t.days * DAY, t.stoppedAt || Infinity);
   const active = (t, at) => !!t && at >= t.startedAt && at < testEnd(t);
   const baselineStart = t => t.startedAt - Math.ceil(t.days / 7) * 7 * DAY;
@@ -52,11 +54,13 @@
     };
   }
 
-  function campaignRows(batches, from, to, match, tests) {
+  function campaignRows(batches, from, to, match, confirmed = '') {
     const campaigns = new Map(), snapshots = new Set(), nativeBySource = new Map();
     const ordered = [...batches].sort((a, b) => Number(b.importedAt) - Number(a.importedAt));
+    let latestReport = confirmed;
     for (const batch of ordered) {
       const match = /^kaspi-auto-(\d+)-(\d+)-\d{4}-\d{2}-\d{2}$/.exec(String(batch.id));
+      if ((match || batch.campaignId) && batch.fromDate <= to && batch.fromDate > latestReport) latestReport = batch.fromDate;
       if (!match || !batch.sourceKey) continue;
       const native = nativeBySource.get(batch.sourceKey) || new Set();
       native.add(match[1] + ':' + match[2]);
@@ -70,19 +74,24 @@
       const key = manual ? (mapped?.size === 1 ? [...mapped][0] : 'manual:' + (batch.sourceKey || batch.campaignName || batch.fileName || batch.id))
         : String(batch.accountId || account || '') + ':' + campaignId;
       if (!campaigns.has(key)) campaigns.set(key, {
-        key, manual, name: batch.campaignName || batch.fileName || 'Кампания Kaspi', products: new Map(), spend: 0, hasDay: false,
+        key, manual: true, name: batch.campaignName || batch.fileName || 'Кампания Kaspi', products: new Map(), spend: 0, hasDay: false, latest: false,
       });
       const campaign = campaigns.get(key);
+      if (!manual) {
+        if (campaign.manual) campaign.name = batch.campaignName || campaign.name;
+        campaign.manual = false;
+      }
       const covered = new Set();
       for (const line of batch.lines || []) {
         const day = line.date || batch.fromDate;
+        if (!(day >= from && day <= to)) continue;
+        const id = JSON.stringify([key, day]);
+        if (snapshots.has(id)) continue;
+        if (!manual && day === latestReport && hasActivity(line)) campaign.latest = true;
         const sku = String(line.sku || '').trim();
         const product = match(line);
         const productId = product ? String(product.id) : '';
-        if (!(day >= from && day <= to) && !tests[productId]) continue;
         const productKey = sku ? 'sku:' + sku : productId || 'name:' + (line.name || 'Неизвестный товар');
-        const id = JSON.stringify([key, day]);
-        if (snapshots.has(id)) continue;
         let row = campaign.products.get(productKey);
         if (!row) {
           row = { productId, sku, name: product?.name || line.name || sku || 'Товар Kaspi', lines: [], last: null };
@@ -111,17 +120,24 @@
           campaign.spend += Number(batch.amount) || 0;
           campaign.hasDay = true;
           if (Number(batch.amount) > 0) campaign.hasUnallocated = true;
+          if (!manual && batch.fromDate === latestReport && Number(batch.amount) > 0) campaign.latest = true;
         }
       }
       for (const id of covered) snapshots.add(id);
     }
-    return [...campaigns.values()].sort((a, b) => b.spend - a.spend || a.name.localeCompare(b.name, 'ru'));
+    return [...campaigns.values()].filter(c => c.hasDay || c.latest)
+      .sort((a, b) => b.spend - a.spend || a.name.localeCompare(b.name, 'ru'));
   }
 
   function campaignMetrics(row, finance, claims) {
     if (!row.lines.length) return {};
     const out = Object.fromEntries(countKeys.map(k => [k, sum(row.lines, k)]));
     out.cpc = out.clicks > 0 ? row.spend / out.clicks : null;
+    out.partial = {};
+    for (const key of countKeys) {
+      const known = row.lines.filter(line => number(line[key]) !== null);
+      if (known.length && known.length < row.lines.length) out.partial[key] = sum(known, key);
+    }
     out.score = number(row.last?.score);
     out.bid = number(row.last?.bid);
     out.averageBid = number(row.last?.averageBid);
@@ -176,6 +192,7 @@
     .kaw-tag[data-kind="lower"],.kaw-negative { color:#a12639; }
     .kaw-tag[data-kind="raise"],.kaw-positive { color:#166744; }
     .kaw-tag[data-kind="unknown"] { color:var(--ka-muted); background:#f2f2f6; }
+    .kaw-search { width:100%; margin:2px 0 7px; padding:8px 10px; min-height:37px; border:1px solid var(--ka-border); border-radius:9px; font:inherit; }
     .kaw-caret { flex:none; color:var(--ka-muted); }
     .kaw details[open] > summary .kaw-caret { transform:rotate(180deg); }
     .kaw-product { border-top:1px solid var(--ka-border); margin-left:9px; }
@@ -189,11 +206,13 @@
   `;
   document.head.append(css);
 
-  let days = 30, filter = 'all', mode = 'campaigns', rendered = false;
+  let days = 30, filter = 'all', mode = 'campaigns', rendered = false, history = false;
   let data = null, pending = '', failure = false;
+  let reportCache = null, search = '', catalogLimit = 50, paint = null;
   let confirmedAdDays = new Set();
-  const expanded = new Set(), productExpanded = new Set(), forms = new Set();
-  const tests = () => state.settings.kaspiPriceTests || {};
+  const expanded = new Set(), productExpanded = new Set(), forms = new Set(), detailBodies = new Map();
+  const emptyTests = {};
+  const tests = () => state.settings.kaspiPriceTests || emptyTests;
   const root = () => document.getElementById('kaspiCampaignWorkbench');
 
   function readAnalytics(from, to, list, at) {
@@ -264,7 +283,7 @@
         if (!lines?.length || lines.some(line=>line.unknownCost)) return null;
         margin += lines.reduce((total,line)=>total+line.profit,0);
       }
-      const campaigns = campaignRows(state.kaspiAdExpenses || [], iso(from), iso(until - 1), kaspiAdsMatchProduct, {});
+      const campaigns = campaignRows(state.kaspiAdExpenses || [], iso(from), iso(until - 1), kaspiAdsMatchProduct);
       if (campaigns.some(c=>c.hasUnallocated || [...c.products.values()].some(x=>x.spend > 0 && !x.productId))) return null;
       for (const c of campaigns) for (const row of c.products.values()) if (row.productId === t.productId) margin -= row.spend || 0;
       return margin / ((until - from) / DAY);
@@ -273,15 +292,12 @@
     return before == null || after == null ? null : {before,after};
   }
 
-  function renderProduct(row, campaign, m, kind, t, at) {
-    const item = prod(row.productId);
-    const key = JSON.stringify([campaign.key, row.sku, row.productId, row.name]);
-    const running = active(t, at);
-    const token = productExpanded.has(key) ? ' open' : '';
-    const text = running ? 'День ' + experiment(t, data?.orders, at).day + '/' + t.days : actions[kind];
+  function productBody(row, m, kind, t, at) {
+    const item = prod(row.productId), running = active(t, at);
+    const metric = key => m[key] == null && m.partial?.[key] != null ? value(m.partial[key]) + '*' : value(m[key]);
     const metrics = [
-      ['Расход', cash(row.lines.length ? row.spend : null)], ['Показы', value(m.views)],
-      ['Клики', value(m.clicks)], ['Корзины', value(m.carts)], ['Рекл. заказы', value(m.orders)],
+      ['Расход', cash(row.lines.length ? row.spend : null)], ['Показы', metric('views')],
+      ['Клики', metric('clicks')], ['Корзины', metric('carts')], ['Рекл. заказы', metric('orders')],
       ['В выкупе', value(m.buyouts)], ['Цена клика', cash(m.cpc)], ['Окупается до', cash(m.maxCpc)], ['Оценка Kaspi', value(m.score)],
     ];
     if (m.bid != null) metrics.push(['Ставка', cash(m.bid)]);
@@ -294,6 +310,10 @@
         : 'Показы редкие, а ставка ниже средней по категории. Проверь доступность и дневной бюджет.',
       price: 'По товару кликают, но редко заказывают. Проверь цену в выдаче перед тестом.',
       card: 'Товар часто видят, но редко открывают. Проверь главное фото и цену в выдаче.',
+      unknown: row.lines.length ? (m.orders == null ? 'В выгрузке нет полной статистики рекламных заказов. Прибыль и ставки пока не оценены.'
+        : m.profit == null ? 'Для расчёта прибыли нужны связанные выкупы и себестоимость.'
+        : 'Для рекомендации по ставке пока недостаточно кликов.') : '',
+      unadvertised: row.sku ? 'Артикул Kaspi · ' + row.sku : '',
     }[kind];
     const outcome = t ? testProfit(t,at) : null;
     const testInfo = t
@@ -307,12 +327,22 @@
       + '<label>Дней<input required type="number" name="days" min="1" max="60" value="14"></label>'
       + '<button class="btn dark" type="submit">Начать</button></form><div class="kaw-note">Введи фактическую цену после изменения в Kaspi.</div>' : '';
     const controls = item ? '<div class="kaw-toolbar"><button type="button" data-ka-'+(running ? 'finish' : 'open-test')+'="'+esc(row.productId)+'">'+(running ? 'Завершить тест' : 'Тест цены')+'</button></div>' : '';
-    return '<details class="kaw-product" data-ka-product="'+esc(key)+'"'+token+'><summary class="kaw-row" title="'+esc(row.name)+'">'
+    return (row.lines.length ? '<div class="kaw-metrics">'+metrics.map(([label, x])=>'<span>'+label+' <b>'+x+'</b></span>').join('')
+      + '</div>' : '')+(Object.keys(m.partial || {}).length ? '<div class="kaw-note">* Сумма по дням с доступными данными.</div>' : '')
+      +(reason?'<div class="kaw-note">'+esc(reason)+'</div>':'')+testInfo+controls+form;
+  }
+
+  function renderProduct(row, campaign, m, kind, t, at) {
+    const key = JSON.stringify([campaign.key, row.sku, row.productId, row.name]);
+    const running = active(t, at), open = productExpanded.has(key);
+    const text = running ? 'День ' + experiment(t, data?.orders, at).day + '/' + t.days : actions[kind];
+    const body = () => productBody(row,m,kind,t,at);
+    detailBodies.set(key, body);
+    return '<details class="kaw-product" data-ka-product="'+esc(key)+'"'+(open?' open':'')+'><summary class="kaw-row" title="'+esc(row.name)+'">'
       + '<span class="kaw-name"><b>'+esc(row.name)+'</b>'+(running?'<span class="kaw-progress">'+esc(experimentLabel(t,at))+'</span>':'')+'</span>'
-      + '<b class="kaw-money '+tone(m.profit)+'">'+cash(m.profit)+'</b>'
-      + '<span class="kaw-tag" data-kind="'+kind+'">'+text+'</span><span class="kaw-caret" aria-hidden="true">⌄</span></summary>'
-      + '<div class="kaw-panel"><div class="kaw-metrics">'+metrics.map(([label, x])=>'<span>'+label+' <b>'+x+'</b></span>').join('')
-      + '</div>'+(reason?'<div class="kaw-note">'+esc(reason)+'</div>':'')+testInfo+controls+form+'</div></details>';
+      + (m.profit != null ? '<b class="kaw-money '+tone(m.profit)+'">'+cash(m.profit)+'</b>' : '')
+      + (text?'<span class="kaw-tag" data-kind="'+kind+'">'+text+'</span>':'')+'<span class="kaw-caret" aria-hidden="true">⌄</span></summary>'
+      + '<div class="kaw-panel" data-ka-body'+(open?' data-ka-filled':'')+'>'+(open?body():'')+'</div></details>';
   }
 
   const tone = profit => profit < 0 ? 'kaw-negative' : profit > 0 ? 'kaw-positive' : '';
@@ -320,65 +350,121 @@
     return '<button type="button" data-ka-'+attr+'="'+id+'" aria-pressed="'+(chosen === id)+'">'+label+'</button>';
   }
 
+  function reportFor(from, to) {
+    const batches = state.kaspiAdExpenses, products = state.products, feed = state.kaspiOrderFeed;
+    const confirmed = [...confirmedAdDays].reduce((latest,day)=>day<=to&&day>latest?day:latest,'');
+    if (!reportCache || reportCache.to !== to || reportCache.batches !== batches
+      || reportCache.confirmed !== confirmed || reportCache.products !== products
+      || reportCache.feed !== feed || reportCache.feedSize !== feed?.length) {
+      reportCache = {to,batches,confirmed,products,feed,feedSize:feed?.length,matches:new Map(),periods:new Map()};
+    }
+    const {matches,periods} = reportCache;
+    if (periods.has(from)) return periods.get(from);
+    const rows = campaignRows(batches || [], from, to, line => {
+      const key = JSON.stringify([line.sku,line.name,line.productId]);
+      if (!matches.has(key)) matches.set(key,kaspiAdsMatchProduct(line));
+      return matches.get(key);
+    }, confirmed);
+    const claims = new Map(), advertised = new Set();
+    for (const campaign of rows) for (const row of campaign.products.values()) {
+      if (row.productId && row.lines.some(hasActivity)) advertised.add(row.productId);
+      for (const code of new Set(row.lines.flatMap(line => line.orderCodes || []))) {
+        const key = code + '|' + row.productId;
+        claims.set(key, (claims.get(key) || 0) + 1);
+      }
+    }
+    const catalog = (products || []).filter(item => !advertised.has(String(item.id))
+      && kaspiSkus(item).some(sku => String(sku || '').trim()));
+    catalog.sort((a,b) => a.name.localeCompare(b.name,'ru'));
+    const report = {rows,claims,catalog};
+    periods.set(from,report);
+    return report;
+  }
+
   function draw(refresh = true) {
     const panel = root();
     if (!panel || panel.closest('[hidden]')) return;
-    if (panel.contains(document.activeElement) && document.activeElement.closest('form')) return;
+    if (panel.contains(document.activeElement) && document.activeElement.closest('form, .kaw-search')) return;
     const at = Date.now(), from = iso(at - days * DAY), to = iso(at - DAY), list = tests();
-    const rows = campaignRows(state.kaspiAdExpenses || [], from, to, kaspiAdsMatchProduct, list);
-    if (refresh) readAnalytics(from, to, list, at);
-    const claims = new Map();
-    for (const campaign of rows) for (const row of campaign.products.values()) {
-      for (const code of new Set(row.lines.flatMap(line => line.orderCodes || []))) {
-        const k = code + '|' + row.productId;
-        claims.set(k, (claims.get(k) || 0) + 1);
-      }
+    const report = reportFor(from,to);
+    const finance = data?.from === from && data?.to === to ? data.finance : null;
+    const minute = Math.floor(at / 60000);
+    if (!report.prepared || report.finance !== finance || report.list !== list || report.minute !== minute) {
+      report.prepared = report.rows.map(campaign => {
+        const products = [...campaign.products.values()].map(row => {
+          const m = campaignMetrics(row,finance,report.claims), t = list[row.productId];
+          return {row,m,t,kind:advice(m,prod(row.productId),t,at)};
+        }).sort((a,b)=>(a.m.profit ?? Infinity)-(b.m.profit ?? Infinity) || (b.row.spend||0)-(a.row.spend||0));
+        const profit = campaign.hasDay && !campaign.hasUnallocated && products.length ? sum(products.map(x=>x.m),'profit') : null;
+        return {campaign,products,profit};
+      }).sort((a,b)=>(a.profit??Infinity)-(b.profit??Infinity) || b.campaign.spend-a.campaign.spend);
+      Object.assign(report,{finance,list,minute});
     }
-    const totalSpend = rows.reduce((a,x)=>a+x.spend,0);
-    const hasClickData = rows.some(campaign => [...campaign.products.values()].some(row =>
-      row.lines.some(line => number(line.clicks) !== null)));
-    const prepared = rows.map(campaign => {
-      const products = [...campaign.products.values()].map(row => {
-        const m = campaignMetrics(row, data?.from === from && data?.to === to ? data.finance : null, claims), t = list[row.productId];
-        return {row,m,t,kind:advice(m,prod(row.productId),t,at)};
-      }).sort((a,b)=>(a.m.profit ?? Infinity)-(b.m.profit ?? Infinity) || (b.row.spend||0)-(a.row.spend||0));
-      const inPeriod = products.filter(x=>x.row.lines.length);
-      const profit = campaign.hasDay && !campaign.hasUnallocated && inPeriod.length ? sum(inPeriod.map(x=>x.m),'profit') : null;
-      return {campaign,products,profit};
-    }).sort((a,b)=>(a.profit??Infinity)-(b.profit??Infinity) || b.campaign.spend-a.campaign.spend);
+    if (refresh && (Object.keys(list).length || report.claims.size)) readAnalytics(from,to,list,at);
+    const filters = {all:'Все', lower:'Снизить', raise:'Поднять', price:'Тест цены', card:'Карточка', keep:'Оставить'};
     const renderRow = (x,c) => renderProduct(x.row,c,x.m,x.kind,x.t,at);
-    const filters = {all:'Все', lower:'Снизить', raise:'Поднять', price:'Тест цены', card:'Карточка', keep:'Оставить', unknown:'Мало данных', test:'В тесте'};
-    let content;
-    if (mode === 'tests') {
-      content = Object.values(list).filter(t=>filter !== 'test' || active(t,at)).map(t=>({
+    const empty = message => '<div class="empty">'+message+'</div>';
+    function catalogContent() {
+      const needle = search.trim().toLowerCase();
+      const items = report.catalog.filter(item => [item.name,...kaspiSkus(item)]
+        .some(field => String(field || '').toLowerCase().includes(needle)));
+      return items.slice(0,catalogLimit).map(item => {
+        const productId = String(item.id), t = list[productId];
+        return renderRow({row:{productId,sku:kaspiSkus(item).find(sku=>String(sku || '').trim()),name:item.name,lines:[]},
+          m:{},t,kind:active(t,at)?'test':'unadvertised'}, {key:'catalog'});
+      }).join('')+(items.length>catalogLimit?'<div class="kaw-toolbar"><button type="button" data-ka-more>Показать ещё</button></div>':'')
+        +(!items.length?empty(needle?'Товары не найдены':'Нет товаров Kaspi без рекламных данных за период'):'');
+    }
+    paint = () => {
+      detailBodies.clear();
+      if (mode === 'catalog') return catalogContent();
+      if (mode === 'tests') return Object.values(list).map(t => renderRow({
         row:{productId:t.productId,sku:'',name:prod(t.productId)?.name||t.name,lines:[]},m:{},t,
-        kind:active(t,at)?'test':'unknown',campaign:{key:'tests'},
-      })).map(x=>renderRow(x,x.campaign)).join('');
-    } else {
-      content = prepared.map(({campaign,products,profit})=>{
+        kind:active(t,at)?'test':'unknown',
+      },{key:'tests'})).join('') || empty('Нет тестов. Начни тест из карточки товара.');
+      const group = report.prepared.filter(({campaign}) => history ? !campaign.latest && (campaign.spend > 0
+        || [...campaign.products.values()].some(row => row.lines.some(hasActivity))) : campaign.latest);
+      const spend = group.reduce((a,{campaign})=>a+campaign.spend,0);
+      const profit = group.length ? sum(group,'profit') : null;
+      const heading = '<div class="kaw-overview"><span>'+from.slice(5).split('-').reverse().join('.')+' – '+to.slice(5).split('-').reverse().join('.')+'</span>'
+        + '<b>Расход '+cash(group.length?spend:null)+'</b>'+(profit == null?'':'<span>Прибыль '+cash(profit)+'</span>')+'</div>'
+        + (failure?'<div class="kaw-note" role="status">Не удалось обновить часть статистики.</div>':'');
+      const content = group.map(({campaign,products,profit}) => {
         const visible = products.filter(x => filter === 'all' || x.kind === filter);
         if (filter !== 'all' && !visible.length) return '';
-        const hint = ['test','lower','price','raise','card','keep','unknown'].find(k=>visible.some(x=>x.kind===k));
-        return '<details class="kaw-campaign" data-ka-campaign="'+esc(campaign.key)+'"'+(expanded.has(campaign.key)?' open':'')
+        const hint = ['test','lower','price','raise','card','keep'].find(k=>visible.some(x=>x.kind===k));
+        const open = expanded.has(campaign.key);
+        const body = () => (campaign.manual?'<div class="kaw-panel kaw-note">Старый импорт</div>':'')
+          + (visible.length?visible.map(x=>renderRow(x,campaign)).join(''):'<div class="kaw-panel kaw-note">Нет разбивки по товарам за период.</div>');
+        detailBodies.set(campaign.key,body);
+        return '<details class="kaw-campaign" data-ka-campaign="'+esc(campaign.key)+'"'+(open?' open':'')
           + '><summary class="kaw-row" title="'+esc(campaign.name)+'"><b class="kaw-name">'+esc(campaign.name)+'</b>'
-          + '<span class="kaw-money" title="Расход">'+cash(campaign.hasDay?campaign.spend:null)+'</span>'
-          + '<b class="kaw-money '+tone(profit)+'" title="Прибыль после рекламы">'+cash(profit)+'</b>'
+          + '<span class="kaw-money" title="Расход">'+cash(campaign.spend)+'</span>'
+          + (profit == null?'':'<b class="kaw-money '+tone(profit)+'" title="Прибыль после рекламы">'+cash(profit)+'</b>')
           + (hint?'<span class="kaw-tag" data-kind="'+hint+'">'+actions[hint]+'</span>':'')
-          + '<span class="kaw-caret" aria-hidden="true">⌄</span></summary>'
-          + (campaign.manual?'<div class="kaw-panel kaw-note">Старый импорт</div>':'')
-          + (visible.length?visible.map(x=>renderRow(x,campaign)).join(''):'<div class="kaw-panel kaw-note">Нет разбивки по товарам за период.</div>')+'</details>';
+          + '<span class="kaw-caret" aria-hidden="true">⌄</span></summary><div data-ka-body'+(open?' data-ka-filled':'')+'>'
+          + (open?body():'')+'</div></details>';
       }).join('');
-    }
+      const message = filter !== 'all' ? 'За этот период таких рекомендаций нет.'
+        : history ? 'Нет прошлых кампаний с расходом или показами за выбранный период.'
+        : 'В последней выгрузке нет активности. Прошлые кампании можно посмотреть в истории.';
+      const attributionMissing = group.some(({products}) => products.some(({row,m}) => row.spend > 0 && m.orders == null));
+      return heading+(!history && group.length ? '<div class="kaw-note">Кампании с активностью в последней выгрузке</div>' : '')
+        +(attributionMissing ? '<div class="kaw-note">Для части товаров в выгрузках отсутствуют рекламные заказы. По ним прибыль и окупаемую ставку пока не посчитать.</div>' : '')
+        +(content || empty(message));
+    };
     const scroll = [...panel.querySelectorAll('.kaw-toolbar')].slice(0,2).map(x=>x.scrollLeft);
     panel.innerHTML = '<div class="kaw-toolbar" aria-label="Период и вид">'
-      + [7,14,30].map(d=>button('days',String(d),d+' дней',String(days))).join('')
-      + button('mode','campaigns','Кампании',mode)+button('mode','tests','Тесты',mode)+'</div>'
-      + '<div class="kaw-toolbar" aria-label="Рекомендации">'+Object.entries(filters).map(([key,label])=>button('filter',key,label,filter)).join('')+'</div>'
-      + '<div class="kaw-overview"><span>'+from.slice(5).split('-').reverse().join('.')+' – '+to.slice(5).split('-').reverse().join('.')+'</span>'
-      + '<b>Расход '+cash(rows.some(x=>x.hasDay)?totalSpend:null)+'</b><span>Прибыль после рекламы</span></div>'
-      + (rows.some(x=>x.hasDay) && !hasClickData ? '<div class="kaw-note">За этот период пока есть только расходы. Клики и подсказки появятся, когда Kaspi передаст статистику.</div>' : '')
-      + (failure ? '<div class="kaw-note" role="status">Не удалось обновить часть статистики.</div>' : '')
-      + (content || '<div class="empty">Нет подходящих данных за период</div>');
+      + button('mode','campaigns','Кампании',history?'':mode)+button('mode','catalog','Без рекламы',mode)
+      + button('mode','tests','Тесты',mode)+button('history','history','История',history?'history':'')+'</div>'
+      + (mode !== 'tests' ? '<div class="kaw-toolbar" aria-label="Период">'
+        + [7,14,30].map(d=>button('days',String(d),d+' дней',String(days))).join('')+'</div>' : '')
+      + (mode === 'campaigns' ? '<div class="kaw-toolbar" aria-label="Рекомендации">'
+        + Object.entries(filters).map(([key,label])=>button('filter',key,label,filter)).join('')
+        + '</div>' : '')
+      + (mode === 'catalog' ? '<input class="kaw-search" type="search" aria-label="Поиск товаров Kaspi" placeholder="Название или артикул" value="'+esc(search)+'">'
+        + '<div class="kaw-note">Товары Kaspi без записанной рекламной активности за выбранный период.</div>' : '')
+      + '<div data-ka-content>'+paint()+'</div>';
     [...panel.querySelectorAll('.kaw-toolbar')].slice(0,2).forEach((x,i)=>{x.scrollLeft=scroll[i]||0});
   }
 
@@ -391,22 +477,42 @@
       panel.addEventListener('toggle', event => {
         const {kaCampaign,kaProduct} = event.target.dataset || {};
         const target = kaCampaign ? expanded : productExpanded, key = kaCampaign || kaProduct;
-        if (key) event.target.open ? target.add(key) : target.delete(key);
+        if (!key || !panel.contains(event.target)) return;
+        if (!event.target.open) { target.delete(key); return; }
+        target.add(key);
+        const body = event.target.querySelector(':scope > [data-ka-body]');
+        if (body && !body.hasAttribute('data-ka-filled') && detailBodies.has(key)) {
+          body.innerHTML = detailBodies.get(key)();
+          body.setAttribute('data-ka-filled','');
+        }
       }, true);
+      panel.addEventListener('input', event => {
+        if (!event.target.matches('.kaw-search')) return;
+        search = event.target.value;
+        catalogLimit = 50;
+        panel.querySelector('[data-ka-content]').innerHTML = paint();
+      });
       panel.addEventListener('click', event => {
         const b = event.target.closest('button');
         if (!b) return;
         const k = b.dataset;
-        if (k.kaDays) days = Number(k.kaDays);
-        else if (k.kaMode) { mode = k.kaMode; filter = 'all'; }
-        else if (k.kaFilter) { filter = k.kaFilter; mode = filter === 'test' ? 'tests' : 'campaigns'; }
+        if (k.kaMore !== undefined) {
+          catalogLimit += 50;
+          panel.querySelector('[data-ka-content]').innerHTML = paint();
+          return;
+        }
+        let refresh = false;
+        if (k.kaDays) { days = Number(k.kaDays); refresh = true; }
+        else if (k.kaMode) { mode = k.kaMode; filter = 'all'; history = false; }
+        else if (k.kaHistory) { mode = 'campaigns'; history = true; filter = 'all'; }
+        else if (k.kaFilter) filter = k.kaFilter;
         else if (k.kaOpenTest) forms.has(k.kaOpenTest) ? forms.delete(k.kaOpenTest) : forms.add(k.kaOpenTest);
         else if (k.kaFinish) {
           if (!requireWarehouseEditReady()) return;
           const t = tests()[k.kaFinish];
-          if (active(t,Date.now())) { t.stoppedAt = Date.now(); save(); }
+          if (active(t,Date.now())) { t.stoppedAt = Date.now(); reportCache = null; save(); }
         } else return;
-        draw();
+        draw(refresh);
       });
       panel.addEventListener('submit', event => {
         const productId = event.target.dataset.kaTest;
@@ -428,6 +534,7 @@
         state.settings.kaspiPriceTests[productId] = {productId,name:item.name,before,after,days:length,startedAt:at};
         forms.delete(productId);
         data = null;
+        reportCache = null;
         document.activeElement?.blur();
         save();
         draw();
