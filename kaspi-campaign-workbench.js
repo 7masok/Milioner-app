@@ -18,7 +18,7 @@
   const compactFormat = new Intl.NumberFormat('ru-RU', { notation:'compact', maximumFractionDigits:1 });
   const value = (x, suffix = '') => x == null ? '—' : format.format(x) + suffix;
   const cash = x => value(x, ' ₸');
-  const compact = x => x == null ? '—' : x >= 1000 ? compactFormat.format(x) : format.format(x);
+  const compact = x => x == null ? '—' : Math.abs(x) >= 1000 ? compactFormat.format(x) : format.format(x);
   const hasActivity = line => Number(line.amount) > 0 || countKeys.some(key => Number(line[key]) > 0);
   const kaspiSkus = item => [item.kaspi,...(Array.isArray(item.kaspiAliases)?item.kaspiAliases:[])];
   const testEnd = t => Math.min(t.startedAt + t.days * DAY, t.stoppedAt || Infinity);
@@ -198,7 +198,12 @@
     .kaw-caret { flex:none; color:var(--ka-muted); }
     .kaw details[open] > summary .kaw-caret { transform:rotate(180deg); }
     .kaw-product { border-top:1px solid var(--ka-border); margin-left:9px; }
-    .kaw-product-summary.has-stats { display:grid; grid-template-columns:minmax(0,1.5fr) repeat(var(--ka-cols,4),minmax(0,1fr)) 8px; gap:4px; height:46px; min-height:46px; box-sizing:border-box; }
+    .kaw-product-summary.has-stats,.kaw-campaign-summary { display:grid; grid-template-columns:minmax(0,1.5fr) repeat(5,minmax(0,1fr)) 8px; gap:4px; height:46px; min-height:46px; box-sizing:border-box; }
+    .kaw-campaign-summary { height:auto; margin-left:9px; }
+    .kaw-campaign-summary .kaw-name { display:flex; flex-direction:column; gap:2px; font-size:11px; }
+    .kaw-campaign-summary .kaw-name small { font-size:9px; color:var(--ka-muted); overflow:hidden; text-overflow:ellipsis; }
+    .kaw-sort { display:flex; flex-direction:column; align-items:center; justify-content:center; width:100%; min-width:0; min-height:32px; padding:2px 0; border:1px solid var(--ka-border); border-radius:5px; background:#fff; color:var(--ka-muted); font:inherit; font-size:9px; cursor:pointer; }
+    .kaw-sort[aria-pressed="true"] { background:#eee8ff; border-color:#d9caff; color:#4b2ca2; font-weight:700; }
     .kaw-product-summary.has-stats .kaw-name { max-height:30px; }
     .kaw-product-summary.has-stats .kaw-name > b { display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden; overflow-wrap:anywhere; white-space:normal; line-height:1.16; }
     .kaw-product-summary.has-stats .kaw-name:has(.kaw-progress,.kaw-tag) > b { -webkit-line-clamp:1; }
@@ -221,6 +226,8 @@
   document.head.append(css);
 
   let days = 30, filter = 'all', mode = 'campaigns', rendered = false, history = false;
+  let sortKey = 'spend', sortDirection = 'desc';
+  const sortLabels = {spend:'Расход',clicks:'Клики',orders:'Заказы',bid:'Ставка',profit:'Прибыль'};
   let data = null, pending = '', failure = false;
   let reportCache = null, search = '', catalogLimit = 50, paint = null;
   let confirmedAdDays = new Set();
@@ -379,7 +386,7 @@
   function productCells(row, campaign, m, key) {
     if (!row.lines.length) return '';
     const cell = (label, description, metric, partial = false) =>
-      '<span class="kaw-cell" title="'+esc(description+' · '+value(metric)+(partial?' (доступные дни)':''))+'">'
+      '<span class="kaw-cell '+(label==='Прибыль'?tone(metric):'')+'" title="'+esc(description+' · '+value(metric)+(partial?' (доступные дни)':''))+'">'
       +'<small>'+label+'</small><b>'+compact(metric)+(partial?'*':'')+'</b></span>';
     const count = key => m[key] ?? m.partial?.[key];
     const native = campaign.latest && /^([0-9]+):([0-9]+)$/.exec(campaign.key);
@@ -393,7 +400,7 @@
     return cell('Расход','Расход, ₸',row.spend)
       + cell('Клики','Клики',count('clicks'),m.clicks == null && count('clicks') != null)
       + cell('Заказы','Рекламные заказы',count('orders'),m.orders == null && count('orders') != null)
-      + (m.profit != null?cell('Прибыль','Прибыль после рекламы, ₸',m.profit):'')+bid;
+      + bid+cell('Прибыль',m.profit == null ? 'Прибыль после рекламы не рассчитана. Нужны связанные выкупы и себестоимость' : 'Прибыль после рекламы, ₸',m.profit);
   }
 
   function renderProduct(row, campaign, m, kind, t, at) {
@@ -409,13 +416,37 @@
       +'<button class="btn dark" type="submit">Применить</button><button class="btn" type="button" data-ka-bid-cancel="'+esc(key)+'">Отмена</button>'
       +'<span class="kaw-note" role="status"></span></form>' : '';
     const tag = text?'<span class="kaw-tag" data-kind="'+kind+'">'+text+'</span>':'';
-    return '<details class="kaw-product" data-ka-product="'+esc(key)+'"'+(open?' open':'')+'><summary class="kaw-row kaw-product-summary'+(cells?' has-stats':'')+'"'+(cells && m.profit != null?' style="--ka-cols:5"':'')+' title="'+esc(row.name)+'">'
+    return '<details class="kaw-product" data-ka-product="'+esc(key)+'"'+(open?' open':'')+'><summary class="kaw-row kaw-product-summary'+(cells?' has-stats':'')+'" title="'+esc(row.name)+'">'
       + '<span class="kaw-name"><b>'+esc(row.name)+'</b>'+(running?'<span class="kaw-progress">'+esc(experimentLabel(t,at))+'</span>':'')+(cells?tag:'')+'</span>'
       + cells + (cells?'':tag)+'<span class="kaw-caret" aria-hidden="true">⌄</span></summary>'
       + '<div class="kaw-panel" data-ka-body'+(open?' data-ka-filled':'')+'>'+(open?body():'')+'</div></details>'+editor;
   }
 
   const tone = profit => profit < 0 ? 'kaw-negative' : profit > 0 ? 'kaw-positive' : '';
+  function compareProducts(a,b,campaign) {
+    const metric = item => {
+      if (sortKey==='spend') return item.row.lines.length ? item.row.spend : null;
+      if (sortKey==='bid') {
+        const key=JSON.stringify([campaign.key,item.row.sku,item.row.productId,item.row.name]);
+        return bidValues.get(key) ?? item.m.bid;
+      }
+      return item.m[sortKey] ?? item.m.partial?.[sortKey];
+    };
+    const av=number(metric(a)), bv=number(metric(b));
+    if (av===null && bv!==null) return 1;
+    if (bv===null && av!==null) return -1;
+    const difference=av===null ? 0 : (av-bv)*(sortDirection==='asc'?1:-1);
+    return difference || a.row.name.localeCompare(b.row.name,'ru');
+  }
+
+  function sortButtons() {
+    return Object.entries(sortLabels).map(([key,label])=>{
+      const selected=key===sortKey, arrow=selected?(sortDirection==='asc'?'↑':'↓'):'↕';
+      return '<button type="button" class="kaw-sort" data-ka-sort="'+key+'" aria-pressed="'+selected+'"'
+        +' aria-label="Сортировать · '+label+'" title="'+(selected?(sortDirection==='asc'?'По возрастанию':'По убыванию'):'Сортировать по убыванию')+'">'
+        +'<span>'+label+'</span><span aria-hidden="true">'+arrow+'</span></button>';
+    }).join('');
+  }
   function button(attr, id, label, chosen) {
     return '<button type="button" data-ka-'+attr+'="'+id+'" aria-pressed="'+(chosen === id)+'">'+label+'</button>';
   }
@@ -514,19 +545,16 @@
       const heading = '<div class="kaw-overview"><span>'+from.slice(5).split('-').reverse().join('.')+' – '+to.slice(5).split('-').reverse().join('.')+'</span>'
         + '<b>Расход '+cash(group.length?spend:null)+'</b>'+(profit == null?'':'<span>Прибыль '+cash(profit)+'</span>')+'</div>'
         + (failure?'<div class="kaw-note" role="status">Не удалось обновить часть статистики.</div>':'');
-      const content = group.map(({campaign,products,profit}) => {
-        const visible = products.filter(x => filter === 'all' || x.kind === filter);
+      const content = group.map(({campaign,products}) => {
+        const visible = products.filter(x => filter === 'all' || x.kind === filter).sort((a,b)=>compareProducts(a,b,campaign));
         if (filter !== 'all' && !visible.length) return '';
-        const hint = ['test','lower','price','raise','card','keep'].find(k=>visible.some(x=>x.kind===k));
         const open = expanded.has(campaign.key);
         const body = () => (campaign.manual?'<div class="kaw-panel kaw-note">Старый импорт</div>':'')
           + (visible.length?visible.map(x=>renderRow(x,campaign)).join(''):'<div class="kaw-panel kaw-note">Нет разбивки по товарам за период.</div>');
         detailBodies.set(campaign.key,body);
         return '<details class="kaw-campaign" data-ka-campaign="'+esc(campaign.key)+'"'+(open?' open':'')
-          + '><summary class="kaw-row" title="'+esc(campaign.name)+'"><b class="kaw-name">'+esc(campaign.name)+'</b>'
-          + '<span class="kaw-money" title="Расход">'+cash(campaign.spend)+'</span>'
-          + (profit == null?'':'<b class="kaw-money '+tone(profit)+'" title="Прибыль после рекламы">'+cash(profit)+'</b>')
-          + (hint?'<span class="kaw-tag" data-kind="'+hint+'">'+actions[hint]+'</span>':'')
+          + '><summary class="kaw-row kaw-campaign-summary" title="'+esc(campaign.name)+'"><span class="kaw-name"><b>'+esc(campaign.name)+'</b>'
+          + '<small title="Расход кампании">'+cash(campaign.spend)+'</small></span>'+sortButtons()
           + '<span class="kaw-caret" aria-hidden="true">⌄</span></summary><div data-ka-body'+(open?' data-ka-filled':'')+'>'
           + (open?body():'')+'</div></details>';
       }).join('');
@@ -585,6 +613,13 @@
         const b = event.target.closest('button');
         if (!b) return;
         const k = b.dataset;
+        if (k.kaSort && Object.hasOwn(sortLabels,k.kaSort)) {
+          event.preventDefault();
+          if (sortKey===k.kaSort) sortDirection=sortDirection==='desc'?'asc':'desc';
+          else { sortKey=k.kaSort; sortDirection='desc'; }
+          draw(false);
+          return;
+        }
         if (k.kaBid || k.kaBidCancel) {
           event.preventDefault();
           const key = k.kaBid || k.kaBidCancel;
