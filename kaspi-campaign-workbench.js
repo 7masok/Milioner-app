@@ -198,8 +198,12 @@
     .kaw-caret { flex:none; color:var(--ka-muted); }
     .kaw details[open] > summary .kaw-caret { transform:rotate(180deg); }
     .kaw-product { border-top:1px solid var(--ka-border); margin-left:9px; }
-    .kaw-product-summary.has-stats { display:grid; grid-template-columns:minmax(0,1fr) repeat(var(--ka-cols,4),minmax(34px,max-content)) auto; gap:4px; }
+    .kaw-product-summary.has-stats { display:grid; grid-template-columns:minmax(0,1.5fr) repeat(var(--ka-cols,4),minmax(0,1fr)) 8px; gap:4px; height:46px; min-height:46px; box-sizing:border-box; }
+    .kaw-product-summary.has-stats .kaw-name { max-height:30px; }
     .kaw-product-summary.has-stats .kaw-name > b { display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden; overflow-wrap:anywhere; white-space:normal; line-height:1.16; }
+    .kaw-product-summary.has-stats .kaw-name:has(.kaw-progress,.kaw-tag) > b { -webkit-line-clamp:1; }
+    .kaw-product-summary.has-stats .kaw-cell { min-width:0; width:100%; padding-inline:3px; }
+    .kaw-product-summary.has-stats .kaw-cell > b { max-width:100%; overflow:hidden; text-overflow:ellipsis; }
     .kaw-product-summary .kaw-tag { display:inline-block; max-width:100%; overflow:hidden; text-overflow:ellipsis; vertical-align:middle; }
     .kaw-cell { display:flex; flex-direction:column; align-items:center; justify-content:center; min-height:30px; padding:2px 4px; border-radius:5px; background:#f5f5f8; white-space:nowrap; font-variant-numeric:tabular-nums; line-height:1.15; }
     .kaw-cell > small { color:var(--ka-muted); font-size:9px; }
