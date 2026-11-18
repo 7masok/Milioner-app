@@ -8,7 +8,7 @@ const at = Date.parse('2026-11-18T15:00:00+05:00'), day = 86400000;
 class Clock extends Date { static now() { return at; } }
 const product = {id:'p',name:'Брелок',kaspi:'A'};
 const other = {id:'q',name:'Без рекламы',kaspi:'B'};
-function mount(batches, tests = {}, orders = [], connection = {}) {
+function mount(batches, tests = {}, orders = [], connection = {}, extra = {}) {
   const handlers = {};
   const panel = {innerHTML:'',closest:()=>null,contains:node=>!!node,querySelectorAll:()=>[],
     addEventListener(type,handler){handlers[type]=handler},
@@ -25,11 +25,33 @@ function mount(batches, tests = {}, orders = [], connection = {}) {
     state:{settings:{kaspiPriceTests:tests},kaspiAdExpenses:batches,products:[product,other]}, esc:String,
     prod:id=>[product,other].find(item=>item.id===id), kaspiAdsMatchProduct:line=>line.sku==='A'?product:null,
     apiJson:async()=>({orders,historyCoverage:[{market:'Kaspi',from:at-40*day,to:at-4*3600000}]}),
+    ...extra,
   };
   vm.runInNewContext(source,c);
   c.window.renderKaspiCampaignWorkbench(connection);
   return panel;
 }
+
+test('live campaign metrics fill orders and bid by SKU and the selected dates while preserving an explicit zero', async () => {
+  let calls=0;
+  const panel=mount([batch(19,1,[{date:'2026-11-17',sku:'A',amount:40,clicks:2}])],{},[],{},{
+    adsApi:async url=>{
+      calls++;
+      const query=new URL(url,'https://warehouse.example').searchParams;
+      assert.equal(query.get('from'),'2026-10-19');
+      assert.equal(query.get('to'),'2026-11-17');
+      return {accountId:'42',campaignId:'19',from:query.get('from'),to:query.get('to'),
+        products:[{sku:'A',orders:0,bid:15,clicks:3}]};
+    },
+  });
+  await new Promise(resolve=>setImmediate(resolve));
+  const html=panel.expand({kaCampaign:'42:19'});
+  assert.match(html,/<small>Заказы<\/small><b>0<\/b>/);
+  assert.match(html,/<small>Ставка ✎<\/small><b>15<\/b>/);
+  assert.match(html,/<small>Клики<\/small><b>3<\/b>/);
+  panel.click({kaFilter:'price'});
+  assert.equal(calls,1);
+});
 
 function batch(campaign, importedAt, lines, date = '2026-11-17') {
   return {id:'kaspi-auto-42-'+campaign+'-'+date,sourceKey:'same name',campaignName:'Одинаковое название',fromDate:date,toDate:date,importedAt,lines};

@@ -226,9 +226,37 @@
   let confirmedAdDays = new Set();
   const expanded = new Set(), productExpanded = new Set(), forms = new Set(), detailBodies = new Map();
   const bidRows = new Map(), bidValues = new Map(), bidForms = new Set();
+  const productStats = new Map();
+  let statsVersion = 0;
   const emptyTests = {};
   const tests = () => state.settings.kaspiPriceTests || emptyTests;
   const root = () => document.getElementById('kaspiCampaignWorkbench');
+
+  const statsKey = (campaign,from,to) => JSON.stringify([campaign.key,from,to]);
+  function readProductStats(campaigns,from,to) {
+    if (typeof adsApi!=='function') return;
+    for (const campaign of campaigns) {
+      const native=/^([0-9]+):([0-9]+)$/.exec(campaign.key);
+      if (!native) continue;
+      const key=statsKey(campaign,from,to), cached=productStats.get(key), at=Date.now();
+      if (cached && (cached.pending || at-cached.updatedAt<5*60000)) continue;
+      const record={accountId:native[1],campaignId:native[2],pending:true,updatedAt:at,items:cached?.items};
+      productStats.set(key,record);
+      const query=new URLSearchParams({accountId:native[1],campaignId:native[2],from,to});
+      adsApi('/api/kaspi-marketing/products?'+query).then(snapshot=>{
+        if (snapshot.accountId!==native[1] || snapshot.campaignId!==native[2] || snapshot.from!==from
+          || snapshot.to!==to || !Array.isArray(snapshot.products)) throw Error('Не совпал период статистики Kaspi.');
+        record.items=new Map(snapshot.products.map(row=>[String(row.sku),row]));
+        record.error='';
+      }).catch(error=>{record.error=error.message || 'Не удалось загрузить показатели Kaspi.';})
+        .finally(()=>{
+          record.pending=false;
+          record.updatedAt=Date.now();
+          statsVersion++;
+          draw(false);
+        });
+    }
+  }
 
   function readAnalytics(from, to, list, at) {
     const activeOrRecent = Object.values(list).filter(t => t?.startedAt > 0 && at - t.startedAt < 90 * DAY);
@@ -431,16 +459,31 @@
     const report = reportFor(from,to);
     const finance = data?.from === from && data?.to === to ? data.finance : null;
     const minute = Math.floor(at / 60000);
-    if (!report.prepared || report.finance !== finance || report.list !== list || report.minute !== minute) {
+    if (!report.prepared || report.finance !== finance || report.list !== list || report.minute !== minute || report.statsVersion !== statsVersion) {
       report.prepared = report.rows.map(campaign => {
         const products = [...campaign.products.values()].map(row => {
           const m = campaignMetrics(row,finance,report.claims), t = list[row.productId];
+          const current=productStats.get(statsKey(campaign,from,to))?.items?.get(row.sku);
+          if (current) {
+            if (number(current.orders)!==null && current.orders!==m.orders || number(current.spend)!==null && Math.abs(current.spend-row.spend)>.01) {
+              delete m.profit;
+              delete m.buyouts;
+              delete m.maxCpc;
+            }
+            for (const key of [...countKeys,'bid','cpc','score']) {
+              if (number(current[key])===null) continue;
+              m[key]=Number(current[key]);
+              if (m.partial) delete m.partial[key];
+            }
+            const key=JSON.stringify([campaign.key,row.sku,row.productId,row.name]);
+            if (number(current.bid)!==null) bidValues.set(key,Number(current.bid));
+          }
           return {row,m,t,kind:advice(m,prod(row.productId),t,at)};
         }).sort((a,b)=>(a.m.profit ?? Infinity)-(b.m.profit ?? Infinity) || (b.row.spend||0)-(a.row.spend||0));
         const profit = campaign.hasDay && !campaign.hasUnallocated && products.length ? sum(products.map(x=>x.m),'profit') : null;
         return {campaign,products,profit};
       }).sort((a,b)=>(a.profit??Infinity)-(b.profit??Infinity) || b.campaign.spend-a.campaign.spend);
-      Object.assign(report,{finance,list,minute});
+      Object.assign(report,{finance,list,minute,statsVersion});
     }
     if (refresh && (Object.keys(list).length || report.claims.size)) readAnalytics(from,to,list,at);
     const filters = {all:'Все', lower:'Снизить', raise:'Поднять', price:'Тест цены', card:'Карточка', keep:'Оставить'};
@@ -490,9 +533,12 @@
       const message = filter !== 'all' ? 'За этот период таких рекомендаций нет.'
         : history ? 'Нет прошлых кампаний с расходом или показами за выбранный период.'
         : 'В последней выгрузке нет активности. Прошлые кампании можно посмотреть в истории.';
-      const attributionMissing = group.some(({products}) => products.some(({row,m}) => row.spend > 0 && m.orders == null));
+      const attributionMissing = group.some(({products}) => products.some(({row,m}) => row.spend > 0 && m.profit == null));
+      const stats=group.map(({campaign})=>productStats.get(statsKey(campaign,from,to)));
       return heading+(!history && group.length ? '<div class="kaw-note">Кампании с активностью в последней выгрузке</div>' : '')
-        +(attributionMissing ? '<div class="kaw-note">Для части товаров в выгрузках отсутствуют рекламные заказы. По ним прибыль и окупаемую ставку пока не посчитать.</div>' : '')
+        +(stats.some(record=>record?.pending)?'<div class="kaw-note" role="status">Обновляю заказы и ставки Kaspi…</div>':'')
+        +(stats.some(record=>record?.error)?'<div class="kaw-note" role="status">Заказы и ставки не обновлены. '+esc(stats.find(record=>record?.error).error)+'</div>':'')
+        +(attributionMissing ? '<div class="kaw-note">Для расчёта прибыли нужны номера рекламных заказов, выкупы и себестоимость.</div>' : '')
         +(content || empty(message));
     };
     const scroll = [...panel.querySelectorAll('.kaw-toolbar')].slice(0,2).map(x=>x.scrollLeft);
@@ -508,6 +554,7 @@
         + '<div class="kaw-note">Товары Kaspi без записанной рекламной активности за выбранный период.</div>' : '')
       + '<div data-ka-content>'+paint()+'</div>';
     [...panel.querySelectorAll('.kaw-toolbar')].slice(0,2).forEach((x,i)=>{x.scrollLeft=scroll[i]||0});
+    if (refresh && mode==='campaigns') readProductStats(report.rows.filter(c=>history?!c.latest:c.latest),from,to);
   }
 
   function mount(connection) {
@@ -554,8 +601,8 @@
         }
         let refresh = false;
         if (k.kaDays) { days = Number(k.kaDays); refresh = true; }
-        else if (k.kaMode) { mode = k.kaMode; filter = 'all'; history = false; }
-        else if (k.kaHistory) { mode = 'campaigns'; history = true; filter = 'all'; }
+        else if (k.kaMode) { mode = k.kaMode; filter = 'all'; history = false; refresh = mode==='campaigns'; }
+        else if (k.kaHistory) { mode = 'campaigns'; history = true; filter = 'all'; refresh = true; }
         else if (k.kaFilter) filter = k.kaFilter;
         else if (k.kaOpenTest) forms.has(k.kaOpenTest) ? forms.delete(k.kaOpenTest) : forms.add(k.kaOpenTest);
         else if (k.kaFinish) {
@@ -581,6 +628,14 @@
           try {
             const response = await adsApi('/api/kaspi-marketing/bid',{method:'PUT',body:JSON.stringify({...row,bid})});
             bidValues.set(bidKey,response.bid);
+            for (const record of productStats.values()) {
+              const item=record.items?.get(row.sku);
+              if (item && record.accountId===row.accountId && record.campaignId===row.campaignId) {
+                item.bid=response.bid;
+                record.updatedAt=0;
+              }
+            }
+            statsVersion++;
             bidForms.delete(bidKey);
             document.activeElement?.blur();
             draw(false);
