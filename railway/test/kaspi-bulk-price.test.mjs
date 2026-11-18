@@ -62,6 +62,30 @@ test('Kaspi select all respects search and hidden rows; a confirmed batch saves 
   ctx.priceSelectAllVisible(false); assert.equal(element('priceSelectedCount').textContent, '');
 });
 
+test('advertising price editor reuses warehouse saves and invalidates the Prices snapshot',async()=>{
+  const f=fixture();
+  f.products[0].kaspi='1';
+  assert.equal((await f.ctx.kaspiAdvertisingPrices.load()).rows[0].price,890);
+  const result=await f.ctx.kaspiAdvertisingPrices.save('yellow',990);
+  assert.equal(result.previous,890);
+  assert.equal(result.price,990);
+  assert.deepEqual(f.products.map(p=>p.kaspiPrice),[990,890,1200]);
+  assert.deepEqual(f.calls,{save:1,push:1});
+  await assert.rejects(f.ctx.kaspiAdvertisingPrices.save('missing',990),/не привязан/);
+  await assert.rejects(f.ctx.kaspiAdvertisingPrices.save('yellow',0),/больше нуля/);
+});
+
+test('advertising price editor distinguishes local-only saves from server confirmation',async()=>{
+  const f=fixture({pushed:false});
+  f.products[0].kaspi='1';
+  await assert.rejects(f.ctx.kaspiAdvertisingPrices.save('yellow',990),/локально/);
+  assert.equal(f.products[0].kaspiPrice,990);
+  const readonly=fixture({ready:false});
+  readonly.products[0].kaspi='1';
+  await assert.rejects(readonly.ctx.kaspiAdvertisingPrices.save('yellow',990),/просмотра/);
+  assert.equal(readonly.products[0].kaspiPrice,890);
+});
+
 test('Kaspi batch is fixed to its original selection even after switching shops', async () => {
   const f = fixture(), { ctx, element } = f;
   await ctx.renderPrices(); ctx.priceSearch('Тетрис'); ctx.priceSelectRow(0, true);

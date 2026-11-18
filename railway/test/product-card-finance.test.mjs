@@ -83,6 +83,19 @@ test('Kaspi advertising still uses deterministic links and reports unallocated s
   assert.doesNotMatch(html,/nn\.includes\(x\.key\)\|\|x\.key\.includes\(nn\)/);
 });
 
+test('Kaspi title matching preserves model numbers while removing package counts and dimensions',()=>{
+  const products=[1,2,3,4].map(n=>({id:String(n),name:'Рыбалка #'+n,kaspi:'stock-'+n}));
+  const ctx={window:{},state:{products,kaspiOrderFeed:[]},prod:id=>products.find(p=>p.id===id),
+    normalizeName:value=>String(value||'').toLowerCase(),adsSkuEqual:(a,b)=>String(a).trim()===String(b).trim()};
+  vm.createContext(ctx);
+  const start=html.indexOf('function kaspiAdsNameKey('),end=html.indexOf('function kaspiAdsBreakdown(');
+  vm.runInContext(html.slice(start,end),ctx);
+  assert.equal(ctx.kaspiAdsMatchProduct({sku:'185083186',name:'Брелок LuxAr Рыбалка #4 металл 1 шт'}).id,'4');
+  assert.equal(ctx.kaspiAdsMatchProduct({name:'Брелок LuxAr Рыбалка #4 8,2 см металл 1 шт'}).id,'4');
+  assert.equal(ctx.kaspiAdsMatchProduct({name:'Брелок LuxAr Рыбалка #5 металл 1 шт'}),null);
+  assert.equal(ctx.kaspiAdsMatchProduct({sku:'stock-2',name:'Рыбалка #4'}).id,'2');
+});
+
 test('unmatched marketplace advertising is never spread across unrelated products',()=>{
   assert.match(report,/for\(const x of kaspiKnown\)add\(x\.productId,x\.qty,Number\(x\.profit\)\|\|0,'Kaspi',Math\.max\(0,Number\(x\.ads\)\|\|0\)\)/);
   assert.match(report,/productAds=Math\.max\(0,Number\(x\.advertising\)\|\|0\);add\(v\.pid,saleQty,Number\(x\.netBeforeCost\|\|0\)-cost,model\.market,productAds\)/);
