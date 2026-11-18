@@ -12,7 +12,7 @@ function mount(batches, tests = {}, orders = [], connection = {}) {
   const handlers = {};
   const panel = {innerHTML:'',closest:()=>null,contains:node=>!!node,querySelectorAll:()=>[],
     addEventListener(type,handler){handlers[type]=handler},
-    click(dataset){handlers.click({target:{closest:()=>({dataset})}})},
+    click(dataset){handlers.click({preventDefault(){},target:{closest:()=>({dataset})}})},
     expand(dataset) {
       const body = {innerHTML:'',hasAttribute:()=>false,setAttribute(){}};
       handlers.toggle({target:{open:true,dataset,querySelector:()=>body}});
@@ -20,7 +20,7 @@ function mount(batches, tests = {}, orders = [], connection = {}) {
     },
   };
   const c = {
-    Date:Clock, URLSearchParams, window:{}, MILLIONER_API:'',
+    Date:Clock, URLSearchParams, window:{}, MILLIONER_API:'', requireWarehouseEditReady:()=>true,
     document:{head:{append(){}},createElement:()=>({}),getElementById:()=>panel},
     state:{settings:{kaspiPriceTests:tests},kaspiAdExpenses:batches,products:[product,other]}, esc:String,
     prod:id=>[product,other].find(item=>item.id===id), kaspiAdsMatchProduct:line=>line.sku==='A'?product:null,
@@ -56,13 +56,23 @@ test('past campaigns and Kaspi products without ads are reachable without prepar
   assert.doesNotMatch(panel.innerHTML,/data-ka-campaign="42:18"|data-ka-product=/);
   const closedProduct = panel.expand({kaCampaign:'42:19'});
   assert.match(closedProduct, /data-ka-product=/);
-  assert.doesNotMatch(closedProduct, /Клики/);
+  assert.match(closedProduct, /<small>Расход<\/small><b>40<\/b>/);
+  assert.match(closedProduct, /<small>Клики<\/small><b>2<\/b>/);
+  assert.match(closedProduct, /<small>Заказы<\/small><b>—<\/b>/);
+  assert.match(closedProduct, /<small>Ставка ✎<\/small>/);
+  assert.doesNotMatch(closedProduct, /Цена клика/);
+  panel.click({kaBid:JSON.stringify(['42:19','A','p',product.name])});
+  assert.match(panel.innerHTML,/data-ka-bid-form=/);
+  assert.match(panel.innerHTML,/name="bid" type="number" min="3"/);
+  panel.click({kaBidCancel:JSON.stringify(['42:19','A','p',product.name])});
+  assert.doesNotMatch(panel.innerHTML,/data-ka-bid-form=/);
   const body = panel.expand({kaProduct:JSON.stringify(['42:19','A','p',product.name])});
   assert.match(body, /Клики <b>2<\/b>/);
   assert.match(body, /нет полной статистики рекламных заказов/);
   panel.click({kaHistory:'history'});
   assert.match(panel.innerHTML,/data-ka-campaign="42:18"/);
   assert.doesNotMatch(panel.innerHTML,/data-ka-campaign="42:19"/);
+  assert.doesNotMatch(panel.expand({kaCampaign:'42:18'}), /class="kaw-cell kaw-bid"/);
   panel.click({kaMode:'catalog'});
   assert.match(panel.innerHTML,/<b>Без рекламы<\/b>/);
   assert.doesNotMatch(panel.innerHTML,/<b>Брелок<\/b>/);

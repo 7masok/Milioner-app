@@ -15,8 +15,10 @@
   const sum = (rows, key) => rows.every(row => number(row[key]) !== null)
     ? rows.reduce((total, row) => total + Number(row[key]), 0) : null;
   const format = new Intl.NumberFormat('ru-RU', { maximumFractionDigits: 2 });
+  const compactFormat = new Intl.NumberFormat('ru-RU', { notation:'compact', maximumFractionDigits:1 });
   const value = (x, suffix = '') => x == null ? '—' : format.format(x) + suffix;
   const cash = x => value(x, ' ₸');
+  const compact = x => x == null ? '—' : x >= 1000 ? compactFormat.format(x) : format.format(x);
   const hasActivity = line => Number(line.amount) > 0 || countKeys.some(key => Number(line[key]) > 0);
   const kaspiSkus = item => [item.kaspi,...(Array.isArray(item.kaspiAliases)?item.kaspiAliases:[])];
   const testEnd = t => Math.min(t.startedAt + t.days * DAY, t.stoppedAt || Infinity);
@@ -196,6 +198,14 @@
     .kaw-caret { flex:none; color:var(--ka-muted); }
     .kaw details[open] > summary .kaw-caret { transform:rotate(180deg); }
     .kaw-product { border-top:1px solid var(--ka-border); margin-left:9px; }
+    .kaw-product-summary.has-stats { display:grid; grid-template-columns:minmax(0,1fr) repeat(var(--ka-cols,4),minmax(34px,max-content)) auto; gap:4px; }
+    .kaw-product-summary.has-stats .kaw-name > b { display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden; overflow-wrap:anywhere; white-space:normal; line-height:1.16; }
+    .kaw-product-summary .kaw-tag { display:inline-block; max-width:100%; overflow:hidden; text-overflow:ellipsis; vertical-align:middle; }
+    .kaw-cell { display:flex; flex-direction:column; align-items:center; justify-content:center; min-height:30px; padding:2px 4px; border-radius:5px; background:#f5f5f8; white-space:nowrap; font-variant-numeric:tabular-nums; line-height:1.15; }
+    .kaw-cell > small { color:var(--ka-muted); font-size:9px; }
+    .kaw-cell > b { font-size:11px; }
+    .kaw-cell.kaw-bid { color:#4b2ca2; background:#eee8ff; border:1px solid #d9caff; font:inherit; cursor:pointer; min-width:40px; }
+    .kaw-cell.kaw-bid small { color:inherit; }
     .kaw-panel { padding:0 9px 8px; }
     .kaw-metrics { display:flex; gap:9px 13px; flex-wrap:wrap; margin:4px 0 7px; font-size:11px; color:var(--ka-muted); }
     .kaw-metrics b { color:var(--ka-ink); }
@@ -211,6 +221,7 @@
   let reportCache = null, search = '', catalogLimit = 50, paint = null;
   let confirmedAdDays = new Set();
   const expanded = new Set(), productExpanded = new Set(), forms = new Set(), detailBodies = new Map();
+  const bidRows = new Map(), bidValues = new Map(), bidForms = new Set();
   const emptyTests = {};
   const tests = () => state.settings.kaspiPriceTests || emptyTests;
   const root = () => document.getElementById('kaspiCampaignWorkbench');
@@ -300,6 +311,7 @@
       ['Клики', metric('clicks')], ['Корзины', metric('carts')], ['Рекл. заказы', metric('orders')],
       ['В выкупе', value(m.buyouts)], ['Цена клика', cash(m.cpc)], ['Окупается до', cash(m.maxCpc)], ['Оценка Kaspi', value(m.score)],
     ];
+    if (m.profit != null) metrics.push(['Прибыль',cash(m.profit)]);
     if (m.bid != null) metrics.push(['Ставка', cash(m.bid)]);
     const suggested = kind === 'lower' && m.maxCpc != null ? Math.floor(m.maxCpc * .85)
       : kind === 'raise' ? Math.floor(Math.min(m.bid * 1.1, m.maxCpc * .85)) : null;
@@ -332,17 +344,43 @@
       +(reason?'<div class="kaw-note">'+esc(reason)+'</div>':'')+testInfo+controls+form;
   }
 
+  function productCells(row, campaign, m, key) {
+    if (!row.lines.length) return '';
+    const cell = (label, description, metric, partial = false) =>
+      '<span class="kaw-cell" title="'+esc(description+' · '+value(metric)+(partial?' (доступные дни)':''))+'">'
+      +'<small>'+label+'</small><b>'+compact(metric)+(partial?'*':'')+'</b></span>';
+    const count = key => m[key] ?? m.partial?.[key];
+    const native = campaign.latest && /^([0-9]+):([0-9]+)$/.exec(campaign.key);
+    const currentBid = bidValues.has(key) ? bidValues.get(key) : m.bid;
+    if (native && row.sku) bidRows.set(key,{accountId:native[1],campaignId:native[2],sku:row.sku,bid:currentBid});
+    const bid = native && row.sku
+      ? '<button type="button" class="kaw-cell kaw-bid" data-ka-bid="'+esc(key)+'"'
+        +' aria-label="'+esc('Изменить ставку за клик · '+row.name)+'">'
+        +'<small>Ставка ✎</small><b>'+value(currentBid)+'</b></button>'
+      : cell('Ставка','Ставка за клик, ₸',m.bid);
+    return cell('Расход','Расход, ₸',row.spend)
+      + cell('Клики','Клики',count('clicks'),m.clicks == null && count('clicks') != null)
+      + cell('Заказы','Рекламные заказы',count('orders'),m.orders == null && count('orders') != null)
+      + (m.profit != null?cell('Прибыль','Прибыль после рекламы, ₸',m.profit):'')+bid;
+  }
+
   function renderProduct(row, campaign, m, kind, t, at) {
     const key = JSON.stringify([campaign.key, row.sku, row.productId, row.name]);
     const running = active(t, at), open = productExpanded.has(key);
     const text = running ? 'День ' + experiment(t, data?.orders, at).day + '/' + t.days : actions[kind];
     const body = () => productBody(row,m,kind,t,at);
     detailBodies.set(key, body);
-    return '<details class="kaw-product" data-ka-product="'+esc(key)+'"'+(open?' open':'')+'><summary class="kaw-row" title="'+esc(row.name)+'">'
-      + '<span class="kaw-name"><b>'+esc(row.name)+'</b>'+(running?'<span class="kaw-progress">'+esc(experimentLabel(t,at))+'</span>':'')+'</span>'
-      + (m.profit != null ? '<b class="kaw-money '+tone(m.profit)+'">'+cash(m.profit)+'</b>' : '')
-      + (text?'<span class="kaw-tag" data-kind="'+kind+'">'+text+'</span>':'')+'<span class="kaw-caret" aria-hidden="true">⌄</span></summary>'
-      + '<div class="kaw-panel" data-ka-body'+(open?' data-ka-filled':'')+'>'+(open?body():'')+'</div></details>';
+    const cells = productCells(row,campaign,m,key);
+    const bidInput = bidRows.get(key);
+    const editor = bidForms.has(key) && bidInput ? '<form class="kaw-form kaw-bid-form" data-ka-bid-form="'+esc(key)+'">'
+      +'<label>Ставка за клик, ₸<input name="bid" type="number" min="3" step="0.01" required value="'+(bidInput.bid ?? '')+'"></label>'
+      +'<button class="btn dark" type="submit">Применить</button><button class="btn" type="button" data-ka-bid-cancel="'+esc(key)+'">Отмена</button>'
+      +'<span class="kaw-note" role="status"></span></form>' : '';
+    const tag = text?'<span class="kaw-tag" data-kind="'+kind+'">'+text+'</span>':'';
+    return '<details class="kaw-product" data-ka-product="'+esc(key)+'"'+(open?' open':'')+'><summary class="kaw-row kaw-product-summary'+(cells?' has-stats':'')+'"'+(cells && m.profit != null?' style="--ka-cols:5"':'')+' title="'+esc(row.name)+'">'
+      + '<span class="kaw-name"><b>'+esc(row.name)+'</b>'+(running?'<span class="kaw-progress">'+esc(experimentLabel(t,at))+'</span>':'')+(cells?tag:'')+'</span>'
+      + cells + (cells?'':tag)+'<span class="kaw-caret" aria-hidden="true">⌄</span></summary>'
+      + '<div class="kaw-panel" data-ka-body'+(open?' data-ka-filled':'')+'>'+(open?body():'')+'</div></details>'+editor;
   }
 
   const tone = profit => profit < 0 ? 'kaw-negative' : profit > 0 ? 'kaw-positive' : '';
@@ -496,6 +534,15 @@
         const b = event.target.closest('button');
         if (!b) return;
         const k = b.dataset;
+        if (k.kaBid || k.kaBidCancel) {
+          event.preventDefault();
+          const key = k.kaBid || k.kaBidCancel;
+          if (k.kaBidCancel) bidForms.delete(key);
+          else if (bidRows.has(key)) bidForms.add(key);
+          document.activeElement?.blur();
+          draw(false);
+          return;
+        }
         if (k.kaMore !== undefined) {
           catalogLimit += 50;
           panel.querySelector('[data-ka-content]').innerHTML = paint();
@@ -514,7 +561,33 @@
         } else return;
         draw(refresh);
       });
-      panel.addEventListener('submit', event => {
+      panel.addEventListener('submit', async event => {
+        const bidKey = event.target.dataset.kaBidForm;
+        if (bidKey) {
+          event.preventDefault();
+          if (!requireWarehouseEditReady()) return;
+          const form = event.target, row = bidRows.get(bidKey);
+          if (!row || form.dataset.saving) return;
+          const bid = Number(new FormData(form).get('bid'));
+          if (!Number.isFinite(bid) || bid < 3 || Math.round(bid*100)/100 !== bid) return;
+          const status = form.querySelector('[role="status"]'), buttons = [...form.querySelectorAll('button,input')];
+          form.dataset.saving = '1';
+          buttons.forEach(button=>button.disabled=true);
+          status.textContent='Сохраняю в Kaspi…';
+          try {
+            const response = await adsApi('/api/kaspi-marketing/bid',{method:'PUT',body:JSON.stringify({...row,bid})});
+            bidValues.set(bidKey,response.bid);
+            bidForms.delete(bidKey);
+            document.activeElement?.blur();
+            draw(false);
+          } catch (error) {
+            status.textContent=error.message || 'Проверьте ставку в Kaspi перед повтором.';
+          } finally {
+            delete form.dataset.saving;
+            buttons.forEach(button=>button.disabled=false);
+          }
+          return;
+        }
         const productId = event.target.dataset.kaTest;
         if (!productId) return;
         event.preventDefault();

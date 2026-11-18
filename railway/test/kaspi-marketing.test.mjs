@@ -2,6 +2,31 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createKaspiMarketingService, kaspiProductExpenses } from '../src/kaspi-marketing.js';
 
+test('single-product bid changes use the connected account and require the echoed SKU and bid', async () => {
+  let calls=0, confirmed=true;
+  const data={account:{id:123},cookies:[]};
+  const service=createKaspiMarketingService({
+    read:async()=>structuredClone(data),write:async()=>{},
+    fetchImpl:async (url,options)=>{
+      calls++;
+      assert.equal(url,'https://marketing.kaspi.kz/advertising/products/api/v1/merchant/123/campaign/456/products/update-bid');
+      assert.equal(options.method,'PUT');
+      assert.equal(options.headers['Content-Type'],'application/json');
+      assert.deepEqual(JSON.parse(options.body),{skuList:['A'],bid:8.5});
+      return Response.json({result:'Ok',data:confirmed?[{sku:'A',bid:8.5}]:[]});
+    },
+  });
+  const input={accountId:'123',campaignId:'456',sku:'A',bid:8.5};
+  assert.deepEqual(await service.setBid(input),{ok:true,...input});
+  await assert.rejects(service.setBid({...input,accountId:'999'}),/другой магазин/);
+  await assert.rejects(service.setBid({...input,bid:2}),/от 3/);
+  await assert.rejects(service.setBid({...input,bid:'8.5'}),/от 3/);
+  assert.equal(calls,1);
+  confirmed=false;
+  await assert.rejects(service.setBid(input),/не подтвердил новую ставку/);
+  assert.equal(calls,2);
+});
+
 function fixture(campaigns = [{ id: 456, name: 'Campaign 1', cost: 120.5 }], fixtureOptions = {}) {
   let saved, tick = Date.parse('2026-11-15T03:59:00Z'), requests = 0, logins = 0, expired = false;
   const persisted = [], savedIds = new Set();
