@@ -164,6 +164,22 @@
     return out;
   }
 
+  function productTotal(productId, totals) {
+    if (!productId || !totals) return {};
+    const row=totals.byProduct.get(String(productId));
+    if (!row) return totals.incomplete?{}:{totalProfit:0,totalQty:0};
+    return {totalProfit:row.unknownCost?null:number(row.profit),totalQty:number(row.qty),totalPreliminary:totals.incomplete};
+  }
+
+  function totalProducts(products) {
+    const unique=new Map();
+    for (const entry of products) {
+      if (!entry.row.productId) return null;
+      unique.set(entry.row.productId,entry.m);
+    }
+    return unique.size?sum([...unique.values()],'totalProfit'):null;
+  }
+
   function advice(m, item, test, at) {
     if (active(test, at)) return 'test';
     if (m.clicks >= 30 && m.profit < 0 && m.profit != null) return 'lower';
@@ -289,12 +305,15 @@
     pending = key;
     const query = new URLSearchParams({ market: 'Kaspi', after: Math.floor(earliest), before: Math.floor(at), limit: LIMIT, history: 1 });
     const analytics = state.kaspiAdExpenses?.some(batch => batch.lines?.some(line => line.date >= from && line.date <= to && line.orderCodes?.length));
+    const totalRequest=typeof window.loadKaspiCampaignFinance==='function'
+      ? window.loadKaspiCampaignFinance({from,to}) : Promise.resolve(null);
     const requests = [
       activeOrRecent.length ? apiJson(MILLIONER_API + '/api/orders?' + query) : Promise.resolve(null),
       (analytics || activeOrRecent.length) && typeof window.loadKaspiCampaignFinance === 'function'
         ? window.loadKaspiCampaignFinance({from:financeFrom,to:iso(at)}) : Promise.resolve(null),
+      totalRequest,
     ];
-    Promise.allSettled(requests).then(([orders, snapshot]) => {
+    Promise.allSettled(requests).then(([orders, snapshot, productSnapshot]) => {
       if (pending !== key) return;
       const snap = snapshot.status === 'fulfilled' ? snapshot.value : null;
       let finance = null;
@@ -308,8 +327,13 @@
           if (!(snap.returns || []).some(x => !x.code && !x.id && !x.orderCode && !x.orderId)) finance = {byCode,returned};
         } catch {}
       }
-      data = {key, from, to, orders:orders.status === 'fulfilled' ? orders.value : null, finance};
-      failure = orders.status === 'rejected' || snapshot.status === 'rejected';
+      const summary=productSnapshot.status==='fulfilled'?productSnapshot.value:null;
+      const totals=summary && !summary.historyIncomplete && Array.isArray(summary.products)
+        ? {byProduct:new Map(summary.products.filter(row=>row.productId).map(row=>[String(row.productId),row])),
+          incomplete:!!(summary.pendingOrders || summary.adsDateMissing || summary.returns?.length
+            || summary.products.some(row=>!row.productId && (Number(row.revenue)!==0 || Number(row.ads)>0)))} : null;
+      data = {key, from, to, orders:orders.status === 'fulfilled' ? orders.value : null, finance,totals};
+      failure = orders.status === 'rejected' || snapshot.status === 'rejected' || productSnapshot.status==='rejected';
       pending = '';
       draw(false);
     });
@@ -318,9 +342,7 @@
   function experimentLabel(t, at) {
     const result = experiment(t, data?.orders, at);
     if (result.after == null) return result.observedAfter == null ? 'Ждём данные заказов' : result.observedAfter + ' заказов видно';
-    const delta = result.percent == null ? result.before + ' → ' + result.after
-      : (result.percent > 0 ? '+' : '') + result.percent + '%';
-    return result.after + ' заказов · ' + delta;
+    return 'Заказы: '+result.before+' → '+result.after+(result.percent==null?'':' · '+(result.percent>0?'+':'')+result.percent+'%');
   }
 
   function testProfit(t, at) {
@@ -365,7 +387,9 @@
       ['Клики', metric('clicks')], ['Корзины', metric('carts')], ['Рекл. заказы', metric('orders')],
       ['В выкупе', value(m.buyouts)], ['Цена клика', cash(m.cpc)], ['Окупается до', cash(m.maxCpc)], ['Оценка Kaspi', value(m.score)],
     ];
-    if (m.profit != null) metrics.push(['Прибыль',cash(m.profit)]);
+    if (m.totalProfit != null) metrics.push(['Общая прибыль Kaspi','≈ '+cash(m.totalProfit)]);
+    if (m.totalQty != null) metrics.push(['Продано, шт.',value(m.totalQty)]);
+    if (m.profit != null) metrics.push(['От рекламных выкупов',cash(m.profit)]);
     if (m.bid != null) metrics.push(['Ставка', cash(m.bid)]);
     const suggested = kind === 'lower' && m.maxCpc != null ? Math.floor(m.maxCpc * .85)
       : kind === 'raise' ? Math.floor(Math.min(m.bid * 1.1, m.maxCpc * .85)) : null;
@@ -377,33 +401,37 @@
       price: 'По товару кликают, но редко заказывают. Проверь цену в выдаче перед тестом.',
       card: 'Товар часто видят, но редко открывают. Проверь главное фото и цену в выдаче.',
       unknown: row.lines.length ? (m.orders == null ? 'В выгрузке нет полной статистики рекламных заказов. Прибыль и ставки пока не оценены.'
-        : m.profit == null ? 'Для расчёта прибыли нужны связанные выкупы и себестоимость.'
+        : m.totalProfit == null ? 'Общая прибыль появится после загрузки выкупов и себестоимости.'
+        : m.profit == null ? 'Общая прибыль включает все продажи товара. Окупаемость именно рекламных заказов пока не подтверждена.'
         : 'Для рекомендации по ставке пока недостаточно кликов.') : '',
       unadvertised: row.sku ? 'Артикул Kaspi · ' + row.sku : '',
     }[kind];
     const outcome = t ? testProfit(t,at) : null;
     const testInfo = t
       ? '<div class="kaw-note"><b>'+ (running ? 'Тест цены' : 'Тест завершён') + ' · '+ cash(t.before) + ' → ' + cash(t.after) + '</b> · ' + esc(experimentLabel(t, at))
-        + ' · все заказы Kaspi, предварительно</div><div class="kaw-note">'+(outcome
-          ? 'Прибыль после рекламы в день · '+cash(outcome.before)+' → '+cash(outcome.after)+' (полные дни)'
+        + ' · все заказы Kaspi, предварительно</div><div class="kaw-note">До: '+iso(baselineStart(t))+' — '+iso(baselineStart(t)+Math.max(0,Math.min(testEnd(t),at)-t.startedAt)-1)+' · После: '+iso(t.startedAt)+' — '+iso(Math.min(testEnd(t),at)-1)+'</div><div class="kaw-note">'+(outcome
+          ? 'Прибыль после рекламы в день · ≈ '+cash(outcome.before)+' → ≈ '+cash(outcome.after)+' (полные дни). Изменение: '+(outcome.after-outcome.before>0?'+':'')+cash(outcome.after-outcome.before)+'/день'
           : 'Сравнение прибыли появится после сверки полных дней, расходов и выкупов.')+'</div>' : '';
+    const priceMismatch=running && number(m.price)>0 && Math.abs(m.price-t.after)>.005
+      ? '<div class="kaw-note" role="status">В прайсе склада '+cash(m.price)+', в тесте '+cash(t.after)+'. Проверь цену в Kaspi. Если она ещё не изменилась, заверши тест и начни заново после применения новой цены.</div>' : '';
     const change=priceChanges.get(row.productId);
     const form = item && forms.has(row.productId) && !running ? '<form class="kaw-form" data-ka-test="'+esc(row.productId)+'">'
       + '<label>Было, ₸<input required type="number" name="before" min="1" step="0.01" value="'+(change?.before ?? m.price ?? '')+'"></label>'
       + '<label>Стало, ₸<input required type="number" name="after" min="1" step="0.01" value="'+(change?.after ?? '')+'"></label>'
       + '<label>Дней<input required type="number" name="days" min="1" max="60" value="14"></label>'
-      + '<button class="btn dark" type="submit">Начать</button></form><div class="kaw-note">Цена передаётся через прайс Kaspi. Начни тест после обновления цены в магазине.</div>' : '';
+      + '<button class="btn dark" type="submit">Начать</button></form><div class="kaw-note">Цена передаётся через прайс Kaspi. Начни тест после обновления цены в магазине. «Было» — прежняя цена, «Стало» — новая. Кнопка «Начать» не меняет цену.</div>' : '';
     const controls = item ? '<div class="kaw-toolbar"><button type="button" data-ka-'+(running ? 'finish' : 'open-test')+'="'+esc(row.productId)+'">'+(running ? 'Завершить тест' : 'Тест цены')+'</button></div>' : '';
     const identity = row.lines.length ? '<div class="kaw-note">Артикул Kaspi · '+esc(row.sku || 'не указан')+'</div>'
       +(!item?'<div class="kaw-note">Нет совпадения со складским товаром. Название в выгрузке · '+esc(row.sourceName || 'не указано')+'</div>':'') : '';
     return identity+(row.lines.length ? '<div class="kaw-metrics">'+metrics.map(([label, x])=>'<span>'+label+' <b>'+x+'</b></span>').join('')
       + '</div>' : '')+(Object.keys(m.partial || {}).length ? '<div class="kaw-note">* Сумма по дням с доступными данными.</div>' : '')
-      +(reason?'<div class="kaw-note">'+esc(reason)+'</div>':'')+testInfo+controls+form;
+      +(m.totalPreliminary?'<div class="kaw-note">Прибыль предварительная: есть нераспределённые операции или неполные дни рекламы в отчёте.</div>':'')
+      +(reason?'<div class="kaw-note">'+esc(reason)+'</div>':'')+testInfo+priceMismatch+controls+form;
   }
 
   function productCells(row, campaign, m, key) {
     const cell = (label, description, metric, partial = false) =>
-      '<span class="kaw-cell '+(label==='Прибыль'?tone(metric):'')+'" title="'+esc(description+' · '+value(metric)+(partial?' (доступные дни)':''))+'">'
+      '<span class="kaw-cell '+(label.startsWith('Прибыль')?tone(metric):'')+'" title="'+esc(description+' · '+value(metric)+(partial?' (доступные дни)':''))+'">'
       +'<small>'+label+'</small><b>'+compact(metric)+(partial?'*':'')+'</b></span>';
     const count = key => m[key] ?? m.partial?.[key];
     const native = campaign.latest && /^([0-9]+):([0-9]+)$/.exec(campaign.key);
@@ -427,7 +455,7 @@
     return cell('Расход','Расход, ₸',row.spend)
       + cell('Клики','Клики',count('clicks'),m.clicks == null && count('clicks') != null)
       + cell('Заказы','Рекламные заказы',count('orders'),m.orders == null && count('orders') != null)
-      + bid+price+cell('Прибыль',m.profit == null ? 'Прибыль после рекламы не рассчитана. Нужны связанные выкупы и себестоимость' : 'Прибыль после рекламы, ₸',m.profit);
+      + bid+price+cell('Прибыль ≈',m.totalProfit == null ? 'Общая прибыль Kaspi не рассчитана: нужны выкупы и себестоимость' : 'Общая прибыль товара в Kaspi за период после всех расходов и всей рекламы, по расчётным тарифам',m.totalProfit,!!m.totalPreliminary);
   }
 
   function renderProduct(row, campaign, m, kind, t, at) {
@@ -462,7 +490,7 @@
         const key=JSON.stringify([campaign.key,item.row.sku,item.row.productId,item.row.name]);
         return bidValues.get(key) ?? item.m.bid;
       }
-      return item.m[sortKey] ?? item.m.partial?.[sortKey];
+      return sortKey==='profit'?item.m.totalProfit:item.m[sortKey] ?? item.m.partial?.[sortKey];
     };
     const av=number(metric(a)), bv=number(metric(b));
     if (av===null && bv!==null) return 1;
@@ -521,8 +549,9 @@
     const at = Date.now(), from = iso(at - days * DAY), to = iso(at - DAY), list = tests();
     const report = reportFor(from,to);
     const finance = data?.from === from && data?.to === to ? data.finance : null;
+    const totals=data?.from===from && data?.to===to?data.totals:null;
     const minute = Math.floor(at / 60000);
-    if (!report.prepared || report.finance !== finance || report.list !== list || report.minute !== minute || report.statsVersion !== statsVersion) {
+    if (!report.prepared || report.finance !== finance || report.totals!==totals || report.list !== list || report.minute !== minute || report.statsVersion !== statsVersion) {
       report.prepared = report.rows.map(campaign => {
         const products = [...campaign.products.values()].map(row => {
           const m = campaignMetrics(row,finance,report.claims), t = list[row.productId];
@@ -543,14 +572,15 @@
             const key=JSON.stringify([campaign.key,row.sku,row.productId,row.name]);
             if (number(current.bid)!==null) bidValues.set(key,Number(current.bid));
           }
+          Object.assign(m,productTotal(row.productId,totals));
           return {row,m,t,kind:advice(m,prod(row.productId),t,at)};
-        }).sort((a,b)=>(a.m.profit ?? Infinity)-(b.m.profit ?? Infinity) || (b.row.spend||0)-(a.row.spend||0));
-        const profit = campaign.hasDay && !campaign.hasUnallocated && products.length ? sum(products.map(x=>x.m),'profit') : null;
+        }).sort((a,b)=>(a.m.totalProfit ?? Infinity)-(b.m.totalProfit ?? Infinity) || (b.row.spend||0)-(a.row.spend||0));
+        const profit = campaign.hasDay && !campaign.hasUnallocated ? totalProducts(products) : null;
         return {campaign,products,profit};
       }).sort((a,b)=>(a.profit??Infinity)-(b.profit??Infinity) || b.campaign.spend-a.campaign.spend);
-      Object.assign(report,{finance,list,minute,statsVersion});
+      Object.assign(report,{finance,totals,list,minute,statsVersion});
     }
-    if (refresh && (Object.keys(list).length || report.claims.size)) readAnalytics(from,to,list,at);
+    if (refresh) readAnalytics(from,to,list,at);
     const filters = {all:'Все', lower:'Снизить', raise:'Поднять', price:'Тест цены', card:'Карточка', keep:'Оставить'};
     const renderRow = (x,c) => renderProduct(x.row,c,x.m,x.kind,x.t,at);
     const empty = message => '<div class="empty">'+message+'</div>';
@@ -575,9 +605,9 @@
       const group = report.prepared.filter(({campaign}) => history ? !campaign.latest && (campaign.spend > 0
         || [...campaign.products.values()].some(row => row.lines.some(hasActivity))) : campaign.latest);
       const spend = group.reduce((a,{campaign})=>a+campaign.spend,0);
-      const profit = group.length ? sum(group,'profit') : null;
+      const profit = group.length ? totalProducts(group.flatMap(entry=>entry.products)) : null;
       const heading = '<div class="kaw-overview"><span>'+from.slice(5).split('-').reverse().join('.')+' – '+to.slice(5).split('-').reverse().join('.')+'</span>'
-        + '<b>Расход '+cash(group.length?spend:null)+'</b>'+(profit == null?'':'<span>Прибыль '+cash(profit)+'</span>')+'</div>'
+        + '<b>Расход '+cash(group.length?spend:null)+'</b>'+(profit == null?'':'<span>Прибыль товаров ≈ '+cash(profit)+'</span>')+'</div>'
         + (failure?'<div class="kaw-note" role="status">Не удалось обновить часть статистики.</div>':'');
       const content = group.map(({campaign,products}) => {
         const visible = products.filter(x => filter === 'all' || x.kind === filter).sort((a,b)=>compareProducts(a,b,campaign));
@@ -595,13 +625,15 @@
       const message = filter !== 'all' ? 'За этот период таких рекомендаций нет.'
         : history ? 'Нет прошлых кампаний с расходом или показами за выбранный период.'
         : 'В последней выгрузке нет активности. Прошлые кампании можно посмотреть в истории.';
-      const attributionMissing = group.some(({products}) => products.some(({row,m}) => row.spend > 0 && m.profit == null));
+      const profitMissing = group.some(({products}) => products.some(({row,m}) => row.productId && m.totalProfit == null));
       const stats=group.map(({campaign})=>productStats.get(statsKey(campaign,from,to)));
       return heading+(!history && group.length ? '<div class="kaw-note">Кампании с активностью в последней выгрузке</div>' : '')
         +(stats.some(record=>record?.pending)?'<div class="kaw-note" role="status">Обновляю заказы и ставки Kaspi…</div>':'')
         +(stats.some(record=>record?.error)?'<div class="kaw-note" role="status">Заказы и ставки не обновлены. '+esc(stats.find(record=>record?.error).error)+'</div>':'')
         +(priceError?'<div class="kaw-note" role="status">'+esc(priceError)+'</div>':'')
-        +(attributionMissing ? '<div class="kaw-note">Для расчёта прибыли нужны номера рекламных заказов, выкупы и себестоимость.</div>' : '')
+        +'<div class="kaw-note">Прибыль ≈ — общая по товару в Kaspi за выбранный период, после всей его рекламы. Комиссии и часть доставки расчётные. В разных кампаниях прибыль одного товара повторяется.</div>'
+        +(totals?.incomplete?'<div class="kaw-note">Есть нераспределённые операции: прибыль предварительная, они не разнесены по товарам.</div>':'')
+        +(pending?'<div class="kaw-note" role="status">Загружаю общую прибыль Kaspi…</div>':profitMissing ? '<div class="kaw-note">Для части товаров ещё нет подтверждённых выкупов или себестоимости.</div>' : '')
         +(content || empty(message));
     };
     const scroll = [...panel.querySelectorAll('.kaw-toolbar')].slice(0,2).map(x=>x.scrollLeft);

@@ -102,3 +102,17 @@ test('inline order pages reuse one snapshot across products, preserve the sheet 
  await f.ctx.loadKaspiProductBuyouts(details,3);assert.equal(loads,2);assert.equal((body.innerHTML.match(/data-kaspi-buyout /g)||[]).length,2);assert.match(body.innerHTML,/3 \/ 3/);
  const prior=body.innerHTML;f.paint(1);const last=f.ctx.loadKaspiProductBuyouts(details);open=false;finish(f.snapshot);await last;assert.equal(body.innerHTML,prior);
 });
+
+test('advertising total-profit adapter shares the established product report without another ad subtraction',async()=>{
+ const f=fixture(),before=JSON.stringify(f.state);
+ f.ctx.loadKaspiOrders=async()=>f.snapshot;
+ const start=source.indexOf('window.loadKaspiCampaignFinance=');
+ vm.runInContext(source.slice(start,source.indexOf('\n};',start)+3),f.ctx);
+ const result=await f.ctx.window.loadKaspiCampaignFinance({from:'2026-11-01',to:'2026-11-17'});
+ assert.equal(result.products.find(x=>x.productId==='pink').profit,f.model.rows.find(x=>x.productId==='pink').profit);
+ assert.ok(Math.abs(result.buyouts[0].profit-20-result.products[0].profit)<1e-8);
+ assert.equal(JSON.stringify(f.state),before);
+ f.snapshot.historyIncomplete=true;
+ const incomplete=await f.ctx.window.loadKaspiCampaignFinance({from:'2026-11-01',to:'2026-11-17'});
+ assert.equal(incomplete.products,null);assert.equal(incomplete.buyouts.length,0);
+});

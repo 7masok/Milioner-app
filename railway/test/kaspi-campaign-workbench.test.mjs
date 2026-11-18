@@ -96,10 +96,10 @@ function batch(campaign, importedAt, lines, date = '2026-11-17') {
 test('column buttons sort cached metrics both ways with unknown profit after signed and zero values', async () => {
   let financeReads=0;
   const panel=mount([batch(19,1,[
-    {date:'2026-11-17',sku:'A',name:'Alpha',amount:200,clicks:10,orders:1,bid:20,orderCodes:['111']},
-    {date:'2026-11-17',sku:'B',name:'Beta',amount:100,clicks:20,orders:1,bid:10,orderCodes:['222']},
+    {date:'2026-11-17',sku:'A',name:'Alpha',amount:200,clicks:10,orders:1,bid:20},
+    {date:'2026-11-17',sku:'B',name:'Beta',amount:100,clicks:20,orders:1,bid:10},
     {date:'2026-11-17',sku:'C',name:'Gamma',amount:50},
-    {date:'2026-11-17',sku:'D',name:'Delta',amount:0,clicks:0,orders:0,bid:3,orderCodes:[]},
+    {date:'2026-11-17',sku:'D',name:'Delta',amount:0,clicks:0,orders:0,bid:3},
   ])],{},[],{},{
     kaspiAdsMatchProduct:line=>({id:line.sku,name:line.name}),
     prod:id=>({id,name:id,kaspi:id}),
@@ -108,7 +108,7 @@ test('column buttons sort cached metrics both ways with unknown profit after sig
       return {buyouts:[
         {code:'111',lines:[{productId:'A',profit:300}]},
         {code:'222',lines:[{productId:'B',profit:0}]},
-      ],returns:[]};
+      ],returns:[],products:[{productId:'A',profit:100,qty:2},{productId:'B',profit:-100,qty:1},{productId:'C',profit:500,qty:2,unknownCost:true},{productId:'D',profit:0,qty:0}]};
     }},
   });
   await new Promise(resolve=>setImmediate(resolve));
@@ -127,7 +127,7 @@ test('column buttons sort cached metrics both ways with unknown profit after sig
   assert.deepEqual(names(),['Alpha','Delta','Beta','Gamma']);
   panel.click({kaSort:'profit'});
   assert.deepEqual(names(),['Beta','Delta','Alpha','Gamma']);
-  assert.match(panel.expand({kaCampaign:'42:19'}),/<small>Прибыль<\/small><b>—<\/b>/);
+  assert.match(panel.expand({kaCampaign:'42:19'}),/<small>Прибыль ≈<\/small><b>—<\/b>/);
   assert.equal(financeReads,1);
 });
 
@@ -193,6 +193,72 @@ test('an active test shows the first day and compares six orders with four over 
   await new Promise(resolve=>setImmediate(resolve));
   panel.click({kaMode:'tests'});
   assert.match(panel.innerHTML,/День 1\/14/);
-  assert.match(panel.innerHTML,/6 заказов · \+50%/);
+  assert.match(panel.innerHTML,/Заказы: 4 → 6 · \+50%/);
   assert.doesNotMatch(panel.innerHTML,/Попробуй ставку/);
+});
+
+test('total profit uses the selected report period without advertising order IDs or repeated ad deduction',async()=>{
+  const calls=[];
+  const panel=mount([
+    batch(19,1,[{date:'2026-11-17',sku:'A',amount:40,orders:3}]),
+    batch(20,1,[{date:'2026-11-17',sku:'A',amount:60,orders:1}]),
+  ],{},[],{},{window:{loadKaspiCampaignFinance:async range=>{
+    calls.push(range);
+    return {products:[{productId:'p',profit:450,qty:7}],returns:[],buyouts:[]};
+  }}});
+  await new Promise(resolve=>setImmediate(resolve));
+  assert.equal(calls.length,1);
+  assert.equal(calls[0].from,'2026-10-19');assert.equal(calls[0].to,'2026-11-17');
+  assert.match(panel.expand({kaCampaign:'42:19'}),/<small>Прибыль ≈<\/small><b>450<\/b>/);
+  assert.match(panel.expand({kaCampaign:'42:20'}),/<small>Прибыль ≈<\/small><b>450<\/b>/);
+  assert.match(panel.innerHTML,/Прибыль товаров ≈ 450/);
+  assert.doesNotMatch(panel.innerHTML,/Прибыль товаров ≈ 900|номера рекламных заказов/);
+  const body=panel.expand({kaProduct:JSON.stringify(['42:19','A','p',product.name])});
+  assert.match(body,/Общая прибыль Kaspi/);
+  assert.doesNotMatch(body,/Окупается до <b>(?!—)/);
+  panel.click({kaDays:'7'});
+  await new Promise(resolve=>setImmediate(resolve));
+  assert.equal(calls[1].from,'2026-11-11');assert.equal(calls[1].to,'2026-11-17');
+});
+
+test('incomplete financial history stays unknown and unallocated operations mark product profit preliminary',async()=>{
+  for(const snapshot of [
+    {historyIncomplete:true,products:[],returns:[]},
+    {products:[{productId:'p',profit:-40,qty:0}],returns:[{code:'unallocated'}]},
+    {products:[{productId:'p',profit:200,qty:2,unknownCost:true}],returns:[]},
+  ]){
+    const panel=mount([batch(19,1,[{date:'2026-11-17',sku:'A',amount:40,orders:0}])],{},[],{},
+      {window:{loadKaspiCampaignFinance:async()=>snapshot}});
+    await new Promise(resolve=>setImmediate(resolve));
+    const html=panel.expand({kaCampaign:'42:19'});
+    if(snapshot.returns.length){assert.match(html,/<small>Прибыль ≈<\/small><b>-40\*<\/b>/);assert.match(panel.innerHTML,/прибыль предварительная/)}
+    else assert.match(html,/<small>Прибыль ≈<\/small><b>—<\/b>/);
+  }
+});
+
+test('starting a test records before and after but never changes the product price',async()=>{
+  const tests={};let saved=0,priceWrites=0;
+  const panel=mount([batch(19,1,[{date:'2026-11-17',sku:'A',amount:40}])],tests,[],{},{
+    save:()=>{saved++},
+    window:{kaspiAdvertisingPrices:{load:async()=>({rows:[]}),save:async()=>{priceWrites++;}}},
+    FormData:class{constructor(form){this.values=form.values}get(key){return this.values[key]}},
+  });
+  panel.expand({kaCampaign:'42:19'});
+  panel.click({kaOpenTest:'p'});
+  const body=panel.expand({kaProduct:JSON.stringify(['42:19','A','p',product.name])});
+  assert.match(body,/Кнопка «Начать» не меняет цену/);
+  await panel.submit({dataset:{kaTest:'p'},values:{before:'690',after:'590',days:'14'}});
+  assert.equal(saved,1);assert.equal(priceWrites,0);
+  assert.equal(tests.p.before,690);assert.equal(tests.p.after,590);assert.equal(tests.p.days,14);
+});
+
+test('an active price test warns when its target differs from the warehouse price without changing either',async()=>{
+ const item={...product,kaspiPrice:690};
+ const t={productId:'p',name:item.name,startedAt:at-3600000,days:14,before:690,after:590};
+ const panel=mount([], {p:t},[],{}, {prod:()=>item});
+ panel.click({kaMode:'tests'});
+ const body=panel.expand({kaProduct:JSON.stringify(['tests','','p',item.name])});
+ assert.match(body,/В прайсе склада 690 ₸, в тесте 590 ₸/);
+ assert.match(body,/заверши тест и начни заново/);
+ assert.equal(item.kaspiPrice,690);assert.equal(t.after,590);
 });

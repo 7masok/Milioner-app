@@ -7,10 +7,14 @@ function reportConfidenceNote(market,models=[]){let el=document.getElementById('
 (function(){
 window.loadKaspiCampaignFinance=async function(range){
   const snapshot=await loadKaspiOrders(0,{range});
+  const model=snapshot.historyIncomplete?null:buildModel(snapshot,0,range,null,true);
   return {
     historyIncomplete:snapshot.historyIncomplete,
     returns:snapshot.returns,
-    buyouts:snapshot.historyIncomplete?[]:buildModel(snapshot,0,range,null,true).buyouts,
+    buyouts:model?.buyouts || [],
+    products:model?.rows || null,
+    pendingOrders:model?.pendingOrders || 0,
+    adsDateMissing:model?.adsDateMissing || 0,
   };
 };
 if(typeof state==='undefined')return;
