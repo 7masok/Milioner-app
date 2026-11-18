@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
 import { wbFinancePeriodSql } from '../src/wb-finance-period.js';
+import { advertisingWithoutProvisionalDuplicates } from '../src/wb-operation-audit.js';
 
 const ui = readFileSync(new URL('../../kaspi-report-v2.js', import.meta.url), 'utf8');
 const server = readFileSync(new URL('../src/reports.js', import.meta.url), 'utf8');
@@ -18,19 +19,39 @@ test('finance article matching is case/edge-space insensitive, cabinet-specific 
   assert.doesNotMatch(join, /LIMIT 1|products\.name|warehouse_products\.name/);
 });
 
-async function endpoint(financeRows, adAmount = 173188) {
+async function endpoint(financeRows, adAmount = 173188, adRows = null) {
   let handler, response;
   const byProduct = new Map([['wings', adAmount]]);
   const c = { reportsRouter: { get: (_path, fn) => { handler = fn; } }, asyncRoute: fn => fn,
     readWbReportReconciliation:async(_market,_since,_until,products)=>({products}),
     wbFinancePeriodSql, market: value => value, requestPeriodBounds: () => ({ since: 0, until: 86400000 }), dateKey: () => '2026-10-12',
-    pool: { async query(sql) { return { rows: sql.includes('FROM wb_finance_rows') ? financeRows : [] }; } },
+    advertisingWithoutProvisionalDuplicates,
+    pool: { async query(sql) {
+      if (sql.includes('FROM wb_finance_rows')) return { rows: financeRows };
+      if (sql.includes('FROM wb_ad_costs') && adRows) {
+        return { rows: adRows.map(({ raw_json, ...row }) => sql.includes('raw_json') ? { ...row, raw_json } : row) };
+      }
+      if (sql.includes('FROM product_links')) return { rows: [{ sku: '456', productId: 'wings' }] };
+      return { rows: [] };
+    } },
     resolveWbAdvertising: async () => ({ byProduct, total: adAmount + 50, unmatched: 50, autoRecovered: adAmount,
       rows: [{ productId: 'wings', productName: 'Крылья ангела', nmIds: ['1034505393'] }] }) };
-  vm.runInNewContext(route, c);
+  const attribution = adRows ? server.slice(server.indexOf('function wbAdNmIds('), server.indexOf('// A separate, read-only report:')) : '';
+  vm.runInNewContext(attribution + route, c);
   await handler({ query: { market: 'WB2', days: '30' } }, { json: value => { response = value; } });
   return response;
 }
+
+test('the product report excludes the matching provisional WB charge', async () => {
+  const adRows = [0, 123456789].map(updNum => ({
+    day: '2026-10-12', advertId: '321', campaign: 'Кампания', nmIds: ['456'], amount: 137,
+    raw_json: JSON.stringify({ updNum, updTime: '2026-10-12T23:59:59+03:00', updSum: 137, paymentType: 'Баланс', currency: 'KZT' })
+  }));
+  const result = await endpoint([{ productId: 'wings', qty: 1, retailAmount: 1000, forPay: 800 }], undefined, adRows);
+  assert.equal(result.advertising, 137);
+  assert.equal(result.products[0].advertising, 137);
+  assert.equal(result.products[0].netBeforeCost, 663);
+});
 
 test('linked advertisement is attached and subtracted once across finance article variants', async () => {
   const result = await endpoint([
