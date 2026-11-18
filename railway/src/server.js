@@ -96,6 +96,7 @@ const frontendFiles = Object.freeze([
   'kaspi-report-v2.js',
   'wb-operation-audit-v1.js',
   'kaspi-ads-v2.js',
+  'kaspi-campaign-workbench.js',
   'save-conflict-v1.js',
   'purchase-delete-v1.js',
   'purchase-plan-ignore-v1.js',

@@ -80,6 +80,14 @@ export function kaspiProductExpenses(text, date) {
       cost: header.findIndex(name => EXPENSE_HEADER.test(name)),
       sku: header.findIndex(name => /^(?:рекламируемый товар|sku|артикул|код товара)(?: |$)/.test(name)),
       name: header.findIndex(name => /^(?:товар|наименование товара|название товара|название|product name)(?: |$)/.test(name)),
+      views: header.findIndex(name => /^(?:показы|просмотры|количество показов|количество просмотров|impressions|views)$/.test(name)),
+      clicks: header.findIndex(name => /^(?:клики|количество кликов|clicks)$/.test(name)),
+      carts: header.findIndex(name => /^(?:в корзину|добавления в корзину|cart adds)$/.test(name)),
+      orders: header.findIndex(name => /^(?:заказы|количество заказов|заказы по рекламе|количество заказов по рекламе|orders)$/.test(name)),
+      orderCodes: header.findIndex(name => /^(?:номера? заказов? по рекламе|номера рекламных заказов|advertising order ids)$/.test(name)),
+      score: header.findIndex(name => /^(?:оценка конверсии(?: товара)?|conversion score)$/.test(name)),
+      bid: header.findIndex(name => /^(?:ставка за клик|ставка|bid)$/.test(name)),
+      averageBid: header.findIndex(name => /^(?:средняя ставка по категории|средняя цена за клик по категории|category average bid)$/.test(name)),
     };
     if (indices.sku >= 0 || indices.name >= 0) {
       data = rows.slice(located + 1);
@@ -92,11 +100,26 @@ export function kaspiProductExpenses(text, date) {
     if (!row.some(Boolean) || row.some(cell => /^(итого|всего|total)$/i.test(cell))) continue;
     if (row.length !== header.length) throw fail('В отчёте Kaspi есть неполная строка');
     const value = row[indices.cost].replace(/[\s₸]/g, '').replace(/(?:KZT|тг\.?|тенге)$/i, '').replace(',', '.');
-    if (value === '' || value === '-' || value === '—') continue;
-    const amount = Number(value);
+    const hasCost = value !== '' && value !== '-' && value !== '—';
+    const amount = hasCost ? Number(value) : 0;
     if (!Number.isFinite(amount) || amount < 0) throw fail('Не удалось прочитать сумму в отчёте Kaspi');
-    if (!amount) continue;
-    lines.push({ date, sku: row[indices.sku] || '', name: row[indices.name] || '', amount });
+    const metrics = {};
+    for (const key of ['views', 'clicks', 'carts', 'orders', 'score', 'bid', 'averageBid']) {
+      const cell = (row[indices[key]] || '').replace(/[\s₸]/g, '').replace(',', '.');
+      const number = Number(cell);
+      if (cell && /^(?:\d+)(?:\.\d+)?$/.test(cell) && Number.isFinite(number)
+        && (['views','clicks','carts','orders'].includes(key) ? Number.isSafeInteger(number) : key !== 'score' || number >= 1 && number <= 10)) {
+        metrics[key] = number;
+      }
+    }
+    if (indices.orderCodes >= 0) {
+      const cell = row[indices.orderCodes];
+      if (/^\d+(?:[\s,;]+\d+)*$/.test(cell)) metrics.orderCodes = [...new Set(cell.split(/[\s,;]+/))];
+      else if (!cell && metrics.orders === 0) metrics.orderCodes = [];
+    }
+    const sku = row[indices.sku] || '', name = row[indices.name] || '';
+    if (!amount && (!Object.keys(metrics).length || !sku && !name)) continue;
+    lines.push({ date, sku, name, amount, ...metrics });
   }
   return lines;
 }
@@ -300,6 +323,7 @@ export function createKaspiMarketingService({
         id: ['kaspi-auto', data.account.id, campaign.id, date].join('-'),
         market: 'Kaspi', source: 'Kaspi Marketing auto', sourceKey,
         campaignName: repeatedName ? campaign.name + ' · № ' + campaign.id : campaign.name,
+        campaignId: String(campaign.id), accountId: data.account.id,
         accountingVersion: 'ads-snapshot-v3', replacementPolicy: 'campaign-date-snapshot',
         fromDate: date, toDate: date, amount, rowsCount: lines.length, lines, importedAt,
       });
@@ -347,6 +371,7 @@ export function createKaspiMarketingService({
       lastSuccessAt: data?.lastSuccessAt || 0, lastError: data?.lastError || '', reconnect: Boolean(data?.reconnect),
       defaultFrom: localDay(now() - 4 * DAY), yesterday: localDay(now() - DAY),
       backfill: data?.backfill || null, coverage: coverageSummary(data, now()),
+      confirmedDays: Object.keys(data?.confirmedDays || {}).sort(),
     };
   }
 
@@ -398,6 +423,15 @@ export function createKaspiMarketingService({
       }
       Object.assign(data, { nextRunAt: now() + 60_000, reconnect: false });
       result = amount > 0 ? 'expenses' : 'zero';
+      const recognised = new Set();
+      for (const batch of report.batches) {
+        for (const line of batch.lines) {
+          for (const key of ['views', 'clicks', 'carts', 'orders', 'orderCodes', 'score', 'bid', 'averageBid']) {
+            if (Object.hasOwn(line, key)) recognised.add(key);
+          }
+        }
+      }
+      console.info('Kaspi Marketing report metrics', date, [...recognised].sort().join(',') || 'expenses-only');
     } catch (error) {
       const message = error.status ? error.message : 'Не удалось сохранить отчёт Kaspi';
       const retryAt = Math.max(now() + RETRY, Number(error.retryAt) || 0);

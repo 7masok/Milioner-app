@@ -5,6 +5,14 @@ function sortStoreProfitRows(){const root=document.querySelector('[data-report-p
 function setStoreProfitSort(choice){const spec=storeProfitSortSpec();if(choice==='direction')spec.direction=spec.direction==='asc'?'desc':'asc';else if(['total','unit'].includes(choice))spec.metric=choice;else return;storeProfitSortSpec.current={...spec};try{localStorage.setItem('milioner_store_profit_sort_v1',JSON.stringify(spec))}catch{}sortStoreProfitRows()}
 function reportConfidenceNote(market,models=[]){let el=document.getElementById('reportConfidence');if(!el){el=document.createElement('div');el.id='reportConfidence';el.className='link-note';document.getElementById('mpReport')?.before(el);}const missing=models.some(x=>!x.financeAvailable),costMissing=models.some(x=>!x.complete),stale=models.some(x=>x.sync&&Number(x.sync.financeOk)!==1);el.textContent=(market==='Kaspi'||market==='all'?'Kaspi: расходы по расчётным ставкам, прибыль ориентировочная. ':'')+(missing?'Не по всем магазинам получен финансовый отчёт: общая прибыль не определена. ':'')+(costMissing?'Часть себестоимости не определена. ':'')+(stale?'WB: последнее обновление финансов не удалось. ':'')+(['WB','WB2','all'].includes(market)?'Финансовые даты WB — по Москве. ':'')+'Учтены доступные расходы маркетплейсов, реклама и себестоимость. Налоги, аренда, зарплаты и прочие расходы бизнеса сюда не включены.';}
 (function(){
+window.loadKaspiCampaignFinance=async function(range){
+  const snapshot=await loadKaspiOrders(0,{range});
+  return {
+    historyIncomplete:snapshot.historyIncomplete,
+    returns:snapshot.returns,
+    buyouts:snapshot.historyIncomplete?[]:buildModel(snapshot,0,range,null,true).buyouts,
+  };
+};
 if(typeof state==='undefined')return;
 window.__kaspiOnlyReportsReady=true;
 const baseStats=marketplaceProductStats;

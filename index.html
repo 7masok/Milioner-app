@@ -184,6 +184,7 @@ details[open]>.report-disclosure-summary .arrow{transform:rotate(180deg)}
     <button id="kaspiMarketingButton" type="button" class="btn dark" onclick="openKaspiMarketing()">Подключение</button>
     <button type="button" class="btn" onclick="showKaspiAdsHistory()">История загрузок</button>
   </div>
+  <div id="kaspiCampaignWorkbench" class="kaw"></div>
 </div>
 <div id="adsWbPanel"><div id="adsPeriod" class="period"><button class="chip active" data-ads-period="today" onclick="adsSetPeriod('today')">Сегодня</button><button class="chip" data-ads-period="yesterday" onclick="adsSetPeriod('yesterday')">Вчера</button><button class="chip" data-ads-period="7" onclick="adsSetPeriod('7')">7 дней</button><button class="chip" data-ads-period="30" onclick="adsSetPeriod('30')">30 дней</button><button class="chip" data-ads-period="custom" onclick="adsSetPeriod('custom')">Свой период</button></div><div id="adsCustomRange" class="two" style="display:none;margin:8px 0 12px"><div class="field"><label>Дата с</label><input id="adsDateFrom" type="date" onchange="adsSetCustomDate('from',this.value)"></div><div class="field"><label>Дата по</label><input id="adsDateTo" type="date" onchange="adsSetCustomDate('to',this.value)"></div></div><div id="adsGroupToolbar" class="ad-filters"><button type="button" class="btn dark" onclick="openWbAdGroupEditor()">＋ Группа рекламы</button></div><div id="adsFreshness"></div><div id="adsGroups"></div><details class="ad-summary-details" open><summary>Общая сводка магазина</summary><div id="adsSummary">Загрузка…</div></details><div class="ad-toolbar"><label>Найти кампанию<input type="search" placeholder="Название или артикул" oninput="adsSearch(this.value)"></label><label>Цель ДРР, %<input type="number" min="1" max="100" id="adsTargetInput" value="15" onchange="adsTarget(this.value)"></label></div><div id="adsFilters" class="ad-filters"></div><div id="adsList"></div></div></section>
 <section id="settings" class="view">
@@ -636,6 +637,7 @@ function paintKaspiAdsPanel(connection){
  button.textContent=connected?'Настройки загрузки':'Подключить Kaspi Маркетинг';
  status.textContent=connected?[connection.shop,connection.lastDay?'Загружен отчёт за '+connection.lastDay:'Расходы ожидают загрузки'].filter(Boolean).join(' · '):
   connection.reconnect?'Требуется повторный вход в Kaspi Маркетинг':'Kaspi Маркетинг не подключён';
+ window.renderKaspiCampaignWorkbench?.(connection);
 }
 async function openKaspiMarketing(){
  showSheet('<h3>Kaspi Маркетинг</h3><p id="kmLoading" class="muted">Проверяю подключение…</p>');
@@ -2460,7 +2462,7 @@ function enhanceArrivalProductSearch(){}
 <script src="./wb-variants-v1.js?v=20261105-size-inventory"></script>
 <script src="./product-size-mode-model-v1.js?v=20261026-size-mode-stock-guard"></script>
 <script src="./product-size-mode-v1.js?v=20261105-size-inventory"></script>
-<script src="./kaspi-report-v2.js?v=20261117-product-links"></script>
+<script src="./kaspi-report-v2.js?v=20261117-product-links-campaigns"></script>
 <script src="./product-sales-trend-v1.js?v=20261016-order-trends"></script>
 <script src="./wb-operation-audit-v1.js?v=20261015-report-reconciliation"></script>
 <script src="./purchase-realization-v1.js?v=2"></script>
@@ -2476,6 +2478,7 @@ function enhanceArrivalProductSearch(){}
 <script src="./kaspi-ads-v2-original.js?v=20261116-kaspi-ads"></script>
 <script src="./reservation-compat-v1.js?v=20260820-2324"></script>
 <script src="./kaspi-ads-v2.js?v=20260924-home-lazy"></script>
+<script src="./kaspi-campaign-workbench.js?v=20261118"></script>
 <script src="./ai-assistant-v1.js?v=20260924-stable-header"></script>
 <script src="./purchase-arrival-sort-v1.js?v=20261111-shipment-number"></script>
 <!-- cross-device-sync-v3 -->
