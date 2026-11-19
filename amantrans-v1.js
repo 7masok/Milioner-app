@@ -131,12 +131,40 @@
   const orderedAt=Number(row?.orderedAt||row?.date||row?.createdAt);
   return orderedAt?'Китай '+new Date(orderedAt).toLocaleDateString('ru-RU',{timeZone:'Asia/Almaty'}):'Поставка';
  };
+ const normalizedTrack=track=>String(track||'').replace(/[\s\u200b-\u200d\ufeff]/g,'').toUpperCase();
+ function duplicateTracks(items,track){
+  const key=normalizedTrack(track);if(!key)return [];
+  const own=new Set(items.map(row=>String(row.shipmentId||row.id))),groups=new Map();
+  for(const row of state.purchases||[]){
+   const group=String(row.shipmentId||row.id||'');
+   if(!group||own.has(group)||normalizedTrack(rowTrack(row))!==key)continue;
+   if(!groups.has(group))groups.set(group,row);
+  }
+  return [...groups.entries()].map(([group,row])=>({group,row}));
+ }
+ function duplicateTrackHtml(items,track){
+  const duplicates=duplicateTracks(items,track);if(!duplicates.length)return '';
+  return '<div class="link-note" role="status" style="color:#8a5300"><b>⚠ Такой трек уже указан в других закупках</b>'
+   +duplicates.map(({group,row})=>'<div>'+esc(typeof purchaseShipmentHeading==='function'
+    ?purchaseShipmentHeading(group,row.orderedAt||row.date,window.amanPurchaseTitle(row))
+    :window.amanPurchaseTitle(row)+' · '+new Date(Number(row.orderedAt||row.date)||0).toLocaleDateString('ru-RU'))+'</div>').join('')
+   +'<div>Проверь, это одна посылка или трек введён повторно.</div></div>';
+ }
+ window.amanDuplicateTracks=duplicateTracks;
  window.amanPurchaseTrackHtml=function(items){
   const track=purchaseTrack(items);
-  return track
-   ?'<div class="muted" style="overflow-wrap:anywhere">'+(track.startsWith('TMP-')?'Временный трек':'Трек')+' · '+esc(track)+'</div>':'';
+  return (track?'<div class="muted" style="overflow-wrap:anywhere">'+(track.startsWith('TMP-')?'Временный трек':'Трек')+' · '+esc(track)+'</div>':'')+duplicateTrackHtml(items,track);
  };
- window.amanPurchaseTrackField=items=>'<div class="field"><label for="amanPurchaseTrackInput">Трек-код</label><input id="amanPurchaseTrackInput" value="'+esc(purchaseTrack(items))+'" autocomplete="off" placeholder="Можно добавить позже"></div>';
+ let trackWarningItems=[];
+ window.amanRefreshTrackWarning=function(input){
+  const warning=document.getElementById('amanDuplicateTrackWarning');
+  if(warning)warning.innerHTML=duplicateTrackHtml(trackWarningItems,input.value);
+ };
+ window.amanPurchaseTrackField=items=>{
+  trackWarningItems=items;
+  return '<div class="field"><label for="amanPurchaseTrackInput">Трек-код</label><input id="amanPurchaseTrackInput" value="'+esc(purchaseTrack(items))+'" oninput="amanRefreshTrackWarning(this)" autocomplete="off" placeholder="Можно добавить позже"></div>'
+   +'<div id="amanDuplicateTrackWarning">'+duplicateTrackHtml(items,purchaseTrack(items))+'</div>';
+ };
  window.amanReadPurchaseTrack=()=>document.getElementById('amanPurchaseTrackInput')?.value;
  window.amanPreparePurchase=function(items,previousStage,track,previousTrack){
   if(!items.length)return;

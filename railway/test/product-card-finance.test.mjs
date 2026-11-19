@@ -96,6 +96,21 @@ test('Kaspi title matching preserves model numbers while removing package counts
   assert.equal(ctx.kaspiAdsMatchProduct({sku:'stock-2',name:'Рыбалка #4'}).id,'2');
 });
 
+test('confirmed Kaspi catalog identities match seller SKUs in a separate namespace and reject ambiguous variants',()=>{
+ const products=[{id:'black',name:'Кошки цветы черный',kaspi:'897281226'},
+   {id:'white',name:'Кошки цветы белый',kaspi:'288282987'},
+   {id:'collision',name:'Unrelated seller SKU',kaspi:'186427214'}];
+ const ctx={window:{},state:{products,kaspiOrderFeed:[]},prod:id=>products.find(p=>p.id===id),
+   normalizeName:value=>String(value||'').toLowerCase(),adsSkuEqual:(a,b)=>String(a??'').trim()===String(b??'').trim()};
+ vm.createContext(ctx);
+ vm.runInContext(html.slice(html.indexOf('function kaspiAdsNameKey('),html.indexOf('function kaspiAdsBreakdown(')),ctx);
+ const before=JSON.stringify(products);
+ assert.equal(ctx.kaspiAdsMatchProduct({sku:'186427214',name:'Other title',kaspiMerchantSkus:['897281226']}).id,'black');
+ assert.equal(ctx.kaspiAdsMatchProduct({sku:'186427214',kaspiMerchantSkus:['897281226','288282987']}),null);
+ assert.equal(ctx.kaspiAdsMatchProduct({sku:'186427214',kaspiMerchantSkus:['missing']}),null);
+ assert.equal(JSON.stringify(products),before);assert.equal(products[0].kaspiAliases,undefined);
+});
+
 test('unmatched marketplace advertising is never spread across unrelated products',()=>{
   assert.match(report,/for\(const x of kaspiKnown\)add\(x\.productId,x\.qty,Number\(x\.profit\)\|\|0,'Kaspi',Math\.max\(0,Number\(x\.ads\)\|\|0\)\)/);
   assert.match(report,/productAds=Math\.max\(0,Number\(x\.advertising\)\|\|0\);add\(v\.pid,saleQty,Number\(x\.netBeforeCost\|\|0\)-cost,model\.market,productAds\)/);

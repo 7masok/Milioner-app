@@ -1,7 +1,7 @@
 import crypto from 'node:crypto';
 import express from 'express';
 import { config } from './config.js';
-import { pool } from './db.js';
+import { pool, transaction } from './db.js';
 import { asyncRoute } from './http.js';
 import { requireConfiguredSession } from './auth.js';
 
@@ -43,6 +43,25 @@ export async function saveAmanAccess(value) {
   cache.delete('DELIVERY_AMANTRANS');
 }
 export async function readAmanAccess(){const text=await credentialFor('DELIVERY_AMANTRANS');return text?JSON.parse(text):null;}
+
+// Account-scoped identity evidence shares the existing encrypted integration cache.
+export async function readKaspiIdentityCache(client=pool){
+  const result=await client.query("SELECT encrypted_token FROM marketplace_credentials WHERE id='KASPI_PRODUCT_IDENTITIES'");
+  return result.rows[0]?.encrypted_token?JSON.parse(decryptToken(result.rows[0].encrypted_token)):null;
+}
+export async function saveKaspiIdentityCache(value,linkChanged=false){
+  const at=Date.now(),encrypted=encryptToken(JSON.stringify(value));
+  const store=async client=>{
+    await client.query(`INSERT INTO marketplace_credentials(id,provider,label,encrypted_token,enabled,created_at,updated_at,last_test_ok,last_error)
+      VALUES('KASPI_PRODUCT_IDENTITIES','KASPI_IDENTITIES','Kaspi · связи кодов',$1,1,$2,$2,1,'')
+      ON CONFLICT(id) DO UPDATE SET encrypted_token=EXCLUDED.encrypted_token,updated_at=EXCLUDED.updated_at`,[encrypted,at]);
+    // The read-only warehouse representation gained identity evidence. Wake the
+    // existing watchers and derived reports, without touching any stock or prices.
+    if(linkChanged)await client.query('UPDATE warehouse_state SET revision=revision+1,updated_at=$1 WHERE id=1',[at]);
+  };
+  return linkChanged?transaction(store):store(pool);
+}
+
 
 export async function readKaspiMarketingAccess() {
   // This state is read by the scheduler as well as the owner routes. Read it
@@ -156,7 +175,7 @@ connectionsRouter.get('/connections', asyncRoute(async (_req, res) => {
     };
   });
   for (const row of result.rows) {
-    if (BUILTIN_CONNECTIONS[row.id]||['AMANTRANS','KASPI_MARKETING'].includes(row.provider)||config.storeProfile==='WB3') continue;
+    if (BUILTIN_CONNECTIONS[row.id]||['AMANTRANS','KASPI_MARKETING','KASPI_IDENTITIES'].includes(row.provider)||config.storeProfile==='WB3') continue;
     connections.push({
       id:String(row.id), provider:String(row.provider), label:String(row.label), builtin:false,
       enabled:Boolean(Number(row.enabled)), configured:Boolean(row.encrypted_token), managedInSite:Boolean(row.encrypted_token),

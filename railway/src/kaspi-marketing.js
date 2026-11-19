@@ -1,3 +1,4 @@
+import {kaspiIdentityCollector} from './kaspi-product-identities.js';
 import express from 'express';
 import { config } from './config.js';
 import { requireConfiguredSession } from './auth.js';
@@ -617,6 +618,7 @@ const service = createKaspiMarketingService();
 export const kaspiMarketingRouter = express.Router();
 kaspiMarketingRouter.use(noStore, requireConfiguredSession, requireTrustedOrigin);
 kaspiMarketingRouter.get('/state', asyncRoute(async (_req, res) => res.json(await service.state())));
+kaspiMarketingRouter.get('/identities', asyncRoute(async (_req,res)=>res.json(await kaspiIdentityCollector.snapshot())));
 kaspiMarketingRouter.get('/products', asyncRoute(async (req,res)=>res.json(await service.products(req.query))));
 kaspiMarketingRouter.put('/bid', requireWritesEnabled, asyncRoute(async (req, res) => res.json(await service.setBid(req.body))));
 kaspiMarketingRouter.post('/connect', requireWritesEnabled, asyncRoute(async (req, res) => res.json(await service.connect(req.body))));

@@ -1,3 +1,4 @@
+import {confirmedKaspiIdentities,decorateKaspiIdentities} from './kaspi-product-identities.js';
 export function stripKaspiAdExpensesFromState(input) {
   const state = input && typeof input === 'object' && !Array.isArray(input) ? { ...input } : {};
   delete state.kaspiAdExpenses;
@@ -40,7 +41,8 @@ export async function readWarehouseKaspiAdExpenses(client) {
 
 export async function hydrateKaspiAdExpenses(client, state) {
   const target = state && typeof state === 'object' && !Array.isArray(state) ? state : {};
-  const rows = await readWarehouseKaspiAdExpenses(client);
+  const rawRows = await readWarehouseKaspiAdExpenses(client);
+  const rows = decorateKaspiIdentities(rawRows,await confirmedKaspiIdentities(client));
   if (rows.length) target.kaspiAdExpenses = rows;
   else if (!Array.isArray(target.kaspiAdExpenses)) target.kaspiAdExpenses = [];
   return target;
