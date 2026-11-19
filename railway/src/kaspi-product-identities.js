@@ -28,10 +28,11 @@ async function candidates(){
   const result=await pool.query(`WITH owned AS (
     SELECT payload->>'kaspi' AS sku FROM warehouse_products
     UNION SELECT jsonb_array_elements_text(CASE WHEN jsonb_typeof(payload->'kaspiAliases')='array' THEN payload->'kaspiAliases' ELSE '[]'::jsonb END) FROM warehouse_products
-  ) SELECT DISTINCT ON (o.sku) o.sku,o.entry_id AS "entryId"
-    FROM marketplace_order_lines o JOIN owned p ON p.sku=o.sku
-    WHERE o.market='Kaspi' AND btrim(o.sku)<>'' AND btrim(o.entry_id)<>'' AND o.entry_id<>'__pending__'
-    ORDER BY o.sku,o.creation_date DESC,o.updated_at DESC LIMIT 5000`);
+  ) SELECT DISTINCT ON (p.sku) p.sku,COALESCE(o.entry_id,'') AS "entryId"
+    FROM owned p LEFT JOIN marketplace_order_lines o ON p.sku=o.sku
+      AND o.market='Kaspi' AND btrim(o.entry_id)<>'' AND o.entry_id<>'__pending__'
+    WHERE btrim(COALESCE(p.sku,''))<>''
+    ORDER BY p.sku,o.creation_date DESC,o.updated_at DESC LIMIT 5000`);
   return result.rows;
 }
 export function createKaspiIdentityCollector({token=()=>credentialFor('Kaspi',config.kaspiToken),read=readKaspiIdentityCache,
@@ -43,6 +44,7 @@ export function createKaspiIdentityCollector({token=()=>credentialFor('Kaspi',co
     return {token:value,cache:saved?.scope===scope?saved:{scope,byMerchant:{},retryAt:0}};
   }
   function eligible(rows,cache){return rows.filter(row=>{
+    if(!row.entryId)return false;
     const old=cache.byMerchant[row.sku];return !(old?.retryAt>now()) && !(old?.checkedAt>now()-7*DAY);
   });}
   async function product(path,value){
@@ -60,6 +62,13 @@ export function createKaspiIdentityCollector({token=()=>credentialFor('Kaspi',co
       const ctx=await context();if(!ctx)return {ok:true,items:[],pending:0,connected:false};
       const rows=await list();return {ok:true,items:identityItems(ctx.cache),pending:eligible(rows,ctx.cache).length,
         retryAt:ctx.cache.retryAt||0,connected:true};
+    },
+    async diagnostics(){
+      const ctx=await context();if(!ctx)return [];
+      return (await list()).map(row=>{
+        const saved=ctx.cache.byMerchant[row.sku];
+        return {merchantSku:row.sku,productCode:saved?.productCode||'',status:saved?.productCode?'confirmed':!row.entryId?'no-order-entry':saved?.error||'pending'};
+      });
     },
     async collect(){
       if(busy)return;busy=true;
@@ -101,12 +110,21 @@ export async function confirmedKaspiIdentities(client=pool){
 }
 
 export function startKaspiIdentityLoop(){
+  let diagnosed=false;
   const run=async()=>{
     let client;
     try{
       client=await pool.connect();const lock=await client.query('SELECT pg_try_advisory_lock(873641,2) AS locked');
       if(!lock.rows[0]?.locked)return;
-      try{await kaspiIdentityCollector.collect()}finally{await client.query('SELECT pg_advisory_unlock(873641,2)')}
+      try{
+        await kaspiIdentityCollector.collect();
+        if(!diagnosed){
+          // One bounded startup record makes missing order evidence distinguishable
+          // from a provider failure. No credentials, entry IDs or customer data.
+          for(const row of await kaspiIdentityCollector.diagnostics())console.info('Kaspi identity evidence',JSON.stringify(row));
+          diagnosed=true;
+        }
+      }finally{await client.query('SELECT pg_advisory_unlock(873641,2)')}
     }catch(error){console.warn('Kaspi identity cache: '+(error.status?'HTTP '+error.status:'проверка отложена'))}
     finally{client?.release();setTimeout(run,15000).unref()}
   };

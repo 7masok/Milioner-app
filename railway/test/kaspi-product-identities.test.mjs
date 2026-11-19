@@ -35,3 +35,11 @@ test('mismatched seller SKU never creates a link, and provider cooldown survives
  assert.ok(limited.cache.retryAt>=1800000000000+3600000);
  await limited.service.collect();assert.equal(limited.calls.length,1);
 });
+test('unsold warehouse offers are diagnosed without speculative provider requests',async()=>{
+ const f=fixture({dependencies:{list:async()=>[{sku:'unsold',entryId:''}]}});
+ await f.service.collect();assert.equal(f.calls.length,0);assert.equal((await f.service.snapshot()).pending,0);
+ assert.deepEqual(await f.service.diagnostics(),[{merchantSku:'unsold',productCode:'',status:'no-order-entry'}]);
+ const confirmed=fixture();await confirmed.service.collect();
+ assert.deepEqual(await confirmed.service.diagnostics(),[{merchantSku:'897281226',productCode:'186427214',status:'confirmed'}]);
+ assert.ok(!JSON.stringify(await confirmed.service.diagnostics()).includes('opaque'));
+});
