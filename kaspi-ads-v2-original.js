@@ -91,7 +91,7 @@
           const amount = Math.max(0, Number(raw?.amount) || 0);
           if (!date || !(amount > 0)) continue;
 
-          const product = kaspiAdsMatchProduct(raw);
+          const product = kaspiAdsMatchProduct(raw, batch.id);
           const sku = String(raw?.sku || '').trim().toLowerCase();
           const nameKey = kaspiAdsNameKey(raw?.name || '');
           const key = [date, product ? String(product.id) : '', sku, nameKey].join('|');

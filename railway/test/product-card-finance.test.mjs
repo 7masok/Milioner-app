@@ -67,33 +67,34 @@ test('stock valuation uses sale plus covered reserve plus warehouse stock',()=>{
 
 
 test('Kaspi advertising still uses deterministic links and reports unallocated spend',()=>{
-  assert.match(html,/function kaspiAdsMatchProduct\(line\)/);
-  assert.match(html,/Array\.isArray\(p\?\.kaspiAliases\)\?p\.kaspiAliases:\[\]/);
-  assert.match(html,/identityMatches=state\.products\.filter\(p=>\{const key=kaspiAdsIdentityKey\(p\.name\);return key&&identity&&key===identity\}\)/);
-  assert.match(html,/'см','cm'/);
-  assert.match(html,/function kaspiOrderTitleProducts\(\)/);
-  assert.match(html,/kaspiOrderTitleProducts\(\)\.get\(nn\)/);
+  assert.match(html,/function kaspiAdsMatchProduct\(line,batchId\)/);
+  assert.match(html,/Array\.isArray\(p\.kaspiAliases\)\?p\.kaspiAliases:\[\]/);
   assert.match(report,/Есть реклама Kaspi без товара/);
   assert.match(report,/openReportAdsPanel\('Kaspi'\)/);
   assert.doesNotMatch(report,/kaspiSheetNote/);
   assert.match(html,/onclick="openReportAdsPanel\(\)"/);
   assert.match(report,/window\.openStoreDetail=async function\(market,days\)\{days=days===undefined\|\|days===null\?reportPeriod:Number\(days\);if\(!\['Kaspi','WB','WB2','WB3','Ozon'\]\.includes\(market\)\)return;marketplaceReportContext=\{market,days\}/);
-  assert.match(html,/p\.kaspiAdTitles/);
   assert.doesNotMatch(html,/key\.includes\(identity\)\|\|identity\.includes\(key\)/);
   assert.doesNotMatch(html,/nn\.includes\(x\.key\)\|\|x\.key\.includes\(nn\)/);
 });
 
-test('Kaspi title matching preserves model numbers while removing package counts and dimensions',()=>{
-  const products=[1,2,3,4].map(n=>({id:String(n),name:'Рыбалка #'+n,kaspi:'stock-'+n}));
-  const ctx={window:{},state:{products,kaspiOrderFeed:[]},prod:id=>products.find(p=>p.id===id),
-    normalizeName:value=>String(value||'').toLowerCase(),adsSkuEqual:(a,b)=>String(a).trim()===String(b).trim()};
+test('Kaspi manual advertising links override inference and survive an updated report row',()=>{
+  const products=[{id:'black',name:'Цветочные кошки ЦКЧ',kaspi:'seller-black'},
+    {id:'white',name:'Цветочные кошки ЦКБ',kaspi:'seller-white'}];
+  const links={},ctx={state:{products,settings:{kaspiAdProductLinks:links}},prod:id=>products.find(p=>p.id===id),
+    adsSkuEqual:(a,b)=>String(a??'').trim()===String(b??'').trim()};
   vm.createContext(ctx);
-  const start=html.indexOf('function kaspiAdsNameKey('),end=html.indexOf('function kaspiAdsBreakdown(');
+  const start=html.indexOf('function kaspiAdLinkKey('),end=html.indexOf('function kaspiAdsBreakdown(');
   vm.runInContext(html.slice(start,end),ctx);
-  assert.equal(ctx.kaspiAdsMatchProduct({sku:'185083186',name:'Брелок LuxAr Рыбалка #4 металл 1 шт'}).id,'4');
-  assert.equal(ctx.kaspiAdsMatchProduct({name:'Брелок LuxAr Рыбалка #4 8,2 см металл 1 шт'}).id,'4');
-  assert.equal(ctx.kaspiAdsMatchProduct({name:'Брелок LuxAr Рыбалка #5 металл 1 шт'}),null);
-  assert.equal(ctx.kaspiAdsMatchProduct({sku:'stock-2',name:'Рыбалка #4'}).id,'2');
+  const row={sku:'186427214',name:'Цветочные кошки ЦКЧ',productId:'black'};
+  assert.equal(ctx.kaspiAdsMatchProduct(row),null);
+  assert.equal(ctx.kaspiAdsMatchProduct({...row,sku:'seller-black'}).id,'black');
+  links[ctx.kaspiAdLinkKey(row)]='white';
+  assert.equal(ctx.kaspiAdsMatchProduct({...row,name:'Новое название',kaspiMerchantSkus:['seller-black']}).id,'white');
+  const oldImport={name:'Цветочные кошки ЦКБ'};
+  links[ctx.kaspiAdLinkKey(oldImport,'original')]='white';
+  assert.equal(ctx.kaspiAdsMatchProduct(oldImport,'original').id,'white');
+  assert.equal(ctx.kaspiAdsMatchProduct(oldImport,'different-import'),null);
 });
 
 test('confirmed Kaspi catalog identities match seller SKUs in a separate namespace and reject ambiguous variants',()=>{

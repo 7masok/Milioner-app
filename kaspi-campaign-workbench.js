@@ -91,12 +91,13 @@
         if (snapshots.has(id)) continue;
         if (!manual && day === latestReport && hasActivity(line)) campaign.latest = true;
         const sku = String(line.sku || '').trim();
-        const product = match(line);
+        const product = match(line, batch.id);
+        const linkKey = kaspiAdLinkKey(line, batch.id);
         const productId = product ? String(product.id) : '';
-        const productKey = sku ? 'sku:' + sku : productId || 'name:' + (line.name || 'Неизвестный товар');
+        const productKey = linkKey || (productId ? 'product:' + productId : 'name:' + (line.name || 'Неизвестный товар'));
         let row = campaign.products.get(productKey);
         if (!row) {
-          row = { productId, sku, name: product?.name || 'Нет привязки · '+(sku || 'без артикула'), sourceName:line.name || '', lines: [], last: null };
+          row = { productId, sku, linkKey, name: product?.name || 'Нет привязки · '+(sku || 'без артикула'), sourceName:line.name || '', lines: [], last: null };
           campaign.products.set(productKey, row);
         }
         if (day >= from && day <= to) {
@@ -240,13 +241,15 @@
     .kaw-form label { flex:none; font-size:11px; color:var(--ka-muted); }
     .kaw-form input,.kaw-form select { display:block; width:76px; margin-top:3px; height:37px; border:1px solid var(--ka-border); border-radius:8px; padding:4px 5px; font-size:13px; background:white; }
     .kaw-form button { flex:none; white-space:nowrap; }
+    .kaw-link-form { display:grid; gap:6px; margin:6px 0; }
+    .kaw-link-form input,.kaw-link-form select { width:100%; min-height:36px; }
   `;
   document.head.append(css);
 
   let days = 30, filter = 'all', mode = 'campaigns', rendered = false, history = false;
   let sortKey = 'spend', sortDirection = 'desc';
   const sortLabels = {spend:'Расход',clicks:'Клики',orders:'Заказы',bid:'Ставка',price:'Цена',profit:'Прибыль'};
-  let data = null, pending = '', failure = false;
+  let data = null, pending = '', failure = false, linkVersion = 0;
   let reportCache = null, search = '', catalogLimit = 50, paint = null;
   let confirmedAdDays = new Set();
   const expanded = new Set(), productExpanded = new Set(), forms = new Set(), detailBodies = new Map();
@@ -320,7 +323,7 @@
     const activeOrRecent = Object.values(list).filter(t => t?.startedAt > 0 && at - t.startedAt < 90 * DAY);
     const earliest = Math.min(dayStart(from), ...activeOrRecent.map(baselineStart));
     const financeFrom = iso(earliest);
-    const key = JSON.stringify([from, to, earliest, Math.floor(at / 60000)]);
+    const key = JSON.stringify([from, to, earliest, Math.floor(at / 60000), linkVersion]);
     if (pending === key || data?.key === key) return;
     pending = key;
     const query = new URLSearchParams({ market: 'Kaspi', after: Math.floor(earliest), before: Math.floor(at), limit: LIMIT, history: 1 });
@@ -399,6 +402,40 @@
     return before == null || after == null ? null : {before,after};
   }
 
+  function linkCandidates(query) {
+    const needle = query.trim().toLowerCase();
+    return state.products.filter(item =>
+      !String(item.id).startsWith('inferno:') && item.kind !== 'variant-group'
+      && (typeof window.isWarehouseCatalogProduct !== 'function' || window.isWarehouseCatalogProduct(item))
+      && [item.name,...kaspiSkus(item)].some(field => String(field || '').toLowerCase().includes(needle)))
+      .sort((a,b) => a.name.localeCompare(b.name,'ru'));
+  }
+
+  function linkOptions(query, current = '') {
+    const candidates = linkCandidates(query);
+    const listed = candidates.slice(0,50);
+    const selected = current && candidates.find(item => String(item.id) === current);
+    if (selected && !listed.includes(selected)) listed.unshift(selected);
+    return '<option value="">'+(listed.length ? 'Выбрать товар' : 'Товары не найдены')+'</option>'
+      + listed.map(item => {
+        const id = String(item.id), sku = kaspiSkus(item).find(Boolean);
+        return '<option value="'+esc(id)+'"'+(id === current ? ' selected' : '')+'>'
+          + esc(item.name + (sku ? ' · '+sku : ''))+'</option>';
+      }).join('');
+  }
+
+  function linkEditor(row, item) {
+    const links = state.settings.kaspiAdProductLinks;
+    const manual = row.linkKey && links && Object.hasOwn(links,row.linkKey);
+    if (!row.linkKey || (item && !manual)) return '';
+    return '<form class="kaw-link-form" data-ka-link-form="'+esc(row.linkKey)+'">'
+      +'<input class="kaw-search" data-ka-link-search aria-label="Поиск товара склада" placeholder="Название или артикул">'
+      +'<select required name="product" aria-label="Товар склада">'+linkOptions('',manual ? row.productId : '')+'</select>'
+      +'<div class="kaw-toolbar"><button type="submit">Привязать</button>'
+      +(manual ? '<button type="submit" value="remove" formnovalidate>Снять ручную привязку</button>' : '')
+      +'</div></form>';
+  }
+
   function productBody(row, m, kind, t, at) {
     const item = prod(row.productId), running = active(t, at);
     const metric = key => m[key] == null && m.partial?.[key] != null ? value(m.partial[key]) + '*' : value(m[key]);
@@ -443,7 +480,7 @@
     const controls = item ? '<div class="kaw-toolbar"><button type="button" data-ka-'+(running ? 'finish' : 'open-test')+'="'+esc(row.productId)+'">'+(running ? 'Завершить тест' : 'Тест цены')+'</button></div>' : '';
     const identity = row.lines.length ? '<div class="kaw-note">Код рекламы Kaspi · '+esc(row.sku || 'не указан')+'</div>'+(row.last?.kaspiMerchantSkus?.length?'<div class="kaw-note">Артикул продавца · '+row.last.kaspiMerchantSkus.map(esc).join(', ')+'</div>':'')
       +(!item?'<div class="kaw-note">Нет совпадения со складским товаром. Название в выгрузке · '+esc(row.sourceName || 'не указано')+'</div>':'') : '';
-    return identity+(row.lines.length ? '<div class="kaw-metrics">'+metrics.map(([label, x])=>'<span>'+label+' <b>'+x+'</b></span>').join('')
+    return identity+linkEditor(row,item)+(row.lines.length ? '<div class="kaw-metrics">'+metrics.map(([label, x])=>'<span>'+label+' <b>'+x+'</b></span>').join('')
       + '</div>' : '')+(Object.keys(m.partial || {}).length ? '<div class="kaw-note">* Сумма по дням с доступными данными.</div>' : '')
       +(m.totalPreliminary?'<div class="kaw-note">Прибыль предварительная: есть нераспределённые операции или неполные дни рекламы в отчёте.</div>':'')
       +(reason?'<div class="kaw-note">'+esc(reason)+'</div>':'')+testInfo+priceMismatch+controls+form;
@@ -479,7 +516,7 @@
   }
 
   function renderProduct(row, campaign, m, kind, t, at) {
-    const key = JSON.stringify([campaign.key, row.sku, row.productId, row.name]);
+    const key = JSON.stringify([campaign.key, row.sku, row.productId, row.name, ...(!row.sku && row.linkKey ? [row.linkKey] : [])]);
     const running = active(t, at), open = productExpanded.has(key);
     const text = running ? 'День ' + experiment(t, data?.orders, at).day + '/' + t.days : actions[kind];
     const body = () => productBody(row,m,kind,t,at);
@@ -532,18 +569,19 @@
   }
 
   function reportFor(from, to) {
-    const batches = state.kaspiAdExpenses, products = state.products, feed = state.kaspiOrderFeed;
+    const batches = state.kaspiAdExpenses, products = state.products, links = state.settings.kaspiAdProductLinks;
     const confirmed = [...confirmedAdDays].reduce((latest,day)=>day<=to&&day>latest?day:latest,'');
     if (!reportCache || reportCache.to !== to || reportCache.batches !== batches
       || reportCache.confirmed !== confirmed || reportCache.products !== products
-      || reportCache.feed !== feed || reportCache.feedSize !== feed?.length) {
-      reportCache = {to,batches,confirmed,products,feed,feedSize:feed?.length,matches:new Map(),periods:new Map()};
+      || reportCache.links !== links) {
+      reportCache = {to,batches,confirmed,products,links,matches:new Map(),periods:new Map()};
     }
     const {matches,periods} = reportCache;
     if (periods.has(from)) return periods.get(from);
-    const rows = campaignRows(batches || [], from, to, line => {
-      const key = JSON.stringify([line.sku,line.name,line.productId]);
-      if (!matches.has(key)) matches.set(key,kaspiAdsMatchProduct(line));
+    const rows = campaignRows(batches || [], from, to, (line,batchId) => {
+      const linkKey = kaspiAdLinkKey(line,batchId);
+      const key = JSON.stringify([linkKey,line.kaspiMerchantSkus,linkKey?'':line.productId]);
+      if (!matches.has(key)) matches.set(key,kaspiAdsMatchProduct(line,batchId));
       return matches.get(key);
     }, confirmed);
     const claims = new Map(), advertised = new Set();
@@ -692,6 +730,10 @@
         }
       }, true);
       panel.addEventListener('input', event => {
+        if (event.target.matches('[data-ka-link-search]')) {
+          event.target.form.elements.product.innerHTML = linkOptions(event.target.value);
+          return;
+        }
         if (!event.target.matches('.kaw-search')) return;
         search = event.target.value;
         catalogLimit = 50;
@@ -745,6 +787,26 @@
         draw(refresh);
       });
       panel.addEventListener('submit', async event => {
+        const linkKey = event.target.dataset.kaLinkForm;
+        if (linkKey) {
+          event.preventDefault();
+          if (!requireWarehouseEditReady()) return;
+          const productId = event.target.elements.product.value;
+          const links = {...state.settings.kaspiAdProductLinks};
+          if (event.submitter?.value === 'remove') delete links[linkKey];
+          else {
+            if (!prod(productId)) return;
+            links[linkKey] = productId;
+          }
+          state.settings.kaspiAdProductLinks = links;
+          linkVersion++;
+          reportCache = null;
+          data = null;
+          document.activeElement?.blur();
+          save();
+          draw();
+          return;
+        }
         const priceKey=event.target.dataset.kaPriceForm;
         if (priceKey) {
           event.preventDefault();
