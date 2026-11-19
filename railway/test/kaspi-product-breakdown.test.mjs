@@ -114,5 +114,5 @@ test('advertising total-profit adapter shares the established product report wit
  assert.equal(JSON.stringify(f.state),before);
  f.snapshot.historyIncomplete=true;
  const incomplete=await f.ctx.window.loadKaspiCampaignFinance({from:'2026-11-01',to:'2026-11-17'});
- assert.equal(incomplete.products,null);assert.equal(incomplete.buyouts.length,0);
+ assert.equal(incomplete.products[0].profit,result.products[0].profit);assert.equal(incomplete.buyouts.length,1);
 });
