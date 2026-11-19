@@ -37,6 +37,7 @@ test('live campaign metrics fill orders and bid by SKU and the selected dates wh
   let calls=0;
   const panel=mount([batch(19,1,[{date:'2026-11-17',sku:'A',amount:40,clicks:2}])],{},[],{},{
     adsApi:async url=>{
+      if(url.endsWith('/identities'))return {items:[],pending:0};
       calls++;
       const query=new URL(url,'https://warehouse.example').searchParams;
       assert.equal(query.get('from'),'2026-10-19');
@@ -261,4 +262,20 @@ test('an active price test warns when its target differs from the warehouse pric
  assert.match(body,/В прайсе склада 690 ₸, в тесте 590 ₸/);
  assert.match(body,/заверши тест и начни заново/);
  assert.equal(item.kaspiPrice,690);assert.equal(t.after,590);
+});
+
+test('confirmed code evidence refreshes previously unlinked campaign rows without saving warehouse products',async()=>{
+ let saved=0;
+ const panel=mount([batch(19,1,[{date:'2026-11-17',sku:'186427214',name:'Цветочные кошки ЦКЧ',amount:20}])],{},[],{}, {
+  kaspiAdsMatchProduct:line=>line.kaspiMerchantSkus?.includes('897281226')?product:null,
+  adsApi:async url=>url.endsWith('/identities')?{items:[{productCode:'186427214',merchantSkus:['897281226']}],pending:0}
+    :{accountId:'42',campaignId:'19',from:'2026-10-19',to:'2026-11-17',products:[]},
+  save:()=>{saved++},
+ });
+ await new Promise(resolve=>setImmediate(resolve));
+ const html=panel.expand({kaCampaign:'42:19'});
+ assert.match(html,/class="kaw-name"><b>Брелок/);assert.doesNotMatch(html,/Нет привязки/);
+ const body=panel.expand({kaProduct:JSON.stringify(['42:19','186427214','p',product.name])});
+ assert.match(body,/Код рекламы Kaspi · 186427214/);assert.match(body,/Артикул продавца · 897281226/);
+ assert.equal(saved,0);assert.equal(product.kaspi,'A');
 });

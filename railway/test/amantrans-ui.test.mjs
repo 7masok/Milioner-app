@@ -257,3 +257,22 @@ test('an existing automatic TMP title displays the original order date and retai
  assert.match(f.ctx.amanPurchaseTrackHtml([row]),/Временный трек · TMP-main/);
  assert.equal(row.batch,'TMP-main');
 });
+
+test('duplicate tracks warn across shipments but never count their own lines or change purchases',()=>{
+ const f=fixture();
+ f.ctx.state.purchases=[
+  {id:'a1',shipmentId:'a',amantransTrack:' YT123 ',batch:'First'},
+  {id:'a2',shipmentId:'a',amantransTrack:'YT123',batch:'First'},
+  {id:'b1',shipmentId:'b',amantransTrack:'yt 123',batch:'Second'},
+  {id:'b2',shipmentId:'b',amantransTrack:'YT123',batch:'Second'},
+  {id:'c1',shipmentId:'c',amantransTrack:'YT999',batch:'Third'},
+ ];
+ const rows=f.ctx.state.purchases.slice(0,2),before=JSON.stringify(f.ctx.state.purchases);
+ const duplicates=f.ctx.amanDuplicateTracks(rows,'YT123');
+ assert.equal(duplicates.length,1);assert.equal(duplicates[0].group,'b');
+ assert.match(f.ctx.amanPurchaseTrackHtml(rows),/Такой трек уже указан/);
+ assert.match(f.ctx.amanPurchaseTrackField(rows),/amanRefreshTrackWarning/);
+ assert.equal(f.ctx.amanDuplicateTracks(rows,'').length,0);
+ assert.equal(f.ctx.amanDuplicateTracks(rows,'new').length,0);
+ assert.equal(JSON.stringify(f.ctx.state.purchases),before);assert.equal(f.calls.saved,0);assert.equal(f.requests.length,0);
+});

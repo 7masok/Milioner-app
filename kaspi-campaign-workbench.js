@@ -259,6 +259,26 @@
   const tests = () => state.settings.kaspiPriceTests || emptyTests;
   const root = () => document.getElementById('kaspiCampaignWorkbench');
 
+  let identityReadAt=0,identityPending=false,identityTimer=null;
+  function readIdentities(){
+    if(typeof adsApi!=='function'||identityPending||Date.now()-identityReadAt<60000)return;
+    identityPending=true;identityReadAt=Date.now();
+    adsApi('/api/kaspi-marketing/identities').then(snapshot=>{
+      if(!Array.isArray(snapshot.items))return;
+      const codes=new Map(snapshot.items.map(row=>[String(row.productCode),row.merchantSkus]));
+      let changed=false;
+      const batches=(state.kaspiAdExpenses||[]).map(batch=>({...batch,lines:(batch.lines||[]).map(line=>{
+        const merchants=codes.get(String(line.sku));
+        if(!merchants || JSON.stringify(line.kaspiMerchantSkus)===JSON.stringify(merchants))return line;
+        changed=true;return {...line,kaspiMerchantSkus:merchants};
+      })}));
+      if(changed){state.kaspiAdExpenses=batches;reportCache=null;data=null;draw();}
+      if(snapshot.pending>0&&!identityTimer)identityTimer=setTimeout(()=>{
+        identityTimer=null;identityReadAt=0;if(root()&&!root().closest('[hidden]'))readIdentities();
+      },15000);
+    }).catch(()=>{}).finally(()=>{identityPending=false});
+  }
+
   function readPrices() {
     if (!window.kaspiAdvertisingPrices || priceRequest || Date.now()-priceReadAt<2*60000) return;
     priceReadAt=Date.now();
@@ -421,7 +441,7 @@
       + '<label>Дней<input required type="number" name="days" min="1" max="60" value="14"></label>'
       + '<button class="btn dark" type="submit">Начать</button></form><div class="kaw-note">Цена передаётся через прайс Kaspi. Начни тест после обновления цены в магазине. «Было» — прежняя цена, «Стало» — новая. Кнопка «Начать» не меняет цену.</div>' : '';
     const controls = item ? '<div class="kaw-toolbar"><button type="button" data-ka-'+(running ? 'finish' : 'open-test')+'="'+esc(row.productId)+'">'+(running ? 'Завершить тест' : 'Тест цены')+'</button></div>' : '';
-    const identity = row.lines.length ? '<div class="kaw-note">Артикул Kaspi · '+esc(row.sku || 'не указан')+'</div>'
+    const identity = row.lines.length ? '<div class="kaw-note">Код рекламы Kaspi · '+esc(row.sku || 'не указан')+'</div>'+(row.last?.kaspiMerchantSkus?.length?'<div class="kaw-note">Артикул продавца · '+row.last.kaspiMerchantSkus.map(esc).join(', ')+'</div>':'')
       +(!item?'<div class="kaw-note">Нет совпадения со складским товаром. Название в выгрузке · '+esc(row.sourceName || 'не указано')+'</div>':'') : '';
     return identity+(row.lines.length ? '<div class="kaw-metrics">'+metrics.map(([label, x])=>'<span>'+label+' <b>'+x+'</b></span>').join('')
       + '</div>' : '')+(Object.keys(m.partial || {}).length ? '<div class="kaw-note">* Сумма по дням с доступными данными.</div>' : '')
@@ -650,7 +670,7 @@
       + '<div data-ka-content>'+paint()+'</div>';
     [...panel.querySelectorAll('.kaw-toolbar')].slice(0,2).forEach((x,i)=>{x.scrollLeft=scroll[i]||0});
     if (refresh && mode==='campaigns') readProductStats(report.rows.filter(c=>history?!c.latest:c.latest),from,to);
-    if (refresh) readPrices();
+    if (refresh) {readPrices();readIdentities();}
   }
 
   function mount(connection) {
