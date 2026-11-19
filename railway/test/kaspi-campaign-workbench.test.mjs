@@ -14,6 +14,8 @@ function mount(batches, tests = {}, orders = [], connection = {}, extra = {}) {
   const handlers = {};
   const panel = {innerHTML:'',closest:()=>null,contains:node=>!!node,querySelectorAll:()=>[],
     addEventListener(type,handler){handlers[type]=handler},
+    input(target){handlers.input({target})},
+    querySelector(){return this.content ||= {innerHTML:''}},
     click(dataset){handlers.click({preventDefault(){},target:{closest:()=>({dataset})}})},
     submit(form,submitter){return handlers.submit({preventDefault(){},target:form,submitter})},
     expand(dataset) {
@@ -297,7 +299,8 @@ test('an unlinked Kaspi ad can be assigned and removed from the campaign without
   assert.match(panel.expand(campaign),/Нет привязки · 186427214/);
   const details=panel.expand({kaProduct:JSON.stringify(['42:19','186427214','','Нет привязки · 186427214'])});
   assert.match(details,/name="product"/);
-  assert.match(details,/<option value="q">Без рекламы · B<\/option>/);
+  assert.match(details,/data-ka-link-search/);
+  assert.match(details,/data-ka-link-pick="q" aria-pressed="false">Без рекламы · B<\/button>/);
   const key=JSON.stringify(['sku','186427214']);
   const form={dataset:{kaLinkForm:key},elements:{product:{value:'q'}}};
   await panel.submit(form);
@@ -310,4 +313,60 @@ test('an unlinked Kaspi ad can be assigned and removed from the campaign without
   assert.equal(Object.hasOwn(state.settings.kaspiAdProductLinks,key),false);
   assert.match(panel.innerHTML,/Нет привязки · 186427214/);
   assert.equal(saves,2);
+});
+
+
+test('campaign search matches article, and the inline picker filters warehouse names',()=>{
+  const panel=mount([batch(19,1,[
+    {date:'2026-11-17',sku:'A',amount:40,orders:0},
+    {date:'2026-11-17',sku:'186427214',name:'Кошки',amount:20,orders:0},
+  ])]);
+  panel.input({value:'186427214',matches:selector=>selector==='.kaw-search'});
+  assert.match(panel.content.innerHTML,/Нет привязки · 186427214/);
+  assert.doesNotMatch(panel.content.innerHTML,/<b>Брелок<\/b>/);
+  const results={},confirm={},form={elements:{product:{value:'p'}},
+    querySelector:selector=>selector==='[data-ka-link-results]'?results:confirm};
+  panel.input({form,value:'без рекламы',matches:selector=>selector==='[data-ka-link-search]'});
+  assert.match(results.innerHTML,/data-ka-link-pick="q"/);
+  assert.doesNotMatch(results.innerHTML,/Брелок/);
+  assert.equal(form.elements.product.value,'');
+  assert.equal(confirm.disabled,true);
+});
+
+test('expensive zero-order ads recommend a bid change before a price cut and show unit costs',async()=>{
+  const item={...product,kaspiPrice:990};
+  const panel=mount([batch(19,1,[{date:'2026-11-17',sku:'A',amount:678.63,clicks:22,orders:0,score:5.05}])],{},[],{},{
+    prod:id=>id==='p'?item:null,
+    window:{loadKaspiCampaignFinance:async()=>({returns:[],products:[
+      {productId:'p',qty:1,revenue:990,cost:600,fees:246.78,delivery:92.45,ads:678.63,profit:-535.41},
+    ]})},
+  });
+  await new Promise(resolve=>setImmediate(resolve));
+  panel.expand({kaCampaign:'42:19'});
+  const body=panel.expand({kaProduct:JSON.stringify(['42:19','A','p',product.name])});
+  assert.match(body,/Снизить ставку/);
+  assert.match(body,/Себестоимость \/ шт\. <b>600 ₸/);
+  assert.match(body,/Цена без убытка с рекламой/);
+  assert.match(body,/Оценка конверсии ниже 7/);
+  assert.doesNotMatch(body,/можно протестировать снижение/);
+});
+
+test('positive recorded buyouts can show provisional profit while missing costs stay explicitly unknown',async()=>{
+  for(const unknownCost of [false,true]){
+    const panel=mount([batch(19,1,[{date:'2026-11-17',sku:'A',amount:40,orders:1}])],{},[],{},{
+      window:{loadKaspiCampaignFinance:async()=>({historyIncomplete:true,returns:[],products:[
+        {productId:'p',qty:2,profit:200,unknownCost},
+      ]})},
+    });
+    await new Promise(resolve=>setImmediate(resolve));
+    const rows=panel.expand({kaCampaign:'42:19'});
+    const body=panel.expand({kaProduct:JSON.stringify(['42:19','A','p',product.name])});
+    if(unknownCost){
+      assert.match(rows,/<small>Прибыль ≈<\/small><b>—<\/b>/);
+      assert.match(body,/нет себестоимости/);
+    }else{
+      assert.match(rows,/<small>Прибыль ≈<\/small><b>200\*<\/b>/);
+      assert.match(body,/только загруженные выкупы/);
+    }
+  }
 });

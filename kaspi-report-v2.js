@@ -7,7 +7,7 @@ function reportConfidenceNote(market,models=[]){let el=document.getElementById('
 (function(){
 window.loadKaspiCampaignFinance=async function(range){
   const snapshot=await loadKaspiOrders(0,{range});
-  const model=snapshot.historyIncomplete?null:buildModel(snapshot,0,range,null,true);
+  const model=buildModel(snapshot,0,range,null,true);
   return {
     historyIncomplete:snapshot.historyIncomplete,
     returns:snapshot.returns,
