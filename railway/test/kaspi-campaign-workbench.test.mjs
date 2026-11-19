@@ -4,6 +4,8 @@ import test from 'node:test';
 import vm from 'node:vm';
 
 const source = readFileSync(new URL('../../kaspi-campaign-workbench.js',import.meta.url),'utf8');
+const html = readFileSync(new URL('../../index.html',import.meta.url),'utf8');
+const linkSource = html.slice(html.indexOf('function kaspiAdLinkKey('),html.indexOf('function kaspiAdsMatchProduct('));
 const at = Date.parse('2026-11-18T15:00:00+05:00'), day = 86400000;
 class Clock extends Date { static now() { return at; } }
 const product = {id:'p',name:'Брелок',kaspi:'A'};
@@ -13,7 +15,7 @@ function mount(batches, tests = {}, orders = [], connection = {}, extra = {}) {
   const panel = {innerHTML:'',closest:()=>null,contains:node=>!!node,querySelectorAll:()=>[],
     addEventListener(type,handler){handlers[type]=handler},
     click(dataset){handlers.click({preventDefault(){},target:{closest:()=>({dataset})}})},
-    submit(form){return handlers.submit({preventDefault(){},target:form})},
+    submit(form,submitter){return handlers.submit({preventDefault(){},target:form,submitter})},
     expand(dataset) {
       const body = {innerHTML:'',hasAttribute:()=>false,setAttribute(){}};
       handlers.toggle({target:{open:true,dataset,querySelector:()=>body}});
@@ -28,7 +30,7 @@ function mount(batches, tests = {}, orders = [], connection = {}, extra = {}) {
     apiJson:async()=>({orders,historyCoverage:[{market:'Kaspi',from:at-40*day,to:at-4*3600000}]}),
     ...extra,
   };
-  vm.runInNewContext(source,c);
+  vm.runInNewContext(linkSource+source,c);
   c.window.renderKaspiCampaignWorkbench(connection);
   return panel;
 }
@@ -278,4 +280,34 @@ test('confirmed code evidence refreshes previously unlinked campaign rows withou
  const body=panel.expand({kaProduct:JSON.stringify(['42:19','186427214','p',product.name])});
  assert.match(body,/Код рекламы Kaspi · 186427214/);assert.match(body,/Артикул продавца · 897281226/);
  assert.equal(saved,0);assert.equal(product.kaspi,'A');
+});
+
+test('an unlinked Kaspi ad can be assigned and removed from the campaign without editing the product',async () => {
+  const state={settings:{},products:[product,other],kaspiAdExpenses:[batch(19,1,[
+    {date:'2026-11-17',sku:'186427214',name:'Цветочные кошки ЦКЧ',amount:20},
+  ])]};
+  let saves=0;
+  const panel=mount([],{},[],{},{
+    state,save:()=>saves++,kaspiAdsMatchProduct:line=>{
+      const chosen=state.settings.kaspiAdProductLinks?.[JSON.stringify(['sku',line.sku])];
+      return state.products.find(item=>item.id===chosen)||null;
+    },
+  });
+  const campaign={kaCampaign:'42:19'};
+  assert.match(panel.expand(campaign),/Нет привязки · 186427214/);
+  const details=panel.expand({kaProduct:JSON.stringify(['42:19','186427214','','Нет привязки · 186427214'])});
+  assert.match(details,/name="product"/);
+  assert.match(details,/<option value="q">Без рекламы · B<\/option>/);
+  const key=JSON.stringify(['sku','186427214']);
+  const form={dataset:{kaLinkForm:key},elements:{product:{value:'q'}}};
+  await panel.submit(form);
+  assert.equal(state.settings.kaspiAdProductLinks[key],'q');
+  assert.match(panel.innerHTML,/<b>Без рекламы<\/b>/);
+  assert.equal(other.kaspi,'B');
+  const linked=panel.expand({kaProduct:JSON.stringify(['42:19','186427214','q','Без рекламы'])});
+  assert.match(linked,/Снять ручную привязку/);
+  await panel.submit(form,{value:'remove'});
+  assert.equal(Object.hasOwn(state.settings.kaspiAdProductLinks,key),false);
+  assert.match(panel.innerHTML,/Нет привязки · 186427214/);
+  assert.equal(saves,2);
 });
