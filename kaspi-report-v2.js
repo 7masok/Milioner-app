@@ -194,29 +194,85 @@ window.loadBusinessMarketplaceDaily=async function(range,{force=false,work=null,
 };
 const productPeriodStatsCache=new Map(),productPeriodStatsJobs=new Map();
 window.refreshProductPeriodStats=function(spec={days:30,key:'30'},{force=false}={}){
- const days=Number(spec?.days)===-1?-1:Math.max(0,Number(spec?.days)||0),range=spec?.range||null,key=String(spec?.key||periodCacheKey(days,range));
+ const days=Number(spec?.days)===-1?-1:Math.max(0,Number(spec?.days)||0),range=spec?.range||null;
+ const report=Boolean(spec?.report),key=(report?'report:':'')+String(spec?.key||periodCacheKey(days,range));
  if(!force){const cached=productPeriodStatsCache.get(key);if(cached?.data&&Date.now()-cached.at<60000)return Promise.resolve(cached.data);if(productPeriodStatsJobs.has(key))return productPeriodStatsJobs.get(key)}
  const job=(async()=>{
   try{
-   const [kaspiSnapshot,wb1,wb2,ozon,wb3]=await Promise.all([window.WB3_ONLY?Promise.resolve({orders:[],returns:[]}):loadKaspiOrders(days,{force,range}),loadWbModel('WB',days,{range}),window.WB3_ONLY?Promise.resolve({market:'WB2',products:[]}):loadWbModel('WB2',days,{range}),window.WB3_ONLY?Promise.resolve({products:[]}):loadOzonSummary(days,{range}),window.unifiedWarehouseEnabled?loadWbModel('WB3',days,{range}):Promise.resolve(null)]);
-   if(ozon?.missing)throw new Error('Ozon finance is not ready for the selected product period');
-   if(window.WB3_ONLY&&!wb1.financeAvailable)return null; // Missing WB finance is unknown, not zero sales/profit.
+   const wbStores=window.WB3_ONLY?['WB']:window.unifiedWarehouseEnabled?['WB','WB2','WB3']:['WB','WB2'];
+   const liveRequest=report&&!range&&[-1,1].includes(days)
+    ? Promise.all(wbStores.map(async market=>[market,await ensureWbLiveOverview(market,days).catch(()=>null)]))
+    : Promise.resolve([]);
+   const requests=[window.WB3_ONLY?Promise.resolve({orders:[],returns:[]}):loadKaspiOrders(days,{force:force&&!report,range}),loadWbModel('WB',days,{range}),window.WB3_ONLY?Promise.resolve({market:'WB2',products:[]}):loadWbModel('WB2',days,{range}),window.WB3_ONLY?Promise.resolve({products:[]}):loadOzonSummary(days,{range}),window.unifiedWarehouseEnabled?loadWbModel('WB3',days,{range}):Promise.resolve(null)];
+   const [kaspiSnapshot,wb1,wb2,ozon,wb3]=report
+    ? (await Promise.allSettled(requests)).map(r=>r.status==='fulfilled'?r.value:null)
+    : await Promise.all(requests);
+   if(!report&&ozon?.missing)throw new Error('Ozon finance is not ready for the selected product period');
+   if(!report&&window.WB3_ONLY&&!wb1?.financeAvailable)return null; // Missing WB finance is unknown, not zero sales/profit.
    const totals=new Map((state.products||[]).map(p=>[String(p.id),{qty:0,profit:0,ads:0,sources:{}}])),
      add=(pid,qty,profit,source,ads=0)=>{pid=String(pid||'');qty=Math.max(0,Number(qty)||0);if(!pid)return;const row=totals.get(pid)||{qty:0,profit:0,ads:0,sources:{}};const profitValue=Number(profit)||0,adValue=Math.max(0,Number(ads)||0);row.qty+=qty;row.profit+=profitValue;row.ads+=adValue;if(source){const part=row.sources[source]||{qty:0,profit:0,ads:0};part.qty+=qty;part.profit+=profitValue;part.ads+=adValue;row.sources[source]=part}totals.set(pid,row)},
      addWbEconomics=(pid,source,metrics)=>{pid=String(pid||'');const row=totals.get(pid),part=row?.sources?.[source];if(!row||!part)return;part.deliveryTotal=Math.max(0,Number(part.deliveryTotal)||0)+Math.max(0,Number(metrics?.deliveryTotal)||0);part.commissionPctWeighted=(Number(part.commissionPctWeighted)||0)+(Number(metrics?.commissionPctWeighted)||0);part.commissionPctWeight=Math.max(0,Number(part.commissionPctWeight)||0)+Math.max(0,Number(metrics?.commissionPctWeight)||0)},
-     kaspi=buildModel(kaspiSnapshot,days,range);
-   const kaspiKnown=kaspi.rows.filter(x=>x.productId);
+     kaspi=kaspiSnapshot?buildModel(kaspiSnapshot,days,range):null;
+   const record=(pid,market,amounts)=>{
+    if(!report)return;
+    const part=totals.get(String(pid))?.sources[market];if(!part)return;
+    const detail=part.detail ||= {revenue:0,cost:0,fees:0,fbo:0,profitKnown:true,estimated:false,adsKnown:true};
+    for(const k of ['revenue','cost','fees','fbo'])detail[k]=detail[k]==null||amounts[k]==null?null:detail[k]+amounts[k];
+    detail.profitKnown=detail.profitKnown&&amounts.profitKnown;
+    detail.estimated=detail.estimated||amounts.estimated;
+    detail.adsKnown=detail.adsKnown&&amounts.adsKnown!==false;
+   };
+   const kaspiKnown=(kaspi?.rows||[]).filter(x=>x.productId);
    // Product-level economics must only use advertising that is explicitly linked to that product.
    // Unmatched marketplace advertising remains in marketplace totals instead of being spread across unrelated SKUs.
-   for(const x of kaspiKnown)add(x.productId,x.qty,Number(x.profit)||0,'Kaspi',Math.max(0,Number(x.ads)||0));
-   for(const model of[wb1,wb2,...(wb3?[wb3]:[])]){
-     const linked=model.products.map(x=>({x,pid:wbLiveProductId(model.market,x)})).filter(v=>v.pid);
-     for(const v of linked){const x=v.x,netQty=Number(x.qty)||0,saleQty=Math.max(0,Number(x.saleQty??netQty)||0),cost=wbReportProductCost(x,v.pid,model.market,days,range).cost,productAds=Math.max(0,Number(x.advertising)||0);add(v.pid,saleQty,Number(x.netBeforeCost||0)-cost,model.market,productAds);const deliveryTotal=Math.max(0,Number(x.delivery||0)+Number(x.rebill||0));addWbEconomics(v.pid,model.market,{deliveryTotal,commissionPctWeighted:Number(x.commissionPctWeighted)||0,commissionPctWeight:Math.max(0,Number(x.commissionPctWeight)||0)})}
+   for(const x of kaspiKnown){
+    add(x.productId,x.qty,Number(x.profit)||0,'Kaspi',Math.max(0,Number(x.ads)||0));
+    record(x.productId,'Kaspi',{revenue:x.revenue,cost:x.unknownCost?null:x.cost,fees:x.fees,fbo:0,profitKnown:!x.unknownCost,estimated:true});
    }
-   for(const x of ozon?.products||[]){const pid=String(x?.productId||''),qty=Math.max(0,Number(x?.qty)||0);if(pid)add(pid,qty,Number(x?.profit)||0,'Ozon',Math.max(0,Number(x?.ads)||0))}
+   for(const model of [wb1,wb2,wb3].filter(Boolean)){
+     const linked=model.products.map(x=>({x,pid:wbLiveProductId(model.market,x)})).filter(v=>v.pid);
+    for(const v of linked){
+     const {x,pid}=v,netQty=Number(x.qty)||0,saleQty=Math.max(0,Number(x.saleQty??netQty)||0),info=wbReportProductCost(x,pid,model.market,days,range);
+     const net=Number(x.netBeforeCost)||0,revenue=Number(x.retailAmount)||0,productAds=Math.max(0,Number(x.advertising)||0);
+     add(v.pid,saleQty,net-info.cost,model.market,productAds);
+     record(pid,model.market,{revenue,cost:info.known?info.cost:null,fees:revenue-net-productAds,fbo:0,
+       profitKnown:info.known&&model.financeAvailable,estimated:info.estimated});
+     const deliveryTotal=Math.max(0,Number(x.delivery||0)+Number(x.rebill||0));
+     addWbEconomics(pid,model.market,{deliveryTotal,commissionPctWeighted:Number(x.commissionPctWeighted)||0,commissionPctWeight:Math.max(0,Number(x.commissionPctWeight)||0)});
+    }
+   }
+   for(const x of ozon?.products||[]){
+    const pid=String(x?.productId||''),qty=Math.max(0,Number(report?(x?.saleQty??x?.qty):x?.qty)||0);if(!pid||report&&ozon.mixedCurrency)continue;
+    const cost=Number(x.cost)||0,costKnown=!Number(x.qty)||!!cost;
+    add(pid,qty,Number(x?.profit)||0,'Ozon',Math.max(0,Number(x.ads)||0));
+    record(pid,'Ozon',{revenue:x.sales,cost:costKnown?cost:null,fees:x.fees,fbo:Number(x.fbo)||0,
+      profitKnown:costKnown,adsKnown:x.adsKnown!==false,estimated:costKnown&&x.adsKnown===false||!!cost});
+   }
+   const awaitingFinance=new Set();
+   for(const [market,live] of await liveRequest){
+    const byProduct=new Map();
+    for(const x of live?.products||[]){
+     const pid=wbLiveProductId(market,x),qty=Number(x.qty)||0;
+     if(pid&&qty>0)byProduct.set(String(pid),(byProduct.get(String(pid))||0)+qty);
+    }
+    for(const [pid,qty] of byProduct){
+     const added=qty-(totals.get(pid)?.sources[market]?.qty||0);
+     if(added<=0)continue;
+     awaitingFinance.add(market);add(pid,added,0,market);
+     record(pid,market,{revenue:null,cost:null,fees:null,fbo:null,adsKnown:false,profitKnown:false,estimated:true});
+    }
+   }
    const result=new Map([...totals].map(([pid,x])=>{for(const part of Object.values(x.sources||{})){if(part.deliveryTotal!==undefined||part.commissionPctWeight!==undefined){part.avgDelivery=Number(part.qty)>0?Number(part.deliveryTotal||0)/Number(part.qty):null;part.commissionPct=Number(part.commissionPctWeight)>0?Number(part.commissionPctWeighted||0)/Number(part.commissionPctWeight):null}}return[pid,{qty:x.qty,profit:x.profit,ads:x.ads,unitProfit:x.qty?x.profit/x.qty:0,sources:x.sources}]}));
+   if(report)result.coverage={
+    Kaspi:kaspiSnapshot?(kaspiSnapshot.historyIncomplete||kaspi?.pendingOrders||kaspi?.adsDateMissing||kaspi?.rows.some(r=>!r.productId&&(r.revenue||r.ads||r.isReturn))?'partial':'ready'):'missing',
+    WB:awaitingFinance.has('WB')?'partial':wb1?.financeAvailable?'ready':'missing',
+    WB2:awaitingFinance.has('WB2')?'partial':wb2?.financeAvailable?'ready':'missing',
+    WB3:awaitingFinance.has('WB3')?'partial':wb3?.financeAvailable?'ready':'missing',
+    Ozon:!ozon||ozon.missing||ozon.mixedCurrency?'missing':ozon.financeIncomplete||ozon.adsPending||ozon.unallocatedAds||ozon.unallocatedFbo?'partial':'ready',
+   };
    productPeriodStatsCache.set(key,{at:Date.now(),data:result});
-   if(!range&&days===30)window.allMarketUnitProfit30=result;
+   if(productPeriodStatsCache.size>24)productPeriodStatsCache.delete(productPeriodStatsCache.keys().next().value);
+   if(!report&&!range&&days===30)window.allMarketUnitProfit30=result;
    return result;
   }catch(e){console.warn('Product period stats',e);return null}
   finally{productPeriodStatsJobs.delete(key)}
@@ -288,14 +344,146 @@ function paintOzonSheet(summary,days){const empty=!summary||summary.empty,sales=
 function paintOzonMain(summary){reportConfidenceNote('Ozon');const empty=!summary||summary.empty,set=(id,v)=>{const e=document.getElementById(id);if(e)e.textContent=v};set('rRevenue',empty?'—':fmt(summary.sales));set('rCost',empty?'—':fmt(summary.cost));set('rFees',empty?'—':fmt(summary.fees));set('rAds',empty?'—':fmt(summary.ads));set('rProfit',empty?'—':fmt(summary.profit));const box=document.getElementById('mpReport');if(box)box.innerHTML='<div class="item row" role="button" tabindex="0" style="cursor:pointer" onclick="openStoreDetail(\'Ozon\','+reportPeriod+')"><div class="grow"><b>Ozon</b><div class="muted">'+(empty?'нет операций за период':'приход '+fmt(summary.sales)+' · расход '+fmt((summary.cost||0)+(summary.fees||0)+(summary.ads||0)))+' · нажмите для детализации</div></div><b>'+(empty?'—':fmt(summary.profit))+'</b></div>'}
 async function loadOzonSummary(days,{range=null}={}){if(Number(days)===0&&!range&&reportCustomFrom&&reportCustomTo)range={from:String(reportCustomFrom),to:String(reportCustomTo)};const key=periodCacheKey(days,range),old=ozonSummaryCache.get(key);if(old?.data&&Date.now()-old.at<120000)return old.data;if(old?.promise)return old.promise;const promise=(async()=>{let fn=typeof ozonStoreDetail==='function'?ozonStoreDetail:(typeof summarizeOzonReport==='function'?summarizeOzonReport:null);for(let i=0;!fn&&i<25;i++){await new Promise(r=>setTimeout(r,40));fn=typeof ozonStoreDetail==='function'?ozonStoreDetail:(typeof summarizeOzonReport==='function'?summarizeOzonReport:null)}if(!fn){ozonSummaryCache.delete(key);return {sales:0,cost:0,fees:0,ads:0,profit:0,qty:0,empty:true,products:[],missing:true}}const data=await fn(days,range);ozonSummaryCache.set(key,{at:Date.now(),data});return data})().catch(e=>{ozonSummaryCache.delete(key);throw e});ozonSummaryCache.set(key,{at:Date.now(),promise});return promise}
 async function loadOzonMain(days,seq){try{const summary=await loadOzonSummary(days);if(seq!==renderSeq)return;paintOzonMain(summary)}catch(e){if(seq!==renderSeq)return;console.warn('Ozon report',e);for(const id of ['rRevenue','rCost','rFees','rAds','rProfit']){const el=document.getElementById(id);if(el)el.textContent='—'}const box=document.getElementById('mpReport');if(box)box.innerHTML='<div class="empty">Не удалось загрузить отчёт Ozon.</div>'}}
-window.isOzonAdsRangeActive=function(days,range){const match=(d,r)=>Number(d)===Number(days)&&(!range&&!r||range&&r&&range.from===r.from&&range.to===r.to);return ['all','Ozon'].includes(reportMarket)&&match(reportPeriod,Number(reportPeriod)===0?{from:reportCustomFrom,to:reportCustomTo}:null)||document.getElementById('modal')?.classList.contains('open')&&marketplaceReportContext?.market==='Ozon'&&match(marketplaceReportContext.days,marketplaceReportContext.range)};
-window.onOzonSummary=function(days,summary,range=null){if(!summary)return;const key=periodCacheKey(days,range);ozonSummaryCache.set(key,{at:Date.now(),data:summary});const sameRange=range?Number(reportPeriod)===0&&String(reportCustomFrom||'')===String(range.from||'')&&String(reportCustomTo||'')===String(range.to||''):Number(reportPeriod)===Number(days);if(sameRange&&reportMarket==='Ozon')paintOzonMain(summary);if(sameRange&&reportMarket==='all'){const ks=warmKaspi(days),wb1=warmWb('WB',days),wb2=warmWb('WB2',days);if(ks&&wb1&&wb2)paintCombined(days,ks,wb1,wb2,summary,false);}const modal=document.getElementById('modal'),sheet=document.getElementById('sheet'),html=String(sheet?.innerHTML||'');if(modal?.classList.contains('open')&&html.includes('Реклама Ozon')&&marketplaceReportContext?.market==='Ozon'&&Number(marketplaceReportContext.days)===Number(days)&&(!range||marketplaceReportContext.range?.from===range.from&&marketplaceReportContext.range?.to===range.to)){const scroll=sheet?.scrollTop||0;paintOzonSheet(summary,days);requestAnimationFrame(()=>{const next=document.getElementById('sheet');if(next)next.scrollTop=scroll;});}else if(sameRange&&modal?.classList.contains('open')&&html.includes('Ozon FBO · прибыль по товарам')&&typeof openOzonProductProfit==='function'){const scroll=sheet?.scrollTop||0;openOzonProductProfit();requestAnimationFrame(()=>{const next=document.getElementById('sheet');if(next)next.scrollTop=scroll;});}};
+window.isOzonAdsRangeActive=function(days,range){if(window.activeProductSalesReport?.(days,range))return true;const match=(d,r)=>Number(d)===Number(days)&&(!range&&!r||range&&r&&range.from===r.from&&range.to===r.to);return ['all','Ozon'].includes(reportMarket)&&match(reportPeriod,Number(reportPeriod)===0?{from:reportCustomFrom,to:reportCustomTo}:null)||document.getElementById('modal')?.classList.contains('open')&&marketplaceReportContext?.market==='Ozon'&&match(marketplaceReportContext.days,marketplaceReportContext.range)};
+window.onOzonSummary=function(days,summary,range=null){if(!summary)return;const key=periodCacheKey(days,range);ozonSummaryCache.set(key,{at:Date.now(),data:summary});window.refreshProductSalesReport?.(days,range);const sameRange=range?Number(reportPeriod)===0&&String(reportCustomFrom||'')===String(range.from||'')&&String(reportCustomTo||'')===String(range.to||''):Number(reportPeriod)===Number(days);if(sameRange&&reportMarket==='Ozon')paintOzonMain(summary);if(sameRange&&reportMarket==='all'){const ks=warmKaspi(days),wb1=warmWb('WB',days),wb2=warmWb('WB2',days);if(ks&&wb1&&wb2)paintCombined(days,ks,wb1,wb2,summary,false);}const modal=document.getElementById('modal'),sheet=document.getElementById('sheet'),html=String(sheet?.innerHTML||'');if(modal?.classList.contains('open')&&html.includes('Реклама Ozon')&&marketplaceReportContext?.market==='Ozon'&&Number(marketplaceReportContext.days)===Number(days)&&(!range||marketplaceReportContext.range?.from===range.from&&marketplaceReportContext.range?.to===range.to)){const scroll=sheet?.scrollTop||0;paintOzonSheet(summary,days);requestAnimationFrame(()=>{const next=document.getElementById('sheet');if(next)next.scrollTop=scroll;});}else if(sameRange&&modal?.classList.contains('open')&&html.includes('Ozon FBO · прибыль по товарам')&&typeof openOzonProductProfit==='function'){const scroll=sheet?.scrollTop||0;openOzonProductProfit();requestAnimationFrame(()=>{const next=document.getElementById('sheet');if(next)next.scrollTop=scroll;});}};
 let storeDetailSeq=0;
 window.openStoreCustomPeriod=function(market){if(typeof reportCustomBounds==='function')reportCustomBounds();showSheet('<h3>Свой период · '+esc(storeTitle(market))+'</h3><div class="two"><div class="field"><label>Дата с</label><input id="storeDetailFrom" type="date" value="'+esc(reportCustomFrom)+'"></div><div class="field"><label>Дата по</label><input id="storeDetailTo" type="date" value="'+esc(reportCustomTo)+'"></div></div><button class="btn dark full" onclick="applyStoreCustomPeriod(\''+market+'\')">Показать отчёт</button>')};
 window.applyStoreCustomPeriod=function(market){const from=String(document.getElementById('storeDetailFrom')?.value||''),to=String(document.getElementById('storeDetailTo')?.value||'');if(!reportDateTimestamp(from)||!reportDateTimestamp(to)||reportDateTimestamp(from)>reportDateTimestamp(to))return alert('Проверьте даты периода.');reportCustomFrom=from;reportCustomTo=to;reportPeriodPreset=0;reportPeriod=0;state.settings.reportPeriodPreset=0;state.settings.reportPeriod=0;state.settings.reportCustomFrom=from;state.settings.reportCustomTo=to;state.settings.reportPeriodUpdatedAt=Date.now();rememberReportPeriodUiPreference();if(document.querySelector('#reports.view.active'))renderReports();openStoreDetail(market,0)};
 window.openStoreDetail=async function(market,days){days=days===undefined||days===null?reportPeriod:Number(days);if(!['Kaspi','WB','WB2','WB3','Ozon'].includes(market))return;marketplaceReportContext={market,days};marketplaceReportContext.range=Number(days)===0?{from:reportCustomFrom,to:reportCustomTo}:null;const seq=++storeDetailSeq,title=storeTitle(market);try{if(market==='Kaspi'){const cached=warmKaspi(days);if(cached){paintKaspiSheet(cached,days);return}showSheet('<h3>'+esc(title)+'</h3>'+detailPeriodHtml(market,days)+'<div class="empty">Загружаю детализацию…</div>');const model=buildModel(await loadKaspiOrders(days),days);if(seq!==storeDetailSeq)return;paintKaspiSheet(model,days);return}if((market==='WB'||market==='WB2'||market==='WB3')){const daily=[-1,1].includes(Number(days)),cached=warmWb(market,days);if(cached&&!daily){paintWbSheet(cached,market,days);return}showSheet('<h3>'+esc(title)+'</h3>'+detailPeriodHtml(market,days)+'<div class="empty">Загружаю детализацию…</div>');const [model,live]=await Promise.all([loadWbModel(market,days),daily&&typeof ensureWbLiveOverview==='function'?ensureWbLiveOverview(market,days).catch(()=>null):Promise.resolve(null)]);if(seq!==storeDetailSeq)return;const view=resolvedWbReportStats(model,live,market,days);if(view.useLive)paintWbLiveSheet(model,market,days,live,view);else paintWbSheet(model,market,days);return}const key=cacheKey(days),cached=ozonSummaryCache.get(key);if(cached?.data&&Date.now()-cached.at<120000){paintOzonSheet(cached.data,days);return}showSheet('<h3>'+esc(title)+'</h3>'+detailPeriodHtml(market,days)+'<div class="empty">Загружаю детализацию…</div>');const summary=await loadOzonSummary(days);if(seq!==storeDetailSeq)return;paintOzonSheet(summary,days)}catch(e){if(seq!==storeDetailSeq)return;showSheet('<h3>'+esc(title)+'</h3>'+detailPeriodHtml(market,days)+'<div class="empty">Не удалось загрузить детализацию: '+esc(String(e.message||e))+'</div>')}};
 function paintCombined(days,ks,wb1,wb2,ozon,ozonPending,wb1Live=null,wb2Live=null){reportConfidenceNote('all',[wb1,wb2]);const kp=reportProfitView(ks),w1=resolvedWbReportStats(wb1,wb1Live,'WB',days),w2=resolvedWbReportStats(wb2,wb2Live,'WB2',days),known=v=>v!==null&&v!==undefined&&Number.isFinite(Number(v)),expense=v=>known(v.cost)&&known(v.fees)?Number(v.cost)+Number(v.fees)+Number(v.ads||0):null,tot={revenue:Number(ks.revenue)||0,cost:Number(ks.cost)||0,fees:Number(ks.fees)||0,ads:Number(ks.ads)||0,profit:Number(kp.value)||0};for(const w of[w1,w2]){tot.revenue+=Number(w.revenue)||0;tot.cost+=known(w.cost)?Number(w.cost):0;tot.fees+=known(w.fees)?Number(w.fees):0;tot.ads+=Number(w.ads)||0;if(known(w.profit))tot.profit+=Number(w.profit)}if(!ozonPending&&ozon&&Number.isFinite(ozon.sales)){tot.revenue+=Number(ozon.sales)||0;tot.cost+=Number(ozon.cost)||0;tot.fees+=Number(ozon.fees)||0;tot.ads+=Number(ozon.ads)||0;if(Number.isFinite(Number(ozon.profit)))tot.profit+=Number(ozon.profit)||0}const set=(id,v)=>{const e=document.getElementById(id);if(e)e.textContent=fmt(v)};set('rRevenue',tot.revenue);set('rCost',tot.cost);set('rFees',tot.fees);for(const id of ['rRevenue','rCost','rFees']){const el=document.getElementById(id);if(el)el.textContent='≈ '+el.textContent}set('rAds',tot.ads);const wbProfitKnown=known(w1.profit)&&known(w2.profit);document.getElementById('rProfit').textContent=wbProfitKnown?'≈ '+fmt(tot.profit):'—';const row=(name,sub,value,action)=>'<div class="item row" role="button" tabindex="0" style="cursor:pointer" onclick="'+action+'"><div class="grow"><b>'+name+'</b><div class="muted">'+sub+'</div></div><b>'+(value===null?'—':'≈ '+fmt(value))+'</b></div>',wbSub=(view,model)=>view.useLive?'выкупы ≈ '+fmt(view.revenue)+' · '+Number(view.qty||0)+' шт. · расход '+(expense(view)===null?'—':'≈ '+fmt(expense(view))):!view.financeAvailable?'данные продаж WB ожидаются · реклама '+fmt(model.ads):'приход '+fmt(model.revenue+model.adjustment)+' · расход '+fmt(model.expenses+model.ads+model.cost),ozonSub=ozonPending?'загружаю…':!ozon?'не удалось загрузить':ozon.empty?'нет операций за период':'приход '+fmt(ozon.sales)+' · расход '+fmt((ozon.cost||0)+(ozon.fees||0)+(ozon.ads||0)),ozonValue=ozonPending?null:(ozon&&Number.isFinite(ozon.profit)?ozon.profit:null),box=document.getElementById('mpReport');if(box)box.innerHTML=row('Kaspi',ks.qty+' шт. · нажмите для детализации',kp.value,"openStoreDetail('Kaspi',"+days+")")+row('WB 1',wbSub(w1,wb1),known(w1.profit)?w1.profit:null,"openStoreDetail('WB',"+days+")")+row('WB 2',wbSub(w2,wb2),known(w2.profit)?w2.profit:null,"openStoreDetail('WB2',"+days+")")+row('Ozon',ozonSub,ozonValue,"openStoreDetail('Ozon',"+days+")")}
 async function loadAllReports(days,seq){showLoading();try{const ozonTask=typeof loadOzonSummary==='function'?loadOzonSummary(days).catch(()=>null):(typeof summarizeOzonReport==='function'?summarizeOzonReport(days).catch(()=>null):Promise.resolve(null)),liveTask=[-1,1].includes(Number(days))&&typeof ensureWbLiveOverview==='function'?Promise.all([ensureWbLiveOverview('WB',Number(days)).catch(()=>null),ensureWbLiveOverview('WB2',Number(days)).catch(()=>null)]):Promise.resolve([null,null]);const [ks,wb1,wb2,ozon,live]=await Promise.all([loadKaspiOrders(days).then(s=>buildModel(s,days)),loadWbModel('WB',days),loadWbModel('WB2',days),ozonTask,liveTask]);if(seq!==renderSeq)return;if(ozon&&typeof ozonSummaryCache!=='undefined'&&ozonSummaryCache&&typeof cacheKey==='function')ozonSummaryCache.set(cacheKey(days),{at:Date.now(),data:ozon});paintCombined(days,ks,wb1,wb2,ozon,false,live?.[0]||null,live?.[1]||null)}catch(e){if(seq!==renderSeq)return;const box=document.getElementById('mpReport');if(box)box.innerHTML='<div class="empty">Не удалось загрузить общий отчёт: '+esc(String(e.message||e))+'</div>'}}
+const productReportStores=[['Kaspi','kaspi'],['WB','wb'],['WB2','wb2'],['WB3','wb3'],['Ozon','ozon']];
+const productReportPeriods=[[1,'Сегодня'],[-1,'Вчера'],[7,'7 дней'],[30,'30 дней'],[0,'Свой период']];
+const productReportSigns=[['all','Все'],['plus','В плюс'],['minus','В минус']];
+let productReportSession=null;
+function productReportStoreList(){
+ return window.WB3_ONLY?[['WB','wb']]:productReportStores.filter(([market])=>market!=='WB3'||window.unifiedWarehouseEnabled);
+}
+function productReportStoreName(market){return window.WB3_ONLY&&market==='WB'?'WB3':storeTitle(market);}
+function activeProductReport(days,range){
+ const current=productReportSession;
+ return !!current&&current.root===document.getElementById('productReportSheet')&&document.getElementById('modal')?.classList.contains('open')
+  &&current.days===Number(days)&&periodCacheKey(days,current.range)===periodCacheKey(days,range);
+}
+function productReportMoney(value,estimated=false){
+ return value==null||!Number.isFinite(Number(value))?'—':(estimated?'≈ ':'')+wbReportAmount(value);
+}
+function productReportProduct(item,metric,coverage,stores){
+ const parts=stores.map(([market,field])=>{
+  const values=metric?.sources?.[market],linked=!!values||Boolean(item[field])||Boolean(item[field+'Aliases']?.length);
+  return {market,values,linked,coverage:coverage[market]};
+ });
+ const available=parts.filter(part=>part.values?.detail?.profitKnown);
+ const partial=parts.some(part=>part.linked&&(part.coverage!=='ready'||part.values&&!part.values.detail?.profitKnown||part.values?.detail?.estimated));
+ const hasActivity=parts.some(({values})=>values&&(values.qty||values.ads||values.profit||values.detail?.revenue||values.detail?.fees||values.detail?.fbo));
+ const knownQty=parts.filter(part=>part.values?.qty>0||part.coverage==='ready'&&part.linked);
+ const qty=knownQty.length?knownQty.reduce((n,part)=>n+(part.values?.qty||0),0):null;
+ const profit=available.length?available.reduce((n,part)=>n+part.values.profit,0):metric&&knownQty.length&&!hasActivity&&!partial?0:null;
+ return {item,parts,qty,profit,partial,hasActivity};
+}
+function productReportCard(row,opened){
+ const {item,parts}=row,marketNames=parts.filter(part=>part.linked).map(part=>productReportStoreName(part.market)).join(' · ');
+ const tone=row.profit<0?'color:#a12639':row.profit>0?'color:#166744':'';
+ const labels=[['Выручка','revenue'],['Себестоимость','cost'],['Расходы','fees'],['FBO / кросс-докинг','fbo']];
+ return '<details class="item" data-product-report-item="'+esc(item.id)+'"'+(opened.has(String(item.id))?' open':'')+'>'
+  +'<summary class="row" style="cursor:pointer;list-style:none"><span class="grow" style="min-width:0;overflow-wrap:anywhere"><b>'+esc(item.name)+'</b>'
+  +(marketNames?'<span class="muted" style="display:block">'+esc(marketNames)+'</span>':'')+'</span>'
+  +'<span style="flex:none;text-align:right"><b style="'+tone+'">'+productReportMoney(row.profit,row.partial)+'</b><span class="muted" style="display:block">'+(row.qty==null?'—':row.qty+' шт.')+'</span></span><span aria-hidden="true">⌄</span></summary>'
+  +parts.map(({market,values,linked,coverage})=>{
+   const d=values?.detail,profit=d?.profitKnown?values.profit:null;
+   const status=!linked?'Нет привязки':coverage==='missing'?'Данные за период недоступны':!values?(coverage==='partial'?'Данные за период неполные':'Без операций'):!d?.profitKnown?(d?.cost==null&&d?.revenue!=null?'Нет себестоимости':'Прибыль пока неизвестна'):!d.adsKnown?'Прибыль до неучтённой рекламы':'';
+   return '<div style="border-top:1px solid #eee;margin-top:8px;padding-top:6px"><div class="row"><b class="grow">'+esc(productReportStoreName(market))+'</b>'
+    +'<span>'+(values&&coverage!=='missing'?values.qty+' шт.':linked&&coverage==='ready'?'0 шт.':'—')+'</span><b>'+productReportMoney(profit,d?.estimated||coverage==='partial')+'</b></div>'
+    +(d?'<div class="muted" style="line-height:1.5">'+labels.filter(([,key])=>key!=='fbo'||d.fbo).map(([label,key])=>label+' '+productReportMoney(d[key])).concat('Реклама '+productReportMoney(d.adsKnown?values.ads:null)).join(' · ')+'</div>':'')
+    +(status?'<div class="muted">'+status+'</div>':'')+'</div>';
+  }).join('')+'</details>';
+}
+function paintProductReport(){
+ const s=productReportSession;
+ if(!s)return;
+ const node=s.root.querySelector('[data-product-report-results]');
+ if(!s.metrics){node.innerHTML=s.loading?'<div class="empty" role="status">Загружаю продажи и прибыль…</div>':'<div class="empty">Отчёт недоступен. <button type="button" class="btn" data-product-report-retry>Повторить</button></div>';return;}
+ const coverage=s.metrics.coverage,stores=productReportStoreList(),needle=normalizeName(s.query);
+ const rows=(state.products||[]).filter(item=>!needle||productSearchHaystack(item).includes(needle))
+  .map(item=>productReportProduct(item,s.metrics.get(String(item.id)),coverage,stores))
+  .filter(row=>(needle||row.hasActivity)&&(s.sign==='all'||(s.sign==='plus'?row.profit>0:row.profit<0)));
+ rows.sort((a,b)=>{
+  if(s.sort==='qty')return (b.qty??-1)-(a.qty??-1)||a.item.name.localeCompare(b.item.name,'ru');
+  if(a.profit==null||b.profit==null){if(a.profit!==b.profit)return a.profit==null?1:-1;}
+  return (s.sort==='ascending'?1:-1)*(a.profit-b.profit)||a.item.name.localeCompare(b.item.name,'ru');
+ });
+ const incomplete=stores.filter(([market])=>coverage[market]!=='ready').map(([market])=>productReportStoreName(market));
+ const unavailable=stores.every(([market])=>coverage[market]==='missing');
+ node.innerHTML=(incomplete.length?'<div class="link-note">Данные неполные · '+esc(incomplete.join(', '))+'. Итоги по доступным операциям.</div>':'')
+  +(unavailable&&!rows.length?'<div class="empty">Продажи за период пока недоступны. <button class="btn" type="button" data-product-report-retry>Повторить</button></div>':rows.length?'<div class="list" style="margin-top:8px">'+rows.slice(0,s.limit).map(row=>productReportCard(row,s.opened)).join('')+'</div>':'<div class="empty">По этим условиям товаров нет</div>')
+  +(rows.length>s.limit?'<button class="btn full" type="button" data-product-report-more>Показать ещё</button>':'');
+}
+async function loadProductReport(force=false){
+ const s=productReportSession;if(!s)return;
+ const serial=++s.serial,days=s.days,range=s.range;
+ s.loading=true;if(!force)s.metrics=null;paintProductReport();
+ const metrics=await window.refreshProductPeriodStats({days,range,report:true},{force});
+ if(productReportSession!==s||serial!==s.serial||!activeProductReport(days,range))return;
+ s.loading=false;s.metrics=metrics;paintProductReport();
+}
+function openProductSalesReport(){
+ const selected=productReportPeriods.some(([days])=>days===Number(reportPeriod))?Number(reportPeriod):30;
+ const bounds=periodBounds(selected);
+ const asDate=t=>new Date(t+18000000).toISOString().slice(0,10);
+ const initial={from:asDate(bounds.start),to:asDate(bounds.end-1)};
+ showSheet('<div id="productReportSheet" data-report-sheet><h3>Продажи по товарам</h3>'
+  +'<div class="period" style="margin-top:0">'+productReportPeriods.map(([days,label])=>'<button type="button" class="chip'+(days===selected?' active':'')+'" data-product-report-days="'+days+'">'+label+'</button>').join('')+'</div>'
+  +'<form data-product-report-range'+(selected===0?'':' hidden')+'><div class="row" style="flex-wrap:wrap;margin-bottom:8px">'
+  +'<label class="field">С <input name="from" type="date" required value="'+initial.from+'"></label><label class="field">По <input name="to" type="date" required value="'+initial.to+'"></label><button class="btn" type="submit">Показать</button></div></form>'
+  +'<div class="field"><input type="search" data-product-report-search aria-label="Поиск товара" placeholder="Название или артикул"></div>'
+  +'<div class="row" style="flex-wrap:wrap;justify-content:space-between"><div class="market-tabs" style="margin:0">'+productReportSigns.map(([id,label])=>'<button type="button" class="market-tab'+(id==='all'?' active':'')+'" data-product-report-sign="'+id+'">'+label+'</button>').join('')+'</div>'
+  +'<select data-product-report-sort aria-label="Сортировка"><option value="descending">Прибыль ↓</option><option value="ascending">Прибыль ↑</option><option value="qty">Продажи ↓</option></select></div>'
+  +'<div data-product-report-results></div></div>');
+ const root=document.getElementById('productReportSheet'),form=root.querySelector('[data-product-report-range]');
+ const s={root,days:selected,range:selected===0?initial:null,query:'',sign:'all',sort:'descending',limit:40,opened:new Set(),serial:0};
+ productReportSession=s;
+ function changePeriod(days,range){
+  s.days=days;s.range=range;s.limit=40;
+  for(const button of root.querySelectorAll('[data-product-report-days]'))button.classList.toggle('active',Number(button.dataset.productReportDays)===days);
+  loadProductReport();
+ }
+ root.addEventListener('click',event=>{
+  const b=event.target.closest('button');if(!b)return;
+  const {productReportDays:period,productReportSign:sign}=b.dataset;
+  if(period!==undefined){form.hidden=Number(period)!==0;if(form.hidden)changePeriod(Number(period),null);else form.elements.from.focus();}
+  if(sign){s.sign=sign;s.limit=40;for(const chip of root.querySelectorAll('[data-product-report-sign]'))chip.classList.toggle('active',chip===b);paintProductReport();}
+  if(b.hasAttribute('data-product-report-more')){s.limit+=40;paintProductReport();}
+  if(b.hasAttribute('data-product-report-retry'))loadProductReport(true);
+ });
+ root.addEventListener('submit',event=>{
+  if(event.target!==form)return;
+  event.preventDefault();const from=form.elements.from,to=form.elements.to;
+  to.setCustomValidity(from.value>to.value?'Дата окончания раньше начала.':'');if(to.reportValidity())changePeriod(0,{from:from.value,to:to.value});
+ });
+ root.addEventListener('input',event=>{
+  if(event.target.form===form)form.elements.to.setCustomValidity('');
+  if(event.target.matches('[data-product-report-search]')){s.query=event.target.value;s.limit=40;paintProductReport();}
+ });
+ root.addEventListener('change',event=>{
+  if(event.target.matches('[data-product-report-sort]')){s.sort=event.target.value;s.limit=40;paintProductReport();}
+ });
+ root.addEventListener('toggle',event=>{
+  const id=event.target.dataset?.productReportItem;
+  if(id&&root.contains(event.target)){if(event.target.open)s.opened.add(id);else s.opened.delete(id);}
+ },true);
+ loadProductReport();
+}
+window.activeProductSalesReport=activeProductReport;
+window.refreshProductSalesReport=(days,range)=>{
+ if(activeProductReport(days,range))loadProductReport(true);
+};
+const productReportTitle=document.getElementById('reports')?.querySelector('h2');
+if(productReportTitle){
+ const button=document.createElement('button');button.type='button';button.className='btn full';
+ button.textContent='Продажи по товарам';button.addEventListener('click',openProductSalesReport);
+ productReportTitle.before(button);
+}
+
 const selectedReportViews=new Map();
 async function renderSelectedReports(){
  const seq=++renderSeq,ids=selectedStoreIds('reports'),days=reportPeriod;

@@ -113,8 +113,8 @@ test('confirmed Kaspi catalog identities match seller SKUs in a separate namespa
 });
 
 test('unmatched marketplace advertising is never spread across unrelated products',()=>{
-  assert.match(report,/for\(const x of kaspiKnown\)add\(x\.productId,x\.qty,Number\(x\.profit\)\|\|0,'Kaspi',Math\.max\(0,Number\(x\.ads\)\|\|0\)\)/);
-  assert.match(report,/productAds=Math\.max\(0,Number\(x\.advertising\)\|\|0\);add\(v\.pid,saleQty,Number\(x\.netBeforeCost\|\|0\)-cost,model\.market,productAds\)/);
+  assert.match(report,/for\(const x of kaspiKnown\)\{\s*add\(x\.productId,x\.qty,Number\(x\.profit\)\|\|0,'Kaspi',Math\.max\(0,Number\(x\.ads\)\|\|0\)\)/);
+  assert.match(report,/productAds=Math\.max\(0,Number\(x\.advertising\)\|\|0\);\s*add\(v\.pid,saleQty,net-info\.cost,model\.market,productAds\)/);
   assert.doesNotMatch(report,/kaspiLooseAds|looseShare/);
   assert.doesNotMatch(report,/unmatchedAds=Math\.max\(0,Number\(model\.unmatchedAdvertising\)/);
 });
@@ -139,7 +139,7 @@ test('unified Product-period profit includes Ozon and supports an explicit custo
   assert.match(compat,/window\.summarizeOzonReport=async function\(days,range=null\)/);
   assert.match(compat,/ozonProfitModel\(payload,days,range,prepared\)/);
   assert.match(html,/Не удалось загрузить расчёт за '\+esc\(spec\.label\)/);
-  assert.match(report,/kaspi=buildModel\(kaspiSnapshot,days,range\)/);
+  assert.match(report,/kaspi=kaspiSnapshot\?buildModel\(kaspiSnapshot,days,range\)/);
   assert.match(report,/kaspiAdsBreakdown\(days,range\)/);
   assert.match(kaspiAds,/function breakdown\(days = reportPeriod, range = null\)/);
   assert.match(kaspiAds,/effectiveRows\(days, '', range\)/);
@@ -220,4 +220,56 @@ test('buyer-transit profit is additive across stores with different margins for 
   assert.equal(combined.missingUnits,2);
   assert.equal(report([['b',[['WB',2]]]],2).total,null);
   assert.equal(report([],0).total,0);
+});
+
+
+test('the product sales report combines connected shops, explains Ozon FBO and preserves missing profit',async()=>{
+  const range={from:'2026-11-01',to:'2026-11-19'};
+  const item={id:'shared',name:'Форма малина 6',kaspi:'k',wb:'w',wb2:'w2',wb3:'w3',ozon:'4584610840'};
+  const wb={market:'WB',financeAvailable:true,products:[{productId:'shared',saleQty:3,qty:2,retailAmount:900,netBeforeCost:550,advertising:50}]};
+  const context={
+    window:{unifiedWarehouseEnabled:true},state:{products:[item]},periodCacheKey:(days,span)=>JSON.stringify([days,span]),
+    loadKaspiOrders:async(_days,options)=>{assert.equal(options.range,range);return {}},
+    buildModel:()=>({rows:[{productId:'shared',qty:2,revenue:800,cost:100,fees:200,ads:50,profit:450}]}),
+    loadWbModel:async market=>{if(market==='WB2')throw Error('Finance unavailable');return market==='WB'?wb:{market,financeAvailable:true,products:[]}},
+    wbLiveProductId:(_market,x)=>x.productId,
+    wbReportProductCost:()=>({cost:150,known:true,estimated:false}),
+    loadOzonSummary:async()=>({financeIncomplete:true,products:[
+      {productId:'shared',qty:1,saleQty:4,sales:4600,cost:600,fees:500,fbo:5000,ads:30,adsKnown:true,profit:-1530},
+    ]}),
+    console,esc:String,storeTitle:String,wbReportAmount:n=>n+' ₸',
+  };
+  vm.createContext(context);
+  vm.runInContext(report.slice(report.indexOf('const productPeriodStatsCache='),report.indexOf('window.refreshAllMarketUnitProfit=')),context);
+  vm.runInContext(report.slice(report.indexOf('const productReportStores='),report.indexOf('function paintProductReport()')),context);
+  context.reportRows=await context.window.refreshProductPeriodStats({days:0,range,report:true});
+  assert.equal(context.reportRows.coverage.WB2,'missing');
+  assert.equal(context.reportRows.coverage.Ozon,'partial');
+  const row=vm.runInContext("productReportProduct(state.products[0],reportRows.get('shared'),reportRows.coverage,productReportStoreList())",context);
+  assert.equal(row.qty,9);
+  assert.equal(row.profit,-680);
+  assert.equal(row.partial,true);
+  context.row=row;
+  const card=vm.runInContext('productReportCard(row,new Set())',context);
+  assert.match(card,/≈ -680 ₸/);
+  assert.match(card,/FBO \/ кросс-докинг 5000 ₸/);
+  assert.match(card,/WB2<\/b><span>—<\/span><b>—<\/b>/);
+});
+
+test('the product sales report shows current WB sales ahead of settlement without counting the same units twice',async()=>{
+  const item={id:'only-wb',name:'Брелок',wb:'seller-sku'};
+  const context={
+    window:{WB3_ONLY:true},state:{products:[item]},periodCacheKey:String,
+    loadWbModel:async()=>({market:'WB',financeAvailable:true,products:[{productId:item.id,saleQty:2,retailAmount:800,netBeforeCost:500}]}),
+    ensureWbLiveOverview:async()=>({products:[{productId:item.id,qty:3}]}),buildModel:()=>({rows:[]}),
+    wbLiveProductId:(_market,x)=>x.productId,wbReportProductCost:()=>({cost:100,known:true,estimated:false}),console,
+  };
+  vm.createContext(context);
+  vm.runInContext(report.slice(report.indexOf('const productPeriodStatsCache='),report.indexOf('window.refreshAllMarketUnitProfit=')),context);
+  const metrics=await context.window.refreshProductPeriodStats({days:1,report:true});
+  const wb=metrics.get(item.id).sources.WB;
+  assert.equal(wb.qty,3);
+  assert.equal(wb.detail.profitKnown,false);
+  assert.equal(wb.detail.revenue,null);
+  assert.equal(metrics.coverage.WB,'partial');
 });
