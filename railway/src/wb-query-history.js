@@ -2,7 +2,7 @@ import express from 'express';
 import {requireConfiguredSession} from './auth.js';
 import {createHash} from 'node:crypto';
 import {asyncRoute,requireTrustedOrigin,noStore} from './http.js';
-import {queryDay,shiftDay,queryRule,queryVerdict,queryWindows,normalizeQueryStats} from './wb-query-history-model.js';
+import {queryDay,shiftDay,queryRule,queryVerdict,canAutoExclude,queryWindows,normalizeQueryStats} from './wb-query-history-model.js';
 const API='https://advert-api.wildberries.ru',SLOT=12*60*1000+5000;
 const QUERY_PAGE_SIZE=40;
 const QUERY_SORTS={samplesAsc:['samples',1],samplesDesc:['samples',-1],viewsAsc:['views',1],viewsDesc:['views',-1],clicksAsc:['clicks',1],clicksDesc:['clicks',-1],ordersDesc:['orders',-1]};
@@ -46,8 +46,8 @@ export function createWbQueryHistory({db,tokenFor,request,snapshot,clock=Date.no
    .map(r=>({...r,...queryVerdict(r,rule),exclusion:exclusionByQuery.get(r.nmId+':'+r.query)||null}));
   const filtered=rows.filter(r=>{
    if(filter==='excluded')return r.exclusion?.state==='confirmed';
-   if(filter==='ready')return r.state==='poor'||r.state==='good';
-   return !['collecting','poor','unknown'].includes(filter)||r.state===filter;
+   if(filter==='ready')return ['poor','poorClicks','good'].includes(r.state);
+   return !['collecting','poor','poorClicks','unknown'].includes(filter)||r.state===filter;
   });
   const [metric,direction]=Object.hasOwn(QUERY_SORTS,sort)?QUERY_SORTS[sort]:QUERY_SORTS.samplesAsc;
   filtered.sort((a,b)=>(Number(a[metric]==null)-Number(b[metric]==null))
@@ -100,7 +100,7 @@ export function createWbQueryHistory({db,tokenFor,request,snapshot,clock=Date.no
   const {campaign_id:id,nm_id:nm,query}=pending;
   if(pending.source==='auto'&&pending.state==='pending'){
    const rule=await getRule(market,Number(id)),row=(await totals(market,Number(id))).find(x=>Number(x.nmId)===Number(nm)&&x.query===query);
-   if(!rule.autoExclude||!row||queryVerdict(row,rule).state!=='poor'||row.orders===null||Number(row.orders)!==0){await db.query("UPDATE wb_query_exclusions SET state='cancelled',updated_at=$5 WHERE market=$1 AND campaign_id=$2 AND nm_id=$3 AND query=$4",[market,id,nm,query,clock()]);return;}
+   if(!row||!canAutoExclude(row,rule)){await db.query("UPDATE wb_query_exclusions SET state='cancelled',updated_at=$5 WHERE market=$1 AND campaign_id=$2 AND nm_id=$3 AND query=$4",[market,id,nm,query,clock()]);return;}
   }
   try{
    const data=await wbCall(market,'/adv/v0/normquery/get-minus',{items:[{advert_id:Number(id),nm_id:Number(nm)}]});
@@ -117,7 +117,7 @@ export function createWbQueryHistory({db,tokenFor,request,snapshot,clock=Date.no
   const rules=(await db.query("SELECT campaign_id,rule FROM wb_query_rules WHERE market=$1 AND rule->>'autoExclude'='true'",[market])).rows;
   for(const r of rules){const id=Number(r.campaign_id),rule=queryRule(r.rule);const health=(await db.query('SELECT MIN(synced_at)::float8 AS last,COUNT(*) FILTER(WHERE synced_at=0 OR last_error<>\'\')::int AS pending FROM wb_query_windows WHERE market=$1 AND campaign_id=$2 AND date_to >= $3',[market,id,shiftDay(queryDay(clock()),-29)])).rows[0];
    if(!health?.last||Number(health.pending)>0||clock()-Number(health.last)>24*60*60*1000)continue;
-   for(const row of await totals(market,id))if(queryVerdict(row,rule).state==='poor'&&row.orders!==null&&Number(row.orders)===0)await queueExclusion(market,id,Number(row.nmId),row.query,'auto');
+   for(const row of await totals(market,id))if(canAutoExclude(row,rule))await queueExclusion(market,id,Number(row.nmId),row.query,'auto');
   }
  }
  async function collectNow(market){if(busy)return;busy=true;try{await syncOne(market);}catch(e){console.warn('WB query collection',market,e.message);}finally{busy=false;}}

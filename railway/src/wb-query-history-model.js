@@ -3,14 +3,24 @@ export function queryDay(now=Date.now()) {return new Intl.DateTimeFormat('en-CA'
 export function shiftDay(day,n){return new Date(Date.parse(day+'T00:00:00Z')+n*DAY).toISOString().slice(0,10);}
 export function queryRule(value={}){
  const basis=value.basis??'views',minSamples=Number(value.minSamples??100),minCartPercent=Number(value.minCartPercent??1);
- if(!['views','clicks'].includes(basis)||!Number.isSafeInteger(minSamples)||minSamples<1||minSamples>10000000||!Number.isFinite(minCartPercent)||minCartPercent<0||minCartPercent>100)throw Object.assign(Error('Проверьте порог: целое число от 1 и процент от 0 до 100.'),{status:400});
- return {basis,minSamples,minCartPercent,autoExclude:value.autoExclude===true};
+ const clickMinViews=Number(value.clickMinViews??100),minClickPercent=Number(value.minClickPercent??1);
+ const validCount=n=>Number.isSafeInteger(n)&&n>=1&&n<=10000000;
+ const validPercent=n=>Number.isFinite(n)&&n>=0&&n<=100;
+ if(!['views','clicks'].includes(basis)||!validCount(minSamples)||!validPercent(minCartPercent)||!validCount(clickMinViews)||!validPercent(minClickPercent))throw Object.assign(Error('Пороги количества — целые числа от 1 до 10 000 000. Проценты — от 0 до 100.'),{status:400});
+ return {basis,minSamples,minCartPercent,clickEnabled:value.clickEnabled===true,clickMinViews,minClickPercent,autoExclude:value.autoExclude===true};
 }
 export function queryVerdict(row,rule){
- const samples=row[rule.basis],carts=row.cartAdds;
- if(samples===null||samples===undefined||carts===null||carts===undefined)return {state:'unknown',percent:null,samples:samples??null};
- const n=Number(samples),percent=n>0?Number(carts)/n*100:null;
- return {state:n<rule.minSamples?'collecting':percent<rule.minCartPercent?'poor':'good',percent,samples:n};
+ const samples=row[rule.basis]??null,carts=row.cartAdds;
+ const percent=samples>0&&carts!=null?Number(carts)/samples*100:null;
+ const clickPercent=row.views>0&&row.clicks!=null?Number(row.clicks)/row.views*100:null;
+ let state='unknown';
+ if(rule.clickEnabled&&row.views>=rule.clickMinViews&&clickPercent!=null&&clickPercent<rule.minClickPercent)state='poorClicks';
+ else if(samples!=null&&carts!=null)state=samples<rule.minSamples?'collecting':percent<rule.minCartPercent?'poor':'good';
+ return {state,percent,samples,clickPercent};
+}
+export function canAutoExclude(row,rule){
+ if(!rule.autoExclude||row.orders==null||Number(row.orders)!==0)return false;
+ return ['poor','poorClicks'].includes(queryVerdict(row,rule).state);
 }
 // Stable, disjoint 7-day segments remain short enough to refresh inside the WB horizon.
 export function queryWindows(first,today){

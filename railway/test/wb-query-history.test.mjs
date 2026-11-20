@@ -24,6 +24,16 @@ test('threshold is configurable, equality passes, 99 impressions keep collecting
  for(const v of [{minSamples:1.5},{minSamples:0},{minCartPercent:NaN},{basis:'other'}])assert.throws(()=>queryRule(v));
  assert.equal(queryRule().autoExclude,false);
 });
+test('click threshold is independent of the basket threshold and requires known impressions and clicks',()=>{
+ const rule=queryRule({basis:'clicks',minSamples:200,clickEnabled:true});
+ assert.equal(queryVerdict({views:99,clicks:0,cartAdds:0},rule).state,'collecting');
+ assert.equal(queryVerdict({views:100,clicks:0,cartAdds:null},rule).state,'poorClicks');
+ assert.equal(queryVerdict({views:100,clicks:1,cartAdds:0},rule).state,'collecting');
+ assert.equal(queryVerdict({views:null,clicks:200,cartAdds:0},rule).state,'poor');
+ assert.equal(queryVerdict({views:100,clicks:null,cartAdds:0},rule).state,'unknown');
+ assert.equal(queryVerdict({views:100,clicks:0,cartAdds:0},queryRule({minSamples:200})).state,'collecting');
+ for(const invalid of [{clickMinViews:0},{clickMinViews:1.5},{minClickPercent:101}])assert.throws(()=>queryRule(invalid));
+});
 test('segments have no overlaps or gaps across month/year/leap day and stay inside 7 days',()=>{
  const windows=queryWindows('2026-01-17','2026-03-04');assert.equal(windows[0].from,'2026-01-17');assert.equal(windows.at(-1).to,'2026-03-04');
  for(let i=0;i<windows.length;i++){const w=windows[i];assert.ok(Date.parse(w.to)-Date.parse(w.from)<=6*86400000);if(i)assert.equal(Date.parse(w.from)-Date.parse(windows[i-1].to),86400000);}
@@ -103,6 +113,29 @@ test('automatic exclusion requires full fresh stats, minimum samples and zero kn
    throw Error('Unexpected request');
   }});
   await controller.tick();assert.deepEqual(sent,['уже исключён','без корзин']);const rows=(await db.query('SELECT query,state,source FROM wb_query_exclusions')).rows;assert.equal(rows.length,1);assert.equal(rows[0].query,'без корзин');assert.equal(rows[0].source,'auto');assert.equal(rows[0].state,'checking');
+ }finally{await db.close();}
+});
+
+test('automatic click exclusion can run at 100 impressions before the basket threshold of 200',async()=>{
+ const db=await fixture(),now=Date.parse('2026-10-30T12:00:00Z');
+ const pg={query:(...a)=>db.query(...a),connect:async()=>({query:(...a)=>db.query(...a),release(){}})};
+ const writes=[];
+ try{
+  const one=row('без кликов',100,0);
+  await window(db,'WB','2026-10-25','2026-10-30',[
+   {...one,clicks:0},{...one,query:'с заказом',clicks:0,orders:1},{...one,query:'заказы неизвестны',clicks:0,orders:null},
+   {...one,query:'клики неизвестны',clicks:null},{...one,query:'ровно один процент',clicks:1},
+  ],now);
+  await db.query("INSERT INTO wb_query_rules(market,campaign_id,rule,updated_at) VALUES('WB',1,$1::jsonb,$2)",
+   [JSON.stringify(queryRule({autoExclude:true,clickEnabled:true,minSamples:200})),now]);
+  const controller=createWbQueryHistory({db:pg,clock:()=>now,tokenFor:async()=> 'auto-token',snapshot:async()=>null,request:async(url,token,opts)=>{
+   if(url.endsWith('/get-minus'))return {items:[{advert_id:1,nm_id:2,norm_queries:[]}]};
+   if(url.endsWith('/set-minus')){writes.push(opts.body.norm_queries);return {};}
+   throw Error('Unexpected request');
+  }});
+  await controller.tick();
+  assert.deepEqual(writes,[['без кликов']]);
+  assert.deepEqual((await db.query('SELECT query,state FROM wb_query_exclusions')).rows,[{query:'без кликов',state:'checking'}]);
  }finally{await db.close();}
 });
 
