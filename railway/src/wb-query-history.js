@@ -4,6 +4,8 @@ import {createHash} from 'node:crypto';
 import {asyncRoute,requireTrustedOrigin,noStore} from './http.js';
 import {queryDay,shiftDay,queryRule,queryVerdict,queryWindows,normalizeQueryStats} from './wb-query-history-model.js';
 const API='https://advert-api.wildberries.ru',SLOT=12*60*1000+5000;
+const QUERY_PAGE_SIZE=40;
+const QUERY_SORTS={samplesAsc:['samples',1],samplesDesc:['samples',-1],viewsAsc:['views',1],viewsDesc:['views',-1],clicksAsc:['clicks',1],clicksDesc:['clicks',-1],ordersDesc:['orders',-1]};
 const identifier=value=>{const n=Number(value);if(!Number.isSafeInteger(n)||n<1)throw Object.assign(Error('Неверный идентификатор'),{status:400});return n;};
 const marketId=value=>{if(!['WB','WB2'].includes(String(value)))throw Object.assign(Error('Неверный магазин'),{status:400});return String(value);};
 export async function replaceQueryWindow(db,job,rows,now){
@@ -35,18 +37,34 @@ export function createWbQueryHistory({db,tokenFor,request,snapshot,clock=Date.no
  async function track(market,id){const c=await campaign(market,id);if(!Array.isArray(c.nmIds)||!c.nmIds.length)throw Object.assign(Error('WB ещё не вернул артикулы кампании. Дождитесь обновления рекламы.'),{status:409});const today=queryDay(clock());for(const nm of c.nmIds||[]){const n=identifier(nm);await db.query(`INSERT INTO wb_query_sources(market,campaign_id,nm_id,first_day) VALUES($1,$2,$3,$4) ON CONFLICT DO NOTHING`,[market,id,n,shiftDay(today,-29)]);}return c;}
  async function totals(market,id){return (await db.query(QUERY_TOTALS_SQL,[market,id])).rows;}
  async function getRule(market,id){const r=await db.query('SELECT rule FROM wb_query_rules WHERE market=$1 AND campaign_id=$2',[market,id]);return queryRule(r.rows[0]?.rule);}
- async function list(market,id,search=''){
+ async function list(market,id,{q='',filter='',sort='',page=1}={}){
   const rule=await getRule(market,id),all=await totals(market,id);
   const exclusions=(await db.query('SELECT nm_id::text AS "nmId",query,state,last_error AS "lastError" FROM wb_query_exclusions WHERE market=$1 AND campaign_id=$2',[market,id])).rows;
-  const rows=all.map(r=>({...r,...queryVerdict(r,rule),exclusion:exclusions.find(e=>e.nmId===r.nmId&&e.query===r.query)||null}));
-  rows.sort((a,b)=>({poor:0,collecting:1,good:2,unknown:3}[a.state]-{poor:0,collecting:1,good:2,unknown:3}[b.state])||(Number(b[rule.basis])-Number(a[rule.basis]))||a.query.localeCompare(b.query,'ru'));
-  const windows=(await db.query('SELECT MIN(date_from)::text AS "dateFrom",MIN(synced_at)::float8 AS "syncedAt",MAX(last_error) AS error,COUNT(*)::int AS windows,COUNT(*) FILTER(WHERE synced_at=0)::int AS pending FROM wb_query_windows WHERE market=$1 AND campaign_id=$2',[market,id])).rows[0];
-  const filtered=rows.filter(r=>!search||r.query.toLocaleLowerCase('ru').includes(search.toLocaleLowerCase('ru')));
-  return {ok:true,market,campaignId:id,rule,rows:filtered.slice(0,200),total:filtered.length,history:windows||{},tracked:(await db.query('SELECT 1 FROM wb_query_sources WHERE market=$1 AND campaign_id=$2 LIMIT 1',[market,id])).rows.length>0};
+  const exclusionByQuery=new Map(exclusions.map(e=>[e.nmId+':'+e.query,e]));
+  const search=String(q).trim().slice(0,200).toLocaleLowerCase('ru');
+  const rows=all.filter(r=>r.query.toLocaleLowerCase('ru').includes(search)||r.nmId.includes(search))
+   .map(r=>({...r,...queryVerdict(r,rule),exclusion:exclusionByQuery.get(r.nmId+':'+r.query)||null}));
+  const filtered=rows.filter(r=>{
+   if(filter==='excluded')return r.exclusion?.state==='confirmed';
+   if(filter==='ready')return r.state==='poor'||r.state==='good';
+   return !['collecting','poor','unknown'].includes(filter)||r.state===filter;
+  });
+  const [metric,direction]=Object.hasOwn(QUERY_SORTS,sort)?QUERY_SORTS[sort]:QUERY_SORTS.samplesAsc;
+  filtered.sort((a,b)=>(Number(a[metric]==null)-Number(b[metric]==null))
+   ||direction*(Number(a[metric])-Number(b[metric]))||a.query.localeCompare(b.query,'ru')
+   ||a.nmId.localeCompare(b.nmId,'en',{numeric:true}));
+  const pages=Math.max(1,Math.ceil(filtered.length/QUERY_PAGE_SIZE));
+  page=Number.isSafeInteger(Number(page))?Math.min(pages,Math.max(1,Number(page))):1;
+  const offset=(page-1)*QUERY_PAGE_SIZE;
+  const windows=(await db.query(`SELECT MIN(date_from)::text AS "dateFrom",MIN(date_from) FILTER(WHERE synced_at>0)::text AS "savedFrom",
+   MAX(synced_at)::float8 AS "syncedAt",COUNT(*) FILTER(WHERE synced_at=0)::int AS pending,
+   (ARRAY_AGG(last_error ORDER BY attempted_at DESC) FILTER(WHERE last_error<>''))[1] AS error
+   FROM wb_query_windows WHERE market=$1 AND campaign_id=$2`,[market,id])).rows[0];
+  return {ok:true,market,campaignId:id,rule,rows:filtered.slice(offset,offset+QUERY_PAGE_SIZE),total:filtered.length,allTotal:all.length,page,pages,history:windows||{},tracked:(await db.query('SELECT 1 FROM wb_query_sources WHERE market=$1 AND campaign_id=$2 LIMIT 1',[market,id])).rows.length>0};
  }
- router.get('/:market/:id',asyncRoute(async(req,res)=>res.json(await list(marketId(req.params.market),identifier(req.params.id),String(req.query.q||'').slice(0,200)))));
+ router.get('/:market/:id',asyncRoute(async(req,res)=>res.json(await list(marketId(req.params.market),identifier(req.params.id),req.query))));
  router.post('/:market/:id/collect',asyncRoute(async(req,res)=>{const m=marketId(req.params.market),id=identifier(req.params.id);await track(m,id);const data=await list(m,id);schedule(()=>collectNow(m));res.json(data);}));
- router.put('/:market/:id',requireTrustedOrigin,asyncRoute(async(req,res)=>{const m=marketId(req.params.market),id=identifier(req.params.id),rule=queryRule(req.body);await track(m,id);await db.query(`INSERT INTO wb_query_rules(market,campaign_id,rule,updated_at) VALUES($1,$2,$3::jsonb,$4) ON CONFLICT(market,campaign_id) DO UPDATE SET rule=EXCLUDED.rule,updated_at=EXCLUDED.updated_at`,[m,id,JSON.stringify(rule),clock()]);if(!rule.autoExclude)await db.query("UPDATE wb_query_exclusions SET state='cancelled',updated_at=$3 WHERE market=$1 AND campaign_id=$2 AND source='auto' AND state='pending'",[m,id,clock()]);res.json(await list(m,id));}));
+ router.put('/:market/:id',requireTrustedOrigin,asyncRoute(async(req,res)=>{const m=marketId(req.params.market),id=identifier(req.params.id),rule=queryRule(req.body);await track(m,id);await db.query(`INSERT INTO wb_query_rules(market,campaign_id,rule,updated_at) VALUES($1,$2,$3::jsonb,$4) ON CONFLICT(market,campaign_id) DO UPDATE SET rule=EXCLUDED.rule,updated_at=EXCLUDED.updated_at`,[m,id,JSON.stringify(rule),clock()]);if(!rule.autoExclude)await db.query("UPDATE wb_query_exclusions SET state='cancelled',updated_at=$3 WHERE market=$1 AND campaign_id=$2 AND source='auto' AND state='pending'",[m,id,clock()]);res.json(await list(m,id,req.query));}));
  router.post('/:market/:id/exclude',requireTrustedOrigin,asyncRoute(async(req,res)=>{const m=marketId(req.params.market),id=identifier(req.params.id),nm=identifier(req.body.nmId),query=String(req.body.query||'');await campaign(m,id);const exists=await db.query('SELECT 1 FROM wb_query_stats WHERE market=$1 AND campaign_id=$2 AND nm_id=$3 AND query=$4 LIMIT 1',[m,id,nm,query]);if(!exists.rows.length)throw Object.assign(Error('Запрос не найден в сохранённой статистике'),{status:400});await queueExclusion(m,id,nm,query);res.json({ok:true,state:'pending'});}));
  async function queueExclusion(m,id,nm,query,source='manual'){
   const conflict=source==='manual'?"DO UPDATE SET state='pending',source='manual',last_error='',updated_at=EXCLUDED.updated_at WHERE wb_query_exclusions.state IN ('error','cancelled')":"DO NOTHING";

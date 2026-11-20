@@ -3,6 +3,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
 import {PGlite} from '@electric-sql/pglite';
+import {withGrowthAnalyticsPage} from '../src/growth-analytics-page.js';
 import {queryRule,queryVerdict,queryWindows,normalizeQueryStats} from '../src/wb-query-history-model.js';
 process.env.APP_ADMIN_TOKEN='query-tests-only';
 const {replaceQueryWindow,QUERY_TOTALS_SQL,createWbQueryHistory}=await import('../src/wb-query-history.js');
@@ -123,14 +124,24 @@ test('opening collection tracks idempotently without saving rules or applying ex
   assert.equal((await call('WB/1/collect')).status,200);assert.equal((await db.query('SELECT * FROM wb_query_sources')).rows.length,1);await tasks.shift()();assert.equal(calls.length,1);
   const custom=queryRule({basis:'clicks',minSamples:222,minCartPercent:3,autoExclude:true});await db.query("INSERT INTO wb_query_rules(market,campaign_id,rule,updated_at) VALUES('WB',1,$1::jsonb,$2)",[JSON.stringify(custom),now]);
   assert.equal((await call('WB/1/collect')).status,200);data=await (await fetch(url+'/q/WB/1',{headers})).json();assert.deepEqual(data.rule,custom);
+  await window(db,'WB','2026-09-01','2026-09-07',[row('долгая история',110,0),...Array.from({length:42},(_,i)=>row('старый запрос '+i,i+1,0))]);
+  await window(db,'WB','2026-11-02','2026-11-08',[row('долгая история',120,0)],now+1000);
+  const read=async params=>(await fetch(url+'/q/WB/1?'+new URLSearchParams(params),{headers})).json();
+  const ready=await read({filter:'ready',q:'ДОЛГАЯ'});assert.equal(ready.total,1);assert.equal(ready.rows[0].clicks,230);assert.equal(ready.history.syncedAt,now+1000);
+  const first=await read({sort:'viewsAsc',filter:'collecting'}),second=await read({sort:'viewsAsc',filter:'collecting',page:2});
+  assert.equal(first.rows[0].views,1);assert.equal(first.rows.length,40);assert.equal(second.page,2);assert.equal(second.rows.at(-1).views,42);
+  assert.equal((await read({sort:'clicksDesc',q:'2'})).rows[0].clicks,230);
+  assert.equal(calls.length,1);
  }finally{await new Promise(r=>server.close(r));await db.close();}
 });
 
 test('opening the panel starts collection automatically but does not overwrite edits or enable automation',async()=>{
- const html=readFileSync(new URL('../../index.html',import.meta.url),'utf8'),start=html.indexOf('async function openWbQueryHistory('),end=html.indexOf('\nfunction scheduleWbQueryPoll(',start),source=html.slice(start,end);
+ const html=withGrowthAnalyticsPage(readFileSync(new URL('../../index.html',import.meta.url),'utf8')),start=html.indexOf('async function openWbQueryHistory('),end=html.indexOf('\nfunction scheduleWbQueryPoll(',start),source=html.slice(start,end);
+ assert.equal(html.match(/async function openWbQueryHistory\(/g)?.length,1);
+ assert.match(html,/id="wbQuerySort"/);
  for(const tracked of [false,true]){
   const calls=[],box={},saved={tracked,rule:{autoExclude:false,minSamples:100},rows:[]};let paints=0,polls=0;
-  const ctx={wbQueryPollTimer:0,wbQueryRequest:0,wbQueryView:null,adsMarket:'WB2',clearTimeout(){},showSheet(){},document:{getElementById:id=>id==='wbQueryPanel'?box:null},paintWbQueryHistory:()=>paints++,scheduleWbQueryPoll:()=>polls++,adsApi:async(path,options)=>{calls.push({path,options});if(options){box.oninput({target:{id:'wbQueryMinimum'}});return {...saved,tracked:true};}return saved;}};
+  const ctx={wbQueryPollTimer:0,wbQuerySearchTimer:0,wbQueryRequest:0,wbQueryView:null,adsMarket:'WB2',clearTimeout(){},showSheet(){},document:{getElementById:id=>id==='wbQueryPanel'?box:null},paintWbQueryHistory:()=>paints++,scheduleWbQueryPoll:()=>polls++,adsApi:async(path,options)=>{calls.push({path,options});if(options){box.oninput({target:{id:'wbQueryMinimum'}});return {...saved,tracked:true};}return saved;}};
   vm.createContext(ctx);vm.runInContext(source,ctx);await ctx.openWbQueryHistory(777);
   assert.equal(calls.length,tracked?1:2);assert.equal(paints,1);assert.equal(polls,1);assert.equal(ctx.wbQueryView.data.rule.autoExclude,false);
   if(!tracked){assert.equal(calls[1].path,'/api/promotion/queries/WB2/777/collect');assert.equal(calls[1].options.method,'POST');assert.equal(ctx.wbQueryView.dirty,true);}
