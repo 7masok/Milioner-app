@@ -59,7 +59,26 @@ test('live campaign metrics fill orders and bid by SKU and the selected dates wh
   assert.equal(calls,1);
 });
 
-test('review names remain readable, unlinked ad titles stay in details, and a price edit opens a prefilled test',async()=>{
+test('live order statistics refresh a recommendation without changing the bid', async () => {
+  let supplyStats;
+  const panel=mount([batch(19,1,[{date:'2026-11-17',sku:'A',amount:400,clicks:30}])],{},[],{},{
+    adsApi:async url=>{
+      if(url.endsWith('/identities')) return {items:[],pending:0};
+      return new Promise(resolve=>{supplyStats=resolve;});
+    },
+  });
+  const campaign={kaCampaign:'42:19'};
+  assert.match(panel.expand(campaign),/class="kaw-name"><b>Брелок/);
+  supplyStats({accountId:'42',campaignId:'19',from:'2026-10-19',to:'2026-11-17',
+    products:[{sku:'A',orders:0,clicks:30,bid:15}]});
+  await new Promise(resolve=>setImmediate(resolve));
+  assert.match(panel.expand(campaign),/class="kaw-name kaw-review"><b>Брелок/);
+  const details=panel.expand({kaProduct:JSON.stringify(['42:19','A','p',product.name])});
+  assert.match(details,/Снизить ставку/);
+  assert.match(details,/Ставка <b>15 ₸/);
+});
+
+test('review and unlinked names have different styling, and a price edit opens a prefilled test',async()=>{
   const item={...product,kaspiPrice:1200};
   let saved=0;
   const panel=mount([batch(19,1,[
@@ -76,8 +95,8 @@ test('review names remain readable, unlinked ad titles stay in details, and a pr
   await new Promise(resolve=>setImmediate(resolve));
   const html=panel.expand({kaCampaign:'42:19'});
   assert.match(html,/class="kaw-name kaw-review"><b>Брелок/);
-  assert.doesNotMatch(html,/Проверить карточку|Long external marketplace title/);
-  assert.match(html,/Нет привязки · unmatched/);
+  assert.doesNotMatch(html,/Проверить карточку/);
+  assert.match(html,/class="kaw-name kaw-unlinked"><small>Нужна привязка<\/small><b>Long external marketplace title<\/b>/);
   const unlinked=panel.expand({kaProduct:JSON.stringify(['42:19','unmatched','','Нет привязки · unmatched'])});
   assert.match(unlinked,/Long external marketplace title/);
   assert.doesNotMatch(unlinked,/data-ka-price=/);
@@ -197,8 +216,10 @@ test('an active test shows the first day and compares six orders with four over 
     {p:{productId:'p',startedAt,days:14,before:5990,after:5490}},orders);
   await new Promise(resolve=>setImmediate(resolve));
   panel.click({kaMode:'tests'});
-  assert.match(panel.innerHTML,/День 1\/14/);
-  assert.match(panel.innerHTML,/Заказы: 4 → 6 · \+50%/);
+  assert.doesNotMatch(panel.innerHTML,/День 1\/14/);
+  const details=panel.expand({kaProduct:JSON.stringify(['tests','','p',product.name])});
+  assert.match(details,/День 1\/14/);
+  assert.match(details,/Заказы: 4 → 6 · \+50%/);
   assert.doesNotMatch(panel.innerHTML,/Попробуй ставку/);
 });
 
@@ -296,7 +317,7 @@ test('an unlinked Kaspi ad can be assigned and removed from the campaign without
     },
   });
   const campaign={kaCampaign:'42:19'};
-  assert.match(panel.expand(campaign),/Нет привязки · 186427214/);
+  assert.match(panel.expand(campaign),/Нужна привязка<\/small><b>Цветочные кошки ЦКЧ<\/b>/);
   const details=panel.expand({kaProduct:JSON.stringify(['42:19','186427214','','Нет привязки · 186427214'])});
   assert.match(details,/name="product"/);
   assert.match(details,/data-ka-link-search/);
@@ -311,7 +332,7 @@ test('an unlinked Kaspi ad can be assigned and removed from the campaign without
   assert.match(linked,/Снять ручную привязку/);
   await panel.submit(form,{value:'remove'});
   assert.equal(Object.hasOwn(state.settings.kaspiAdProductLinks,key),false);
-  assert.match(panel.innerHTML,/Нет привязки · 186427214/);
+  assert.match(panel.innerHTML,/Нужна привязка<\/small><b>Цветочные кошки ЦКЧ<\/b>/);
   assert.equal(saves,2);
 });
 
@@ -322,7 +343,7 @@ test('campaign search matches article, and the inline picker filters warehouse n
     {date:'2026-11-17',sku:'186427214',name:'Кошки',amount:20,orders:0},
   ])]);
   panel.input({value:'186427214',matches:selector=>selector==='.kaw-search'});
-  assert.match(panel.content.innerHTML,/Нет привязки · 186427214/);
+  assert.match(panel.content.innerHTML,/Нужна привязка<\/small><b>Кошки<\/b>/);
   assert.doesNotMatch(panel.content.innerHTML,/<b>Брелок<\/b>/);
   const results={},confirm={},form={elements:{product:{value:'p'}},
     querySelector:selector=>selector==='[data-ka-link-results]'?results:confirm};
@@ -342,7 +363,9 @@ test('expensive zero-order ads recommend a bid change before a price cut and sho
     ]})},
   });
   await new Promise(resolve=>setImmediate(resolve));
-  panel.expand({kaCampaign:'42:19'});
+  const rows=panel.expand({kaCampaign:'42:19'});
+  assert.match(rows,/class="kaw-name kaw-review"><b>Брелок<\/b><\/span>/);
+  assert.doesNotMatch(rows,/Снизить ставку|kaw-progress/);
   const body=panel.expand({kaProduct:JSON.stringify(['42:19','A','p',product.name])});
   assert.match(body,/Снизить ставку/);
   assert.match(body,/Себестоимость \/ шт\. <b>600 ₸/);
@@ -369,4 +392,20 @@ test('positive recorded buyouts can show provisional profit while missing costs 
       assert.match(body,/только загруженные выкупы/);
     }
   }
+});
+
+test('a negative product without ad spend keeps its name visible and explains the context inside',async()=>{
+  const panel=mount([batch(19,1,[
+    {date:'2026-11-16',sku:'A',amount:0,clicks:0,orders:0},
+    {date:'2026-11-17',sku:'B',amount:40,clicks:2,orders:0},
+  ])],{},[],{},{
+    window:{loadKaspiCampaignFinance:async()=>({returns:[],products:[{productId:'p',qty:1,profit:-20}]})},
+  });
+  await new Promise(resolve=>setImmediate(resolve));
+  const rows=panel.expand({kaCampaign:'42:19'});
+  assert.match(rows,/class="kaw-name"><b>Брелок<\/b><\/span>/);
+  assert.doesNotMatch(rows,/Мало данных|kaw-progress/);
+  const body=panel.expand({kaProduct:JSON.stringify(['42:19','A','p',product.name])});
+  assert.match(body,/Мало данных/);
+  assert.match(body,/нет расхода и кликов/);
 });

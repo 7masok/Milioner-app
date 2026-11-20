@@ -196,6 +196,7 @@
     return unique.size?sum([...unique.values()],'totalProfit'):null;
   }
 
+  const reviewActions = new Set(['lower','raise','price','margin','card']);
   const minBid = 3;
   const lowScore = m => m.score != null && m.score < 7;
   const targetCpc = m => m.maxCpc == null ? null : Math.floor(m.maxCpc*.85*100)/100;
@@ -227,12 +228,9 @@
     .kaw summary::-webkit-details-marker { display:none; }
     .kaw-row { display:flex; gap:8px; align-items:center; padding:8px 9px; min-height:39px; font-size:12px; }
     .kaw-name { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-    .kaw-progress { display:block; overflow:hidden; text-overflow:ellipsis; font-size:10px; color:var(--ka-muted); }
-    .kaw-money, .kaw-tag { flex:none; white-space:nowrap; }
-    .kaw-tag { color:#4b2ca2; background:#f2edff; border-radius:6px; padding:3px 5px; font-size:10px; }
-    .kaw-tag[data-kind="lower"],.kaw-negative { color:#a12639; }
-    .kaw-tag[data-kind="raise"],.kaw-positive { color:#166744; }
-    .kaw-tag[data-kind="unknown"] { color:var(--ka-muted); background:#f2f2f6; }
+    .kaw-money { flex:none; white-space:nowrap; }
+    .kaw-negative { color:#a12639; }
+    .kaw-positive { color:#166744; }
     .kaw-search { width:100%; margin:2px 0 7px; padding:8px 10px; min-height:37px; border:1px solid var(--ka-border); border-radius:9px; font:inherit; }
     .kaw-caret { flex:none; color:var(--ka-muted); }
     .kaw details[open] > summary .kaw-caret { transform:rotate(180deg); }
@@ -243,13 +241,18 @@
     .kaw-campaign-summary .kaw-name small { font-size:9px; color:var(--ka-muted); overflow:hidden; text-overflow:ellipsis; }
     .kaw-sort { display:flex; flex-direction:column; align-items:center; justify-content:center; width:100%; min-width:0; min-height:32px; padding:2px 0; border:1px solid var(--ka-border); border-radius:5px; background:#fff; color:var(--ka-muted); font:inherit; font-size:9px; cursor:pointer; }
     .kaw-sort[aria-pressed="true"] { background:#eee8ff; border-color:#d9caff; color:#4b2ca2; font-weight:700; }
-    .kaw-product-summary.has-stats .kaw-name { max-height:30px; }
-    .kaw-product-summary.has-stats .kaw-name > b { display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden; overflow-wrap:anywhere; white-space:normal; line-height:1.16; }
+    .kaw-product-summary.has-stats { padding-block:5px; }
+    .kaw-product-summary .kaw-name { font-size:10px; line-height:1.15; white-space:normal; overflow-wrap:anywhere; }
+    .kaw-product-summary .kaw-name > b { display:-webkit-box; -webkit-line-clamp:3; -webkit-box-orient:vertical; overflow:hidden; }
+    .kaw-product-summary.kaw-needs-link { height:auto; }
+    .kaw-product-summary .kaw-unlinked { color:#814300; background:#fff0d1; padding:2px 3px; border-radius:4px; }
+    .kaw-unlinked > small { display:block; font-size:9px; font-weight:700; }
+    .kaw-product-summary .kaw-unlinked > b { -webkit-line-clamp:2; }
     .kaw-product-summary .kaw-name.kaw-review > b { color:#a12639; }
-    .kaw-product-summary.has-stats .kaw-name:has(.kaw-progress) > b { -webkit-line-clamp:1; }
+    .kaw-product[open] > .kaw-product-summary.has-stats { height:auto; }
+    .kaw-product[open] > .kaw-product-summary .kaw-name > b { display:block; }
     .kaw-product-summary.has-stats .kaw-cell { min-width:0; width:100%; padding-inline:3px; }
     .kaw-product-summary.has-stats .kaw-cell > b { max-width:100%; overflow:hidden; text-overflow:ellipsis; }
-    .kaw-product-summary .kaw-tag { display:inline-block; max-width:100%; overflow:hidden; text-overflow:ellipsis; vertical-align:middle; }
     .kaw-cell { display:flex; flex-direction:column; align-items:center; justify-content:center; min-height:30px; padding:2px 4px; border-radius:5px; background:#f5f5f8; white-space:nowrap; font-variant-numeric:tabular-nums; line-height:1.15; }
     .kaw-cell > small { color:var(--ka-muted); font-size:9px; }
     .kaw-cell > b { font-size:11px; }
@@ -464,6 +467,14 @@
       +'</div></form>';
   }
 
+  function insufficientAdvice(m, row) {
+    if (!row.spend && m.clicks === 0) return 'За выбранный период у этой рекламы нет расхода и кликов. Минус в общей прибыли сам по себе не говорит, что нужно менять ставку.';
+    if (m.orders == null) return 'В выгрузке за выбранный период нет полного числа рекламных заказов. После обновления статистики рекомендация пересчитается.';
+    if (m.orders === 0) return 'Рекламных заказов пока нет. По текущему расходу и кликам ещё рано менять ставку или цену.';
+    if (m.profit == null) return 'Пока не удалось связать рекламные заказы с выкупами и их себестоимостью. Прибыль всех продаж товара не показывает, окупилась ли реклама.';
+    return 'Подтверждённых кликов и выкупов пока мало для рекомендации по цене или ставке.';
+  }
+
   function productBody(row, m, kind, t, at) {
     const item = prod(row.productId), running = active(t, at);
     const metric = key => m[key] == null && m.partial?.[key] != null ? value(m.partial[key]) + '*' : value(m[key]);
@@ -492,7 +503,7 @@
       margin: 'Проверь себестоимость, доставку и цену. Маржа до рекламы исчерпана на выкупах или при текущей цене. Снижение цены усилит убыток.',
       price: 'Сравни цену с конкурентами. Если она выше рынка, можно протестировать снижение с запасом выше расчётной цены без убытка.',
       card: 'Товар часто видят, но редко открывают. Начни с главного фото и цены в выдаче.',
-      watch: 'Данных для вывода об окупаемости рекламы мало. Проверь расход и выкупы перед изменением цены или повышением ставки.',
+      watch: insufficientAdvice(m,row),
       unknown: row.lines.length && m.orders == null ? 'В выгрузке нет полной статистики рекламных заказов.'
         : row.lines.length && !m.profitReason && m.profit == null ? 'Окупаемость рекламных заказов пока не подтверждена.' : '',
       unadvertised: row.sku ? 'Артикул Kaspi · '+row.sku : '',
@@ -502,7 +513,7 @@
       : m.score>=7 ? 'Оценка конверсии в высокой категории Kaspi (7–10).' : '';
     const outcome = t ? testProfit(t,at) : null;
     const testInfo = t
-      ? '<div class="kaw-note"><b>'+ (running ? 'Тест цены' : 'Тест завершён') + ' · '+ cash(t.before) + ' → ' + cash(t.after) + '</b> · ' + esc(experimentLabel(t, at))
+      ? '<div class="kaw-note"><b>'+ (running ? 'День '+experiment(t,data?.orders,at).day+'/'+t.days+' · Тест цены' : 'Тест завершён') + ' · '+ cash(t.before) + ' → ' + cash(t.after) + '</b> · ' + esc(experimentLabel(t, at))
         + ' · все заказы Kaspi, предварительно</div><div class="kaw-note">До: '+iso(baselineStart(t))+' — '+iso(baselineStart(t)+Math.max(0,Math.min(testEnd(t),at)-t.startedAt)-1)+' · После: '+iso(t.startedAt)+' — '+iso(Math.min(testEnd(t),at)-1)+'</div><div class="kaw-note">'+(outcome
           ? 'Прибыль после рекламы в день · ≈ '+cash(outcome.before)+' → ≈ '+cash(outcome.after)+' (полные дни). Изменение: '+(outcome.after-outcome.before>0?'+':'')+cash(outcome.after-outcome.before)+'/день'
           : 'Сравнение прибыли появится после сверки полных дней, расходов и выкупов.')+'</div>' : '';
@@ -557,8 +568,10 @@
 
   function renderProduct(row, campaign, m, kind, t, at) {
     const key = JSON.stringify([campaign.key, row.sku, row.productId, row.name, ...(!row.sku && row.linkKey ? [row.linkKey] : [])]);
-    const running = active(t, at), open = productExpanded.has(key);
-    const text = running ? 'День ' + experiment(t, data?.orders, at).day + '/' + t.days : actions[kind];
+    const open = productExpanded.has(key);
+    const unlinked = !row.productId && row.lines.length > 0;
+    const name = unlinked ? row.sourceName || row.sku : row.name;
+    const nameClass = unlinked ? ' kaw-unlinked' : reviewActions.has(kind) ? ' kaw-review' : '';
     const body = () => productBody(row,m,kind,t,at);
     detailBodies.set(key, body);
     const cells = productCells(row,campaign,m,key);
@@ -572,10 +585,9 @@
       +'<label>Цена Kaspi, ₸<input name="price" type="number" min="1" step="0.01" required value="'+(priceInput.price ?? '')+'"></label>'
       +'<button class="btn dark" type="submit">Сохранить</button><button class="btn" type="button" data-ka-price-cancel="'+esc(key)+'">Отмена</button>'
       +'<span class="kaw-note" role="status"></span></form><div class="kaw-note">Прайс Kaspi · '+esc(priceInput.sku)+'. Изменение передаётся через прайс.</div>' : '';
-    const tag = text && kind!=='card'?'<span class="kaw-tag" data-kind="'+kind+'">'+text+'</span>':'';
-    return '<details class="kaw-product" data-ka-product="'+esc(key)+'"'+(open?' open':'')+'><summary class="kaw-row kaw-product-summary'+(row.lines.length?' has-stats':'')+'" title="'+esc(row.name)+'">'
-      + '<span class="kaw-name'+(kind==='card'?' kaw-review':'')+'"><b>'+esc(row.name)+'</b>'+(text&&kind!=='card'?'<span class="kaw-progress">'+esc(text)+(running?' · '+esc(experimentLabel(t,at)):'')+'</span>':'')+'</span>'
-      + cells + (cells?'':tag)+'<span class="kaw-caret" aria-hidden="true">⌄</span></summary>'
+    return '<details class="kaw-product" data-ka-product="'+esc(key)+'"'+(open?' open':'')+'><summary class="kaw-row kaw-product-summary'+(row.lines.length?' has-stats':'')+(unlinked?' kaw-needs-link':'')+'" title="'+esc(name || 'Нужна привязка')+'">'
+      + '<span class="kaw-name'+nameClass+'">'+(unlinked?'<small>Нужна привязка</small>':'')+(name?'<b>'+esc(name)+'</b>':'')+'</span>'
+      + cells + '<span class="kaw-caret" aria-hidden="true">⌄</span></summary>'
       + '<div class="kaw-panel" data-ka-body'+(open?' data-ka-filled':'')+'>'+(open?body():'')+'</div></details>'+editor+priceEditor;
   }
 
