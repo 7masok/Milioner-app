@@ -210,18 +210,16 @@ function statMetric(row, day, fields) {
   return Math.max(0, Number(value) || 0);
 }
 
+function isDefaultCampaignName(name) {
+  return /^кампания(?:\s+от\s+\d{1,2}[.\/-]\d{1,2}[.\/-]\d{2,4}|\s+№?\s*\d+)$/iu.test(name);
+}
+
 function campaignApiName(row) {
-  return String(
-    row?.campaignName
-    || row?.campaign_name
-    || row?.settings?.name
-    || row?.params?.name
-    || row?.advertName
-    || row?.advert_name
-    || row?.advert?.name
-    || row?.name
-    || '',
-  ).trim();
+  const names = [
+    row?.settings?.name, row?.campaignName, row?.campaign_name, row?.params?.name,
+    row?.advertName, row?.advert_name, row?.advert?.name, row?.name,
+  ].filter(value => typeof value === 'string').map(value => value.trim()).filter(Boolean);
+  return names.find(name => !isDefaultCampaignName(name)) || names[0] || '';
 }
 
 function spend(row, day) {
@@ -400,11 +398,13 @@ async function fetchCampaigns(marketName, previous) {
     const statRow = byId.get(id);
     const label = campaignName(row, statRow, cards);
     const hasFreshStats = Boolean(statRow);
-    const preservedName = prior?.nameSource === 'wb' ? String(prior.name || '') : '';
+    const priorName = prior?.nameSource === 'wb' ? String(prior.name || '').trim() : '';
+    const preservedName = !isDefaultCampaignName(priorName) ? priorName : '';
+    const customName = label.apiName && !isDefaultCampaignName(label.apiName) ? label.apiName : preservedName;
     return {
       id,
-      name: label.apiName || preservedName || label.title,
-      nameSource: label.apiName || preservedName ? 'wb' : 'missing',
+      name: customName || label.title,
+      nameSource: customName ? 'wb' : label.apiName ? 'default' : 'missing',
       status: Number(row?.status ?? row?.statusId ?? 0),
       paymentType: String(row?.payment_type || row?.paymentType || ''),
       // Never carry yesterday's totals into a new day when WB statistics are
@@ -612,6 +612,8 @@ async function publicSnapshot(marketName) {
       .map(row => ({
         ...row,
         name: overrides.get(Number(row.id)) || row.name,
+        nameSource: overrides.get(Number(row.id)) ? 'warehouse'
+          : isDefaultCampaignName(row.name) ? 'default' : row.nameSource,
         inventory: inventory.get(Number(row.id)),
         startBlocked: stockBlock(inventory.get(Number(row.id)), configured.get(Number(row.id))),
         rule: configured.has(Number(row.id)) ? (()=>{const rule={...configured.get(Number(row.id))},info=actionErrorInfo(rule.lastActionError);if(info){rule.lastActionError=(info.status===429?'WB ограничил запросы':info.message)+' · '+new Date(info.at).toLocaleString('ru-RU',{timeZone:'Asia/Almaty'})+(info.retryAt?' · повтор после '+new Date(info.retryAt).toLocaleTimeString('ru-RU',{timeZone:'Asia/Almaty'}):'');}return rule;})() : { dailyLimit: 0, enabled: false, scheduleEnabled: false, startTime: '09:00', manualPaused: false },
@@ -622,6 +624,27 @@ async function publicSnapshot(marketName) {
 wbAdsRouter.get('/promotion/campaigns', asyncRoute(async (req, res) => {
   // Important: this browser-facing route never calls WB. It only reads Railway/Postgres.
   res.json({ ok: true, ...await publicSnapshot(market(req.query.market)) });
+}));
+
+async function saveWbCampaignName(marketName, id, value) {
+  const name = typeof value === 'string' ? value.trim() : '';
+  if (!allowed(marketName) || !Number.isSafeInteger(id) || id <= 0 || !name || [...name].length > 100) {
+    throw Object.assign(new Error('Укажите название кампании до 100 символов.'), {status: 400});
+  }
+  const snapshot = await storedSnapshot(marketName);
+  if (!snapshot?.campaigns.some(row => Number(row.id) === id && MANAGEABLE_CAMPAIGN_STATUSES.has(Number(row.status)))) {
+    throw Object.assign(new Error('Кампания не найдена в этом кабинете WB.'), {status: 409});
+  }
+  await pool.query(
+    `INSERT INTO wb_ad_name_overrides(market,campaign_id,display_name,updated_at) VALUES($1,$2,$3,$4)
+     ON CONFLICT (market,campaign_id) DO UPDATE SET display_name=EXCLUDED.display_name,updated_at=EXCLUDED.updated_at`,
+    [marketName,id,name,Date.now()],
+  );
+  return {ok:true,name};
+}
+
+wbAdsRouter.put('/promotion/campaign-name/:market/:campaignId', requireTrustedOrigin, requireWritesEnabled, asyncRoute(async (req,res) => {
+  res.json(await saveWbCampaignName(market(req.params.market),Number(req.params.campaignId),req.body?.name));
 }));
 
 wbAdsRouter.put('/promotion/limits/:market/:campaignId', asyncRoute(async (req, res) => {

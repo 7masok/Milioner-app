@@ -18,7 +18,7 @@ function harness(configured = []) {
     pool: { query: async (sql, args) => { queries.push({ sql, args }); return { rows: configured }; } },
     stockBlock, createWbQueryHistory, createWbAdGroups, config: {}, credentialFor: async () => 'test-token', requireTrustedOrigin() {}, requireWritesEnabled() {}, asyncRoute: fn => fn,
   });
-  vm.runInContext(source.replace(/^import .*;\r?\n/gm, '').replace(/export /g, '') + '\nglobalThis.api = { enforce, fetchCampaigns, setStoredCampaignStatus, localDate, requestInterval, campaignName, campaignApiName, campaignPeriodMetrics, experimentStartBlock, saveBulkAdsLimits };', context);
+  vm.runInContext(source.replace(/^import .*;\r?\n/gm, '').replace(/export /g, '') + '\nglobalThis.api = { enforce, fetchCampaigns, setStoredCampaignStatus, localDate, requestInterval, campaignName, campaignApiName, campaignPeriodMetrics, experimentStartBlock, saveBulkAdsLimits, saveWbCampaignName };', context);
   context.mockRequest = async url => { calls.push(url); return {}; };
   vm.runInContext('request = (...args) => mockRequest(...args); setStoredCampaignStatus = async () => {}; inventoryFor = async (m, rows) => new Map(rows.map(r => [Number(r.id), {known:true, allEmpty:false, allRisky:false}]));', context);
   return { context, api: context.api, calls, queries };
@@ -141,6 +141,18 @@ test('current WB campaign endpoint supplies the exact campaign name', async () =
 test('explicit WB campaign settings name wins over a generic row name', () => {
   const h=harness();
   assert.equal(h.api.campaignApiName({name:'Скелет',settings:{name:'Крылья'}}),'Крылья');
+  assert.equal(h.api.campaignApiName({campaignName:'Кампания от 20.11.2026',settings:{name:'Крылья'}}),'Крылья');
+  assert.equal(h.api.campaignApiName({name:'Крылья',settings:{name:'Кампания от 20.11.2026'}}),'Крылья');
+});
+
+test('a default title from WB does not overwrite an earlier confirmed custom name', async () => {
+  const h=harness();
+  h.context.mockRequest=async url=>url.includes('/api/advert/v2/adverts')
+    ?{adverts:[{id:1,status:9,name:'Кампания от 20.11.2026'},{id:2,status:9,name:'Кампания от 20.11.2026'}]}:{cards:[]};
+  const result=await h.api.fetchCampaigns('WB',{campaigns:[{id:1,name:'Моё имя',nameSource:'wb'}]});
+  assert.deepEqual(Array.from(result.campaigns,row=>[row.name,row.nameSource]),[
+    ['Моё имя','wb'],['Кампания от 20.11.2026','default'],
+  ]);
 });
 
 test('campaign statistics keep daily rows for the last 30 days while today stays separate', async () => {
@@ -187,7 +199,7 @@ test('experiment starts require known stock, current data, one unchanged article
 test('bulk advertising settings update selected campaigns atomically with independent fields', async () => {
   const db=new PGlite();
   try {
-    for (const file of ['005_wb_ad_limits.sql','010_wb_ads_snapshots.sql','012_wb_ads_auto_resume.sql',
+    for (const file of ['005_wb_ad_limits.sql','010_wb_ads_snapshots.sql','011_wb_ad_name_overrides.sql','012_wb_ads_auto_resume.sql',
       '013_wb_ads_start_schedule.sql','014_wb_ads_manual_pause.sql','016_wb_ads_stock_protection.sql']) {
       await db.exec(readFileSync(new URL('../migrations/'+file,import.meta.url),'utf8'));
     }
@@ -223,6 +235,11 @@ test('bulk advertising settings update selected campaigns atomically with indepe
     assert.equal(row.enabled,false);
     assert.equal(row.schedule_enabled,true);
     assert.equal(row.manual_paused,true);
+    await h.api.saveWbCampaignName('WB',1,'  Название продавца  ');
+    await h.api.saveWbCampaignName('WB2',1,'Другое имя');
+    await assert.rejects(h.api.saveWbCampaignName('WB',3,'Закрыта'),{status:409});
+    const names=await db.query("SELECT market,display_name FROM wb_ad_name_overrides WHERE campaign_id=1 ORDER BY market");
+    assert.deepEqual(names.rows,[{market:'WB',display_name:'Название продавца'},{market:'WB2',display_name:'Другое имя'}]);
   } finally {await db.close();}
 });
 
@@ -234,11 +251,16 @@ test('bulk settings module adds a toolbar button and sends only edited fields', 
   assert.ok(script.index<html.indexOf('<script>initOwnerAuth();</script>'));
   const calls=[];
   let sheet='',closed=0;
-  const filters={children:[],scrollLeft:7,prepend(node){this.children.unshift(node);}};
+  let toolbar;
+  const filters={before(node){toolbar=node;}},actions={children:[],append(node){this.children.push(node);}};
   const context=vm.createContext({
-    document:{head:{append(){}},getElementById:()=>filters,createElement:()=>({addEventListener(){}})},
-    adsMarket:'WB2',adsDashboardData:{campaigns:[{id:21,name:'Кампания'}]},
-    drawAdsDashboard(){filters.children=[];},esc:String,wbAdsMoneyText:String,
+    document:{
+      head:{append(){}},
+      getElementById:id=>id==='adsFilters'?filters:id==='wbAdBulkActions'?toolbar:id==='adsDetails_21'?{querySelector:()=>actions}:null,
+      createElement:()=>({children:[],append(node){this.children.push(node);},addEventListener(_event,fn){this.click=fn;}}),
+    },
+    adsMarket:'WB2',adsDashboardData:{campaigns:[{id:21,name:'Кампания от 20.11.2026',nameSource:'default'}]},
+    drawAdsDashboard(){actions.children=[];},esc:String,wbAdsMoneyText:String,
     showSheet(value){sheet=value;},closeModal(){closed++;},queueAdsRender(){},
     adsApi:async (url, options)=>calls.push([url,JSON.parse(options.body)]),
     FormData:class{constructor(form){this.fields=form.fields;}get(key){return this.fields[key];}getAll(key){return this.fields[key];}},
@@ -246,8 +268,9 @@ test('bulk settings module adds a toolbar button and sends only edited fields', 
   context.window=context;
   vm.runInContext(module,context);
   context.drawAdsDashboard();
-  assert.deepEqual(filters.children.map(x=>x.textContent),['Лимит и время']);
-  context.openWbAdsBulkSettings();
+  assert.deepEqual(toolbar.children.map(x=>x.textContent),['Выбрать кампании']);
+  assert.deepEqual(actions.children.map(x=>x.textContent),['Задать своё имя']);
+  toolbar.children[0].click();
   assert.match(sheet,/Лимит и время · WB2/);
   assert.match(sheet,/name="campaign" value="21"/);
   const status={},button={};
@@ -257,5 +280,5 @@ test('bulk settings module adds a toolbar button and sends only edited fields', 
   assert.equal(closed,1);
   context.adsMarket='Kaspi';
   context.drawAdsDashboard();
-  assert.deepEqual(filters.children,[]);
+  assert.equal(toolbar.hidden,true);
 });
