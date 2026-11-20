@@ -2,6 +2,8 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import test from 'node:test';
 import vm from 'node:vm';
+import { PGlite } from '@electric-sql/pglite';
+import { withGrowthAnalyticsPage } from '../src/growth-analytics-page.js';
 import {createWbAdGroups} from '../src/wb-ad-groups.js';
 import {createWbQueryHistory} from '../src/wb-query-history.js';
 import {stockBlock} from '../src/wb-ad-inventory.js';
@@ -14,9 +16,9 @@ function harness(configured = []) {
     Date, Intl, URL, AbortController, setTimeout, clearTimeout, setInterval,
     express: { Router: () => ({ get() {}, put() {}, post() {}, use() {} }) },
     pool: { query: async (sql, args) => { queries.push({ sql, args }); return { rows: configured }; } },
-    stockBlock, createWbQueryHistory, createWbAdGroups, config: {}, credentialFor: async () => 'test-token', asyncRoute: fn => fn,
+    stockBlock, createWbQueryHistory, createWbAdGroups, config: {}, credentialFor: async () => 'test-token', requireTrustedOrigin() {}, requireWritesEnabled() {}, asyncRoute: fn => fn,
   });
-  vm.runInContext(source.replace(/^import .*;\r?\n/gm, '').replace(/export /g, '') + '\nglobalThis.api = { enforce, fetchCampaigns, setStoredCampaignStatus, localDate, requestInterval, campaignName, campaignApiName, campaignPeriodMetrics, experimentStartBlock };', context);
+  vm.runInContext(source.replace(/^import .*;\r?\n/gm, '').replace(/export /g, '') + '\nglobalThis.api = { enforce, fetchCampaigns, setStoredCampaignStatus, localDate, requestInterval, campaignName, campaignApiName, campaignPeriodMetrics, experimentStartBlock, saveBulkAdsLimits };', context);
   context.mockRequest = async url => { calls.push(url); return {}; };
   vm.runInContext('request = (...args) => mockRequest(...args); setStoredCampaignStatus = async () => {}; inventoryFor = async (m, rows) => new Map(rows.map(r => [Number(r.id), {known:true, allEmpty:false, allRisky:false}]));', context);
   return { context, api: context.api, calls, queries };
@@ -180,4 +182,80 @@ test('experiment starts require known stock, current data, one unchanged article
  h.context.testSnap.campaigns[0].status=4;assert.equal(await h.api.experimentStartBlock('WB',1,'777'),'');
  const manual=harness([limit(1,{manualPaused:true})]);manual.context.testSnap=h.context.testSnap;vm.runInContext('storedSnapshot=async()=>testSnap;',manual.context);assert.match(await manual.api.experimentStartBlock('WB',1,'777'),/Ручная пауза/);
  const scheduled=harness([limit(1,{scheduleEnabled:true})]);scheduled.context.testSnap=h.context.testSnap;vm.runInContext('storedSnapshot=async()=>testSnap;',scheduled.context);assert.match(await scheduled.api.experimentStartBlock('WB',1,'777'),/ежедневный запуск/);
+});
+
+test('bulk advertising settings update selected campaigns atomically with independent fields', async () => {
+  const db=new PGlite();
+  try {
+    for (const file of ['005_wb_ad_limits.sql','010_wb_ads_snapshots.sql','012_wb_ads_auto_resume.sql',
+      '013_wb_ads_start_schedule.sql','014_wb_ads_manual_pause.sql','016_wb_ads_stock_protection.sql']) {
+      await db.exec(readFileSync(new URL('../migrations/'+file,import.meta.url),'utf8'));
+    }
+    await db.query("INSERT INTO wb_ads_snapshots (market,payload) VALUES ('WB',$1),('WB2',$2)",[
+      {campaigns:[campaign(1),campaign(2),campaign(3,7)]},{campaigns:[campaign(1)]},
+    ]);
+    await db.exec(`INSERT INTO wb_ad_limits
+      (market,campaign_id,daily_limit,enabled,schedule_enabled,start_time,manual_paused,stock_paused,low_stock_mode,updated_at)
+      VALUES ('WB',1,300,true,true,'07:00',true,true,'pause',0),('WB2',1,900,true,false,'10:00',false,false,'warn',0)`);
+    const h=harness();
+    h.context.pool.query=(...args)=>db.query(...args);
+    const read=async (market,id)=>(await db.query('SELECT * FROM wb_ad_limits WHERE market=$1 AND campaign_id=$2',[market,id])).rows[0];
+    await assert.rejects(h.api.saveBulkAdsLimits('WB',{campaignIds:[1,3],dailyLimit:450}),{status:409});
+    assert.equal((await read('WB',1)).daily_limit,'300');
+    await assert.rejects(h.api.saveBulkAdsLimits('WB',{campaignIds:[1],startTime:'25:00'}),{status:400});
+    const saved=await h.api.saveBulkAdsLimits('WB',{campaignIds:[2,1,1],dailyLimit:600});
+    assert.equal(saved.updated,2);
+    let row=await read('WB',1);
+    assert.equal(row.daily_limit,'600');
+    assert.equal(row.start_time,'07:00');
+    assert.equal(row.manual_paused,true);
+    assert.equal(row.stock_paused,true);
+    assert.equal(row.low_stock_mode,'pause');
+    assert.equal((await read('WB',2)).schedule_enabled,false);
+    await h.api.saveBulkAdsLimits('WB',{campaignIds:[2,1],startTime:'08:30'});
+    row=await read('WB',2);
+    assert.equal(row.daily_limit,'600');
+    assert.equal(row.schedule_enabled,true);
+    assert.equal(row.start_time,'08:30');
+    assert.equal((await read('WB2',1)).daily_limit,'900');
+    await h.api.saveBulkAdsLimits('WB',{campaignIds:[1],dailyLimit:0});
+    row=await read('WB',1);
+    assert.equal(row.enabled,false);
+    assert.equal(row.schedule_enabled,true);
+    assert.equal(row.manual_paused,true);
+  } finally {await db.close();}
+});
+
+test('bulk settings module adds a toolbar button and sends only edited fields', async () => {
+  const module=readFileSync(new URL('../../wb-ads-bulk-v1.js',import.meta.url),'utf8');
+  const html=withGrowthAnalyticsPage('<head></head><script>initOwnerAuth();</script>');
+  const script=html.match(/<script data-source="wb-ads-bulk-v1\.js">\n([\s\S]+?)<\/script>/);
+  assert.equal(script?.[1],module);
+  assert.ok(script.index<html.indexOf('<script>initOwnerAuth();</script>'));
+  const calls=[];
+  let sheet='',closed=0;
+  const filters={children:[],scrollLeft:7,prepend(node){this.children.unshift(node);}};
+  const context=vm.createContext({
+    document:{head:{append(){}},getElementById:()=>filters,createElement:()=>({addEventListener(){}})},
+    adsMarket:'WB2',adsDashboardData:{campaigns:[{id:21,name:'Кампания'}]},
+    drawAdsDashboard(){filters.children=[];},esc:String,wbAdsMoneyText:String,
+    showSheet(value){sheet=value;},closeModal(){closed++;},queueAdsRender(){},
+    adsApi:async (url, options)=>calls.push([url,JSON.parse(options.body)]),
+    FormData:class{constructor(form){this.fields=form.fields;}get(key){return this.fields[key];}getAll(key){return this.fields[key];}},
+  });
+  context.window=context;
+  vm.runInContext(module,context);
+  context.drawAdsDashboard();
+  assert.deepEqual(filters.children.map(x=>x.textContent),['Лимит и время']);
+  context.openWbAdsBulkSettings();
+  assert.match(sheet,/Лимит и время · WB2/);
+  assert.match(sheet,/name="campaign" value="21"/);
+  const status={},button={};
+  const form={dataset:{market:'WB2'},isConnected:true,fields:{campaign:['21'],dailyLimit:'',startTime:'08:30'},querySelector:key=>key==='[data-bulk-error]'?status:button};
+  await context.saveWbAdsBulkSettings(form);
+  assert.deepEqual(calls,[['/api/promotion/limits-bulk/WB2',{campaignIds:[21],startTime:'08:30'}]]);
+  assert.equal(closed,1);
+  context.adsMarket='Kaspi';
+  context.drawAdsDashboard();
+  assert.deepEqual(filters.children,[]);
 });
