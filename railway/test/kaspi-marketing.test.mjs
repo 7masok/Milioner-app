@@ -37,9 +37,10 @@ test('product statistics read campaign totals and current bid separately from th
 
 test('single-product bid changes use the connected account and require the echoed SKU and bid', async () => {
   let calls=0, confirmed=true;
-  const data={account:{id:123},cookies:[]};
+  let data={account:{id:123},cookies:[]};
+  const at=Date.parse('2026-11-18T10:00:00Z');
   const service=createKaspiMarketingService({
-    read:async()=>structuredClone(data),write:async()=>{},
+    read:async()=>structuredClone(data),write:async value=>{data=value;},now:()=>at,
     fetchImpl:async (url,options)=>{
       calls++;
       assert.equal(url,'https://marketing.kaspi.kz/advertising/products/api/v1/merchant/123/campaign/456/products/update-bid');
@@ -58,6 +59,7 @@ test('single-product bid changes use the connected account and require the echoe
   confirmed=false;
   await assert.rejects(service.setBid(input),/не подтвердил новую ставку/);
   assert.equal(calls,2);
+  assert.deepEqual((await service.state()).bidChanges,[{...input,at}]);
 });
 
 function fixture(campaigns = [{ id: 456, name: 'Campaign 1', cost: 120.5 }], fixtureOptions = {}) {

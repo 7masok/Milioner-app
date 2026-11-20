@@ -409,3 +409,67 @@ test('a negative product without ad spend keeps its name visible and explains th
   assert.match(body,/Мало данных/);
   assert.match(body,/нет расхода и кликов/);
 });
+
+test('weekly price suggestion prefers the 3 ₸ bid and leaves at least 100 ₸ before advertising',async()=>{
+  const days=Array.from({length:7},(_,i)=>'2026-11-'+(11+i));
+  const item={...product,kaspiPrice:990};
+  const panel=mount(days.map(date=>batch(19,1,[{
+    date,sku:'A',amount:10,views:90,clicks:8,orders:0,bid:3,score:8,
+  }],date)),{},[],{confirmedDays:days},{
+    prod:id=>id==='p'?item:null,
+    productAvailableStock:()=>20,
+    window:{loadKaspiCampaignFinance:async()=>({returns:[],products:[
+      {productId:'p',qty:1,revenue:1000,cost:500,fees:200,delivery:100,ads:70,profit:230},
+    ]})},
+  });
+  panel.click({kaMode:'tests'});
+  await new Promise(resolve=>setImmediate(resolve));
+  assert.match(panel.innerHTML,/kaw-testing/);
+  assert.match(panel.innerHTML,/>Тест недели</);
+  const key=JSON.stringify(['42:19','A','p',product.name]);
+  assert.match(panel.expand({kaProduct:key}),/990 ₸ → 778 ₸ · ≥100 ₸/);
+  panel.click({kaPrice:key});
+  assert.match(panel.innerHTML,/name="price"[^>]+value="778"/);
+});
+
+test('bid history excludes a confirmed switch day and calculates daily views and the actual CPC',()=>{
+  const days=['2026-11-16','2026-11-17'];
+  const panel=mount(days.map((date,i)=>batch(19,1,[{
+    date,sku:'A',amount:i?100:45,views:i?900:180,clicks:i?20:5,bid:i?30:24,
+  }],date)),{},[],{
+    confirmedDays:days,bidChanges:[{accountId:'42',campaignId:'19',sku:'A',bid:30,at:at-day}],
+  });
+  panel.expand({kaCampaign:'42:19'});
+  const body=panel.expand({kaProduct:JSON.stringify(['42:19','A','p',product.name])});
+  assert.match(body,/24 ₸<\/b> · дней 1 · показы\/день 180 · клики\/день 5 · расход 45 ₸ · клик 9 ₸/);
+  assert.match(body,/Дней вне сравнения[^:]*: 1/);
+  assert.match(body,/подтверждена ставка 30 ₸/);
+  assert.doesNotMatch(body,/показы\/день 900/);
+});
+
+test('weekly bid suggestion uses the live bid and stops proposing changes after a confirmed adjustment',async()=>{
+  const days=Array.from({length:7},(_,i)=>'2026-11-'+(11+i));
+  let writes=0;
+  const panel=mount(days.map(date=>batch(19,1,[{
+    date,sku:'A',amount:10,views:10,clicks:1,orders:0,bid:18,score:9,
+  }],date)),{},[],{confirmedDays:days},{
+    adsApi:async (url,options)=>{
+      if (url.endsWith('/identities')) return {items:[],pending:0};
+      if (options?.method==='PUT') {writes++;return {bid:15};}
+      const dates=new URL(url,'https://warehouse.example').searchParams;
+      return {accountId:'42',campaignId:'19',from:dates.get('from'),to:dates.get('to'),
+        products:[{sku:'A',bid:18,score:9,clicks:7,orders:0}]};
+    },
+    FormData:class {constructor(form){this.values=form.values}get(key){return this.values[key]}},
+  });
+  const key=JSON.stringify(['42:19','A','p',product.name]);
+  panel.click({kaMode:'tests'});
+  await new Promise(resolve=>setImmediate(resolve));
+  assert.match(panel.expand({kaProduct:key}),/Оценка ниже 10\. Ставка 18 ₸ → 15 ₸/);
+  panel.click({kaBid:key});
+  assert.match(panel.innerHTML,/name="bid"[^>]+value="15"/);
+  assert.equal(writes,0);
+  await panel.submit({dataset:{kaBidForm:key},values:{bid:'15'},querySelector:()=>({}),querySelectorAll:()=>[]});
+  assert.equal(writes,1);
+  assert.doesNotMatch(panel.innerHTML,/data-ka-product=/);
+});
