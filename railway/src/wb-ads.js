@@ -5,7 +5,7 @@ import {createWbQueryHistory} from './wb-query-history.js';
 import { pool } from './db.js';
 import { config } from './config.js';
 import { credentialFor } from './connections.js';
-import { asyncRoute } from './http.js';
+import { asyncRoute, requireTrustedOrigin, requireWritesEnabled } from './http.js';
 import { campaignInventory, parseAdWarehouse, stockBlock } from './wb-ad-inventory.js';
 import { hydrateWarehousePurchases } from './warehouse-purchases.js';
 import { hydrateWarehouseReservations } from './warehouse-reservations.js';
@@ -643,6 +643,43 @@ wbAdsRouter.put('/promotion/limits/:market/:campaignId', asyncRoute(async (req, 
     [marketName, id, limit, enabled, scheduleEnabled, startTime, Date.now(), lowStockMode],
   );
   res.json({ ok: true, market: marketName, campaignId: id, dailyLimit: limit, enabled, scheduleEnabled, startTime });
+}));
+
+async function saveBulkAdsLimits(marketName, {campaignIds, dailyLimit = null, startTime = null} = {}) {
+  const reject = (message, status = 400) => Object.assign(new Error(message), {status});
+  if (!allowed(marketName) || !Array.isArray(campaignIds) || !campaignIds.length
+    || campaignIds.some(id => !Number.isSafeInteger(id) || id <= 0)) throw reject('Выберите кампании одного кабинета WB.');
+  if (dailyLimit === null && startTime === null) throw reject('Укажите дневной лимит или время запуска.');
+  if (dailyLimit !== null && (!Number.isSafeInteger(dailyLimit) || dailyLimit < 0)) throw reject('Дневной лимит должен быть целым числом от 0 ₸.');
+  if (startTime !== null && (typeof startTime !== 'string' || !/^([01]\d|2[0-3]):[0-5]\d$/.test(startTime))) {
+    throw reject('Укажите время запуска в формате ЧЧ:ММ.');
+  }
+
+  const ids = [...new Set(campaignIds)].sort((a, b) => a - b);
+  const snapshot = await storedSnapshot(marketName);
+  const available = new Set(snapshot?.campaigns.filter(row => MANAGEABLE_CAMPAIGN_STATUSES.has(Number(row.status))).map(row => Number(row.id)));
+  if (ids.some(id => !available.has(id))) throw reject('Список кампаний изменился. Обновите рекламу и выберите кампании заново.', 409);
+
+  // One statement keeps a bulk edit atomic, and updates only the supplied fields.
+  await pool.query(
+    `INSERT INTO wb_ad_limits(market,campaign_id,daily_limit,enabled,schedule_enabled,start_time,updated_at)
+     SELECT $1,id,COALESCE($3::numeric,0),COALESCE($3::numeric>0,FALSE),$4::text IS NOT NULL,COALESCE($4::text,'09:00'),$5
+     FROM unnest($2::bigint[]) AS picked(id) ORDER BY id
+     ON CONFLICT(market,campaign_id) DO UPDATE SET
+       daily_limit=COALESCE($3::numeric,wb_ad_limits.daily_limit),
+       enabled=CASE WHEN $3::numeric IS NULL THEN wb_ad_limits.enabled ELSE EXCLUDED.enabled END,
+       schedule_enabled=CASE WHEN $4::text IS NULL THEN wb_ad_limits.schedule_enabled ELSE TRUE END,
+       start_time=COALESCE($4::text,wb_ad_limits.start_time),
+       auto_paused=CASE WHEN $3::numeric=0 THEN FALSE ELSE wb_ad_limits.auto_paused END,
+       auto_paused_day=CASE WHEN $3::numeric=0 THEN '' ELSE wb_ad_limits.auto_paused_day END,
+       updated_at=EXCLUDED.updated_at`,
+    [marketName, ids, dailyLimit, startTime, Date.now()],
+  );
+  return {ok: true, market: marketName, updated: ids.length};
+}
+
+wbAdsRouter.put('/promotion/limits-bulk/:market', requireTrustedOrigin, requireWritesEnabled, asyncRoute(async (req, res) => {
+  res.json(await saveBulkAdsLimits(market(req.params.market), req.body || {}));
 }));
 
 wbAdsRouter.post('/promotion/actions/:market/:campaignId', asyncRoute(async (req, res) => {
