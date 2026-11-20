@@ -276,3 +276,39 @@ test('duplicate tracks warn across shipments but never count their own lines or 
  assert.equal(f.ctx.amanDuplicateTracks(rows,'new').length,0);
  assert.equal(JSON.stringify(f.ctx.state.purchases),before);assert.equal(f.calls.saved,0);assert.equal(f.requests.length,0);
 });
+
+test('a zero declaration shows carrier details and can be updated only after reviewing a matching new shipment',async()=>{
+ const f=fixture(),purchase=f.ctx.state.purchases[0],remote=f.view.orders[0];
+ Object.assign(purchase,{amantransOrderId:'11',amantransAccountId:'7',amantransTrack:'MATCH-TRACK'});
+ Object.assign(remote,{track:'MATCH-TRACK',amount:purchase.qty,status:'NEW',statusLabel:'Новый',priceUsd:0,totalKzt:0});
+ await f.ctx.openAmanTrans('main');
+ const card=f.ctx.amanShipmentHtml('main',[purchase]);
+ assert.match(card,/Правильный/);
+ assert.match(card,/Стоимость товара 0 \$/);
+ assert.match(card,/доставка 0 ₸/);
+ assert.match(card,/Сверить название и сумму/);
+ f.ctx.amanReviewShipmentData('main');
+ assert.match(f.html,/Правильный → Название закупки/);
+ assert.equal(f.requests.filter(x=>x.options.method==='PATCH').length,0);
+ const original=f.ctx.fetch;
+ f.ctx.fetch=async(url,options)=>{
+  if(options.method==='PATCH'){
+   assert.match(url,/\/orders\/11$/);
+   assert.deepEqual(JSON.parse(options.body).fields,{name:'Название закупки',track:'MATCH-TRACK',priceUsd:10000,amount:2});
+   remote.name='Название закупки';remote.priceUsd=10000;
+  }
+  return original(url,options);
+ };
+ await f.ctx.amanSendShipmentData({disabled:false});
+ assert.equal(f.field('amanShipmentDataStatus').textContent,'Обновление подтверждено Aman Trans.');
+ assert.equal(purchase.buyTotal,10000);
+ assert.equal(purchase.delivery,500);
+ assert.equal(remote.totalKzt,0);
+ remote.amount=100;
+ await f.ctx.openAmanTrans('main');
+ // Reopening is cacheable, so explicitly reload the provider snapshot.
+ await f.ctx.amanRefresh({disabled:false});
+ const mismatched=f.ctx.amanShipmentHtml('main',[purchase]);
+ assert.match(mismatched,/Количество отличается/);
+ assert.doesNotMatch(mismatched,/Сверить название и сумму/);
+});
