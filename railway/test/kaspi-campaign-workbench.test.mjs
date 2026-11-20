@@ -410,26 +410,46 @@ test('a negative product without ad spend keeps its name visible and explains th
   assert.match(body,/нет расхода и кликов/);
 });
 
-test('weekly price suggestion prefers the 3 ₸ bid and leaves at least 100 ₸ before advertising',async()=>{
+test('weekly price uses half the unit cost with a 100 ₸ minimum and rejects a lower price',async()=>{
   const days=Array.from({length:7},(_,i)=>'2026-11-'+(11+i));
-  const item={...product,kaspiPrice:990};
-  const panel=mount(days.map(date=>batch(19,1,[{
-    date,sku:'A',amount:10,views:90,clicks:8,orders:0,bid:3,score:8,
-  }],date)),{},[],{confirmedDays:days},{
-    prod:id=>id==='p'?item:null,
-    productAvailableStock:()=>20,
-    window:{loadKaspiCampaignFinance:async()=>({returns:[],products:[
-      {productId:'p',qty:1,revenue:1000,cost:500,fees:200,delivery:100,ads:70,profit:230},
-    ]})},
-  });
-  panel.click({kaMode:'tests'});
-  await new Promise(resolve=>setImmediate(resolve));
-  assert.match(panel.innerHTML,/kaw-testing/);
-  assert.match(panel.innerHTML,/>Тест недели</);
-  const key=JSON.stringify(['42:19','A','p',product.name]);
-  assert.match(panel.expand({kaProduct:key}),/990 ₸ → 778 ₸ · ≥100 ₸/);
-  panel.click({kaPrice:key});
-  assert.match(panel.innerHTML,/name="price"[^>]+value="778"/);
+  const cases=[
+    {cost:120,current:990,price:356,profit:100},
+    {cost:500,current:990,price:945,profit:250},
+    {cost:500,current:945,price:null,profit:250},
+  ];
+  for (const {cost,current,price,profit} of cases) {
+    const item={...product,kaspiPrice:current};
+    let writes=0;
+    const panel=mount(days.map(date=>batch(19,1,[{
+      date,sku:'A',amount:10,views:90,clicks:8,orders:0,bid:3,score:8,
+    }],date)),{},[],{confirmedDays:days},{
+      prod:id=>id==='p'?item:null,
+      productAvailableStock:()=>20,
+      FormData:class {constructor(form){this.values=form.values}get(key){return this.values[key]}},
+      window:{
+        kaspiAdvertisingPrices:{load:async()=>({rows:[]}),save:async()=>{writes++;}},
+        loadKaspiCampaignFinance:async()=>({returns:[],products:[
+          {productId:'p',qty:2,revenue:2000,cost:cost*2,fees:400,delivery:200,ads:70,profit:1530-cost*2},
+        ]}),
+      },
+    });
+    panel.click({kaMode:'tests'});
+    await new Promise(resolve=>setImmediate(resolve));
+    if (price==null) {
+      assert.doesNotMatch(panel.innerHTML,/>Тест недели</);
+      continue;
+    }
+    assert.match(panel.innerHTML,/>Тест недели</);
+    const key=JSON.stringify(['42:19','A','p',product.name]);
+    assert.ok(panel.expand({kaProduct:key}).includes(current+' ₸ → '+price+' ₸ · ≥'+profit+' ₸'));
+    panel.click({kaPrice:key});
+    assert.match(panel.innerHTML,new RegExp('name="price"[^>]+value="'+price+'"'));
+    const status={};
+    await panel.submit({dataset:{kaPriceForm:key},values:{price:String(price-1)},querySelector:()=>status});
+    assert.ok(status.textContent.includes(price+' ₸'));
+    assert.ok(status.textContent.includes(profit+' ₸'));
+    assert.equal(writes,0);
+  }
 });
 
 test('bid history excludes a confirmed switch day and calculates daily views and the actual CPC',()=>{
