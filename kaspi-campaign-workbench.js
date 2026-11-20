@@ -182,9 +182,10 @@
     const feeRate=(fees-delivery)/revenue;
     if (!(feeRate>=0&&feeRate<1)) return result;
     const costUnit=costs/qty, deliveryUnit=delivery/qty, adUnit=ads/qty;
-    return {...result,costUnit,deliveryUnit,feeUnit:fees/qty,adUnit,
+    const testProfitFloor=Math.max(100,costUnit*.5);
+    return {...result,costUnit,deliveryUnit,feeUnit:fees/qty,adUnit,testProfitFloor,
       beforeAds:(revenue-costs-fees)/qty,
-      priceAt100:Math.ceil((costUnit+deliveryUnit+100)/(1-feeRate)),
+      testPriceFloor:Math.ceil((costUnit+deliveryUnit+testProfitFloor)/(1-feeRate)),
       baseFloor:Math.ceil((costUnit+deliveryUnit)/(1-feeRate)),
       adFloor:Math.ceil((costUnit+deliveryUnit+adUnit)/(1-feeRate))};
   }
@@ -607,7 +608,7 @@
       + '<label>Дней<input required type="number" name="days" min="1" max="60"'+(change?.weekly?' readonly':'')+' value="'+(change?.weekly?7:14)+'"></label>'
       + '<button class="btn dark" type="submit">Начать</button></form><div class="kaw-note">Цена передаётся через прайс Kaspi. Начни тест после обновления цены в магазине. «Было» — прежняя цена, «Стало» — новая. Кнопка «Начать» не меняет цену.</div>' : '';
     const experimentProposal = m.weeklyPrice ? '<div class="kaw-note"><b>Тест недели · '+cash(m.price)+' → '+cash(m.weeklyPrice)
-      +' · ≥100 ₸ до рекламы</b></div>' : '';
+      +' · ≥'+cash(m.testProfitFloor)+' до рекламы</b></div>' : '';
     const bidProposal = m.weeklyBid ? '<div class="kaw-note"><b>'+esc(m.weeklyBid.text)+'</b></div>' : '';
     const controls = item && !change?.weekly ? '<div class="kaw-toolbar"><button type="button" data-ka-'+(running ? 'finish' : 'open-test')+'="'+esc(row.productId)+'">'+(running ? 'Завершить тест' : 'Тест цены')+'</button></div>' : '';
     const identity = row.lines.length ? '<div class="kaw-note">Код рекламы Kaspi · '+esc(row.sku || 'не указан')+'</div>'+(row.last?.kaspiMerchantSkus?.length?'<div class="kaw-note">Артикул продавца · '+row.last.kaspiMerchantSkus.map(esc).join(', ')+'</div>':'')
@@ -637,7 +638,7 @@
     const priceLocked=active(tests()[row.productId],Date.now());
     const warehousePrice=number(prod(row.productId)?.kaspiPrice);
     m.price=number(m.price) ?? (warehousePrice>0?warehousePrice:priceSnapshot.get(row.productId)) ?? null;
-    if (row.productId) priceRows.set(key,{productId:row.productId,price:m.price,weeklyPrice:m.weeklyPrice,sku:kaspiSkus(prod(row.productId) || {}).find(sku=>String(sku || '').trim()) || ''});
+    if (row.productId) priceRows.set(key,{productId:row.productId,price:m.price,weeklyPrice:m.weeklyPrice,testProfitFloor:m.testProfitFloor,sku:kaspiSkus(prod(row.productId) || {}).find(sku=>String(sku || '').trim()) || ''});
     const price = row.productId
       ? '<button type="button" class="kaw-cell kaw-bid" data-ka-price="'+esc(key)+'"'+(priceLocked?' disabled':'')
         +' title="'+(priceLocked?'Идёт тест цены':'Изменить цену в прайсе Kaspi')+'" aria-label="'+esc('Изменить цену · '+row.name)+'">'
@@ -787,7 +788,7 @@
     const candidates = weekly ? currentRows.flatMap(({campaign,products})=>products.map(x=>({...x,campaign}))) : [];
     const weeklyDraft=state.settings.kaspiWeeklyPriceDraft;
     const priceCandidate = !(weeklyDraft && prod(weeklyDraft.productId)) && !Object.values(list).some(t=>active(t,at) || t.startedAt>=at-7*DAY)
-      ? candidates.filter(({row,m})=>occurrences.get(row.productId)===1 && m.priceAt100<m.price
+      ? candidates.filter(({row,m})=>occurrences.get(row.productId)===1 && m.testPriceFloor<m.price
           && !m.totalPreliminary && m.bid>=minBid && m.views>=(m.bid===minBid?100:500) && m.clicks>=30 && m.orders!=null
           && m.orders/m.clicks<.02 && Number(productAvailableStock(prod(row.productId)))>0)
         .sort((a,b)=>Number(b.m.bid===minBid)-Number(a.m.bid===minBid) || b.m.views-a.m.views)[0] : null;
@@ -819,7 +820,7 @@
             const history=bidHistory(x.row,x.campaign,finance,report.claims,from,to);
             return {...x,m:{...x.m,weeklyBid:number(observed?.bid)!=null ? weeklyBid({...x.m,weekStart:dayStart(from)},history) : null}};
           }).filter(x=>x.m.weeklyBid);
-        const proposal = priceCandidate ? renderRow({...priceCandidate,kind:'price',m:{...priceCandidate.m,weeklyPrice:priceCandidate.m.priceAt100}},priceCandidate.campaign) : '';
+        const proposal = priceCandidate ? renderRow({...priceCandidate,kind:'price',m:{...priceCandidate.m,weeklyPrice:priceCandidate.m.testPriceFloor}},priceCandidate.campaign) : '';
         const running=Object.values(list).map(t => renderRow({
         row:{productId:t.productId,sku:'',name:prod(t.productId)?.name||t.name,lines:[]},m:{},t,
         kind:active(t,at)?'test':'unknown',
@@ -1027,7 +1028,7 @@
           const price=number(new FormData(form).get('price')), status=form.querySelector('[role="status"]');
           if (!(price>0)) return;
           if (row.weeklyPrice && state.settings.kaspiWeeklyPriceDraft && prod(state.settings.kaspiWeeklyPriceDraft.productId)) {status.textContent='Сначала запусти подготовленный тест.';return;}
-          if (row.weeklyPrice && price<row.weeklyPrice) {status.textContent='Для теста должно остаться не меньше 100 ₸ до рекламы.';return;}
+          if (row.weeklyPrice && price<row.weeklyPrice) {status.textContent='Минимальная цена теста — '+cash(row.weeklyPrice)+'. До рекламы должно остаться не меньше '+cash(row.testProfitFloor)+'.';return;}
           if (active(tests()[row.productId],Date.now())) {status.textContent='Сначала заверши текущий тест цены.';return;}
           const buttons=[...form.querySelectorAll('button,input')];
           form.dataset.saving='1';
