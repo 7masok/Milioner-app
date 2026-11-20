@@ -323,12 +323,6 @@ function campaignName(row, statRow, cards) {
     vendorCodesByNm: Object.fromEntries(matched.filter(card => card.vendorCode).map(card => [card.nmId, card.vendorCode])) };
 }
 
-function fetchedCampaignMembership(row, cards) {
-  const label = campaignName(row, null, cards);
-  return {membershipSource:'wb-settings-v1', nmIds:label.nmIds, productTitles:label.productTitles,
-    vendorCodes:label.vendorCodes, vendorCodesByNm:label.vendorCodesByNm};
-}
-
 function sameCampaignArticles(a,b) {
   return a && b && a.length===b.length && a.every(id=>b.includes(id));
 }
@@ -348,7 +342,6 @@ async function fetchCampaigns(marketName, previous) {
   const token = await tokenFor(marketName);
   if (!token) throw new Error((marketName === 'WB2' ? 'WB_TOKEN_2' : 'WB_TOKEN') + ' не настроен');
 
-  const membershipReadAt=Date.now();
   const previousRows = Array.isArray(previous?.campaigns) ? previous.campaigns : [];
   const previousById = new Map(previousRows.map(row => [Number(row.id), row]));
   // Always fetch the full manageable set; name recovery must not hide other campaigns.
@@ -448,7 +441,7 @@ async function fetchCampaigns(marketName, previous) {
       periodMetrics: hasFreshStats
         ? campaignPeriodMetrics(statRow, historyFrom, historyTo)
         : (Array.isArray(prior?.periodMetrics) ? prior.periodMetrics : []),
-      membershipSource: 'wb-settings-v1', membershipReadAt,
+      membershipSource: 'wb-settings-v1',
       nmIds:label.nmIds, productTitles:label.productTitles, vendorCodes:label.vendorCodes,
       vendorCodesByNm:label.vendorCodesByNm,
     };
@@ -524,21 +517,10 @@ async function saveSnapshot(marketName, value) {
     `INSERT INTO wb_ads_snapshots(market,payload,updated_at,last_error,next_attempt_at)
      VALUES($1,$2,$3,'',0)
      ON CONFLICT(market) DO UPDATE
-     SET payload=jsonb_set(EXCLUDED.payload,'{campaigns}',COALESCE((
-       SELECT jsonb_agg(CASE WHEN COALESCE((old.item->>'membershipReadAt')::bigint,0)>COALESCE((fresh.item->>'membershipReadAt')::bigint,0)
-         THEN fresh.item || jsonb_build_object('nmIds',old.item->'nmIds','vendorCodes',old.item->'vendorCodes',
-           'productTitles',old.item->'productTitles','vendorCodesByNm',old.item->'vendorCodesByNm',
-           'membershipReadAt',old.item->'membershipReadAt','membershipSource',old.item->'membershipSource')
-         ELSE fresh.item END ORDER BY fresh.ordinal)
-       FROM jsonb_array_elements(EXCLUDED.payload->'campaigns') WITH ORDINALITY AS fresh(item,ordinal)
-       LEFT JOIN LATERAL (
-         SELECT item FROM jsonb_array_elements(COALESCE(wb_ads_snapshots.payload->'campaigns','[]'::jsonb)) AS prior(item)
-         WHERE item->>'id'=fresh.item->>'id' LIMIT 1
-       ) old ON TRUE),'[]'::jsonb)),
-       updated_at=EXCLUDED.updated_at,last_error='',next_attempt_at=0`,
+     SET payload=EXCLUDED.payload,updated_at=EXCLUDED.updated_at,last_error='',next_attempt_at=0`,
     [marketName, JSON.stringify(value), now],
   );
-  return storedSnapshot(marketName);
+  return { ...value, updatedAt: now, lastError: '', nextAttemptAt: 0 };
 }
 
 async function nameOverrides(marketName) {
@@ -656,38 +638,6 @@ async function saveWbCampaignName(marketName, id, value) {
   );
   return {ok:true,name};
 }
-
-async function refreshWbCampaignMembership(marketName,id) {
-  if (!allowed(marketName)||!Number.isSafeInteger(id)||id<=0) {
-    throw Object.assign(new Error('Неверная кампания WB.'),{status:400});
-  }
-  const snapshot=await storedSnapshot(marketName);
-  if (!snapshot?.campaigns.some(row=>Number(row.id)===id)) {
-    throw Object.assign(new Error('Кампания не найдена в этом кабинете WB.'),{status:409});
-  }
-  const token=await tokenFor(marketName);
-  if(!token)throw Object.assign(new Error('Подключите рекламу этого кабинета WB.'),{status:409});
-  const membershipReadAt=Date.now();
-  const row=await currentCampaignRow(id,token);
-  let cards;
-  try { cards=await cardCatalog(marketName,token); }
-  catch { cards=new Map(); }
-  const membership={...fetchedCampaignMembership(row,cards),membershipReadAt};
-  await pool.query(
-    `UPDATE wb_ads_snapshots SET payload=jsonb_set(payload,'{campaigns}',
-      COALESCE((SELECT jsonb_agg(CASE WHEN (item->>'id')::bigint=$2
-        AND COALESCE((item->>'membershipReadAt')::bigint,0)<=$4
-        THEN item || $3::jsonb ELSE item END ORDER BY ordinal)
-      FROM jsonb_array_elements(payload->'campaigns') WITH ORDINALITY AS listed(item,ordinal)),'[]'::jsonb))
-     WHERE market=$1`,
-    [marketName,id,JSON.stringify(membership),membershipReadAt],
-  );
-  return {ok:true,count:membership.nmIds.length};
-}
-
-wbAdsRouter.post('/promotion/campaign-products/:market/:campaignId', requireTrustedOrigin, asyncRoute(async (req,res) => {
-  res.json(await refreshWbCampaignMembership(market(req.params.market),Number(req.params.campaignId)));
-}));
 
 wbAdsRouter.put('/promotion/campaign-name/:market/:campaignId', requireTrustedOrigin, requireWritesEnabled, asyncRoute(async (req,res) => {
   res.json(await saveWbCampaignName(market(req.params.market),Number(req.params.campaignId),req.body?.name));

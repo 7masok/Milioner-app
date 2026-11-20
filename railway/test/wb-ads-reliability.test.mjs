@@ -18,7 +18,7 @@ function harness(configured = []) {
     pool: { query: async (sql, args) => { queries.push({ sql, args }); return { rows: configured }; } },
     stockBlock, createWbQueryHistory, createWbAdGroups, config: {}, credentialFor: async () => 'test-token', requireTrustedOrigin() {}, requireWritesEnabled() {}, asyncRoute: fn => fn,
   });
-  vm.runInContext(source.replace(/^import .*;\r?\n/gm, '').replace(/export /g, '') + '\nglobalThis.api = { enforce, fetchCampaigns, setStoredCampaignStatus, localDate, requestInterval, campaignName, campaignApiName, campaignPeriodMetrics, experimentStartBlock, saveBulkAdsLimits, saveWbCampaignName, refreshWbCampaignMembership, saveSnapshot };', context);
+  vm.runInContext(source.replace(/^import .*;\r?\n/gm, '').replace(/export /g, '') + '\nglobalThis.api = { enforce, fetchCampaigns, setStoredCampaignStatus, localDate, requestInterval, campaignName, campaignApiName, campaignPeriodMetrics, experimentStartBlock, saveBulkAdsLimits, saveWbCampaignName, storedSnapshot, saveSnapshot };', context);
   context.mockRequest = async url => { calls.push(url); return {}; };
   vm.runInContext('request = (...args) => mockRequest(...args); setStoredCampaignStatus = async () => {}; inventoryFor = async (m, rows) => new Map(rows.map(r => [Number(r.id), {known:true, allEmpty:false, allRisky:false}]));', context);
   return { context, api: context.api, calls, queries };
@@ -255,16 +255,21 @@ test('bulk advertising settings update selected campaigns atomically with indepe
     await assert.rejects(h.api.saveWbCampaignName('WB',3,'Закрыта'),{status:409});
     const names=await db.query("SELECT market,display_name FROM wb_ad_name_overrides WHERE campaign_id=1 ORDER BY market");
     assert.deepEqual(names.rows,[{market:'WB',display_name:'Название продавца'},{market:'WB2',display_name:'Другое имя'}]);
-    h.context.mockRequest=async url=>url.endsWith('adverts?ids=1')
-      ?{adverts:[{id:1,status:9,nm_settings:[{nm_id:123}]}]}:{cards:[{nmID:123,vendorCode:'black'}]};
-    const refreshed=await h.api.refreshWbCampaignMembership('WB',1);
-    assert.equal(refreshed.count,1);
-    const savedSnapshot=await h.api.saveSnapshot('WB',{campaigns:[
-      {id:1,status:9,clicks:27,nmIds:[123,456],vendorCodesByNm:{123:'black',456:'gray'},membershipReadAt:1},
+    await h.api.saveSnapshot('WB',{campaigns:[
+      {id:1,status:9,nmIds:[123,456],membershipSource:'wb-settings-v1'},
     ]});
-    assert.deepEqual(savedSnapshot.campaigns[0].nmIds,[123]);
-    assert.deepEqual(savedSnapshot.campaigns[0].vendorCodesByNm,{123:'black'});
-    assert.equal(savedSnapshot.campaigns[0].clicks,27);
+    h.context.mockRequest=async url=>{
+      if (url.endsWith('statuses=4,9,11')) return {adverts:[{id:1,status:9,nm_settings:[{nm_id:123}]}]};
+      if (url.includes('/fullstats')) return [{id:1,clicks:27}];
+      return {cards:[{nmID:123,vendorCode:'black'}]};
+    };
+    const previous=await h.api.storedSnapshot('WB');
+    const scheduled=await h.api.fetchCampaigns('WB',previous);
+    await h.api.saveSnapshot('WB',scheduled);
+    const refreshed=await h.api.storedSnapshot('WB');
+    assert.deepEqual(refreshed.campaigns[0].nmIds,[123]);
+    assert.deepEqual(refreshed.campaigns[0].vendorCodesByNm,{123:'black'});
+    assert.equal(refreshed.campaigns[0].clicks,27);
   } finally {await db.close();}
 });
 
@@ -294,7 +299,7 @@ test('bulk settings module adds a toolbar button and sends only edited fields', 
   vm.runInContext(module,context);
   context.drawAdsDashboard();
   assert.deepEqual(toolbar.children.map(x=>x.textContent),['Выбрать кампании']);
-  assert.deepEqual(actions.children.map(x=>x.textContent),['Задать своё имя','Обновить состав']);
+  assert.deepEqual(actions.children.map(x=>x.textContent),['Задать своё имя']);
   toolbar.children[0].click();
   assert.match(sheet,/Лимит и время · WB2/);
   assert.match(sheet,/name="campaign" value="21"/);
