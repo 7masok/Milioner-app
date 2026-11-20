@@ -196,8 +196,7 @@
   const operationId=firstRow.amantransTrackOperationId||crypto.randomUUID();if(!firstRow.amantransTrackOperationId){for(const row of items){row.amantransTrackOperationId=operationId;row.amantransPendingTrack=track;}save();}
   sending.add(key);sendErrors.delete(key);paint();let successful=false;
   try{
-   const first=items.slice().sort((a,b)=>productNameById(a.productId,'').localeCompare(productNameById(b.productId,''),'ru',{numeric:true,sensitivity:'base'}))[0];
-   const result=await request('/purchases/register','POST',{purchaseKey:key,...(linked?{orderId:firstRow.amantransOrderId,accountId:firstRow.amantransAccountId,previousTrack:firstRow.amantransSyncedTrack||order(firstRow.amantransOrderId)?.track||''}:{}),editOperationId:operationId,fields:{name:productNameById(first.productId,''),track,amount:items.reduce((n,x)=>n+Number(x.qty||0),0),priceUsd:Math.round(items.reduce((n,x)=>n+(Number(x.buyTotal)||Number(x.unitCost||0)*Number(x.qty||0)),0)*100)/100,shippingMethod:'Avto'}});
+   const result=await request('/purchases/register','POST',{purchaseKey:key,...(linked?{orderId:firstRow.amantransOrderId,accountId:firstRow.amantransAccountId,previousTrack:firstRow.amantransSyncedTrack||order(firstRow.amantransOrderId)?.track||''}:{}),editOperationId:operationId,fields:{...warehouseDeclaration(items),track,shippingMethod:'Avto'}});
    accept(result);
    if(!result.createdOrderId)throw Error('Проверяем создание в Aman Trans. Связь восстановится автоматически, повторной записи не будет.');
    const current=purchaseShipmentRows(enc(key));
@@ -207,14 +206,91 @@
   }catch(error){sendErrors.set(key,error.message);}finally{sending.delete(key);paint();if(successful&&purchaseTrack(purchaseShipmentRows(enc(key)))!==track)void amanSubmitPurchase(enc(key));}
  };
  window.amanRetryPurchase=key=>amanSubmitPurchase(key);
+ let shipmentDataDraft=null;
+ const shipmentDataOperations=new Map();
+ function warehouseDeclaration(items){
+  const names=items.map(row=>productNameById(row.productId,'')).filter(Boolean)
+   .sort((a,b)=>a.localeCompare(b,'ru',{numeric:true,sensitivity:'base'}));
+  const total=items.reduce((n,row)=>n+(Number(row.buyTotal)||Number(row.unitCost||0)*Number(row.qty||0)),0);
+  return {name:(names[0]||'').slice(0,200),priceUsd:Math.round(total*100)/100,
+   amount:items.reduce((n,row)=>n+Number(row.qty||0),0)};
+ }
+ function linkedShipment(items){
+  const id=String(items[0]?.amantransOrderId||'');
+  return id&&snapshot.accountId&&items.every(x=>String(x.amantransOrderId||'')===id
+   &&String(x.amantransAccountId||'')===snapshot.accountId) ? order(id) : null;
+ }
+ function shipmentComparison(items,carrier){
+  const warehouse=warehouseDeclaration(items);
+  const trackMatches=!!carrier.track&&items.every(row=>rowTrack(row)===carrier.track)
+   &&!duplicateTracks(items,carrier.track).length;
+  const quantityKnown=Number.isSafeInteger(carrier.amount)&&carrier.amount>0;
+  const ready=snapshot.connected&&!snapshot.lastError&&trackMatches&&warehouse.name
+   &&Number.isFinite(warehouse.priceUsd)&&warehouse.priceUsd>0&&quantityKnown
+   &&carrier.amount===warehouse.amount&&carrier.status==='NEW';
+  return {warehouse,trackMatches,ready,changed:warehouse.name!==carrier.name||warehouse.priceUsd!==carrier.priceUsd};
+ }
+ window.amanReviewShipmentData=function(encodedKey){
+  const items=purchaseShipmentRows(encodedKey),carrier=linkedShipment(items);
+  if(!carrier)return alert('Отправление Aman Trans не найдено. Обнови данные.');
+  const result=shipmentComparison(items,carrier);
+  if(!result.ready||!result.changed)return alert('Сверь трек, количество, статус и сумму закупки перед обновлением.');
+  const {warehouse}=result;
+  const operationKey=JSON.stringify([carrier.id,carrier.fingerprint,warehouse.name,warehouse.priceUsd]);
+  if(!shipmentDataOperations.has(operationKey))shipmentDataOperations.set(operationKey,crypto.randomUUID());
+  shipmentDataDraft={encodedKey,operationKey};
+  showSheet('<h3>Обновить данные Aman Trans</h3><div class="muted">Трек '+esc(carrier.track)+'</div>'
+   +'<div class="item"><div>Название · '+esc(carrier.name||'—')+' → '+esc(warehouse.name)+'</div>'
+   +'<div>Стоимость · '+number(carrier.priceUsd)+' $ → '+number(warehouse.priceUsd)+' $</div></div>'
+   +'<div class="muted">Aman Trans подписывает поле стоимости как «$». В него передаётся число из суммы закупки, как при создании отправления.</div>'
+   +'<button type="button" class="btn dark full" onclick="amanSendShipmentData(this)">Обновить в Aman Trans</button>'
+   +'<div id="amanShipmentDataStatus" role="status"></div>');
+ };
+ window.amanSendShipmentData=async function(button){
+  const draft=shipmentDataDraft;
+  if(!draft||!requireWarehouseEditReady()||button.disabled)return;
+  const items=purchaseShipmentRows(draft.encodedKey),carrier=linkedShipment(items),status=document.getElementById('amanShipmentDataStatus');
+  const result=carrier&&shipmentComparison(items,carrier);
+  if(!result?.ready||!result.changed||JSON.stringify([carrier.id,carrier.fingerprint,result.warehouse.name,result.warehouse.priceUsd])!==draft.operationKey){
+   status.textContent='Данные изменились. Открой сверку заново.';return;
+  }
+  button.disabled=true;
+  try{
+   const {warehouse}=result;
+   await request('/orders/'+carrier.id,'PATCH',{fingerprint:carrier.fingerprint,operationId:shipmentDataOperations.get(draft.operationKey),
+    fields:{name:warehouse.name,track:carrier.track,priceUsd:warehouse.priceUsd,amount:carrier.amount}});
+   const fresh=await request('/sync','POST');accept(fresh);
+   const updated=order(carrier.id);
+   if(updated?.name!==warehouse.name||updated?.priceUsd!==warehouse.priceUsd)throw Error('Aman Trans ещё не подтвердил новые данные.');
+   status.textContent='Обновление подтверждено Aman Trans.';
+  }catch(error){
+   status.textContent=error.message+' Проверь данные отправления перед повтором.';
+  }
+ };
  function connectedCard(){return '<b>Aman Trans</b><div class="muted">'+(loaded?snapshot.connected?'Подключён '+esc(snapshot.phoneHint||''):'Не подключён':'Доставки из Китая')+'</div><button type="button" class="btn full" onclick="openAmanTrans()">'+(snapshot.connected?'Отправления и доставка':'Подключить Aman Trans')+'</button><button type="button" class="btn full" onclick="openPurchaseWorkflowEditor()">Привязать этапы</button>';}
  function install(){document.getElementById('amanPurchases')?.remove?.();if(!document.getElementById('amanSettings')){const root=document.getElementById('settings');if(root){const box=document.createElement('div');box.id='amanSettings';box.className='item';root.append(box);}}paint();}
  function paint(){for(const el of document.querySelectorAll('[data-aman-shipment]')){const key=decodeURIComponent(el.dataset.amanShipment),items=typeof state!=='undefined'?(state.purchases||[]).filter(x=>String(x.shipmentId||x.id||'')===key):[];el.outerHTML=amanShipmentHtml(key,items);}const box=document.getElementById('amanSettings');if(box)box.innerHTML=connectedCard();}
  window.amanShipmentHtml=function(key,items){
-  const ids=[...new Set(items.map(x=>x.amantransOrderId).filter(Boolean).map(String))],accounts=[...new Set(items.map(x=>x.amantransAccountId).filter(Boolean).map(String))];
-  const row=ids.length===1&&accounts.length===1&&accounts[0]===snapshot.accountId?order(ids[0]):null;
-  const requested=items.some(x=>x.amantransAutoRequestedAt),error=sendErrors.get(key),label=sending.has(key)?'Синхронизирую трек…':error?error:row?row.statusLabel+(row.weight==null?'':' · '+number(row.weight)+' кг')+(row.totalKzt==null?'':' · '+money(row.totalKzt))+(snapshot.lastError?' · нет обновления':''):ids.length?'Связь требует проверки':requested?'Ожидает отправки':'';
-  return '<div class="aman-shipment" data-aman-shipment="'+enc(key)+'">'+(label?'<div class="muted">Aman Trans · '+esc(label)+'</div>':'')+'</div>';
+  const row=linkedShipment(items),requested=items.some(x=>x.amantransAutoRequestedAt),error=sendErrors.get(key);
+  const label=sending.has(key)?'Синхронизирую трек…':error?error:row?row.statusLabel+(snapshot.lastError?' · нет обновления':'')
+   :items.some(x=>x.amantransOrderId)?'Связь требует проверки':requested?'Ожидает отправки':'';
+  let details='';
+  if(row){
+   const {warehouse,trackMatches,ready,changed}=shipmentComparison(items,row);
+   const discrepancy=!trackMatches?'Проверь привязку: трек различается или повторяется в закупках.'
+    :row.amount!=null&&row.amount!==warehouse.amount?'Количество отличается: «Склад» '+number(warehouse.amount)+' шт., Aman Trans '+number(row.amount)+' шт.'
+    :changed?'Название или стоимость отличаются от «Склада».':'';
+   details='<details><summary class="muted">Данные Aman Trans</summary><div class="muted">Трек '+esc(row.track)
+    +' · '+number(row.amount)+' шт. · вес '+number(row.weight)+' кг</div>'
+    +'<div class="muted">Стоимость товара '+number(row.priceUsd)+' $ · тариф '+number(row.tariffUsd)+' $/кг</div>'
+    +'<div class="muted">Доставка '+number(row.deliveryUsd)+' $ · упаковка '+number(row.boxUsd)+' $ · курс '+number(row.exchangeRate)+'</div>'
+    +(row.createdAt?'<div class="muted">Создано '+when(row.createdAt)+'</div>':'')
+    +(discrepancy?'<div class="muted">'+esc(discrepancy)+'</div>':'')
+    +(ready&&changed?'<button type="button" class="btn" onclick="amanReviewShipmentData(\''+enc(key)+'\')">Сверить название и сумму</button>':'')
+    +'</details>';
+  }
+  return '<div class="aman-shipment" data-aman-shipment="'+enc(key)+'">'+(label?'<div class="muted">Aman Trans · '+esc(label)
+   +(row?' · '+esc(row.name||'Без названия')+' · доставка '+money(row.totalKzt):'')+'</div>':'')+details+'</div>';
  };
  window.openAmanTrans=async function(key=''){shipment=decodeURIComponent(String(key));search='';page=1;showHidden=false;showSheet('<h3>Aman Trans</h3><div class="muted">Читаю сохранённые отправления…</div>');await load();if(!snapshot.connected)return openAmanConnect();renderManager();};
  function renderManager(){
