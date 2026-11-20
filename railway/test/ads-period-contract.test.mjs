@@ -100,3 +100,51 @@ test('Kaspi advertising report keeps its total and skips the audit action', asyn
   await ctx.window.openReportAdsPanel('WB');
   assert.match(ctx.markup,/Разобрать/);
 });
+
+test('WB campaign rows keep key metrics and search-query access visible with details collapsed', () => {
+  const context = vm.createContext({
+    adsDashboardData: { day:'2026-11-20', campaigns:[
+      {id:41,name:'Длинное название кампании',status:9,rule:{dailyLimit:2000},metric:{complete:true,spend:250,revenue:1000,orders:3,clicks:15}},
+      {id:42,name:'Неполный период',status:11,metric:{complete:false,spend:90,revenue:300,orders:1,clicks:2}},
+    ], groups:[{id:'group',name:'Формы',campaignIds:[41]}]},
+    adsDashboardFilter:'all', adsDashboardQuery:'', adsMarket:'WB2', adsExpandedCards:new Set(),
+    wbAdOpenGroups:new Set(['WB2:group']),
+    adsSyncPeriodControls() {}, adsFreshnessHtml:()=>'', adsPeriodRange:()=>({title:'Сегодня'}),
+    adsIsoDateOffset:()=> '2026-11-20', adsAdvice:()=>({key:'wait'}), adsAutoStartLabel:()=> '',
+    adsMetricsForRow:row=>row.metric, esc:String,
+    localStorage:{setItem() {}},
+  });
+  const nodes=new Map();
+  context.document={getElementById(id){
+    if (!nodes.has(id)) nodes.set(id,{innerHTML:''});
+    return nodes.get(id);
+  }};
+  const sections = [
+    ['function adsStatusLabel(', 'let adsDashboardData='],
+    ['function wbAdsMoneyText(', 'function adsErrorText('],
+    ['function adsCardKey(', 'function adsOpenSchedule('],
+    ['function drawAdsDashboard(){', 'function adsAuditReasonLabel('],
+    ['function wbAdGroupMetric(', 'function toggleWbAdGroup('],
+  ];
+  for(const [from,to] of sections) vm.runInContext(html.slice(html.indexOf(from),html.indexOf(to,html.indexOf(from))),context);
+  context.drawAdsDashboard();
+  const groups=nodes.get('adsGroups').innerHTML;
+  const [head,details]=groups.split('<div id="adsDetails_41" class="ad-card-body">');
+  assert.match(head,/adsCard_41[^>]*collapsed/);
+  assert.match(head,/aria-expanded="false" aria-controls="adsDetails_41"/);
+  for(const label of ['Расход','Клики','Заказы','ДРР']) assert.ok(head.includes('<small>'+label+'</small>'));
+  assert.match(head,/aria-label="Запросы · корзины"[^>]*openWbQueryHistory\(41\)/);
+  assert.doesNotMatch(head,/Расписание|changeAdsCampaignState/);
+  assert.match(details,/Расписание/);
+  assert.match(details,/changeAdsCampaignState\(41,'pause'/);
+  assert.match(details,/<details><summary>Сравнение кампаний<\/summary>/);
+  assert.match(nodes.get('adsList').innerHTML,/<small>Расход<\/small><b>—<\/b>/);
+
+  const button={setAttribute(key,value){this[key]=value;}, 'aria-expanded':'false'}, caret={textContent:'⌄'};
+  let collapsed=true;
+  nodes.set('adsCard_41',{classList:{toggle(_class, value){collapsed=value;}},querySelector:s=>s==='.ad-card-head'?button:caret});
+  context.adsToggleCard(41);
+  assert.equal(collapsed,false);
+  assert.equal(button['aria-expanded'],'true');
+  assert.equal(caret.textContent,'⌃');
+});

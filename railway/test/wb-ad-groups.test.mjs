@@ -51,10 +51,10 @@ test('group endpoints require session and trusted Origin without external market
 });
 function extract(name){const start=html.indexOf('function '+name+'(');assert.ok(start>=0);return html.slice(start,html.indexOf('\nfunction ',start+10));}
 test('group renderer keeps individual campaign cards, escapes names, filters membership and marks partial totals',()=>{
- const ctx={Set,Map,Number,adsMarket:'WB',wbAdOpenGroups:new Set(['WB:g']),adsDashboardQuery:'',adsDashboardFilter:'all',esc:x=>String(x).replaceAll('<','&lt;').replaceAll('>','&gt;'),adsNumber:String,wbAdsMoneyText:x=>x+' ₸',adsMetricsForRow:r=>r.metric};vm.createContext(ctx);vm.runInContext(extract('wbAdGroupMetric')+'\n'+extract('wbAdGroupedCards'),ctx);
+ const ctx={Set,Map,Number,adsMarket:'WB',wbAdOpenGroups:new Set(['WB:g']),adsDashboardQuery:'',adsDashboardFilter:'all',esc:x=>String(x).replaceAll('<','&lt;').replaceAll('>','&gt;'),adsNumber:String,wbAdsMoneyText:x=>x+' ₸',adsMetricsForRow:r=>r.metric};vm.createContext(ctx);vm.runInContext(html.slice(html.indexOf('const wbAdCompactNumber'),html.indexOf('let adsDashboardData='))+'\n'+extract('wbAdGroupMetric')+'\n'+extract('wbAdGroupedCards'),ctx);
  const rows=[{row:{id:1,name:'Клик',paymentType:'cpc',metric:{complete:true,spend:100,cartAdds:2}}},{row:{id:2,name:'Показы',paymentType:'cpm',metric:{complete:true,spend:200,cartAdds:3}}},{row:{id:4,name:'Вне группы',metric:{complete:true,spend:10,cartAdds:0}}}];
  const cards=new Map([[1,'CARD1'],[2,'CARD2'],[4,'CARD4']]);let out=ctx.wbAdGroupedCards(rows,cards,[{id:'g',name:'<Лимон>',campaignIds:[1,2,3]}]);
- assert.match(out,/&lt;Лимон&gt;/);assert.doesNotMatch(out,/<Лимон>/);assert.match(out,/2 из 3 кампаний/);assert.match(out,/Расход 300 ₸/);for(const text of ['CARD1','CARD2','CARD4','Без группы','Цена корзины'])assert.ok(out.includes(text));
+ assert.match(out,/&lt;Лимон&gt;/);assert.doesNotMatch(out,/<Лимон>/);assert.match(out,/2 из 3 кампаний/);assert.match(out,/Расход · 300 ₸/);for(const text of ['CARD1','CARD2','CARD4','Без группы','Цена корзины'])assert.ok(out.includes(text));
  ctx.wbAdOpenGroups.clear();out=ctx.wbAdGroupedCards(rows,cards,[{id:'g',name:'Лимон',campaignIds:[1,2]}]);assert.match(out,/wb-ad-group-body" hidden/);
  rows[0].row.metric.complete=false;out=ctx.wbAdGroupedCards(rows,cards,[{id:'g',name:'Лимон',campaignIds:[1,2]}]);assert.match(out,/Статистика группы неполная/);
 });
