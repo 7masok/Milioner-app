@@ -8,8 +8,8 @@ const html = readFileSync(new URL('../../index.html',import.meta.url),'utf8');
 const linkSource = html.slice(html.indexOf('function kaspiAdLinkKey('),html.indexOf('function kaspiAdsMatchProduct('));
 const at = Date.parse('2026-11-18T15:00:00+05:00'), day = 86400000;
 class Clock extends Date { static now() { return at; } }
-const product = {id:'p',name:'Брелок',kaspi:'A'};
-const other = {id:'q',name:'Без рекламы',kaspi:'B'};
+const product = {id:'p',name:'Брелок',kaspi:'A',cost:120};
+const other = {id:'q',name:'Без рекламы',kaspi:'B',cost:120};
 function mount(batches, tests = {}, orders = [], connection = {}, extra = {}) {
   const handlers = {};
   const panel = {innerHTML:'',closest:()=>null,contains:node=>!!node,querySelectorAll:()=>[],
@@ -126,7 +126,7 @@ test('column buttons sort cached metrics both ways with unknown profit after sig
     {date:'2026-11-17',sku:'D',name:'Delta',amount:0,clicks:0,orders:0,bid:3},
   ])],{},[],{},{
     kaspiAdsMatchProduct:line=>({id:line.sku,name:line.name}),
-    prod:id=>({id,name:id,kaspi:id}),
+    prod:id=>({id,name:id,kaspi:id,cost:120}),
     window:{loadKaspiCampaignFinance:async()=>{
       financeReads++;
       return {buyouts:[
@@ -418,7 +418,7 @@ test('weekly price uses half the unit cost with a 100 ₸ minimum and rejects a 
     {cost:500,current:945,price:null,profit:250},
   ];
   for (const {cost,current,price,profit} of cases) {
-    const item={...product,kaspiPrice:current};
+    const item={...product,kaspiPrice:current,cost};
     let writes=0;
     const panel=mount(days.map(date=>batch(19,1,[{
       date,sku:'A',amount:10,views:90,clicks:8,orders:0,bid:3,score:8,
@@ -429,7 +429,7 @@ test('weekly price uses half the unit cost with a 100 ₸ minimum and rejects a 
       window:{
         kaspiAdvertisingPrices:{load:async()=>({rows:[]}),save:async()=>{writes++;}},
         loadKaspiCampaignFinance:async()=>({returns:[],products:[
-          {productId:'p',qty:2,revenue:2000,cost:cost*2,fees:400,delivery:200,ads:70,profit:1530-cost*2},
+          {productId:'p',qty:2,revenue:2000,cost:200,fees:400,delivery:200,ads:70,profit:1330},
         ]}),
       },
     });
@@ -448,8 +448,40 @@ test('weekly price uses half the unit cost with a 100 ₸ minimum and rejects a 
     await panel.submit({dataset:{kaPriceForm:key},values:{price:String(price-1)},querySelector:()=>status});
     assert.ok(status.textContent.includes(price+' ₸'));
     assert.ok(status.textContent.includes(profit+' ₸'));
+    item.cost=0;
+    await panel.submit({dataset:{kaPriceForm:key},values:{price:String(price)},querySelector:()=>status});
+    assert.match(status.textContent,/себестоимость.*равна нулю/);
     assert.equal(writes,0);
   }
+});
+
+test('missing warehouse cost lights up just the name, explains the block and prevents a lower price',async()=>{
+  const days=Array.from({length:7},(_,i)=>'2026-11-'+(11+i));
+  const item={...product,kaspiPrice:990,cost:0};
+  let writes=0;
+  const panel=mount(days.map(date=>batch(19,1,[{date,sku:'A',amount:10,views:90,clicks:8,orders:0,bid:3}],date)),{},[],{confirmedDays:days},{
+    prod:id=>id==='p'?item:null,
+    productAvailableStock:()=>20,
+    FormData:class {constructor(form){this.values=form.values}get(key){return this.values[key]}},
+    window:{
+      kaspiAdvertisingPrices:{load:async()=>({rows:[]}),save:async()=>{writes++;}},
+      loadKaspiCampaignFinance:async()=>({returns:[],products:[
+        {productId:'p',qty:2,revenue:2000,cost:240,fees:400,delivery:200,ads:70,profit:1290},
+      ]}),
+    },
+  });
+  panel.click({kaMode:'tests'});
+  await new Promise(resolve=>setImmediate(resolve));
+  const key=JSON.stringify(['42:19','A','p',product.name]);
+  assert.match(panel.innerHTML,/class="kaw-name kaw-cost-error"><b>Брелок<\/b><\/span>/);
+  assert.doesNotMatch(panel.innerHTML,/>Тест недели</);
+  const detail=panel.expand({kaProduct:key});
+  assert.match(detail,/равна нулю или не указана/);
+  assert.doesNotMatch(detail,/data-ka-open-test/);
+  const status={};
+  await panel.submit({dataset:{kaPriceForm:key},values:{price:'590'},querySelector:()=>status});
+  assert.match(status.textContent,/снижение цены для теста заблокировано/);
+  assert.equal(writes,0);
 });
 
 test('bid history excludes a confirmed switch day and calculates daily views and the actual CPC',()=>{
