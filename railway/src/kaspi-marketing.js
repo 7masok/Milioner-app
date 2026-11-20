@@ -375,6 +375,8 @@ export function createKaspiMarketingService({
       defaultFrom: localDay(now() - 4 * DAY), yesterday: localDay(now() - DAY),
       backfill: data?.backfill || null, coverage: coverageSummary(data, now()),
       confirmedDays: Object.keys(data?.confirmedDays || {}).sort(),
+      bidChanges: (data?.bidChanges || []).filter(change => change.accountId === String(data?.account?.id)
+        && change.at >= now() - 120 * DAY),
     };
   }
 
@@ -555,10 +557,16 @@ export function createKaspiMarketingService({
         }
         throw error;
       }
-      await write(data);
       const product = Array.isArray(result) ? result.find(row => String(row?.sku) === sku) : null;
-      if (!product || Number(product.bid) !== bid) throw fail('Kaspi не подтвердил новую ставку. Проверьте её в кабинете перед повтором.', 502);
+      if (!product || Number(product.bid) !== bid) {
+        await write(data);
+        throw fail('Kaspi не подтвердил новую ставку. Проверьте её в кабинете перед повтором.', 502);
+      }
+      const at = now();
+      data.bidChanges = [...(data.bidChanges || []).filter(change => change.at >= at - 120 * DAY),
+        {accountId,campaignId,sku,bid,at}].slice(-5000);
       productStatsCache.clear();
+      await write(data);
       return {ok:true,accountId,campaignId,sku,bid};
     }),
     connect: input => locked(async () => {
@@ -586,7 +594,7 @@ export function createKaspiMarketingService({
     }),
     disconnect: () => locked(async () => {
       const data = await read();
-      await write({ time: data?.time });
+      await write({ time: data?.time, bidChanges: data?.bidChanges || [] });
       return view(null);
     }),
     queueBackfill: input => locked(async () => {
