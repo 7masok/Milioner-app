@@ -270,29 +270,10 @@ function monotonicDailyMetric(freshValue, priorValue, previousIsToday) {
   return previousIsToday ? Math.max(fresh, Math.max(0, Number(priorValue) || 0)) : fresh;
 }
 
-function collectNmIds(value, output = new Set(), depth = 0) {
-  if (value == null || depth > 8) return output;
-  if (Array.isArray(value)) {
-    for (const item of value) collectNmIds(item, output, depth + 1);
-    return output;
-  }
-  if (typeof value !== 'object') return output;
-  for (const [key, item] of Object.entries(value)) {
-    if (/^(nm_?id|nmID)$/i.test(key)) {
-      const id = Number(item);
-      if (id > 0) output.add(id);
-      continue;
-    }
-    if (/^(nms|nm_?ids)$/i.test(key) && Array.isArray(item)) {
-      for (const candidate of item) {
-        const id = Number(typeof candidate === 'object' ? candidate?.nmId ?? candidate?.nmID ?? candidate?.nm_id : candidate);
-        if (id > 0) output.add(id);
-      }
-      continue;
-    }
-    collectNmIds(item, output, depth + 1);
-  }
-  return output;
+function campaignArticles(row) {
+  if (!Array.isArray(row?.nm_settings)) return null;
+  const ids = row.nm_settings.map(item => Number(item?.nm_id));
+  return ids.every(id => Number.isSafeInteger(id) && id > 0) ? [...new Set(ids)] : null;
 }
 
 async function cardCatalog(marketName, token) {
@@ -332,13 +313,34 @@ async function cardCatalog(marketName, token) {
 
 function campaignName(row, statRow, cards) {
   // Membership comes only from campaign settings, never attributed sales statistics.
-  const allNmIds = [...collectNmIds(row?.nm_settings || [])];
+  const allNmIds = campaignArticles(row) || [];
   const matched = allNmIds.map(id => cards.get(id)).filter(Boolean);
   const titles = [...new Set(matched.map(card => card.title).filter(Boolean))];
   const vendorCodes = [...new Set(matched.map(card => card.vendorCode).filter(Boolean))];
   const apiName = campaignApiName(row);
   const title = apiName || ('Кампания ' + campaignId(row));
-  return { title, apiName, nmIds: allNmIds, productTitles: titles, vendorCodes };
+  return { title, apiName, nmIds: allNmIds, productTitles: titles, vendorCodes,
+    vendorCodesByNm: Object.fromEntries(matched.filter(card => card.vendorCode).map(card => [card.nmId, card.vendorCode])) };
+}
+
+function fetchedCampaignMembership(row, cards) {
+  const label = campaignName(row, null, cards);
+  return {membershipSource:'wb-settings-v1', nmIds:label.nmIds, productTitles:label.productTitles,
+    vendorCodes:label.vendorCodes, vendorCodesByNm:label.vendorCodesByNm};
+}
+
+function sameCampaignArticles(a,b) {
+  return a && b && a.length===b.length && a.every(id=>b.includes(id));
+}
+
+async function currentCampaignRow(id, token) {
+  const rows=campaignRows(await request(ADVERT_API+'/api/advert/v2/adverts?ids='+id,token))
+    .filter(row=>campaignId(row)===id);
+  const articles=campaignArticles(rows[0]);
+  if (!articles || !rows.every(row=>sameCampaignArticles(articles,campaignArticles(row)))) {
+    throw Object.assign(new Error('WB не подтвердил актуальный состав этой кампании.'),{status:409});
+  }
+  return rows[0];
 }
 
 async function fetchCampaigns(marketName, previous) {
@@ -346,12 +348,29 @@ async function fetchCampaigns(marketName, previous) {
   const token = await tokenFor(marketName);
   if (!token) throw new Error((marketName === 'WB2' ? 'WB_TOKEN_2' : 'WB_TOKEN') + ' не настроен');
 
+  const membershipReadAt=Date.now();
   const previousRows = Array.isArray(previous?.campaigns) ? previous.campaigns : [];
   const previousById = new Map(previousRows.map(row => [Number(row.id), row]));
   // Always fetch the full manageable set; name recovery must not hide other campaigns.
-  const list = campaignRows(await request(
+  const received = campaignRows(await request(
     ADVERT_API + '/api/advert/v2/adverts?statuses=4,9,11', token,
   )).filter(row => MANAGEABLE_CAMPAIGN_STATUSES.has(Number(row?.status ?? row?.statusId ?? 0)));
+  const byCampaign = new Map();
+  for (const row of received) {
+    const id=campaignId(row);
+    if (!id) continue;
+    if (!byCampaign.has(id)) byCampaign.set(id,[]);
+    byCampaign.get(id).push(row);
+  }
+  const list=[];
+  for (const [id,rows] of byCampaign) {
+    const items=campaignArticles(rows[0]);
+    if (rows.length===1 || rows.every(row=>sameCampaignArticles(items,campaignArticles(row)))) list.push(rows[0]);
+    else {
+      try { list.push(await currentCampaignRow(id,token)); }
+      catch { list.push({...rows[0],nm_settings:null}); }
+    }
+  }
   const unresolvedNames = list.filter(row => !campaignApiName(row));
   if (unresolvedNames.length) {
     console.warn('WB ads campaign names missing', marketName, unresolvedNames.map(row => ({
@@ -429,28 +448,12 @@ async function fetchCampaigns(marketName, previous) {
       periodMetrics: hasFreshStats
         ? campaignPeriodMetrics(statRow, historyFrom, historyTo)
         : (Array.isArray(prior?.periodMetrics) ? prior.periodMetrics : []),
-      membershipSource: 'wb-settings-v1',
-      nmIds: label.nmIds,
-      productTitles: label.productTitles,
-      vendorCodes: label.vendorCodes,
+      membershipSource: 'wb-settings-v1', membershipReadAt,
+      nmIds:label.nmIds, productTitles:label.productTitles, vendorCodes:label.vendorCodes,
+      vendorCodesByNm:label.vendorCodesByNm,
     };
   });
-  const unique = new Map();
-  for (const row of campaigns) {
-    const existing = unique.get(row.id);
-    if (!existing) {
-      unique.set(row.id, row);
-      continue;
-    }
-    unique.set(row.id, {
-      ...existing,
-      ...row,
-      nmIds: [...new Set([...(existing.nmIds || []), ...(row.nmIds || [])])],
-      productTitles: [...new Set([...(existing.productTitles || []), ...(row.productTitles || [])])],
-      vendorCodes: [...new Set([...(existing.vendorCodes || []), ...(row.vendorCodes || [])])],
-    });
-  }
-  return { campaigns: [...unique.values()], statsError, historyFrom, historyTo };
+  return { campaigns, statsError, historyFrom, historyTo };
 }
 
 async function inventoryFor(marketName, campaigns) {
@@ -521,10 +524,21 @@ async function saveSnapshot(marketName, value) {
     `INSERT INTO wb_ads_snapshots(market,payload,updated_at,last_error,next_attempt_at)
      VALUES($1,$2,$3,'',0)
      ON CONFLICT(market) DO UPDATE
-     SET payload=EXCLUDED.payload,updated_at=EXCLUDED.updated_at,last_error='',next_attempt_at=0`,
+     SET payload=jsonb_set(EXCLUDED.payload,'{campaigns}',COALESCE((
+       SELECT jsonb_agg(CASE WHEN COALESCE((old.item->>'membershipReadAt')::bigint,0)>COALESCE((fresh.item->>'membershipReadAt')::bigint,0)
+         THEN fresh.item || jsonb_build_object('nmIds',old.item->'nmIds','vendorCodes',old.item->'vendorCodes',
+           'productTitles',old.item->'productTitles','vendorCodesByNm',old.item->'vendorCodesByNm',
+           'membershipReadAt',old.item->'membershipReadAt','membershipSource',old.item->'membershipSource')
+         ELSE fresh.item END ORDER BY fresh.ordinal)
+       FROM jsonb_array_elements(EXCLUDED.payload->'campaigns') WITH ORDINALITY AS fresh(item,ordinal)
+       LEFT JOIN LATERAL (
+         SELECT item FROM jsonb_array_elements(COALESCE(wb_ads_snapshots.payload->'campaigns','[]'::jsonb)) AS prior(item)
+         WHERE item->>'id'=fresh.item->>'id' LIMIT 1
+       ) old ON TRUE),'[]'::jsonb)),
+       updated_at=EXCLUDED.updated_at,last_error='',next_attempt_at=0`,
     [marketName, JSON.stringify(value), now],
   );
-  return { ...value, updatedAt: now, lastError: '', nextAttemptAt: 0 };
+  return storedSnapshot(marketName);
 }
 
 async function nameOverrides(marketName) {
@@ -642,6 +656,38 @@ async function saveWbCampaignName(marketName, id, value) {
   );
   return {ok:true,name};
 }
+
+async function refreshWbCampaignMembership(marketName,id) {
+  if (!allowed(marketName)||!Number.isSafeInteger(id)||id<=0) {
+    throw Object.assign(new Error('Неверная кампания WB.'),{status:400});
+  }
+  const snapshot=await storedSnapshot(marketName);
+  if (!snapshot?.campaigns.some(row=>Number(row.id)===id)) {
+    throw Object.assign(new Error('Кампания не найдена в этом кабинете WB.'),{status:409});
+  }
+  const token=await tokenFor(marketName);
+  if(!token)throw Object.assign(new Error('Подключите рекламу этого кабинета WB.'),{status:409});
+  const membershipReadAt=Date.now();
+  const row=await currentCampaignRow(id,token);
+  let cards;
+  try { cards=await cardCatalog(marketName,token); }
+  catch { cards=new Map(); }
+  const membership={...fetchedCampaignMembership(row,cards),membershipReadAt};
+  await pool.query(
+    `UPDATE wb_ads_snapshots SET payload=jsonb_set(payload,'{campaigns}',
+      COALESCE((SELECT jsonb_agg(CASE WHEN (item->>'id')::bigint=$2
+        AND COALESCE((item->>'membershipReadAt')::bigint,0)<=$4
+        THEN item || $3::jsonb ELSE item END ORDER BY ordinal)
+      FROM jsonb_array_elements(payload->'campaigns') WITH ORDINALITY AS listed(item,ordinal)),'[]'::jsonb))
+     WHERE market=$1`,
+    [marketName,id,JSON.stringify(membership),membershipReadAt],
+  );
+  return {ok:true,count:membership.nmIds.length};
+}
+
+wbAdsRouter.post('/promotion/campaign-products/:market/:campaignId', requireTrustedOrigin, asyncRoute(async (req,res) => {
+  res.json(await refreshWbCampaignMembership(market(req.params.market),Number(req.params.campaignId)));
+}));
 
 wbAdsRouter.put('/promotion/campaign-name/:market/:campaignId', requireTrustedOrigin, requireWritesEnabled, asyncRoute(async (req,res) => {
   res.json(await saveWbCampaignName(market(req.params.market),Number(req.params.campaignId),req.body?.name));

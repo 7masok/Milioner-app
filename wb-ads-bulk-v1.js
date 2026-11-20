@@ -84,6 +84,20 @@ function openCampaignName(row) {
   finally{delete form.dataset.saving;button.disabled=false;}
  };
 }
+async function refreshCampaignProducts(row,button) {
+ const selected=adsMarket;
+ button.disabled=true;
+ button.textContent='Сверяю…';
+ try {
+  await adsApi('/api/promotion/campaign-products/'+selected+'/'+Number(row.id),{method:'POST'});
+  if(selected===adsMarket)queueAdsRender();
+ } catch(error) {
+  alert(adsErrorText(error.message));
+ } finally {
+  button.disabled=false;
+  button.textContent='Обновить состав';
+ }
+}
 const draw = drawAdsDashboard;
 drawAdsDashboard = function(...args) {
  draw(...args);
@@ -113,7 +127,13 @@ drawAdsDashboard = function(...args) {
   button.className='btn';
   button.textContent=['default','missing'].includes(row.nameSource)?'Задать своё имя':'Изменить имя';
   button.addEventListener('click',()=>openCampaignName(row));
-  actions.append(button);
+  const refresh=document.createElement('button');
+  refresh.type='button';
+  refresh.className='btn';
+  refresh.textContent='Обновить состав';
+  refresh.setAttribute('aria-label','Обновить состав кампании из WB');
+  refresh.addEventListener('click',()=>refreshCampaignProducts(row,refresh));
+  actions.append(button,refresh);
  }
 };
 })();

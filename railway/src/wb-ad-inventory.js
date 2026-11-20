@@ -96,10 +96,23 @@ export function campaignInventory(state, orders, market, campaigns, now = Date.n
   return new Map(campaigns.map(c=>{
     const codesWanted=list(c.vendorCodes).map(String).filter(Boolean);
     const nms=[...new Set(list(c.nmIds).map(String).filter(nm=>/^[1-9]\d*$/.test(nm)))];
-    const matches=products.filter(p=>nms.includes(article(p)) || ((!article(p)||!nms.length)&&codes(p,field).some(x=>codesWanted.includes(x))));
+    const codeByArticle=c.vendorCodesByNm;
+    const resolved=new Map();
+    if (codeByArticle && nms.length) {
+      for (const nm of nms) {
+        const exact=products.filter(p=>article(p)===nm);
+        const code=codeByArticle[nm];
+        const fallback=code ? products.filter(p=>!article(p)&&codes(p,field).includes(code)) : [];
+        resolved.set(nm,exact.length?exact:fallback.length===1?fallback:[]);
+      }
+    }
+    const matches=resolved.size ? [...new Set([...resolved.values()].flat())]
+      : products.filter(p=>nms.includes(article(p)) || ((!article(p)||!nms.length)&&codes(p,field).some(x=>codesWanted.includes(x))));
     const completeCodes=codesWanted.length>0&&codesWanted.every(code=>matches.some(p=>codes(p,field).includes(code)));
     const completeNms=nms.length>0&&nms.every(nm=>matches.some(p=>article(p)===nm));
-    const localKnown=products.length>0&&((completeCodes&&nms.length<=codesWanted.length)||completeNms)&&matches.every(p=>stockKnown(p));
+    const complete=resolved.size ? [...resolved.values()].every(items=>items.length)
+      : (completeCodes&&nms.length<=codesWanted.length)||completeNms;
+    const localKnown=products.length>0&&complete&&matches.every(p=>stockKnown(p));
     const fboByNm=new Map(nms.map(nm=>[nm,fboQuantity(nm)]));
     const fboKnown=nms.length>0&&[...fboByNm.values()].every(qty=>qty!==null);
     const fboAvailable=[...fboByNm.values()].reduce((sum,qty)=>sum+(qty??0),0);
