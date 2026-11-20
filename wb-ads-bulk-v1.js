@@ -6,6 +6,8 @@ style.textContent = `
 .wb-ad-bulk-list{max-height:40dvh;overflow:auto;margin-block:6px}
 .wb-ad-bulk-list label{display:flex;align-items:center;gap:9px;padding:6px 4px;border-top:1px solid var(--line);font-size:13px;overflow-wrap:anywhere}
 .wb-ad-bulk-list input{flex:none;width:18px;height:18px}
+.wb-ad-bulk-actions{margin:6px 0}
+.wb-ad-bulk-actions>button{min-height:36px;padding:5px 9px;font-size:12px}
 `;
 document.head.append(style);
 
@@ -55,18 +57,63 @@ window.saveWbAdsBulkSettings=async function(form){
  finally{delete form.dataset.saving;button.disabled=false;}
 };
 
+function openCampaignName(row) {
+ const selected=adsMarket;
+ showSheet(`<h3>Название кампании в «Складе»</h3>
+  <div class="muted">Текущее название · ${esc(row.name||'—')}</div>
+  <form onsubmit="event.preventDefault();" data-wb-campaign-name>
+   <div class="field"><label>Твоё название<input type="text" name="name" required maxlength="100" autocomplete="off"></label></div>
+   <button class="btn dark" type="submit">Сохранить</button>
+   <div role="status" data-name-status></div>
+  </form>`);
+ const form=document.querySelector('[data-wb-campaign-name]');
+ if(!form)return;
+ form.onsubmit=async event=>{
+  event.preventDefault();
+  if(form.dataset.saving||selected!==adsMarket)return;
+  const name=new FormData(form).get('name').trim(),status=form.querySelector('[data-name-status]');
+  if(!name){status.textContent='Укажи название.';return;}
+  const button=form.querySelector('button[type=submit]');
+  button.disabled=true;
+  form.dataset.saving='1';
+  try{
+   await adsApi('/api/promotion/campaign-name/'+selected+'/'+Number(row.id),{method:'PUT',body:JSON.stringify({name})});
+   if(form.isConnected)closeModal();
+   if(selected===adsMarket)queueAdsRender();
+  }catch(error){status.textContent=adsErrorText(error.message);}
+  finally{delete form.dataset.saving;button.disabled=false;}
+ };
+}
 const draw = drawAdsDashboard;
 drawAdsDashboard = function(...args) {
- const filters = document.getElementById('adsFilters');
- const scroll = filters.scrollLeft;
  draw(...args);
- if (adsMarket==='Kaspi'||!adsDashboardData?.campaigns?.length) return;
- const button = document.createElement('button');
- button.type = 'button';
- button.className = 'btn';
- button.textContent = 'Лимит и время';
- button.addEventListener('click',window.openWbAdsBulkSettings);
- filters.prepend(button);
- filters.scrollLeft = scroll;
+ const filters=document.getElementById('adsFilters');
+ let controls=document.getElementById('wbAdBulkActions');
+ if(!controls){
+  controls=document.createElement('div');
+  controls.id='wbAdBulkActions';
+  controls.className='wb-ad-bulk-actions';
+  const button=document.createElement('button');
+  button.type='button';
+  button.className='btn dark';
+  button.textContent='Выбрать кампании';
+  button.addEventListener('click',window.openWbAdsBulkSettings);
+  controls.append(button);
+  filters.before(controls);
+ }
+ const campaigns=adsDashboardData?.campaigns||[];
+ controls.hidden=adsMarket==='Kaspi'||!campaigns.length;
+ if(controls.hidden)return;
+ for(const row of campaigns){
+  const detail=document.getElementById('adsDetails_'+Number(row.id));
+  const actions=detail?.querySelector('.ad-actions');
+  if(!actions)continue;
+  const button=document.createElement('button');
+  button.type='button';
+  button.className='btn';
+  button.textContent=['default','missing'].includes(row.nameSource)?'Задать своё имя':'Изменить имя';
+  button.addEventListener('click',()=>openCampaignName(row));
+  actions.append(button);
+ }
 };
 })();
