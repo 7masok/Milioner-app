@@ -96,3 +96,14 @@ test('an exact different WB article cannot pick up FBO through a conflicting sel
  assert.equal(r.products.length,0);
  assert.ok(stockBlock(r));
 });
+
+test('an exact active article excludes a second warehouse row matched only by seller code',()=>{
+ const products=[
+  product('black',78,{wbIdentity:{nmId:123}}),
+  product('gray',82,{wbAliases:['black']}),
+ ];
+ const campaigns=[{id:42095728,nmIds:[123],vendorCodes:['black'],vendorCodesByNm:{123:'black'}}];
+ const stock=campaignInventory({products},[],'WB',campaigns,now).get(42095728);
+ assert.equal(stock.available,78);
+ assert.deepEqual(stock.products.map(row=>row.productId),['black']);
+});
