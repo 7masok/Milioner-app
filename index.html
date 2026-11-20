@@ -134,6 +134,41 @@ details[open]>.report-disclosure-summary .arrow{transform:rotate(180deg)}
 .product-store-tabs{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));border:1px solid var(--line,#e5e7eb);border-radius:16px;overflow:hidden;background:#fff;margin:0 0 10px}.product-store-tabs button{min-width:0;border:0;border-right:1px solid var(--line,#e5e7eb);border-bottom:1px solid var(--line,#e5e7eb);padding:12px 3px;background:transparent;color:inherit;font:inherit;font-size:13px;cursor:pointer}.product-store-tabs button:nth-child(3n){border-right:0}.product-store-tabs button:nth-last-child(-n+3){border-bottom:0}.product-store-link-mode{display:flex;gap:6px;margin:0 0 10px}.product-store-link-mode[hidden]{display:none}.product-store-link-mode button{flex:1;font-size:12px;padding:9px 5px}.product-store-link-mode button.active{background:#f1e8ff;color:#6b21a8;border-color:#d8b4fe}.product-store-tabs button.active{background:#f1e8ff;color:#6b21a8;font-weight:700}.product-store-links{display:flex;flex-wrap:wrap;gap:3px 6px;margin:4px 0;font-size:10px;line-height:1.3;color:#5b6472}.product-store-links span{max-width:100%;overflow-wrap:anywhere}.product-store-links .selected{color:#6b21a8;font-weight:700}
 .wb-ad-group{border:1px solid var(--line);border-radius:18px;padding:12px;background:#fff;margin:10px 0}.wb-ad-group-toggle{border:0;background:none;text-align:left;padding:3px 0;min-width:0;color:inherit}.wb-ad-group-toggle b{display:block;font-size:18px;overflow-wrap:anywhere}.wb-ad-group-toggle span{display:block;margin-top:4px;font-size:12px}.wb-ad-group-body[hidden]{display:none}.wb-ad-group-body>.ad-card{margin:10px 0}.wb-ad-compare{overflow-x:auto}.wb-ad-compare-row{display:grid;grid-template-columns:minmax(100px,1.5fr) repeat(4,minmax(65px,1fr));gap:6px;align-items:center;padding:8px 0;border-bottom:1px solid var(--line);font-size:11px}.wb-ad-compare-row>span:first-child{overflow-wrap:anywhere}.wb-ad-compare-row small{display:block;color:var(--muted);margin-top:3px}
 .ad-summary-details{margin:12px 0}.ad-summary-details>summary{cursor:pointer;padding:12px 0;color:var(--muted)}#adsGroups:empty{display:none}
+#adsWbPanel #adsPeriod,#adsWbPanel .ad-filters{display:flex;flex-wrap:nowrap;gap:5px;overflow-x:auto;margin:6px 0;padding-block:2px;scrollbar-width:thin}
+#adsWbPanel :is(#adsPeriod,.ad-filters)>button{flex:none;min-height:34px;padding:4px 8px;font-size:11px;white-space:nowrap}
+#adsWbPanel .ad-toolbar{align-items:end;gap:8px;margin:6px 0}
+#adsWbPanel .ad-toolbar label{min-width:0;font-size:11px}
+#adsWbPanel .ad-toolbar label:last-child{flex:0 0 83px}
+#adsWbPanel .ad-toolbar input{width:100%;min-height:36px;margin:0;padding:5px 7px;font-size:12px}
+#adsWbPanel .ad-summary-details{margin:4px 0}
+#adsWbPanel .ad-summary-details>summary{padding:5px 0;font-size:12px}
+#adsWbPanel .ad-kpis{gap:6px;margin:4px 0;padding:8px;border-radius:8px}
+#adsWbPanel .ad-kpi span,#adsWbPanel .ad-updated{font-size:10px}
+#adsWbPanel .ad-kpi strong{font-size:13px}
+#adsWbPanel .ad-card,#adsWbPanel .wb-ad-group{padding:0;margin:4px 0;border-radius:8px}
+.wb-ad-line{display:flex;align-items:stretch;min-width:0}
+#adsWbPanel .ad-card-head,.wb-ad-group-toggle{display:grid;align-items:center;grid-template-columns:minmax(0,1.45fr) repeat(4,minmax(0,1fr)) 10px;gap:3px;flex:1;min-width:0;min-height:44px;padding:4px 5px;color:inherit;background:none;border:0;text-align:left;font:inherit}
+.wb-ad-name{display:block;min-width:0;line-height:1.1}
+.wb-ad-name>b{display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;overflow-wrap:anywhere;font-size:11px}
+.ad-card:not(.collapsed) .wb-ad-name>b,.wb-ad-group-toggle[aria-expanded=true] .wb-ad-name>b{display:block}
+.wb-ad-name .wb-ad-status{display:block;color:var(--muted);font-size:9px;margin-top:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.wb-ad-status[data-status="9"]{color:#176443}
+.wb-ad-status[data-status="11"]{color:#894500}
+.wb-ad-metric{display:grid;gap:1px;min-width:0;min-height:29px;align-content:center;text-align:center;background:#f3f4f6;border-radius:4px;padding:2px;color:#27384a;font-variant-numeric:tabular-nums;line-height:1.15}
+.wb-ad-metric>small,.wb-ad-metric>b{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.wb-ad-metric>small{font-size:9px}
+.wb-ad-metric>b{font-size:11px}
+#adsWbPanel .ad-chevron{width:auto;font-size:12px}
+.wb-ad-line>.wb-ad-shortcut{flex:0 0 auto;min-width:33px;margin:0;padding:0 4px;color:#263e4d;background:none;border:0;border-left:1px solid var(--line);font-size:10px}
+.wb-ad-shortcut:focus-visible,.wb-ad-group-toggle:focus-visible{outline:2px solid var(--ad-accent);outline-offset:-2px}
+#adsWbPanel .ad-card .ad-card-body,#adsWbPanel .wb-ad-group-body{margin:0;padding:6px 8px}
+#adsWbPanel .wb-ad-group-toggle{grid-template-columns:minmax(0,2fr) repeat(2,minmax(0,1fr)) 10px}
+#adsWbPanel .wb-ad-group-body{border-top:1px solid var(--line)}
+#adsWbPanel .wb-ad-group-body>.ad-card{margin:4px 0}
+#adsWbPanel .wb-ad-group-body>details>summary{padding:4px 0;color:var(--muted);font-size:11px;cursor:pointer}
+#adsWbPanel .wb-ad-group-body .btn{min-height:32px;padding:4px 7px;font-size:11px}
+@media (max-width:360px){#adsWbPanel .ad-card-head{gap:2px;padding-inline:3px}.wb-ad-line>.wb-ad-shortcut{min-width:29px;padding-inline:2px}}
+
 .movement-balance{font-size:10px;line-height:1.3;margin-top:4px;white-space:normal;min-width:66px}.movement-stockout{color:#a40000;font-weight:700}
 .warehouse-scope-switch{display:flex;gap:4px;padding:4px;background:#edf0f2;border-radius:14px;margin:0 0 10px}.warehouse-scope-switch[hidden]{display:none}.warehouse-scope-switch button{flex:1;border:0;border-radius:10px;padding:10px 8px;font:inherit;font-size:13px;color:var(--muted);background:transparent;cursor:pointer}.warehouse-scope-switch button.active{background:#fff;color:#17181a;font-weight:750;box-shadow:0 1px 4px #0001}.warehouse-scope-switch button[data-scope="inferno"].active{color:#a33516;background:#fff3ec}
 .store-multi-tabs{display:flex!important;flex-wrap:wrap}.store-multi-tabs>button{flex:1;min-width:56px}.store-multi-tabs>button.active{background:#f1e8ff;color:#6b21a8;font-weight:700}
@@ -209,7 +244,7 @@ details[open]>.report-disclosure-summary .arrow{transform:rotate(180deg)}
   </div>
   <div id="kaspiCampaignWorkbench" class="kaw"></div>
 </div>
-<div id="adsWbPanel"><div id="adsPeriod" class="period"><button class="chip active" data-ads-period="today" onclick="adsSetPeriod('today')">Сегодня</button><button class="chip" data-ads-period="yesterday" onclick="adsSetPeriod('yesterday')">Вчера</button><button class="chip" data-ads-period="7" onclick="adsSetPeriod('7')">7 дней</button><button class="chip" data-ads-period="30" onclick="adsSetPeriod('30')">30 дней</button><button class="chip" data-ads-period="custom" onclick="adsSetPeriod('custom')">Свой период</button></div><div id="adsCustomRange" class="two" style="display:none;margin:8px 0 12px"><div class="field"><label>Дата с</label><input id="adsDateFrom" type="date" onchange="adsSetCustomDate('from',this.value)"></div><div class="field"><label>Дата по</label><input id="adsDateTo" type="date" onchange="adsSetCustomDate('to',this.value)"></div></div><div id="adsGroupToolbar" class="ad-filters"><button type="button" class="btn dark" onclick="openWbAdGroupEditor()">＋ Группа рекламы</button></div><div id="adsFreshness"></div><div id="adsGroups"></div><details class="ad-summary-details" open><summary>Общая сводка магазина</summary><div id="adsSummary">Загрузка…</div></details><div class="ad-toolbar"><label>Найти кампанию<input type="search" placeholder="Название или артикул" oninput="adsSearch(this.value)"></label><label>Цель ДРР, %<input type="number" min="1" max="100" id="adsTargetInput" value="15" onchange="adsTarget(this.value)"></label></div><div id="adsFilters" class="ad-filters"></div><div id="adsList"></div></div></section>
+<div id="adsWbPanel"><div id="adsPeriod" class="period"><button class="chip active" data-ads-period="today" onclick="adsSetPeriod('today')">Сегодня</button><button class="chip" data-ads-period="yesterday" onclick="adsSetPeriod('yesterday')">Вчера</button><button class="chip" data-ads-period="7" onclick="adsSetPeriod('7')">7 дней</button><button class="chip" data-ads-period="30" onclick="adsSetPeriod('30')">30 дней</button><button class="chip" data-ads-period="custom" onclick="adsSetPeriod('custom')">Свой период</button></div><div id="adsCustomRange" class="two" style="display:none;margin:8px 0 12px"><div class="field"><label>Дата с</label><input id="adsDateFrom" type="date" onchange="adsSetCustomDate('from',this.value)"></div><div class="field"><label>Дата по</label><input id="adsDateTo" type="date" onchange="adsSetCustomDate('to',this.value)"></div></div><div id="adsFreshness"></div><details class="ad-summary-details"><summary>Общая сводка магазина</summary><div id="adsSummary">Загрузка…</div></details><div class="ad-toolbar"><label>Найти кампанию<input type="search" placeholder="Название или артикул" oninput="adsSearch(this.value)"></label><label>Цель ДРР, %<input type="number" min="1" max="100" id="adsTargetInput" value="15" onchange="adsTarget(this.value)"></label></div><div id="adsFilters" class="ad-filters"></div><div id="adsGroups"></div><div id="adsList"></div></div></section>
 <section id="settings" class="view">
   <div class="settings-title"><div><h2>Настройки</h2><p>Магазины, резервные копии и параметры склада</p></div></div>
 
@@ -747,7 +782,12 @@ async function updateKaspiMarketing(action,button){
 }
 function adsStatusLabel(status){return status===9?'Активна':status===11?'На паузе':status===4?'Готова к запуску':status===7?'Завершена':status===8?'Отменена':'Статус '+(status||'—')}
 function adsProductLine(row){const titles=Array.isArray(row.productTitles)?row.productTitles.filter(Boolean):[],codes=Array.isArray(row.vendorCodes)?row.vendorCodes.filter(Boolean):[];if(titles.length)return 'Товары: '+titles.slice(0,3).map(esc).join(' · ')+(titles.length>3?' · ещё '+(titles.length-3):'');if(codes.length)return 'Артикулы: '+codes.slice(0,3).map(esc).join(' · ')+(codes.length>3?' · ещё '+(codes.length-3):'');return 'Товары кампании пока загружаются'}
-function adsStatusBadge(status){const kind=status===9?'ok':status===11?'warn':status===7?'':'purple';return '<span class="badge '+kind+'">'+adsStatusLabel(status)+'</span>'}
+const wbAdCompactNumber = new Intl.NumberFormat('ru-RU',{notation:'compact',maximumFractionDigits:1});
+function wbAdMetric(label, value, display=value) {
+ return '<span class="wb-ad-metric" title="'+esc(label+' · '+value)+'"><small>'+label+'</small><b>'+display+'</b></span>';
+}
+function wbAdShortNumber(value){return value>=10000?wbAdCompactNumber.format(value):adsNumber(value)}
+
 let adsDashboardData=null,adsDashboardFilter='all',adsDashboardQuery='',adsTargetDrr=Number(localStorage.getItem('adsTargetDrr'))||15;
 document.getElementById('adsTargetInput').value=adsTargetDrr;
 function wbAdsMoneyText(value){const n=Number(value);return (Number.isFinite(n)?Math.round(n):0).toLocaleString('ru-RU')+' ₸'}
@@ -755,7 +795,7 @@ function adsNumber(value,digits=0){const n=Number(value);return Number.isFinite(
 function adsErrorText(value){const text=String(value||'');if(/rate limit|too many requests|\b429\b|X-RateLimit-Retry/i.test(text))return 'Wildberries временно ограничил частоту запросов. Приложение повторит попытку автоматически.';if(/advert has no budget|no budget/i.test(text))return 'WB отклонил запуск: у кампании нет бюджета. Пополните бюджет этой кампании в кабинете WB и нажмите «Возобновить». Лимит в складе не пополняет WB. Автопроверка — раз в 30 минут.';return text.slice(0,220)}
 const adsExpandedCards=new Set((()=>{try{const saved=JSON.parse(localStorage.getItem('adsExpandedCards')||'[]');return Array.isArray(saved)?saved:[]}catch{return []}})());
 function adsCardKey(id){return adsMarket+':'+id}
-function adsToggleCard(id,open){const key=adsCardKey(id),card=document.getElementById('adsCard_'+id),next=open===undefined?!adsExpandedCards.has(key):Boolean(open);if(next)adsExpandedCards.add(key);else adsExpandedCards.delete(key);localStorage.setItem('adsExpandedCards',JSON.stringify([...adsExpandedCards]));if(card){card.classList.toggle('collapsed',!next);card.querySelector('.ad-chevron').textContent=next?'⌃':'⌄'}}
+function adsToggleCard(id,open){const key=adsCardKey(id),card=document.getElementById('adsCard_'+id),next=open===undefined?!adsExpandedCards.has(key):Boolean(open);if(next)adsExpandedCards.add(key);else adsExpandedCards.delete(key);localStorage.setItem('adsExpandedCards',JSON.stringify([...adsExpandedCards]));if(card){card.classList.toggle('collapsed',!next);card.querySelector('.ad-card-head').setAttribute('aria-expanded',String(next));card.querySelector('.ad-chevron').textContent=next?'⌃':'⌄'}}
 function adsOpenSchedule(id){adsToggleCard(id,true);const settings=document.querySelector('#adsCard_'+id+' .ad-settings');if(settings){settings.open=true;settings.querySelector('input[type=time]')?.focus()}}
 function adsToggleAll(open){for(const group of adsDashboardData?.groups||[]){const key=adsMarket+':'+group.id;if(open)wbAdOpenGroups.add(key);else wbAdOpenGroups.delete(key)}rememberWbAdOpenGroups();for(const row of adsDashboardData?.campaigns||[]){const key=adsCardKey(row.id);if(open)adsExpandedCards.add(key);else adsExpandedCards.delete(key)}localStorage.setItem('adsExpandedCards',JSON.stringify([...adsExpandedCards]));drawAdsDashboard()}
 let adsSwipeStart=null;
@@ -797,7 +837,9 @@ function drawAdsDashboard(){
  const counts=key=>classified.filter(x=>x.advice.key===key).length;
  const kpi=(label,value,detail='')=>'<div class="ad-kpi"><span>'+label+'</span><strong>'+value+'</strong>'+(detail?'<small>'+detail+'</small>':'')+'</div>';
  document.getElementById('adsSummary').innerHTML='<div class="ad-kpis">'+kpi('Расход · '+range.title,periodComplete?wbAdsMoneyText(spend):'—')+kpi('Выручка заказов',periodComplete?wbAdsMoneyText(revenue):'—')+kpi('Заказов',periodComplete?adsNumber(orders,0):'—')+kpi('ДРР',periodComplete&&revenue?adsNumber(spend/revenue*100)+'%':'—')+kpi('Цена заказа',periodComplete&&orders?wbAdsMoneyText(spend/orders):'—')+kpi('Цена клика',periodComplete&&clicks?wbAdsMoneyText(spend/clicks):'—')+'</div>'+(!periodComplete?'<div class="ad-warning">История выбранного периода ещё не заполнена полностью.</div>':'');
- document.getElementById('adsFilters').innerHTML=[['all','Все',all.length],['risk','Запас / привязка',counts('risk')],['review','Проверить расход',counts('review')],['growth','Потенциал',counts('growth')],['paused','На ручном контроле',counts('paused')]].map(([key,title,count])=>'<button class="btn '+(adsDashboardFilter===key?'dark':'')+'" onclick="adsFilter(\''+key+'\')">'+title+' <b>'+count+'</b></button>').join('')+'<span class="ad-filter-spacer"></span><button class="btn" onclick="adsToggleAll(false)">Свернуть все</button><button class="btn" onclick="adsToggleAll(true)">Развернуть все</button>';
+ const filterBar=document.getElementById('adsFilters'), filterScroll=filterBar.scrollLeft;
+ filterBar.innerHTML=[['all','Все',all.length],['risk','Запас / привязка',counts('risk')],['review','Проверить расход',counts('review')],['growth','Потенциал',counts('growth')],['paused','На ручном контроле',counts('paused')]].map(([key,title,count])=>'<button class="btn '+(adsDashboardFilter===key?'dark':'')+'" onclick="adsFilter(\''+key+'\')">'+title+' <b>'+count+'</b></button>').join('')+'<button type="button" class="btn" onclick="openWbAdGroupEditor()">＋ Группа</button><button class="btn" onclick="adsToggleAll(false)">Свернуть все</button><button class="btn" onclick="adsToggleAll(true)">Развернуть все</button>';
+ filterBar.scrollLeft=filterScroll;
  const rank={risk:0,review:1,growth:2,paused:3,wait:4};
  const groupedNames=new Map((data.groups||[]).flatMap(g=>(g.campaignIds||[]).map(id=>[Number(id),g.name])));
  const rows=classified.filter(x=>(adsDashboardFilter==='all'||x.advice.key===adsDashboardFilter)&&[x.row.name,groupedNames.get(Number(x.row.id))||'',...(x.row.vendorCodes||[]),x.row.id].join(' ').toLowerCase().includes(adsDashboardQuery.toLowerCase())).sort((a,b)=>rank[a.advice.key]-rank[b.advice.key]);
@@ -818,17 +860,25 @@ function drawAdsDashboard(){
   }).join('');
   const currentDetails=[budget?'Сегодня '+budget:'', inv.known&&inv.available!=null?'Запас '+adsNumber(inv.available)+' шт.':'', inv.fboAvailable>0?'FBO '+adsNumber(inv.fboAvailable)+' шт.':''].filter(Boolean).join(' · ');
   return [id, `<article id="adsCard_${id}" class="ad-card ad-${advice.key}${expanded?'':' collapsed'}">
-   <div class="ad-card-head" role="button" tabindex="0" onclick="adsToggleCard(${id})" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();adsToggleCard(${id})}" ontouchstart="adsSwipeBegin(event,${id})" ontouchend="adsSwipeEnd(event,${id})">
-    <h3>${esc(row.name||('Кампания '+id))}</h3><div class="ad-head-status">${adsStatusBadge(status)}<span class="ad-chevron">${expanded?'⌃':'⌄'}</span></div>
+   <div class="wb-ad-line">
+    <button type="button" class="ad-card-head" aria-expanded="${expanded}" aria-controls="adsDetails_${id}" title="${esc(row.name||('Кампания '+id))}"
+      onclick="adsToggleCard(${id})" ontouchstart="adsSwipeBegin(event,${id})" ontouchend="adsSwipeEnd(event,${id})">
+     <span class="wb-ad-name"><b>${esc(row.name||('Кампания '+id))}</b><small class="wb-ad-status" data-status="${status}">${adsStatusLabel(status)}</small></span>
+     ${wbAdMetric('Расход',metric.complete?wbAdsMoneyText(spend):'—',metric.complete?wbAdShortNumber(spend)+' ₸':'—')}
+     ${wbAdMetric('Клики',metric.complete?adsNumber(clicks):'—',metric.complete?wbAdShortNumber(clicks):'—')}
+     ${wbAdMetric('Заказы',metric.complete?adsNumber(orders):'—',metric.complete?wbAdShortNumber(orders):'—')}
+     ${wbAdMetric('ДРР',metric.complete&&revenue?adsNumber(spend/revenue*100)+'%':'—')}
+     <span class="ad-chevron" aria-hidden="true">${expanded?'⌃':'⌄'}</span>
+    </button>
+    <button type="button" class="wb-ad-shortcut" aria-label="Запросы · корзины" title="Запросы · корзины" onclick="openWbQueryHistory(${id})">Запр.</button>
    </div>
-   <div class="ad-metrics">${kpi('Расход',metric.complete?wbAdsMoneyText(spend):'—')}${kpi('Заказы',metric.complete?adsNumber(orders):'—')}${kpi('ДРР',metric.complete&&revenue?adsNumber(spend/revenue*100)+'%':'—')}</div>
-   <div class="ad-meta">${esc([autoLabel,currentDetails].filter(Boolean).join(' · '))}</div>
-   ${typeof wbAdTestCardNote==='function'?wbAdTestCardNote(id):''}
-   <div class="ad-actions">${controls}<button type="button" class="btn" onclick="adsOpenSchedule(${id})">Расписание</button><button type="button" class="btn" onclick="openWbQueryHistory(${id})">Запросы · корзины</button></div>
-   ${canResume&&row.startBlocked?`<div class="ad-warning">${esc(row.startBlocked)}</div>`:''}
-   ${rule.lastActionError?`<div class="ad-warning">${esc(adsErrorText(rule.lastActionError))}</div>`:''}
-   <div id="adsAction_${id}" role="status"></div>
-   <div class="ad-card-body">
+   <div id="adsDetails_${id}" class="ad-card-body">
+    <div class="ad-meta">${esc([autoLabel,currentDetails].filter(Boolean).join(' · '))}</div>
+    ${typeof wbAdTestCardNote==='function'?wbAdTestCardNote(id):''}
+    <div class="ad-actions">${controls}<button type="button" class="btn" onclick="adsOpenSchedule(${id})">Расписание</button></div>
+    ${canResume&&row.startBlocked?`<div class="ad-warning">${esc(row.startBlocked)}</div>`:''}
+    ${rule.lastActionError?`<div class="ad-warning">${esc(adsErrorText(rule.lastActionError))}</div>`:''}
+    <div id="adsAction_${id}" role="status"></div>
     <div class="ad-meta">№ ${id} · ${metric.complete?adsNumber(views)+' показов · '+adsNumber(clicks)+' кликов · '+adsNumber(cartAdds)+' в корзину · '+wbAdsMoneyText(revenue)+' выручка':'Статистика периода загружается'}</div>
     ${['review','risk','growth'].includes(advice.key)?`<div class="ad-meta" title="${esc(advice.text)}">${esc(advice.title)}</div>`:''}
     <div class="ad-stock">${stockRows||'<span class="ad-meta">Нет привязки к складу</span>'}</div>
@@ -872,9 +922,17 @@ function wbAdGroupedCards(rows,cards,groups,includeFree=true){
  const ids=new Set(rows.map(x=>Number(x.row.id))),assigned=new Set(groups.flatMap(g=>g.campaignIds.map(Number)));let html='';
  for(const g of groups){const visible=g.campaignIds.map(Number).filter(id=>ids.has(id));if(!visible.length&&(adsDashboardQuery||adsDashboardFilter!=='all'))continue;
   const key=adsMarket+':'+g.id,open=wbAdOpenGroups.has(key),metric=wbAdGroupMetric(rows.filter(x=>visible.includes(Number(x.row.id)))),comparison=visible.map(id=>{const row=rows.find(x=>Number(x.row.id)===id).row,m=adsMetricsForRow(row);return '<div class="wb-ad-compare-row"><span>'+esc(row.name||('Кампания '+id))+'<small>'+esc(row.paymentType==='cpc'?'За клики':row.paymentType==='cpm'?'За показы':'Модель оплаты не указана')+'</small></span><b>'+(m.complete?wbAdsMoneyText(m.spend):'—')+'</b><b>'+(m.complete?adsNumber(m.cartAdds,0):'—')+'</b><b>'+(m.complete&&m.cartAdds>0?wbAdsMoneyText(m.spend/m.cartAdds):'—')+'</b><b>'+(m.complete?adsNumber(Number(m.orders)||0,0):'—')+'</b></div>';}).join('');
-  html+='<section class="wb-ad-group"><div class="row" style="gap:8px"><button type="button" class="wb-ad-group-toggle grow" aria-expanded="'+open+'" onclick="toggleWbAdGroup(\''+g.id+'\')"><b>'+esc(g.name)+'</b><span class="muted">'+visible.length+' из '+g.campaignIds.length+' кампаний · '+(open?'Свернуть ↑':'Открыть ↓')+'</span></button><button type="button" class="btn" aria-label="Изменить группу" onclick="openWbAdGroupEditor(\''+g.id+'\')">✎</button></div>'+
-   '<div class="muted" style="margin:8px 0">'+(metric.complete?'Расход '+wbAdsMoneyText(metric.spend)+' · Корзин по отчётам '+adsNumber(metric.cartAdds,0):'Статистика группы неполная')+'</div>'+
-   (g.test?wbAdTestStatus(g):'')+'<button type="button" class="btn" onclick="openWbAdTest(\''+g.id+'\')">Тест по дням</button>'+'<div class="wb-ad-group-body" '+(open?'':'hidden')+'><div class="wb-ad-compare"><div class="wb-ad-compare-row muted"><span>Кампания</span><span>Расход</span><span>Корзины</span><span>Цена корзины</span><span>Заказы</span></div>'+comparison+'</div><div class="muted" style="margin:8px 0">Показатели кампаний могут пересекаться: одна покупка может учитываться в нескольких.</div>'+visible.map(id=>cards.get(id)).join('')+(!visible.length?'<div class="empty">Кампаний группы нет в текущем списке WB.</div>':'')+'</div></section>';
+  html+='<section class="wb-ad-group"><div class="wb-ad-line"><button type="button" class="wb-ad-group-toggle" aria-expanded="'+open+'" onclick="toggleWbAdGroup(\''+g.id+'\')">'
+   +'<span class="wb-ad-name"'+(metric.complete?'':' title="Статистика группы неполная"')+'><b>'+esc(g.name)+'</b><small class="wb-ad-status">'+visible.length+' из '+g.campaignIds.length+' кампаний</small></span>'
+   +wbAdMetric('Расход',metric.complete?wbAdsMoneyText(metric.spend):'—',metric.complete?wbAdShortNumber(metric.spend)+' ₸':'—')
+   +wbAdMetric('Корзины',metric.complete?adsNumber(metric.cartAdds):'—',metric.complete?wbAdShortNumber(metric.cartAdds):'—')
+   +'<span class="ad-chevron" aria-hidden="true">'+(open?'⌃':'⌄')+'</span></button>'
+   +'<button type="button" class="wb-ad-shortcut" aria-label="Изменить группу" onclick="openWbAdGroupEditor(\''+g.id+'\')">✎</button></div>'
+   +'<div class="wb-ad-group-body" '+(open?'':'hidden')+'>'+(g.test?wbAdTestStatus(g):'')
+   +'<div class="ad-actions"><button type="button" class="btn" onclick="openWbAdTest(\''+g.id+'\')">Тест по дням</button></div>'
+   +(visible.length?visible.map(id=>cards.get(id)).join(''):'<div class="empty">Кампаний группы нет в текущем списке WB.</div>')
+   +(visible.length?'<details><summary>Сравнение кампаний</summary><div class="wb-ad-compare"><div class="wb-ad-compare-row muted"><span>Кампания</span><span>Расход</span><span>Корзины</span><span>Цена корзины</span><span>Заказы</span></div>'+comparison+'</div><div class="ad-meta">Одна покупка может учитываться в нескольких кампаниях.</div></details>':'')
+   +'</div></section>';
  }
  if(!includeFree)return html;
  const free=rows.filter(x=>!assigned.has(Number(x.row.id)));if(groups.length&&free.length)html+='<h3 style="margin:12px 0">Без группы</h3>';html+=free.map(x=>cards.get(Number(x.row.id))).join('');
