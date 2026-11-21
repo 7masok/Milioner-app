@@ -277,10 +277,10 @@ test('duplicate tracks warn across shipments but never count their own lines or 
  assert.equal(JSON.stringify(f.ctx.state.purchases),before);assert.equal(f.calls.saved,0);assert.equal(f.requests.length,0);
 });
 
-test('a zero declaration shows carrier details and can be updated only after reviewing a matching new shipment',async()=>{
+test('a zero declaration shows carrier details and can be updated after reviewing a matching shipment in transit',async()=>{
  const f=fixture(),purchase=f.ctx.state.purchases[0],remote=f.view.orders[0];
  Object.assign(purchase,{amantransOrderId:'11',amantransAccountId:'7',amantransTrack:'MATCH-TRACK'});
- Object.assign(remote,{track:'MATCH-TRACK',amount:purchase.qty,status:'NEW',statusLabel:'Новый',priceUsd:0,totalKzt:0});
+ Object.assign(remote,{track:'MATCH-TRACK',amount:purchase.qty,status:'ON_ROAD',statusLabel:'В пути',priceUsd:0,totalKzt:0});
  await f.ctx.openAmanTrans('main');
  const card=f.ctx.amanShipmentHtml('main',[purchase]);
  assert.match(card,/Правильный/);

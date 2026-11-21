@@ -30,7 +30,7 @@ function fixture(readDeclarations){
  return {service,calls,connect:()=>service.connect({phone:'+77000000001',password:'fixture-only'}),get stored(){return stored},get source(){return source},set mode(value){mode=value},advance:ms=>at+=ms};
 }
 const fields={name:'Исправленное название',track:'SAME-TRACK',priceUsd:3,amount:2};
-test('background sync recovers a pending create with a placeholder declaration by exact track',async()=>{
+test('background sync recovers a pending create with a placeholder declaration already in transit',async()=>{
  const track='RECOVERY-TRACK';
  const purchase={id:'p1',shipmentId:'shipment',productId:'sku',status:'to_forwarder',amantransTrack:track,amantransPendingTrack:track,qty:20,buyTotal:1289};
  const f=fixture(async()=>({purchases:[purchase],products:[{id:'sku',name:'Клевер голубой'}]}));
@@ -39,7 +39,7 @@ test('background sync recovers a pending create with a placeholder declaration b
  const body={purchaseKey:'shipment',fields:{name:'Клевер голубой',track,priceUsd:1289,amount:20,shippingMethod:'Avto'}};
  await assert.rejects(f.service.registerPurchase(body));
  f.mode='';
- const order={...raw(55,'Заполните название и цену'),track_code:track,status:{name:'NEW'},price:3};
+ const order={...raw(55,'Заполните название и цену'),track_code:track,status:{name:'ON_ROAD_CHINA'},price:3};
  f.source.push(order,{...order,id:56});
  f.advance(300001);await f.service.syncIfDue();
  assert.equal((await f.service.get()).purchaseLinks.shipment,undefined,'duplicate track cannot be recovered');
@@ -54,7 +54,7 @@ test('background sync recovers a pending create with a placeholder declaration b
  assert.equal(f.calls.filter(call=>call.url.pathname.endsWith('/create')).length,1);
  assert.equal(f.calls.filter(call=>call.url.pathname.endsWith('/update')).length,1);
 });
-test('background declaration sync updates the unique new carrier shipment from saved warehouse values',async()=>{
+test('background declaration sync updates the unique carrier shipment before and during transit',async()=>{
  const purchase={id:'p1',shipmentId:'405',productId:'sku',status:'to_forwarder',workflowStageId:'departed',amantransTrack:'SAME-TRACK',qty:540,buyTotal:77004};
  const product={id:'sku',name:'Балерина аттитюд'};
  const f=fixture(async()=>({purchases:[purchase],products:[product]}));
@@ -69,7 +69,12 @@ test('background declaration sync updates the unique new carrier shipment from s
  assert.equal(f.calls.filter(call=>call.url.pathname.endsWith('/create')).length,0);
  f.advance(300001);await f.service.syncIfDue();assert.equal(edits().length,1);
  purchase.buyTotal=78000;
- f.advance(300001);await f.service.syncIfDue();assert.equal(edits().length,2);assert.equal(edits()[1].body.price,78000);
+ purchase.status='to_me';
+ f.source[0].status={name:'ON_ROAD',name_ru:'В пути'};
+ f.advance(300001);await f.service.syncIfDue();
+ assert.equal(edits().length,2);
+ assert.deepEqual(edits()[1].body,{id:11,name:product.name,track_code:'SAME-TRACK',price:78000,amount:540});
+ assert.equal((await f.service.get()).orders[0].status,'ON_ROAD');
 });
 test('declaration sync skips ambiguous tracks and verifies a lost write response without repeating it',async()=>{
  const purchase={id:'p1',productId:'sku',status:'to_forwarder',amantransTrack:'SAME-TRACK',qty:2,buyTotal:350};

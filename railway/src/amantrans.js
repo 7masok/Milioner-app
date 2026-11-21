@@ -149,7 +149,7 @@ export function createAmanService({read=readAmanAccess,write=saveAmanAccess,fetc
  }
  async function refresh(data,persistFailure=true){try{await session(data);const orders=await list(data);repairLegacyDuplicates(data,orders);data.orders=orders;data.fetchedAt=now();data.nextAttemptAt=now()+TTL;data.lastError='';await write(data);}catch(error){if(data&&persistFailure){data.lastError=error.message;data.nextAttemptAt=Math.max(now()+TTL,Number(error.retryAt)||0);await write(data);}throw error;}return view(data);}
  async function reconcileDeclarations(data){
-  if(!readDeclarations||!data.orders?.some(order=>order.status==='NEW'))return;
+  if(!readDeclarations||!data.orders?.length)return;
   const candidates=warehouseDeclarationCandidates(await readDeclarations(),data.accountId);
   const receipts=data.declarationUpdates||={};
   let changed=false;
@@ -167,7 +167,7 @@ export function createAmanService({read=readAmanAccess,write=saveAmanAccess,fetc
    const op=purchaseOperation(key),pending=data.operations?.[op];
    const recover=!!pending&&!pending.orderId&&pending.fields?.track_code===fields.track_code;
    if(pending&&!pending.orderId&&!recover)continue;
-   if(order.status!=='NEW'||data.hidden?.[order.id]||ids.some(id=>id!==order.id)
+   if(data.hidden?.[order.id]||ids.some(id=>id!==order.id)
     ||isOrderClaimed(data,key,order.id)||!recover&&(receipts[order.id]||declarationMatches(order,fields)))continue;
    let current;
    try{current=await list(data,fields.track_code);}

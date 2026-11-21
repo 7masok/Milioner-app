@@ -227,7 +227,7 @@
   const quantityKnown=Number.isSafeInteger(carrier.amount)&&carrier.amount>0;
   const ready=snapshot.connected&&!snapshot.lastError&&trackMatches&&warehouse.name
    &&Number.isFinite(warehouse.priceUsd)&&warehouse.priceUsd>0&&quantityKnown
-   &&carrier.amount===warehouse.amount&&carrier.status==='NEW';
+   &&carrier.amount===warehouse.amount;
   return {warehouse,trackMatches,ready,changed:warehouse.name!==carrier.name||warehouse.priceUsd!==carrier.priceUsd};
  }
  window.amanReviewShipmentData=function(encodedKey){
