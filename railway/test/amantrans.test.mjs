@@ -3,9 +3,9 @@ import assert from 'node:assert/strict';
 import {amanIdentity,amanOrder,amanEdit,createAmanService,amanRouter} from '../src/amantrans.js';
 const token=(id=7,role='RoleClient')=>'header.'+Buffer.from(JSON.stringify({id,role,exp:4000000000})).toString('base64url')+'.fixture';
 const raw=(id,name='Кошелёк')=>({id,name,track_code:'SAME-TRACK',amount:1,price:3,weight:0.13,tariff_price:3.2,box_price:0.026,delivery_price:0.416,usd:455.1,created_at:'2026-10-17T08:00:00Z',status:{name:'SUB_FILIAL',name_ru:'В филиале'},customer:{id:7,phone:'not-returned'}});
-function fixture(){
+function fixture(readDeclarations){
  let stored=null,at=1000000,source=[raw(11),raw(12,'Ошибочная запись')],mode='',calls=[],nextId=15;
- const service=createAmanService({now:()=>at,read:async()=>structuredClone(stored),write:async data=>{stored=structuredClone(data)},fetchImpl:async(url,options)=>{
+ const service=createAmanService({readDeclarations,now:()=>at,read:async()=>structuredClone(stored),write:async data=>{stored=structuredClone(data)},fetchImpl:async(url,options)=>{
   const u=new URL(url),body=options.body?JSON.parse(options.body):null;calls.push({url:u,options,body});
   assert.equal(u.origin,'https://api.amantrans.com.kz');assert.equal(options.redirect,'error');assert.ok(options.signal);
   if(u.pathname==='/auth/sign-in-client')return new Response(JSON.stringify({token:token()}));
@@ -28,6 +28,42 @@ function fixture(){
  return {service,calls,connect:()=>service.connect({phone:'+77000000001',password:'fixture-only'}),get stored(){return stored},get source(){return source},set mode(value){mode=value},advance:ms=>at+=ms};
 }
 const fields={name:'Исправленное название',track:'SAME-TRACK',priceUsd:3,amount:2};
+test('background declaration sync updates the unique new carrier shipment from saved warehouse values',async()=>{
+ const purchase={id:'p1',shipmentId:'405',productId:'sku',status:'to_forwarder',workflowStageId:'departed',amantransTrack:'SAME-TRACK',qty:540,buyTotal:77004};
+ const product={id:'sku',name:'Балерина аттитюд'};
+ const f=fixture(async()=>({purchases:[purchase],products:[product]}));
+ f.source.pop();
+ Object.assign(f.source[0],{name:'Подставка под горячее',amount:100,price:64307,status:{name:'NEW',name_ru:'Новый'}});
+ await f.connect();
+ f.advance(300001);
+ await f.service.syncIfDue();
+ const edits=()=>f.calls.filter(call=>call.options.method==='PUT');
+ assert.deepEqual(edits().map(call=>call.body),[{id:11,name:product.name,track_code:'SAME-TRACK',price:77004,amount:540}]);
+ assert.equal((await f.service.get()).orders[0].amount,540);
+ assert.equal(f.calls.filter(call=>call.url.pathname.endsWith('/create')).length,0);
+ f.advance(300001);await f.service.syncIfDue();assert.equal(edits().length,1);
+ purchase.buyTotal=78000;
+ f.advance(300001);await f.service.syncIfDue();assert.equal(edits().length,2);assert.equal(edits()[1].body.price,78000);
+});
+test('declaration sync skips ambiguous tracks and verifies a lost write response without repeating it',async()=>{
+ const purchase={id:'p1',productId:'sku',status:'to_forwarder',amantransTrack:'SAME-TRACK',qty:2,buyTotal:350};
+ const rows=[purchase,{...purchase,id:'p2'}];
+ const f=fixture(async()=>({purchases:rows,products:[{id:'sku',name:'Товар Склада'}]}));
+ const edits=()=>f.calls.filter(call=>call.options.method==='PUT');
+ for(const row of f.source)row.status={name:'NEW'};
+ await f.connect();
+ f.advance(300001);await f.service.syncIfDue();assert.equal(edits().length,0,'two carrier records');
+ f.source.pop();
+ f.advance(300001);await f.service.syncIfDue();assert.equal(edits().length,0,'two warehouse purchases');
+ rows.pop();
+ purchase.status='received';
+ f.advance(300001);await f.service.syncIfDue();assert.equal(edits().length,0,'received purchase');
+ purchase.status='to_forwarder';
+ f.mode='edit-applied-timeout';
+ f.advance(300001);await f.service.syncIfDue();assert.equal(edits().length,1);assert.ok(f.stored.declarationUpdates['11']);
+ f.mode='';
+ f.advance(300001);await f.service.syncIfDue();assert.equal(edits().length,1);assert.equal(f.stored.declarationUpdates['11'],undefined);
+});
 test('only client identities and exact safe IDs can be used for carrier operations',()=>{
  assert.equal(amanIdentity(token()).accountId,'7');assert.throws(()=>amanIdentity(token(7,'RoleAdmin')));assert.throws(()=>amanIdentity('invalid'));
  assert.throws(()=>amanOrder(raw('9007199254740993')));assert.throws(()=>amanIdentity(token('9007199254740993')));

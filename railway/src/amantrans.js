@@ -4,6 +4,9 @@ import {readAmanAccess,saveAmanAccess} from './connections.js';
 import {requireConfiguredSession} from './auth.js';
 import {requireTrustedOrigin,requireWritesEnabled} from './http.js';
 import {config} from './config.js';
+import {transaction} from './db.js';
+import {readWarehousePurchases} from './warehouse-purchases.js';
+import {readWarehouseProducts} from './warehouse-products.js';
 
 const ORIGIN='https://api.amantrans.com.kz',TTL=5*60000;
 const fail=(message,status=400)=>Object.assign(Error(message),{status});
@@ -28,7 +31,49 @@ export function amanEdit(body,create=false){
  if(create&&!['Avto','Avia'].includes(body.shippingMethod))throw fail('Выберите способ доставки');
  return {name,track_code:track,price,amount,...(create?{shipping_method:body.shippingMethod}:{})};
 }
-export function createAmanService({read=readAmanAccess,write=saveAmanAccess,fetchImpl=fetch,now=Date.now}={}){
+async function readWarehouseDeclarations(){
+ return transaction(async client=>{
+  await client.query('SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY');
+  const purchases=await readWarehousePurchases(client),products=await readWarehouseProducts(client);
+  return {purchases,products};
+ });
+}
+function purchaseTrack(row){
+ const batch=String(row.batch||'').trim();
+ return Object.hasOwn(row,'amantransTrack')?String(row.amantransTrack||'').trim():/^Китай \d/.test(batch)?'':batch;
+}
+function warehouseDeclarationCandidates({purchases,products},accountId){
+ const groups=new Map(),tracks=new Map(),names=new Map(products.map(row=>[row.id,row.name]));
+ for(const row of purchases){
+  if(row.inventoryAdjustment||row.opening||row.returnAdjustment)continue;
+  const key=String(row.shipmentId||row.id||'');
+  if(!key)continue;
+  if(!groups.has(key))groups.set(key,[]);
+  groups.get(key).push(row);
+ }
+ for(const items of groups.values())for(const track of new Set(items.map(purchaseTrack).filter(Boolean)))tracks.set(track,(tracks.get(track)||0)+1);
+ const candidates=[];
+ for(const [key,items] of groups){
+  const track=purchaseTrack(items[0]);
+  if(!track||tracks.get(track)!==1||items.some(row=>purchaseTrack(row)!==track
+   ||!['to_forwarder','to_me'].includes(row.status)||row.workflowStageId==='cart'
+   ||row.amantransAccountId&&String(row.amantransAccountId)!==accountId
+   ||row.amantransPendingTrack&&row.amantransSyncedTrack!==track
+   ||!Number.isSafeInteger(Number(row.qty))||Number(row.qty)<=0))continue;
+  const productNames=items.map(row=>names.get(String(row.productId))?.trim());
+  if(productNames.some(name=>!name))continue;
+  productNames.sort((a,b)=>a.localeCompare(b,'ru',{numeric:true,sensitivity:'base'}));
+  const amount=items.reduce((sum,row)=>sum+Number(row.qty),0);
+  const priceUsd=Math.round(items.reduce((sum,row)=>sum+(Number(row.buyTotal)||Number(row.unitCost||0)*Number(row.qty)),0)*100)/100;
+  if(!Number.isFinite(priceUsd)||priceUsd<=0||priceUsd>1e9||amount>10000000)continue;
+  const fields=amanEdit({name:productNames[0].slice(0,200),track,priceUsd,amount});
+  candidates.push({key,fields,ids:items.map(row=>String(row.amantransOrderId||'')).filter(Boolean)});
+ }
+ return candidates;
+}
+const declarationMatches=(order,fields)=>order.name===fields.name&&order.priceUsd===fields.price&&order.amount===fields.amount;
+
+export function createAmanService({read=readAmanAccess,write=saveAmanAccess,fetchImpl=fetch,now=Date.now,readDeclarations}={}){
  let tail=Promise.resolve();
  const locked=fn=>{const job=tail.catch(()=>{}).then(fn);tail=job;return job;};
  async function call(path,{token,method='GET',body,timeout=20000}={}){
@@ -92,6 +137,42 @@ export function createAmanService({read=readAmanAccess,write=saveAmanAccess,fetc
   }
  }
  async function refresh(data,persistFailure=true){try{await session(data);const orders=await list(data);repairLegacyDuplicates(data,orders);data.orders=orders;data.fetchedAt=now();data.nextAttemptAt=now()+TTL;data.lastError='';await write(data);}catch(error){if(data&&persistFailure){data.lastError=error.message;data.nextAttemptAt=Math.max(now()+TTL,Number(error.retryAt)||0);await write(data);}throw error;}return view(data);}
+ async function reconcileDeclarations(data){
+  if(!readDeclarations||!data.orders?.some(order=>order.status==='NEW'))return;
+  const candidates=warehouseDeclarationCandidates(await readDeclarations(),data.accountId);
+  const receipts=data.declarationUpdates||={};
+  let changed=false;
+  for(const [id,receipt] of Object.entries(receipts)){
+   const carrier=data.orders.find(order=>order.id===id);
+   if(carrier?.track===receipt.fields.track_code&&declarationMatches(carrier,receipt.fields)){
+    delete receipts[id];changed=true;
+   }
+  }
+  if(changed)await write(data);
+  for(const {key,fields,ids} of candidates){
+   const matches=trackMatches(data.orders,fields.track_code);
+   if(matches.length!==1)continue;
+   const order=matches[0];
+   if(order.status!=='NEW'||data.hidden?.[order.id]||ids.some(id=>id!==order.id)
+    ||isOrderClaimed(data,key,order.id)||receipts[order.id]||declarationMatches(order,fields))continue;
+   const current=trackMatches(await list(data,fields.track_code),fields.track_code);
+   if(current.length!==1||current[0].id!==order.id||current[0].fingerprint!==order.fingerprint)continue;
+   receipts[order.id]={fields,at:now()};await write(data);
+   try{
+    await call('/amantrans/orders/update',{token:data.token,method:'PUT',body:{id:Number(order.id),...fields}});
+    const verified=trackMatches(await list(data,fields.track_code),fields.track_code);
+    if(verified.length===1&&verified[0].id===order.id&&declarationMatches(verified[0],fields)){
+     data.orders=data.orders.map(item=>item.id===order.id?verified[0]:item);
+     delete receipts[order.id];await write(data);
+    }
+   }catch(error){
+    receipts[order.id].error=error.status||502;
+    if(error.retryAt)data.nextAttemptAt=Math.max(data.nextAttemptAt,Number(error.retryAt));
+    await write(data);
+   }
+   break;
+  }
+ }
  async function sendOrder(id,body,purchaseKey='',before=[]){
    const fields=amanEdit(body?.fields,!id),op=purchaseKey?'paid_'+crypto.createHash('sha256').update(purchaseKey).digest('hex'):text(body?.operationId,80);if(!/^[a-zA-Z0-9_-]{12,80}$/.test(op))throw fail('Откройте форму отправки заново');
    const data=await session(await read());data.operations||={};
@@ -162,14 +243,14 @@ export function createAmanService({read=readAmanAccess,write=saveAmanAccess,fetc
   connect:body=>locked(async()=>{const phone=String(body?.phone||'').replace(/\D/g,''),password=String(body?.password||'');if(!/^7\d{10}$/.test(phone)||password.length<6||password.length>200)throw fail('Проверьте телефон и пароль');const auth=await login(phone,password),old=await read(),same=old?.accountId===auth.accountId,data={...(same?old:{}),phone,password,...auth,orders:same?old.orders:[],hidden:same?old.hidden:{},operations:same?old.operations:{}};await refresh(data,false);return view(data);}),
   disconnect:()=>locked(async()=>{const data=await read();if(data){delete data.phone;delete data.password;delete data.token;delete data.expiresAt;await write(data);}return view(data);}),
   sync:()=>locked(async()=>{const data=await read();if(data?.lastError&&data.nextAttemptAt>now())throw fail(data.lastError+' · следующая попытка '+new Date(data.nextAttemptAt).toLocaleTimeString('ru-RU',{timeZone:'Asia/Almaty'}),429);return refresh(data);}),
-  syncIfDue:()=>locked(async()=>{const data=await read();if(data?.phone&&data?.password&&now()>=Number(data.nextAttemptAt||0)&&now()-Number(data.fetchedAt||0)>TTL)await refresh(data);}),
+  syncIfDue:()=>locked(async()=>{const data=await read();if(data?.phone&&data?.password&&now()>=Number(data.nextAttemptAt||0)&&now()-Number(data.fetchedAt||0)>TTL){await refresh(data);await reconcileDeclarations(data);}}),
   hide:(id,hidden)=>locked(async()=>{const data=await read();if(!data?.orders?.some(x=>x.id===id))throw fail('Отправление не найдено',404);data.hidden||={};if(hidden)data.hidden[id]=true;else delete data.hidden[id];await write(data);return view(data);}),
   history:id=>locked(async()=>{const data=await session(await read());if(!data.orders?.some(x=>x.id===id))throw fail('Отправление не найдено',404);const rows=await call('/amantrans/order_turkey/get-status-info?'+new URLSearchParams({id,country:'China'}),{token:data.token});if(!Array.isArray(rows))throw fail('История недоступна',502);return {ok:true,history:rows.map(x=>({at:x.update_date,status:x.status_to?.name_ru||x.status_to?.name||''}))};}),
   send:(id,body)=>locked(()=>sendOrder(id,body)),
   registerPurchase:body=>locked(()=>syncPurchase(body))
  };
 }
-export const amanService=createAmanService();
+export const amanService=createAmanService({readDeclarations:readWarehouseDeclarations});
 export const amanRouter=express.Router();
 amanRouter.use(requireConfiguredSession,requireTrustedOrigin);
 const route=fn=>async(req,res)=>{try{res.json(await fn(req));}catch(error){res.status(error.status||502).json({ok:false,error:error.status?error.message:'Не удалось выполнить запрос Aman Trans'});}};
