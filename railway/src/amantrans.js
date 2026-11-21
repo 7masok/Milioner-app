@@ -58,7 +58,7 @@ function warehouseDeclarationCandidates({purchases,products},accountId){
   if(!track||tracks.get(track)!==1||items.some(row=>purchaseTrack(row)!==track
    ||!['to_forwarder','to_me'].includes(row.status)||row.workflowStageId==='cart'
    ||row.amantransAccountId&&String(row.amantransAccountId)!==accountId
-   ||row.amantransPendingTrack&&row.amantransSyncedTrack!==track
+   ||row.amantransPendingTrack&&(row.amantransPendingTrack!==track||row.amantransOrderId&&row.amantransSyncedTrack!==track)
    ||!Number.isSafeInteger(Number(row.qty))||Number(row.qty)<=0))continue;
   const productNames=items.map(row=>names.get(String(row.productId))?.trim());
   if(productNames.some(name=>!name))continue;
@@ -119,6 +119,7 @@ export function createAmanService({read=readAmanAccess,write=saveAmanAccess,fetc
  function view(data){return {ok:true,connected:Boolean(data?.phone&&data?.password),accountId:data?.accountId||'',phoneHint:data?.phone?'•••'+data.phone.slice(-4):'',fetchedAt:data?.fetchedAt||0,lastError:data?.lastError||'',nextAttemptAt:data?.nextAttemptAt||0,orders:(data?.orders||[]).map(row=>({...row,hidden:Boolean(data.hidden?.[row.id])})),purchaseLinks:Object.fromEntries(Object.values(data?.operations||{}).filter(x=>x.purchaseKey&&x.orderId&&x.state==='done'&&!x.trackEdit).map(x=>[x.purchaseKey,{id:x.orderId,track:x.lastTrack||x.fields?.track_code||'',...(x.replacesId?{replacesId:x.replacesId}:{})}])),deleteSupported:false};}
  async function freshOrder(data,id){const old=data.orders?.find(x=>x.id===id);if(!old)throw fail('Сначала обновите список и выберите отправление',404);const rows=await list(data,old.track);const current=rows.find(x=>x.id===id);if(!current)throw fail('Отправление изменилось или больше недоступно. Обновите список',409);return current;}
  function trackMatches(orders,track){return orders.filter(order=>order.track===track);}
+ const purchaseOperation=key=>'paid_'+crypto.createHash('sha256').update(key).digest('hex');
  function isOrderClaimed(data,key,id){
   return Object.values(data.operations||{}).some(entry=>entry.purchaseKey&&entry.purchaseKey!==key&&entry.orderId===id&&!entry.trackEdit);
  }
@@ -163,12 +164,17 @@ export function createAmanService({read=readAmanAccess,write=saveAmanAccess,fetc
    const matches=trackMatches(data.orders,fields.track_code);
    if(matches.length!==1)continue;
    const order=matches[0];
+   const op=purchaseOperation(key),pending=data.operations?.[op];
+   const recover=!!pending&&!pending.orderId&&pending.fields?.track_code===fields.track_code;
+   if(pending&&!pending.orderId&&!recover)continue;
    if(order.status!=='NEW'||data.hidden?.[order.id]||ids.some(id=>id!==order.id)
-    ||isOrderClaimed(data,key,order.id)||receipts[order.id]||declarationMatches(order,fields))continue;
+    ||isOrderClaimed(data,key,order.id)||!recover&&(receipts[order.id]||declarationMatches(order,fields)))continue;
    let current;
    try{current=await list(data,fields.track_code);}
    catch(error){if(error.carrierAccountConflict)continue;throw error;}
    if(current.length!==1||current[0].id!==order.id||current[0].fingerprint!==order.fingerprint)continue;
+   if(recover)await linkExisting(data,op,key,current[0]);
+   if(receipts[order.id]||declarationMatches(order,fields))continue;
    receipts[order.id]={fields,at:now()};await write(data);
    try{
     await call('/amantrans/orders/update',{token:data.token,method:'PUT',body:{id:Number(order.id),...fields}});
@@ -206,7 +212,7 @@ export function createAmanService({read=readAmanAccess,write=saveAmanAccess,fetc
  }
  async function syncPurchase(body){
   const key=String(body?.purchaseKey||'');if(!key||key.length>200||/[\x00-\x1f]/.test(key))throw fail('Закупка не найдена');
-  const fields=amanEdit(body.fields,true),data=await session(await read()),op='paid_'+crypto.createHash('sha256').update(key).digest('hex');data.operations||={};let receipt=data.operations[op];
+  const fields=amanEdit(body.fields,true),data=await session(await read()),op=purchaseOperation(key);data.operations||={};let receipt=data.operations[op];
   if(body.accountId&&String(body.accountId)!==data.accountId)throw fail('Закупка подключена к другому аккаунту Aman Trans',409);
   if(!receipt&&body.orderId){
    const id=String(body.orderId),current=await freshOrder(data,id);
@@ -220,9 +226,15 @@ export function createAmanService({read=readAmanAccess,write=saveAmanAccess,fetc
    return sendOrder(null,{fields:body.fields},key,before);
   }
   if(!receipt.orderId){
-   const candidates=await list(data,receipt.fields.track_code),matches=candidates.filter(row=>!(receipt.beforeIds||[]).includes(row.id)&&row.track===receipt.fields.track_code&&row.name===receipt.fields.name&&row.amount===receipt.fields.amount&&row.priceUsd===receipt.fields.price);
-   if(matches.length!==1)throw fail('Проверяем результат создания в Aman Trans. Новая запись повторно не отправляется.',409);
-   receipt.orderId=matches[0].id;receipt.state='done';const ids=new Set(candidates.map(x=>x.id));data.orders=[...(data.orders||[]).filter(x=>!ids.has(x.id)),...candidates];await write(data);
+   const matches=await list(data,receipt.fields.track_code);
+   if(matches.length>1)throw fail('В Aman Trans несколько отправлений с этим треком. Автоматическая привязка остановлена.',409);
+   const match=matches[0];
+   if(!match||data.hidden?.[match.id])throw fail('Отправление с этим треком ещё не найдено в Aman Trans. Новая запись повторно не отправляется.',409);
+   if(body.orderId&&String(body.orderId)!==match.id)throw fail('ID отправления закупки изменился. Обновите склад',409);
+   // When changing a track, first prove which order the old create produced.
+   if(fields.track_code!==match.track&&(!declarationMatches(match,receipt.fields)||(receipt.beforeIds||[]).includes(match.id)))throw fail('Не удалось подтвердить исходное отправление перед сменой трека.',409);
+   await linkExisting(data,op,key,match);
+   receipt=data.operations[op];
   }
   const id=receipt.orderId;if(body.orderId&&String(body.orderId)!==id&&String(body.orderId)!==receipt.replacesId)throw fail('ID отправления закупки изменился. Обновите склад',409);
   const lastTrack=receipt.lastTrack||receipt.fields.track_code;

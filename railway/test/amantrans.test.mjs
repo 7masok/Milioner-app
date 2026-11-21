@@ -30,6 +30,30 @@ function fixture(readDeclarations){
  return {service,calls,connect:()=>service.connect({phone:'+77000000001',password:'fixture-only'}),get stored(){return stored},get source(){return source},set mode(value){mode=value},advance:ms=>at+=ms};
 }
 const fields={name:'Исправленное название',track:'SAME-TRACK',priceUsd:3,amount:2};
+test('background sync recovers a pending create with a placeholder declaration by exact track',async()=>{
+ const track='RECOVERY-TRACK';
+ const purchase={id:'p1',shipmentId:'shipment',productId:'sku',status:'to_forwarder',amantransTrack:track,amantransPendingTrack:track,qty:20,buyTotal:1289};
+ const f=fixture(async()=>({purchases:[purchase],products:[{id:'sku',name:'Клевер голубой'}]}));
+ await f.connect();
+ f.mode='write-timeout';
+ const body={purchaseKey:'shipment',fields:{name:'Клевер голубой',track,priceUsd:1289,amount:20,shippingMethod:'Avto'}};
+ await assert.rejects(f.service.registerPurchase(body));
+ f.mode='';
+ const order={...raw(55,'Заполните название и цену'),track_code:track,status:{name:'NEW'},price:3};
+ f.source.push(order,{...order,id:56});
+ f.advance(300001);await f.service.syncIfDue();
+ assert.equal((await f.service.get()).purchaseLinks.shipment,undefined,'duplicate track cannot be recovered');
+ f.source.pop();
+ f.advance(300001);await f.service.syncIfDue();
+ const snapshot=await f.service.get();
+ assert.deepEqual(snapshot.purchaseLinks.shipment,{id:'55',track});
+ assert.equal(order.name,'Клевер голубой');
+ assert.equal(order.price,1289);
+ assert.equal(order.amount,20);
+ assert.equal((await f.service.registerPurchase(body)).createdOrderId,'55');
+ assert.equal(f.calls.filter(call=>call.url.pathname.endsWith('/create')).length,1);
+ assert.equal(f.calls.filter(call=>call.url.pathname.endsWith('/update')).length,1);
+});
 test('background declaration sync updates the unique new carrier shipment from saved warehouse values',async()=>{
  const purchase={id:'p1',shipmentId:'405',productId:'sku',status:'to_forwarder',workflowStageId:'departed',amantransTrack:'SAME-TRACK',qty:540,buyTotal:77004};
  const product={id:'sku',name:'Балерина аттитюд'};

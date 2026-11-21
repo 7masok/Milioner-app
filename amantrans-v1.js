@@ -271,7 +271,8 @@
  function install(){document.getElementById('amanPurchases')?.remove?.();if(!document.getElementById('amanSettings')){const root=document.getElementById('settings');if(root){const box=document.createElement('div');box.id='amanSettings';box.className='item';root.append(box);}}paint();}
  function paint(){for(const el of document.querySelectorAll('[data-aman-shipment]')){const key=decodeURIComponent(el.dataset.amanShipment),items=typeof state!=='undefined'?(state.purchases||[]).filter(x=>String(x.shipmentId||x.id||'')===key):[];el.outerHTML=amanShipmentHtml(key,items);}const box=document.getElementById('amanSettings');if(box)box.innerHTML=connectedCard();}
  window.amanShipmentHtml=function(key,items){
-  const row=linkedShipment(items),requested=items.some(x=>x.amantransAutoRequestedAt),error=sendErrors.get(key);
+  const row=linkedShipment(items),requested=items.some(x=>x.amantransAutoRequestedAt);
+  const error=row&&items.every(item=>rowTrack(item)===row.track&&(!item.amantransPendingTrack||item.amantransPendingTrack===row.track))?null:sendErrors.get(key);
   const label=sending.has(key)?'Синхронизирую трек…':error?error:row?row.statusLabel+(snapshot.lastError?' · нет обновления':'')
    :items.some(x=>x.amantransOrderId)?'Связь требует проверки':requested?'Ожидает отправки':'';
   let details='';
