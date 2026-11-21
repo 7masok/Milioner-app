@@ -116,7 +116,13 @@ test('weekly Kaspi server calculation reuses warehouse links and the bid and pri
  assert.equal(row.productId,'p');
  const metrics=report.metrics(row,campaign,{bid:24,score:8,views:600,clicks:35,orders:1,spend:20});
  assert.equal(metrics.bidProposal.bid,21);
+ const observations={score:9,views:600,clicks:35,orders:1,spend:20};
+ assert.equal(report.metrics(row,campaign,{...observations,bid:36}).bidProposal.bid,33);
+ assert.equal(report.metrics(row,campaign,{...observations,bid:4}).bidProposal.bid,3);
+
  assert.equal(metrics.cost,100);
  assert.equal(metrics.testPriceFloor,305);
  assert.equal(report.metrics(row,campaign,{bid:3,score:8,views:600,clicks:35,orders:1,spend:20}).bidProposal,null);
+ row.lines[0].amount=row.spend=10000;
+ assert.equal(report.metrics(row,campaign,{...observations,bid:36,spend:10000}).bidProposal.bid,33);
 });

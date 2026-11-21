@@ -276,12 +276,13 @@
 
   function weeklyBid(m, history) {
     if (!(m.bid>=minBid) || history.changes.some(x=>x.at>=m.weekStart)) return null;
-    if (m.profit<0 || m.score!=null && m.score<10) {
+    const scoreBelowTarget=m.score!=null && m.score<10;
+    if (m.profit<0 || scoreBelowTarget) {
       if (m.bid===minBid) return m.profit<0 ? {text:'Реклама в минусе при 3 ₸. Проверь паузу.'} : null;
       const rollback=history.best?.bid;
       const cap=targetCpc(m);
       const next=Math.max(minBid,Math.round((m.bid-3)*100)/100);
-      const bid=m.profit<0 && rollback>=minBid && rollback<m.bid && rollback<=Math.min(cap ?? 0,bidLimit())
+      const bid=scoreBelowTarget ? next : rollback>=minBid && rollback<m.bid && rollback<=Math.min(cap ?? 0,bidLimit())
         ? rollback : Math.min(next,bidLimit());
       return {bid,text:(m.profit<0?'Убыток по рекламным выкупам.':'Оценка ниже 10.')+' Ставка '+cash(m.bid)+' → '+cash(bid)+'.'};
     }
