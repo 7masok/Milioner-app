@@ -101,7 +101,17 @@ export function createAmanService({read=readAmanAccess,write=saveAmanAccess,fetc
    if(now()>=deadline)throw fail('Aman Trans отвечает дольше обычного. Последний полный снимок сохранён',504);
    const response=await call('/amantrans/orders?'+query,{token:data.token,timeout:Math.min(12000,Math.max(1,deadline-now()))});
    if(!Array.isArray(response?.content)||!Number.isInteger(response.totalPages)||response.totalPages<0)throw fail('Не удалось получить полный список отправлений',502);
-   for(const row of response.content){if(row.customer?.id!=null&&String(row.customer.id)!==data.accountId)throw fail('Aman Trans вернул другой аккаунт',502);const order=amanOrder(row);if(!seen.has(order.id)){seen.add(order.id);result.push(order);}}
+   for(const row of response.content){
+    // The carrier search also matches names and partial tracks.
+    if(search&&text(row.track_code,100)!==search)continue;
+    if(row.customer?.id!=null&&String(row.customer.id)!==data.accountId){
+     throw search
+      ?Object.assign(fail('Aman Trans вернул этот трек с другим аккаунтом',409),{carrierAccountConflict:true})
+      :fail('Aman Trans вернул другой аккаунт',502);
+    }
+    const order=amanOrder(row);
+    if(!seen.has(order.id)){seen.add(order.id);result.push(order);}
+   }
    if(page+1>=response.totalPages)return result;
   }
   throw fail('Список Aman Trans превышает 5000 отправлений. Уточните поиск',502);
@@ -155,7 +165,9 @@ export function createAmanService({read=readAmanAccess,write=saveAmanAccess,fetc
    const order=matches[0];
    if(order.status!=='NEW'||data.hidden?.[order.id]||ids.some(id=>id!==order.id)
     ||isOrderClaimed(data,key,order.id)||receipts[order.id]||declarationMatches(order,fields))continue;
-   const current=trackMatches(await list(data,fields.track_code),fields.track_code);
+   let current;
+   try{current=await list(data,fields.track_code);}
+   catch(error){if(error.carrierAccountConflict)continue;throw error;}
    if(current.length!==1||current[0].id!==order.id||current[0].fingerprint!==order.fingerprint)continue;
    receipts[order.id]={fields,at:now()};await write(data);
    try{

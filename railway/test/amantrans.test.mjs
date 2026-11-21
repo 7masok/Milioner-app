@@ -15,6 +15,8 @@ function fixture(readDeclarations){
    if(mode==='foreign')return Response.json({content:[{...raw(99),customer:{id:8}}],totalPages:1});
    if(mode==='partial'&&u.searchParams.get('page')==='1')throw Error('offline');
    const search=u.searchParams.get('forSearch')||'',matches=source.filter(x=>!search||x.track_code.includes(search)||x.name.includes(search));
+   if(search&&mode==='foreign-fuzzy')matches.unshift({...raw(99,search),track_code:'OTHER-TRACK',customer:{id:8}});
+   if(search&&mode==='foreign-exact')matches.unshift({...raw(99),track_code:search,customer:{id:8}});
    if(mode==='paged'&&search){const page=Number(u.searchParams.get('page'));return Response.json({content:matches.slice(page,page+1),totalPages:matches.length});}
    return Response.json({content:matches,totalPages:mode==='partial'?2:1});
   }
@@ -94,6 +96,18 @@ test('upstream expired login cannot return a warehouse 401 or reflect carrier er
 });
 test('a foreign account or failed new connection never replaces a working account',async()=>{
  const f=fixture();await f.connect();const original=structuredClone(f.stored);f.mode='foreign';await assert.rejects(f.connect());assert.deepEqual(f.stored,original);
+});
+test('an unrelated foreign search result does not block the exact match, but a foreign exact track prevents any write',async()=>{
+ const f=fixture(),track='EXACT-CARRIER-TRACK';
+ f.source.pop();
+ f.source[0].track_code=track;
+ await f.connect();
+ f.mode='foreign-fuzzy';
+ const body={purchaseKey:'purchase-exact',fields:{...fields,track,shippingMethod:'Avto'}};
+ assert.equal((await f.service.registerPurchase(body)).createdOrderId,'11');
+ f.mode='foreign-exact';
+ await assert.rejects(f.service.registerPurchase({...body,purchaseKey:'other-purchase'}),error=>error.status===409&&error.carrierAccountConflict);
+ assert.equal(f.calls.filter(call=>call.url.pathname.endsWith('/create')||call.url.pathname.endsWith('/update')).length,0);
 });
 test('hiding an erroneous duplicate is reversible and makes no carrier write',async()=>{
  const f=fixture();await f.connect();const count=f.calls.length;let view=await f.service.hide('12',true);assert.equal(view.orders.find(x=>x.id==='12').hidden,true);assert.equal(view.orders.find(x=>x.id==='11').hidden,false);
