@@ -39,7 +39,18 @@ export function createBusinessReportRuntime({state,market,readApi,now=Date.now()
   financialSales:()=>state.sales||[],reportPeriod:0,reportCustomFrom:'',reportCustomTo:'',
  };
  ctx.window=ctx;vm.createContext(ctx,{codeGeneration:{strings:false,wasm:false}});
- const defs=calculationDefinitions();
+ const defs=new Map(calculationDefinitions());
+ const adsNames=new Set(['DAY','OFFSET','LIMIT','countKeys','iso','dayStart','number','sum','format','value','cash','hasActivity','kaspiSkus','warehouseUnitCost','testPriceTerms','testEnd','active','baselineStart','coverageIncludes','campaignRows','campaignMetrics','productTotal','targetCpc','bidHistory','weeklyBid','minBid','tests','bidLimit','testProfit']);
+ function loadAdsCalculations(){
+  const adsSource=readFileSync(new URL('kaspi-campaign-workbench.js',root),'utf8');
+  const body=parse(adsSource,{ecmaVersion:'latest'}).body[0].expression.callee.body.body;
+  for(const node of body){
+   if(node.type==='FunctionDeclaration'&&adsNames.has(node.id.name))vm.runInContext(adsSource.slice(node.start,node.end),ctx);
+   if(node.type==='VariableDeclaration')for(const d of node.declarations)if(adsNames.has(d.id.name))
+    Object.defineProperty(ctx,d.id.name,{configurable:true,writable:true,value:vm.runInContext('('+adsSource.slice(d.init.start,d.init.end)+')',ctx)});
+  }
+ }
+
  for(const [name,def]of defs){if(Object.hasOwn(ctx,name))continue;
   let initialized=false,value,evaluating=false;
   Object.defineProperty(ctx,name,{configurable:true,enumerable:true,get(){if(!initialized){if(evaluating)throw Error('Report dependency cycle: '+name);evaluating=true;try{value=vm.runInContext('('+def.code+')',ctx,{timeout:1000});initialized=true}finally{evaluating=false}}return value},set(next){value=next;initialized=true}});
@@ -47,6 +58,48 @@ export function createBusinessReportRuntime({state,market,readApi,now=Date.now()
  // No network or business write capability is available in this context.
  ctx.save=()=>{throw Error('Report calculations cannot save warehouse data')};ctx.fetch=()=>{throw Error('Report calculations cannot access the network')};
  return {
+  async kaspiAdvertising({from,to,confirmedDays,bidChanges,test}){
+   ctx.confirmedAdDays=new Set(confirmedDays);ctx.bidChanges=bidChanges;ctx.emptyTests={};
+   loadAdsCalculations();
+   const range={from,to:test?ctx.iso(now):to}, snapshot=await ctx.loadKaspiOrders(0,{range});
+   const model=ctx.buildModel(snapshot,0,range,null,true);
+   const finance=snapshot.historyIncomplete||snapshot.returns.some(row=>!row.code&&!row.id&&!row.orderCode&&!row.orderId)
+    ? null : {byCode:new Map(model.buyouts.flatMap(row=>[row.id,row.code].filter(Boolean).map(code=>[code,row]))),
+     returned:new Set(snapshot.returns.flatMap(row=>[row.id,row.code,row.orderCode,row.orderId].filter(Boolean).map(String)))};
+   if(test){
+    const orders=await readApi('/api/orders?market=Kaspi&history=1&limit=15000&after='+ctx.dayStart(from)+'&before='+(ctx.dayStart(to)+86400000));
+    ctx.data={finance,orders};
+    return ctx.testProfit(test,now);
+   }
+   const totals={byProduct:new Map(model.rows.filter(row=>row.productId).map(row=>[String(row.productId),row])),
+    historyIncomplete:snapshot.historyIncomplete,incomplete:Boolean(snapshot.historyIncomplete||model.pendingOrders||model.adsDateMissing
+     ||snapshot.returns.length||model.rows.some(row=>!row.productId&&(row.revenue!==0||row.ads>0)))};
+   const recentRange={from:ctx.iso(ctx.dayStart(to)-29*86400000),to};
+   const recentSnapshot=await ctx.loadKaspiOrders(0,{range:recentRange});
+   const recentModel=ctx.buildModel(recentSnapshot,0,recentRange);
+   const recentTotals={...totals,byProduct:new Map(recentModel.rows.filter(row=>row.productId)
+    .map(row=>[String(row.productId),row])),historyIncomplete:recentSnapshot.historyIncomplete};
+   const campaigns=ctx.campaignRows(state.kaspiAdExpenses||[],from,to,ctx.kaspiAdsMatchProduct,to);
+   const claims=new Map();
+   for(const campaign of campaigns)for(const row of campaign.products.values())for(const code of new Set(row.lines.flatMap(line=>line.orderCodes||[]))){
+    const key=code+'|'+row.productId;claims.set(key,(claims.get(key)||0)+1);
+   }
+   return {campaigns:campaigns.filter(campaign=>campaign.latest),incomplete:totals.incomplete,
+    metrics(row,campaign,current){
+     const metrics=ctx.campaignMetrics(row,finance,claims);
+     const history=ctx.bidHistory(row,campaign,finance,claims,from,to);
+     if(current.orders!==metrics.orders||!Number.isFinite(current.spend)||Math.abs(current.spend-row.spend)>.01){delete metrics.profit;delete metrics.buyouts;delete metrics.maxCpc;}
+     if(current.clicks!==metrics.clicks)delete metrics.maxCpc;
+     Object.assign(metrics,ctx.productTotal(row.productId,totals));
+     for(const key of ['views','clicks','orders','bid','score'])if(Number.isFinite(current[key]))metrics[key]=current[key];
+     const item=ctx.prod(row.productId),cost=ctx.warehouseUnitCost(item);
+     const rates=metrics.feeRate!=null?metrics:ctx.productTotal(row.productId,recentTotals);
+     const decisionMetrics=metrics.totalProfit<0&&!metrics.totalPreliminary
+      ? {...metrics,profit:Math.min(metrics.profit??0,metrics.totalProfit)} : metrics;
+     return {...metrics,cost,...ctx.testPriceTerms(cost,rates.feeRate==null?null:rates),
+      bidProposal:ctx.weeklyBid({...decisionMetrics,weekStart:ctx.dayStart(to)+86400000},history)};
+    }};
+  },
   async forecast(days=30){
    const end=Math.floor((now+18000000)/86400000)*86400000-18000000+86400000,range={from:new Date(end-days*86400000+18000000).toISOString().slice(0,10),to:new Date(end-1+18000000).toISOString().slice(0,10)},rows=[],incompleteSources=[];
    for(const source of forecastMarkets){try{

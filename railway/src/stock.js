@@ -106,7 +106,7 @@ async function warehouseKaspiRows(){
   return [...combined.values()].sort((a,b)=>a.sku.localeCompare(b.sku));
 }
 function feedUrl(req){const host=String(req.get('x-forwarded-host')||req.get('host')||'').split(',')[0].trim(),protocol=String(req.get('x-forwarded-proto')||req.protocol||'https').split(',')[0].trim()||'https';return host?`${protocol}://${host}/kaspi/price-list.xml`:''}
-async function kaspiStockFeedStatus(req){
+export async function kaspiStockFeedStatus(req){
   const [template,rows,access]=await Promise.all([liveTemplate(),warehouseKaspiRows(),pool.query('SELECT last_fetched_at AS "lastFetchedAt",fetch_count AS "fetchCount" FROM kaspi_price_feed_access WHERE id=1').catch(()=>({rows:[]}))]);
   const rawXml=String(template?.rawXml||''),info=templateInfo(rawXml),primaryStoreId=String(template?.primaryStoreId||'').trim()||info.storeIds[0]||'',rowsBySku=new Map(rows.map(row=>[row.sku,row])),effective=new Set(info.offers.keys());
   if(primaryStoreId){
@@ -114,7 +114,7 @@ async function kaspiStockFeedStatus(req){
     for(const row of rows)if(automaticOfferFromRow(row,effective,primaryStoreId))effective.add(row.sku);
   }
   const missingOffers=rows.filter(row=>!effective.has(row.sku)).map(row=>({sku:row.sku,productId:row.productId,name:row.name,stock:row.stock,price:row.price})),missingSkus=missingOffers.map(row=>row.sku),missingPrimaryStore=primaryStoreId?rows.filter(row=>info.offers.has(row.sku)&&!info.offers.get(row.sku).stores.has(primaryStoreId)).map(row=>row.sku):[],configured=Boolean(rawXml),ready=configured&&Boolean(primaryStoreId);
-  return {ok:true,configured,ready,primaryStoreId,storeIds:info.storeIds,templateOfferCount:info.offers.size,offerCount:effective.size,recoveredOffers:Math.max(0,effective.size-info.offers.size),linked:rows.length,matched:rows.length-missingSkus.length,missingSkus,missingOffers,missingPrimaryStore,lastFetchedAt:Number(access.rows[0]?.lastFetchedAt||0),fetchCount:Number(access.rows[0]?.fetchCount||0),feedUrl:ready?feedUrl(req):'',error:configured&&!primaryStoreId?'В XML не найден склад Kaspi (availability storeId).':''};
+  return {ok:true,configured,ready,primaryStoreId,storeIds:info.storeIds,templateOfferCount:info.offers.size,offerCount:effective.size,recoveredOffers:Math.max(0,effective.size-info.offers.size),linked:rows.length,matched:rows.length-missingSkus.length,missingSkus,missingOffers,missingPrimaryStore,lastFetchedAt:Number(access.rows[0]?.lastFetchedAt||0),fetchCount:Number(access.rows[0]?.fetchCount||0),feedUrl:ready&&req?feedUrl(req):'',error:configured&&!primaryStoreId?'В XML не найден склад Kaspi (availability storeId).':''};
 }
 
 async function liveTemplate() {

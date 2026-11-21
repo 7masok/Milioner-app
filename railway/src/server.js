@@ -1,3 +1,4 @@
+import {startKaspiWeeklyLoop} from './kaspi-weekly.js';
 import {startKaspiIdentityLoop} from './kaspi-product-identities.js';
 import {numberPurchaseShipments} from './warehouse-shipment-numbers.js';
 import {readWbSupplySnapshot,linkWbSupplyProduct,setWbSupplyAccounting,cancelWbSupplyReservation,startWbSupplyLoop} from './wb3-supply-sync.js';
@@ -462,6 +463,7 @@ const server = app.listen(config.port, '::', () => {
   if(config.storeProfile!=='WB3') {
   startAmanLoop();
   startKaspiMarketingLoop();
+  startKaspiWeeklyLoop();
   startKaspiIdentityLoop();
   startOzonSyncLoop();
   resumeOzonPerformanceRetries().catch(()=>console.warn('Ozon Performance: не удалось восстановить очередь повторов'));

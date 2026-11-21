@@ -280,7 +280,6 @@
       if (m.bid===minBid) return m.profit<0 ? {text:'Реклама в минусе при 3 ₸. Проверь паузу.'} : null;
       const rollback=history.best?.bid;
       const cap=targetCpc(m);
-      if (m.profit<0 && cap!=null && cap<minBid) return {text:'Порог окупаемости ниже 3 ₸. Проверь паузу.'};
       const next=Math.max(minBid,Math.round((m.bid-3)*100)/100);
       const bid=m.profit<0 && rollback>=minBid && rollback<m.bid && rollback<=Math.min(cap ?? 0,bidLimit())
         ? rollback : Math.min(next,bidLimit());
@@ -603,7 +602,12 @@
       ? 'Оценка конверсии ниже 7. Проверь фото, описание, отзывы и цену у конкурентов. Снижать цену имеет смысл при запасе маржи.'
       : m.score>=7 ? 'Оценка конверсии в высокой категории Kaspi (7–10).' : '';
     const outcome = t ? testProfit(t,at) : null;
-    const decision = t?.weekly && !running && !t.stoppedAt && outcome
+    const appliedDecision=t?.decision;
+    const decision = appliedDecision
+      ? appliedDecision.inconclusive ? 'Тест без достоверного результата.'
+        : appliedDecision.applied ? 'Выигравшая цена в прайсе · '+cash(appliedDecision.winner) : 'После теста цена изменена вручную.'
+      : t?.automatic && !running && !t.stoppedAt ? 'Ждём подтверждённые данные для сравнения.'
+      : t?.weekly && !running && !t.stoppedAt && outcome
       ? (outcome.after>outcome.before?'Оставить '+cash(t.after):'Вернуть '+cash(t.before)) : '';
     const testInfo = t
       ? '<div class="kaw-note"><b>'+ (running ? 'День '+experiment(t,data?.orders,at).day+'/'+t.days+' · Тест цены' : 'Тест завершён') + ' · '+ cash(t.before) + ' → ' + cash(t.after) + '</b> · ' + esc(experimentLabel(t, at))

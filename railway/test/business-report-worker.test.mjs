@@ -103,3 +103,20 @@ test('the WB2 transit audit separates terminal evidence, missing margin and fore
  assert.equal(result.deliveredByStatistics,1);
  assert.equal(result.net,250);
 });
+
+test('weekly Kaspi server calculation reuses warehouse links and the bid and price rules',async()=>{
+ const s=state();
+ s.kaspiAdExpenses=[{id:'kaspi-auto-11-22-2026-07-01',fromDate:'2026-07-01',toDate:'2026-07-01',importedAt:1,
+  lines:[{date:'2026-07-01',amount:20,sku:'s',productId:'p',views:600,clicks:35,orders:1,orderCodes:['a'],score:8,bid:24}]}];
+ const runtime=createBusinessReportRuntime({state:s,market:'Kaspi',now:FROM+DAY,
+  readApi:async()=>({ok:true,orders:[completed],returns:[]})});
+ const report=await runtime.kaspiAdvertising({from:'2026-07-01',to:'2026-07-01',confirmedDays:['2026-07-01'],bidChanges:[]});
+ const [campaign]=report.campaigns;
+ const [row]=campaign.products.values();
+ assert.equal(row.productId,'p');
+ const metrics=report.metrics(row,campaign,{bid:24,score:8,views:600,clicks:35,orders:1,spend:20});
+ assert.equal(metrics.bidProposal.bid,21);
+ assert.equal(metrics.cost,100);
+ assert.equal(metrics.testPriceFloor,305);
+ assert.equal(report.metrics(row,campaign,{bid:3,score:8,views:600,clicks:35,orders:1,spend:20}).bidProposal,null);
+});

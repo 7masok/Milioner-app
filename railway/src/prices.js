@@ -188,10 +188,10 @@ function kaspiTemplatePrices(rawXml) {
   return map;
 }
 
-async function listKaspiPrices() {
+export async function listKaspiPrices(client=pool) {
   const [products, template] = await Promise.all([
-    readWarehouseProducts(pool),
-    pool.query('SELECT raw_xml AS "rawXml",updated_at AS "updatedAt" FROM kaspi_price_template WHERE id=1')
+    readWarehouseProducts(client),
+    client.query('SELECT raw_xml AS "rawXml",updated_at AS "updatedAt" FROM kaspi_price_template WHERE id=1')
       .catch(() => ({ rows: [] }))
   ]);
   const templatePrices = kaspiTemplatePrices(template.rows[0]?.rawXml);

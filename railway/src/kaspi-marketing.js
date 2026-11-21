@@ -369,7 +369,7 @@ export function createKaspiMarketingService({
 
   function view(data) {
     return {
-      ok: true, connected: Boolean(data?.account), shop: data?.account?.name || '',
+      ok: true, connected: Boolean(data?.account), accountId:String(data?.account?.id || ''), shop: data?.account?.name || '',
       time: data?.time || '09:00', lastDay: data?.lastDay || '',
       lastSuccessAt: data?.lastSuccessAt || 0, lastError: data?.lastError || '', reconnect: Boolean(data?.reconnect),
       defaultFrom: localDay(now() - 4 * DAY), yesterday: localDay(now() - DAY),
@@ -546,6 +546,10 @@ export function createKaspiMarketingService({
       if (!data?.account || data.reconnect) throw fail('Подключите Kaspi Маркетинг', 409);
       if (String(data.account.id) !== accountId) throw fail('Подключён другой магазин Kaspi', 409);
       if (data.providerRetryAt > now()) throw fail('Дождитесь окончания ограничения Kaspi', 429, {retryAt:data.providerRetryAt});
+      if (input.weekStart && (data.bidChanges || []).some(change => change.at >= input.weekStart
+        && change.accountId === accountId && change.campaignId === campaignId && change.sku === sku)) {
+        return {ok:true,skipped:true};
+      }
       const path = ADS_API + 'v1/merchant/' + accountId + '/campaign/' + campaignId + '/products/update-bid';
       let result;
       try {
@@ -622,13 +626,14 @@ export function createKaspiMarketingService({
   };
 }
 
-const service = createKaspiMarketingService();
+export const kaspiMarketingService = createKaspiMarketingService();
+const service = kaspiMarketingService;
 export const kaspiMarketingRouter = express.Router();
 kaspiMarketingRouter.use(noStore, requireConfiguredSession, requireTrustedOrigin);
 kaspiMarketingRouter.get('/state', asyncRoute(async (_req, res) => res.json(await service.state())));
 kaspiMarketingRouter.get('/identities', asyncRoute(async (_req,res)=>res.json(await kaspiIdentityCollector.snapshot())));
 kaspiMarketingRouter.get('/products', asyncRoute(async (req,res)=>res.json(await service.products(req.query))));
-kaspiMarketingRouter.put('/bid', requireWritesEnabled, asyncRoute(async (req, res) => res.json(await service.setBid(req.body))));
+kaspiMarketingRouter.put('/bid', requireWritesEnabled, asyncRoute(async (req, res) => res.json(await service.setBid({...req.body,weekStart:undefined}))));
 kaspiMarketingRouter.post('/connect', requireWritesEnabled, asyncRoute(async (req, res) => res.json(await service.connect(req.body))));
 kaspiMarketingRouter.post('/schedule', requireWritesEnabled, asyncRoute(async (req, res) => res.json(await service.saveTime(req.body))));
 kaspiMarketingRouter.post('/disconnect', requireWritesEnabled, asyncRoute(async (_req, res) => res.json(await service.disconnect())));

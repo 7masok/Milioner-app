@@ -55,6 +55,7 @@ test('single-product bid changes use the connected account and require the echoe
   await assert.rejects(service.setBid({...input,accountId:'999'}),/другой магазин/);
   await assert.rejects(service.setBid({...input,bid:2}),/от 3/);
   await assert.rejects(service.setBid({...input,bid:'8.5'}),/от 3/);
+  assert.deepEqual(await service.setBid({...input,bid:11.5,weekStart:at-3600000}),{ok:true,skipped:true});
   assert.equal(calls,1);
   confirmed=false;
   await assert.rejects(service.setBid(input),/не подтвердил новую ставку/);
