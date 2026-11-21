@@ -148,7 +148,7 @@ export function createAmanService({read=readAmanAccess,write=saveAmanAccess,fetc
   }
  }
  async function refresh(data,persistFailure=true){try{await session(data);const orders=await list(data);repairLegacyDuplicates(data,orders);data.orders=orders;data.fetchedAt=now();data.nextAttemptAt=now()+TTL;data.lastError='';await write(data);}catch(error){if(data&&persistFailure){data.lastError=error.message;data.nextAttemptAt=Math.max(now()+TTL,Number(error.retryAt)||0);await write(data);}throw error;}return view(data);}
- async function reconcileDeclarations(data){
+ async function reconcileDeclarations(data,requestedKey){
   if(!readDeclarations||!data.orders?.length)return;
   const candidates=warehouseDeclarationCandidates(await readDeclarations(),data.accountId);
   const receipts=data.declarationUpdates||={};
@@ -160,21 +160,29 @@ export function createAmanService({read=readAmanAccess,write=saveAmanAccess,fetc
    }
   }
   if(changed)await write(data);
+  // Service unattempted declarations before retrying older writes.
+  const attempts=new Map(Object.values(receipts).map(receipt=>[receipt.fields.track_code,receipt.at]));
+  candidates.sort((a,b)=>(attempts.get(a.fields.track_code)||0)-(attempts.get(b.fields.track_code)||0));
   for(const {key,fields,ids} of candidates){
+   if(requestedKey&&key!==requestedKey)continue;
    const matches=trackMatches(data.orders,fields.track_code);
    if(matches.length!==1)continue;
    const order=matches[0];
    const op=purchaseOperation(key),pending=data.operations?.[op];
    const recover=!!pending&&!pending.orderId&&pending.fields?.track_code===fields.track_code;
-   if(pending&&!pending.orderId&&!recover)continue;
+   if(pending&&!pending.orderId&&!recover||pending?.orderId&&pending.orderId!==order.id)continue;
    if(data.hidden?.[order.id]||ids.some(id=>id!==order.id)
-    ||isOrderClaimed(data,key,order.id)||!recover&&(receipts[order.id]||declarationMatches(order,fields)))continue;
+    ||isOrderClaimed(data,key,order.id))continue;
+   const needsLink=!pending?.orderId;
+   if(!needsLink&&declarationMatches(order,fields))continue;
+   const previous=receipts[order.id];
+   if(previous&&now()-previous.at<TTL)continue;
    let current;
    try{current=await list(data,fields.track_code);}
    catch(error){if(error.carrierAccountConflict)continue;throw error;}
    if(current.length!==1||current[0].id!==order.id||current[0].fingerprint!==order.fingerprint)continue;
-   if(recover)await linkExisting(data,op,key,current[0]);
-   if(receipts[order.id]||declarationMatches(order,fields))continue;
+   if(needsLink){data.operations||={};await linkExisting(data,op,key,current[0]);}
+   if(declarationMatches(current[0],fields))continue;
    receipts[order.id]={fields,at:now()};await write(data);
    try{
     await call('/amantrans/orders/update',{token:data.token,method:'PUT',body:{id:Number(order.id),...fields}});
@@ -222,8 +230,9 @@ export function createAmanService({read=readAmanAccess,write=saveAmanAccess,fetc
   if(!receipt){
    const before=await list(data,fields.track_code),matches=trackMatches(before,fields.track_code);
    if(matches.length>1)throw fail('В Aman Trans уже несколько отправлений с этим треком. Выберите нужное в закупке.',409);
-   if(matches.length===1)return linkExisting(data,op,key,matches[0]);
-   return sendOrder(null,{fields:body.fields},key,before);
+   if(!matches.length)return sendOrder(null,{fields:body.fields},key,before);
+   await linkExisting(data,op,key,matches[0]);
+   receipt=data.operations[op];
   }
   if(!receipt.orderId){
    const matches=await list(data,receipt.fields.track_code);
@@ -238,7 +247,11 @@ export function createAmanService({read=readAmanAccess,write=saveAmanAccess,fetc
   }
   const id=receipt.orderId;if(body.orderId&&String(body.orderId)!==id&&String(body.orderId)!==receipt.replacesId)throw fail('ID отправления закупки изменился. Обновите склад',409);
   const lastTrack=receipt.lastTrack||receipt.fields.track_code;
-  if(fields.track_code===lastTrack)return {...view(data),sent:true,createdOrderId:id,syncedTrack:lastTrack};
+  if(fields.track_code===lastTrack){
+   await reconcileDeclarations(data,key);
+   return {...view(data),sent:true,createdOrderId:id,syncedTrack:lastTrack,
+    declarationConfirmed:data.orders?.some(row=>row.id===id&&row.track===lastTrack&&declarationMatches(row,fields))||false};
+  }
   const edit=text(body.editOperationId,80);if(!/^[a-zA-Z0-9_-]{12,80}$/.test(edit))throw fail('Сохраните изменение трека ещё раз',409);
   const editKey='track_'+crypto.createHash('sha256').update(key+'|'+edit).digest('hex'),previous=data.operations[editKey];
   if(previous&&(previous.orderId!==id||previous.track!==fields.track_code))throw fail('Изменение трека уже сохранено с другими данными',409);

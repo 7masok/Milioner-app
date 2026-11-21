@@ -263,3 +263,19 @@ test('a changed external track is not overwritten, and an uncertain unsuccessful
  f.source.find(x=>x.id===15).track_code='EXTERNAL-TRACK';await f.service.sync();await assert.rejects(f.service.registerPurchase(edit),/временно не найдено/);assert.equal(f.calls.filter(x=>x.url.pathname==='/amantrans/orders/update').length,0);
  f.source.find(x=>x.id===15).track_code='TMP-WAREHOUSE';f.mode='edit-timeout';await assert.rejects(f.service.registerPurchase(edit));f.mode='';await assert.rejects(f.service.registerPurchase(edit),/повторно не отправляется/);assert.equal(f.calls.filter(x=>x.url.pathname==='/amantrans/orders/update').length,1);
 });
+
+test('linked purchase retries an unapplied update and confirms the original warehouse amount',async()=>{
+ const purchase={id:'p1',productId:'sku',status:'to_forwarder',amantransTrack:'SAME-TRACK',qty:20,buyTotal:1289};
+ const f=fixture(async()=>({purchases:[purchase],products:[{id:'sku',name:'Warehouse item'}]}));
+ f.source.pop();
+ await f.connect();
+ const body={purchaseKey:'p1',fields:{name:'Warehouse item',track:'SAME-TRACK',priceUsd:1289,amount:20,shippingMethod:'Avto'}};
+ f.mode='edit-timeout';
+ assert.equal((await f.service.registerPurchase(body)).declarationConfirmed,false);
+ f.mode='';
+ f.advance(300001);await f.service.syncIfDue();
+ assert.equal((await f.service.registerPurchase(body)).declarationConfirmed,true);
+ assert.equal(f.source[0].price,1289);
+ assert.equal(f.calls.filter(call=>call.options.method==='PUT').length,2);
+ assert.equal(f.calls.filter(call=>call.url.pathname.endsWith('/create')).length,0);
+});
