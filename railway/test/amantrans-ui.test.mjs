@@ -169,7 +169,7 @@ test('legacy paid shipment recovers its unique exact track and mapped stage with
  const writes=f.calls.saved;f.ctx.renderPurchases();assert.equal(f.calls.saved,writes,'repeat render is idempotent');
 });
 test('legacy recovery rejects ambiguous tracks, stale data, other accounts, unpaid and received purchases',async()=>{
- for(const scenario of ['carrier-duplicate','purchase-duplicate','stale','failed','readonly','other-account','cart','received','pending-create','pending-track','partial-link']){
+ for(const scenario of ['carrier-duplicate','purchase-duplicate','stale','failed','readonly','other-account','cart','received','claimed','hidden','pending-track','partial-link']){
   const f=stagedFixture(),row=f.ctx.state.purchases[0];delete row.amantransOrderId;delete row.amantransAccountId;row.batch='EXACT-LEGACY';f.view.orders[0].track=row.batch;
   if(scenario==='carrier-duplicate')f.view.orders[1].track=row.batch;
   if(scenario==='purchase-duplicate')f.ctx.state.purchases[1].batch=row.batch;
@@ -179,7 +179,8 @@ test('legacy recovery rejects ambiguous tracks, stale data, other accounts, unpa
   if(scenario==='other-account')row.amantransAccountId='8';
   if(scenario==='cart')row.workflowStageId='cart';
   if(scenario==='received')row.status='received';
-  if(scenario==='pending-create')row.amantransAutoRequestedAt=123;
+  if(scenario==='claimed')f.view.purchaseLinks={other:{id:'11',track:row.batch}};
+  if(scenario==='hidden')f.view.orders[0].hidden=true;
   if(scenario==='pending-track')row.amantransPendingTrack='OTHER';
   if(scenario==='partial-link')f.ctx.state.purchases.push({...row,id:'p3',amantransOrderId:'11',amantransAccountId:'7'});
   const before=JSON.stringify(f.ctx.state.purchases);await f.ctx.openAmanTrans('main');
@@ -311,4 +312,16 @@ test('a zero declaration shows carrier details and can be updated after reviewin
  const mismatched=f.ctx.amanShipmentHtml('main',[purchase]);
  assert.match(mismatched,/Количество отличается/);
  assert.doesNotMatch(mismatched,/Сверить название и сумму/);
+});
+
+test('a pending registration adopts an existing exact track and imports the carrier delivery and stage',async()=>{
+ const f=stagedFixture(),row=f.ctx.state.purchases[0];
+ delete row.amantransOrderId;delete row.amantransAccountId;
+ Object.assign(row,{amantransTrack:'TRACK-361',amantransPendingTrack:'TRACK-361',amantransAutoRequestedAt:123,delivery:0,qty:20});
+ Object.assign(f.view.orders[0],{track:'TRACK-361',totalKzt:263.86});
+ await f.ctx.openAmanTrans('main');
+ assert.equal(row.amantransOrderId,'11');assert.equal(row.delivery,263.86);
+ assert.equal(row.workflowStageId,'delivery_warehouse');
+ assert.match(f.ctx.amanShipmentHtml('main',[row]),/263,86/);
+ assert.equal(f.requests.filter(r=>r.options.method!=='GET').length,0);
 });

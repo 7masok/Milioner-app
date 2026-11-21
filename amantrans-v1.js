@@ -29,10 +29,12 @@
    for(const items of groups.values())for(const track of new Set(items.map(x=>rowTrack(x)).filter(Boolean)))tracks.set(track,(tracks.get(track)||0)+1);
    for(const items of groups.values()){
     const track=purchaseTrack(items);
-    if(paid<0||!track||tracks.get(track)!==1||items.some(x=>x.amantransOrderId||x.amantransAutoRequestedAt||x.amantransPendingTrack||x.amantransAccountId&&String(x.amantransAccountId)!==snapshot.accountId||rowTrack(x)!==track||!['to_forwarder','to_me'].includes(purchaseStatus(x))||workflow.findIndex(s=>s.id===purchaseWorkflowStage(x))<paid))continue;
+    if(paid<0||!track||tracks.get(track)!==1||items.some(x=>x.amantransOrderId||x.amantransPendingTrack&&x.amantransPendingTrack!==track||x.amantransAccountId&&String(x.amantransAccountId)!==snapshot.accountId||rowTrack(x)!==track||!['to_forwarder','to_me'].includes(purchaseStatus(x))||workflow.findIndex(s=>s.id===purchaseWorkflowStage(x))<paid))continue;
     const matches=snapshot.orders.filter(x=>x.track===track);
     if(matches.length!==1||used.has(String(matches[0].id)))continue;
-    const carrier=matches[0];used.add(String(carrier.id));
+    const carrier=matches[0],key=String(items[0].shipmentId||items[0].id);
+    if(carrier.hidden||Object.entries(snapshot.purchaseLinks||{}).some(([owner,link])=>owner===key?String(link.id)!==carrier.id:String(link.id)===carrier.id))continue;
+    used.add(String(carrier.id));
     for(const row of items){row.amantransOrderId=String(carrier.id);row.amantransAccountId=snapshot.accountId;row.amantransSyncedTrack=track;}changed=true;
    }
   }

@@ -169,8 +169,9 @@ export function createAmanService({read=readAmanAccess,write=saveAmanAccess,fetc
    if(matches.length!==1)continue;
    const order=matches[0];
    const op=purchaseOperation(key),pending=data.operations?.[op];
-   const recover=!!pending&&!pending.orderId&&pending.fields?.track_code===fields.track_code;
-   if(pending&&!pending.orderId&&!recover||pending?.orderId&&pending.orderId!==order.id)continue;
+   // The saved creation attempt may reference an earlier temporary track.
+   // The current warehouse declaration and unique current carrier record identify the shipment.
+   if(pending?.orderId&&pending.orderId!==order.id)continue;
    if(data.hidden?.[order.id]||ids.some(id=>id!==order.id)
     ||isOrderClaimed(data,key,order.id))continue;
    const needsLink=!pending?.orderId;
