@@ -66,7 +66,7 @@ test('auto zero uses confirmed own availability and preserves manual protection'
   assert.match(source,/available=cleanText\(row\.productId\)\?inventory\.amount\(row\.productId\):null/);
   assert.match(source,/const known=available!==null/);
   assert.match(source,/pref\.manualPriceLock\s*\? \{lockedPrice:pref\.lockedPrice,lockedDiscount:pref\.lockedDiscount\}/);
-  assert.match(source,/protectedNow=pref\.manualPriceLock\|\|autoLock/);
+  assert.match(source,/protectedNow=pref\.manualPriceLock\|\|effectiveAutoLock/);
 });
 
 test('WB card grouping is user initiated, verifies actual result and separates one-by-one',()=>{

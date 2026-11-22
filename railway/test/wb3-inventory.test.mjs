@@ -1,3 +1,4 @@
+import {wb3ProtectionStock} from '../src/wb-price-protection.js';
 import test from 'node:test';import assert from 'node:assert/strict';import vm from 'node:vm';import {readFileSync} from 'node:fs';
 import {inventoryPage,aggregateInventory} from '../src/wb3-inventory-model.js';
 const rows=[{nmId:123,chrtId:1,warehouseId:10,quantity:5,inWayToClient:2,inWayFromClient:1},{nmId:123,chrtId:1,warehouseId:11,quantity:3,inWayToClient:1},{nmId:123,chrtId:2,warehouseId:10,quantity:7}];
@@ -14,4 +15,14 @@ test('each product gets its own size quantity and an imported parent never doubl
 });
 test('unknown FBO data is distinct from a confirmed empty snapshot',()=>{
  const ctx=browser(),p={id:'a',wbVariant:{nmId:123,chrtId:1}};ctx.state.products=[p];assert.equal(ctx.fboQty(p),null);assert.match(ctx.productCard(p),/FBO WB: не загружено/);vm.runInContext('wb3StockReady=true',ctx);assert.equal(ctx.fboQty(p),0);
+});
+
+test('WB3 zero-stock protection uses the complete fresh FBO total across warehouses and sizes',()=>{
+ const fetchedAt=1000000, snapshot={...aggregateInventory(rows),fetchedAt};
+ assert.equal(wb3ProtectionStock(snapshot,'123',fetchedAt),15);
+ assert.equal(wb3ProtectionStock(snapshot,'456',fetchedAt),0);
+ assert.equal(wb3ProtectionStock({...snapshot,loading:true},'456',fetchedAt),null);
+ assert.equal(wb3ProtectionStock({...snapshot,error:'WB unavailable'},'456',fetchedAt),null);
+ assert.equal(wb3ProtectionStock({items:{},fetchedAt},'456',fetchedAt),null);
+ assert.equal(wb3ProtectionStock(snapshot,'456',fetchedAt+46*60000),null);
 });

@@ -1,5 +1,7 @@
 import express from 'express';
 import { pool } from './db.js';
+import { config } from './config.js';
+import { readWb3Inventory } from './wb3-inventory.js';
 import { asyncRoute, requireTrustedOrigin, requireWritesEnabled } from './http.js';
 import { hydrateWarehouseProducts } from './warehouse-products.js';
 import { hydrateWarehouseReservations } from './warehouse-reservations.js';
@@ -26,7 +28,17 @@ function parts(product){
     ? product.components.map(row=>({productId:cleanText(row?.productId),qty:Math.max(1,Math.floor(number(row?.qty)||1))})).filter(row=>row.productId)
     : [];
 }
+export function wb3ProtectionStock(snapshot,nmId,now=Date.now()){
+  if(!/^[1-9]\d*$/.test(String(nmId))||snapshot.error||snapshot.loading||
+    !(snapshot.fetchedAt>0)||now-snapshot.fetchedAt>45*60_000||
+    !snapshot.items||Array.isArray(snapshot.items)||typeof snapshot.items!=='object'||
+    !Number.isSafeInteger(snapshot.total)||snapshot.total<0)return null;
+  const item=snapshot.items[String(nmId)];
+  if(!item)return 0; // A completed, unfiltered inventory snapshot covers every WB warehouse.
+  return Number.isSafeInteger(item.quantity)&&item.quantity>=0?item.quantity:null;
+}
 async function warehouseAvailability(client=pool){
+  const fbo=config.storeProfile==='WB3'?await readWb3Inventory():null;
   let state={};
   state=await hydrateWarehouseReservations(client,state);
   state=await hydrateWarehouseProducts(client,state);
@@ -57,7 +69,7 @@ async function warehouseAvailability(client=pool){
     }else value=Math.max(0,Math.floor(number(product?.stock)-number(reserved.get(id))));
     cache.set(id,value);return value;
   }
-  return {byId,amount};
+  return {byId,amount,fboAmount:fbo?(nmId,now)=>wb3ProtectionStock(fbo,nmId,now):null};
 }
 async function priceRows(market,client=pool){
   const result=await client.query('SELECT payload FROM wb_price_snapshots WHERE market=$1',[market]);
@@ -105,7 +117,9 @@ export async function decorateWbProtectionRows(market,rows){
     row.promoBlocked=Boolean(pref.promoBlock);
     row.promoStop=stopsByNm.get(String(row.remoteId))||null;
     row.priceProtected=Boolean(row.manualPriceLock||row.autoZeroLock);
-    row.protectionReason=row.manualPriceLock?'Включено вручную':row.autoZeroLock?'Нет на моём складе':'';
+    row.autoZeroStockSource=inventory.fboAmount?'fbo':'own';
+    row.protectionReason=row.manualPriceLock?'Включено вручную':row.autoZeroLock
+      ?(inventory.fboAmount?'Нет остатка FBO на WB':'Нет на моём складе'):'';
     row.ownStockKnown=available!==null;
     row.ownAvailable=available===null?null:available;
     row.lockedPrice=pref.lockedPrice??null;
@@ -155,7 +169,9 @@ export async function syncWbDiscountBlocks(market,now=Date.now(),client=pool){
   const byNm=new Map(rows.map(row=>[cleanText(row.remoteId),row]));
   let changed=0;
   for(const pref of prefs){
-    if(!pref.promoBlock&&!(pref.autoZeroEnabled&&pref.autoZeroLock))continue;
+    const autoBlocked=pref.autoZeroEnabled&&pref.autoZeroLock
+      &&(config.storeProfile!=='WB3'||pref.ownStockKnown&&pref.ownAvailable===0);
+    if(!pref.promoBlock&&!autoBlocked)continue;
     const row=byNm.get(pref.nmId);if(!row)continue;
     const result=await client.query(`SELECT desired_price AS "desiredPrice",desired_discount AS "desiredDiscount",source,status
       FROM wb_price_update_queue WHERE market=$1 AND nm_id=$2`,[market,pref.nmId]);
@@ -227,7 +243,8 @@ export async function syncWbPriceProtection(market,now=Date.now()){
   for(const pref of prefs){
     const row=byNm.get(pref.nmId);
     if(!row)continue;
-    const available=cleanText(row.productId)?inventory.amount(row.productId):null;
+    const available=inventory.fboAmount?inventory.fboAmount(row.remoteId,now)
+      :cleanText(row.productId)?inventory.amount(row.productId):null;
     const known=available!==null;
     let autoLock=pref.autoZeroLock;
     let lockedPrice=pref.lockedPrice,lockedDiscount=pref.promoBlock?0:pref.lockedDiscount;
@@ -257,14 +274,19 @@ export async function syncWbPriceProtection(market,now=Date.now()){
       await pool.query(`UPDATE wb_price_protection SET own_stock_known=$3,own_available=$4,stock_checked_at=$5
         WHERE market=$1 AND nm_id=$2`,[market,pref.nmId,known,known?available:null,now]).catch(()=>{});
     }
-    const protectedNow=pref.manualPriceLock||autoLock;
+    if(inventory.fboAmount&&pref.autoZeroLock&&(!known||available>0)&&!pref.manualPriceLock&&!pref.promoBlock){
+      await pool.query(`DELETE FROM wb_price_update_queue WHERE market=$1 AND nm_id=$2
+        AND source='protection' AND status IN ('pending','held') AND desired_discount=0`,[market,pref.nmId]);
+    }
+    const effectiveAutoLock=autoLock&&(!inventory.fboAmount||known);
+    const protectedNow=pref.manualPriceLock||effectiveAutoLock;
     if(!protectedNow)continue;
     const night=nights.get(pref.nmId);
     // Only the explicitly approved night/return owns the temporary price. Once
     // its original baseline is restored, ordinary protection resumes unchanged.
     if(night?.protectionOverride===true&&number(night.basePrice)>0)continue;
-    const promo=promos.get(pref.nmId),promoOverride=!autoLock&&promo?.enabled===true&&promo?.protectionOverride===true;
-    if(autoLock)lockedDiscount=0;
+    const promo=promos.get(pref.nmId),promoOverride=!effectiveAutoLock&&promo?.enabled===true&&promo?.protectionOverride===true;
+    if(effectiveAutoLock)lockedDiscount=0;
     else if(promoOverride)lockedDiscount=null;
     const queueResult=await pool.query(`SELECT desired_price AS "desiredPrice",desired_discount AS "desiredDiscount",source,status
       FROM wb_price_update_queue WHERE market=$1 AND nm_id=$2`,[market,pref.nmId]);
