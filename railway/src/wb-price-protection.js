@@ -155,7 +155,7 @@ export async function syncWbDiscountBlocks(market,now=Date.now(),client=pool){
   const byNm=new Map(rows.map(row=>[cleanText(row.remoteId),row]));
   let changed=0;
   for(const pref of prefs){
-    if(!pref.promoBlock)continue;
+    if(!pref.promoBlock&&!(pref.autoZeroEnabled&&pref.autoZeroLock))continue;
     const row=byNm.get(pref.nmId);if(!row)continue;
     const result=await client.query(`SELECT desired_price AS "desiredPrice",desired_discount AS "desiredDiscount",source,status
       FROM wb_price_update_queue WHERE market=$1 AND nm_id=$2`,[market,pref.nmId]);
@@ -263,8 +263,9 @@ export async function syncWbPriceProtection(market,now=Date.now()){
     // Only the explicitly approved night/return owns the temporary price. Once
     // its original baseline is restored, ordinary protection resumes unchanged.
     if(night?.protectionOverride===true&&number(night.basePrice)>0)continue;
-    const promo=promos.get(pref.nmId),promoOverride=promo?.enabled===true&&promo?.protectionOverride===true;
-    if(promoOverride)lockedDiscount=null;
+    const promo=promos.get(pref.nmId),promoOverride=!autoLock&&promo?.enabled===true&&promo?.protectionOverride===true;
+    if(autoLock)lockedDiscount=0;
+    else if(promoOverride)lockedDiscount=null;
     const queueResult=await pool.query(`SELECT desired_price AS "desiredPrice",desired_discount AS "desiredDiscount",source,status
       FROM wb_price_update_queue WHERE market=$1 AND nm_id=$2`,[market,pref.nmId]);
     const queue=queueResult.rows[0];

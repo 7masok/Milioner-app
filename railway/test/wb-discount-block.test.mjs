@@ -6,11 +6,11 @@ import { pricesRouter } from '../src/prices.js';
 
 test('persistent block corrects WB discounts repeatedly, preserves price targets and waits for sent uploads', async () => {
   const original=pool.query, calls=[];
-  let discount=12, enabled=true, queue=null;
+  let discount=12, enabled=true, autoZeroEnabled=false, autoZeroLock=false, queue=null;
   pool.query=async (sql,params)=>{
     calls.push({sql,params});
     if(sql.includes('FROM wb_price_snapshots'))return {rows:[{payload:{rows:[{remoteId:'1',price:5000,discount}]}}]};
-    if(sql.includes('FROM wb_price_protection'))return {rows:[{nmId:'1',promoBlock:enabled}]};
+    if(sql.includes('FROM wb_price_protection'))return {rows:[{nmId:'1',promoBlock:enabled,autoZeroEnabled,autoZeroLock}]};
     if(sql.includes('FROM wb_price_update_queue'))return {rows:queue?[queue]:[]};
     return {rows:[],rowCount:1};
   };
@@ -41,6 +41,13 @@ test('persistent block corrects WB discounts repeatedly, preserves price targets
     assert.equal((await syncWbDiscountBlocks('WB',6)).changed,0,'do not blindly retry a rejected zero');
     calls.length=0; queue=null; enabled=false;
     assert.equal((await syncWbDiscountBlocks('WB',7)).changed,0,'uncheck stops subsequent corrections');
+    autoZeroEnabled=true;
+    assert.equal((await syncWbDiscountBlocks('WB',8)).changed,0,'enabled protection waits for confirmed zero stock');
+    autoZeroLock=true;
+    assert.equal((await syncWbDiscountBlocks('WB',9)).changed,1,'an already-locked row loses an existing discount');
+    assert.match(inserts().at(-1).sql,/VALUES\(\$1,\$2,NULL,0/);
+    autoZeroLock=false;
+    assert.equal((await syncWbDiscountBlocks('WB',10)).changed,0,'after restock the separate permanent block remains off');
   } finally {pool.query=original;}
 });
 

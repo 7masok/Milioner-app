@@ -246,7 +246,7 @@ async function currentQueueRow(market, nmId, client = pool) {
 async function queuePromoDiscount(market, nmId, discount, promotionId = 0, client = pool) {
   const protectedRow = await client.query(`SELECT 1 FROM wb_price_protection
     WHERE market=$1 AND nm_id=$2 AND (manual_price_lock=true OR auto_zero_lock=true)
-      AND NOT EXISTS (SELECT 1 FROM wb_promo_preferences p WHERE p.market=wb_price_protection.market AND p.nm_id=wb_price_protection.nm_id AND p.enabled=true AND p.protection_override=true) LIMIT 1`, [market, nmId]);
+      AND (auto_zero_lock=true OR NOT EXISTS (SELECT 1 FROM wb_promo_preferences p WHERE p.market=wb_price_protection.market AND p.nm_id=wb_price_protection.nm_id AND p.enabled=true AND p.protection_override=true)) LIMIT 1`, [market, nmId]);
   if (protectedRow.rowCount) return false;
   const now = Date.now();
   const normalized = clampDiscount(discount);
@@ -687,7 +687,7 @@ async function syncWbPromotionsMarket(market) {
 
     const rawPrefs = await promoPreferences(market, pool, true);
     const blockedResult = await pool.query(`SELECT nm_id AS "nmId" FROM wb_price_protection
-      WHERE market=$1 AND (promo_block=true OR ((manual_price_lock=true OR auto_zero_lock=true)
+      WHERE market=$1 AND (promo_block=true OR auto_zero_lock=true OR (manual_price_lock=true
       AND NOT EXISTS (SELECT 1 FROM wb_promo_preferences p WHERE p.market=wb_price_protection.market AND p.nm_id=wb_price_protection.nm_id AND p.enabled=true AND p.protection_override=true)))`, [market]);
     const blocked = new Set(blockedResult.rows.map(row => String(row.nmId)));
     const prefs = rawPrefs.filter(pref => !blocked.has(String(pref.nmId)));
