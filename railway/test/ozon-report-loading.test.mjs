@@ -46,3 +46,19 @@ test('an Ozon refund cancels its original quantity and cost, using the finance u
  rows.push({...rows[0],amount:-10000,accruals_for_sale:-10000});
  const summary=f.ctx.window.summaryFrom(f.payload,0,null,range);assert.equal(summary.qty,0);assert.equal(summary.cost,0);assert.equal(summary.sales,0);assert.equal(summary.products[0].qty,0);
 });
+
+test('Ozon cost of sales excludes inventory counts, inventory baselines, returns and warehouse relocations',()=>{
+ const {ctx,payload}=fixture();
+ const received={productId:'p',status:'received',qty:50,landedUnitCost:600};
+ ctx.state.purchases=[
+  received,
+  {...received,qty:1000,landedUnitCost:5000,inventoryAdjustment:true},
+  {...received,qty:90,landedUnitCost:3800,inventoryAdjustment:true,inventoryCostBaseline:true},
+  {...received,qty:20,landedUnitCost:5500,returnAdjustment:true},
+  {...received,qty:30,landedUnitCost:6300,relocation:true},
+ ];
+ const summary=ctx.window.summaryFrom(payload,0,null,range);
+ assert.equal(summary.qty,1);
+ assert.equal(summary.products[0].cost,600);
+ assert.equal(summary.cost,600);
+});

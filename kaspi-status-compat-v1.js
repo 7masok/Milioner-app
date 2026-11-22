@@ -136,6 +136,7 @@ try{
     const pid=String(product?.id||'');let total=0,qty=0;
     for(const row of state.purchases||[]){
       if(String(row?.productId||'')!==pid||String(row?.status||'received')!=='received')continue;
+      if(row.inventoryAdjustment||row.returnAdjustment||row.relocation)continue;
       const q=Math.max(0,ozonNum(row?.qty));if(!q)continue;
       const landed=ozonNum(row?.landedUnitCost)||ozonNum(row?.unitCost)+(ozonNum(row?.delivery)/q);
       if(landed>0){total+=landed*q;qty+=q;}
