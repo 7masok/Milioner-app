@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
 import vm from 'node:vm';
 const html=readFileSync(new URL('../../index.html',import.meta.url),'utf8');
-const source=html.slice(html.indexOf('function purchaseLastQuantity('),html.indexOf('function updatePurchaseAverageEstimates('));
+const source=html.slice(html.indexOf('function purchaseAverageBuyUnitCost('),html.indexOf('function updatePurchaseAverageEstimates('));
 function setup(purchases){
  const ctx={state:{purchases},purchaseWorkflow:()=>[{id:'cart',name:'Корзина'}],normalizeName:x=>x.toLowerCase(),purchaseStatus:x=>x.status||'received',purchaseWorkflowStage:x=>x.workflowStageId,prod:id=>id==='p'?{id}:null,purchaseAverageBuyUnitCost:()=>0,fmt:n=>n+' ₸'};
  vm.createContext(ctx);vm.runInContext(source,ctx);return ctx;
@@ -39,4 +39,10 @@ test('missing history is explicit rather than a fabricated zero',()=>{
  const c=setup([]);assert.equal(c.purchaseLastQuantity('p'),null);
  assert.match(c.purchaseAverageEstimate('p',10),/Прошлой закупки этого товара нет/);
  assert.equal(c.purchaseAverageEstimate('',10),'Выберите товар и укажите количество');
+});
+
+test('a later one-unit return does not replace a 50-unit supplier purchase in the form',()=>{
+ const c=setup([row('receipt',50,10,{status:'received',buyTotal:2311}),row('return',1,20,{status:'received',returnAdjustment:true,buyTotal:10000})]);
+ assert.equal(c.purchaseLastQuantity('p'),50);
+ assert.equal(c.purchaseAverageBuyUnitCost('p'),2311/50);
 });
